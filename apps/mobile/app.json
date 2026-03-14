@@ -1,0 +1,56 @@
+{
+  "expo": {
+    "name": "Drape",
+    "slug": "drape",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "drape",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F5F0E8"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.drape.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Drape uses your camera to upload reference photos and progress updates.",
+        "NSPhotoLibraryUsageDescription": "Drape accesses your photo library for order references and portfolio photos.",
+        "NSMicrophoneUsageDescription": "Drape uses your microphone for voice note messages.",
+        "NSLocationWhenInUseUsageDescription": "Drape uses your location to show nearby tailors."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#2D6A4F"
+      },
+      "package": "com.drape.app",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Drape uses your camera for photos and video."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

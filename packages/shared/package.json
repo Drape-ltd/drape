@@ -1,0 +1,14 @@
+{
+  "name": "@drape/shared",
+  "version": "0.0.1",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./contact-filter": "./src/contact-filter.ts",
+    "./order-machine": "./src/order-machine.ts",
+    "./constants": "./src/constants.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
