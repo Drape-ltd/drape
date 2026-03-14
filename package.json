@@ -18,5 +18,14 @@
     "turbo": "^2.3.0",
     "prettier": "^3.4.2",
     "typescript": "^5.7.2"
+  },
+  "pnpm": {
+    "approvedBuilds": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "sharp",
+      "unrs-resolver"
+    ]
   }
 }
