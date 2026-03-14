@@ -1,8 +1,6 @@
 # Supabase project config for Drape V1
 # Project: https://pqptfuqogvrajozfsqzi.supabase.co
 
-[project]
-id = "pqptfuqogvrajozfsqzi"
 
 [api]
 enabled = true

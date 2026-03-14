@@ -1,5 +1,5 @@
-// Drape V1 â Prisma Schema
-// Mirrors Supabase PostgreSQL. RLS is enforced at the DB level.
+// Drape V1 — Prisma Schema
+// Fields mapped to snake_case to match Supabase PostgreSQL convention.
 
 generator client {
   provider = "prisma-client-js"
@@ -18,6 +18,8 @@ datasource db {
 enum UserRole {
   CUSTOMER
   TAILOR
+
+  @@map("user_role")
 }
 
 enum GarmentContext {
@@ -25,6 +27,8 @@ enum GarmentContext {
   WOMENSWEAR
   BOTH
   PREFER_NOT_TO_SAY
+
+  @@map("garment_context")
 }
 
 enum BodyShape {
@@ -35,34 +39,46 @@ enum BodyShape {
   FULL_MIDSECTION
   ATHLETIC
   PREFER_NOT_TO_SAY
+
+  @@map("body_shape")
 }
 
 enum FitStyle {
   SLIM
   REGULAR
   RELAXED
+
+  @@map("fit_style")
 }
 
 enum TailorTier {
   VERIFIED
   RISING
   MASTER
+
+  @@map("tailor_tier")
 }
 
 enum AvailabilityStatus {
   OPEN
   LIMITED
   FULLY_BOOKED
+
+  @@map("availability_status")
 }
 
 enum FabricSource {
   CUSTOMER_SUPPLIED
   TAILOR_SOURCES
+
+  @@map("fabric_source")
 }
 
 enum DeliveryMethod {
   SHIPPING
   LOCAL_COLLECTION
+
+  @@map("delivery_method")
 }
 
 enum OrderStage {
@@ -84,6 +100,8 @@ enum OrderStage {
   IN_DISPUTE
   REFUNDED
   CANCELLED
+
+  @@map("order_stage")
 }
 
 enum Currency {
@@ -93,11 +111,15 @@ enum Currency {
   NGN
   GHS
   KES
+
+  @@map("currency")
 }
 
 enum PaymentProvider {
   STRIPE
   PAYSTACK
+
+  @@map("payment_provider")
 }
 
 enum DisputeStatus {
@@ -105,11 +127,23 @@ enum DisputeStatus {
   UNDER_REVIEW
   RESOLVED_REFUNDED
   RESOLVED_RELEASED
+
+  @@map("dispute_status")
 }
 
 enum ClientType {
   ON_DRAPE
   PRIVATE
+
+  @@map("client_type")
+}
+
+enum MessageType {
+  TEXT
+  PHOTO
+  VOICE_NOTE
+
+  @@map("message_type")
 }
 
 // ─────────────────────────────────────────────
@@ -117,15 +151,14 @@ enum ClientType {
 // ─────────────────────────────────────────────
 
 model User {
-  id          String   @id @default(uuid()) // matches Supabase auth.users.id
+  id          String   @id @default(uuid())
   email       String   @unique
-  displayName String
+  displayName String   @map("display_name")
   role        UserRole
-  phone       String?  // private, never shown publicly
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  phone       String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
-  // Relations
   customerProfile  CustomerProfile?
   tailorProfile    TailorProfile?
   ordersAsCustomer Order[]          @relation("CustomerOrders")
@@ -139,39 +172,27 @@ model User {
 // ─────────────────────────────────────────────
 
 model CustomerProfile {
-  id     String @id @default(uuid())
-  userId String @unique
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id      String @id @default(uuid())
+  userId  String @unique @map("user_id")
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  // Layer 1 â Measurements
-  chestCm         Float?
-  waistCm         Float?
-  hipsCm          Float?
-  shoulderWidthCm Float?
-  inseamCm        Float?
-  sleeveLengthCm  Float?
-  neckCircumferenceCm Float?
-  heightCm        Float?
-  fitStyle        FitStyle?
-  unitPreference  String   @default("cm") // "cm" | "inches"
-
-  // Layer 2 â Garment context
-  garmentContext  GarmentContext?
-
-  // Layer 3 â Body shape
-  bodyShape       BodyShape?
-
-  // Layer 4 â Fit challenge flags (stored as array of enum strings)
-  fitFlags        String[] // e.g. ["LARGE_THIGHS", "BROAD_SHOULDERS"]
-
-  // Free-text body note (max 150 chars)
-  bodyNote        String?
-
-  // Prompt tracking
-  completionPromptShown Boolean @default(false)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  chestCm              Float?  @map("chest_cm")
+  waistCm              Float?  @map("waist_cm")
+  hipsCm               Float?  @map("hips_cm")
+  shoulderWidthCm      Float?  @map("shoulder_width_cm")
+  inseamCm             Float?  @map("inseam_cm")
+  sleeveLengthCm       Float?  @map("sleeve_length_cm")
+  neckCircumferenceCm  Float?  @map("neck_circumference_cm")
+  heightCm             Float?  @map("height_cm")
+  fitStyle             FitStyle? @map("fit_style")
+  unitPreference       String  @default("cm") @map("unit_preference")
+  garmentContext       GarmentContext? @map("garment_context")
+  bodyShape            BodyShape?      @map("body_shape")
+  fitFlags             String[] @map("fit_flags")
+  bodyNote             String?  @map("body_note")
+  completionPromptShown Boolean @default(false) @map("completion_prompt_shown")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
 
   @@map("customer_profiles")
 }
@@ -181,48 +202,42 @@ model CustomerProfile {
 // ─────────────────────────────────────────────
 
 model TailorProfile {
-  id     String @id @default(uuid())
-  userId String @unique
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                  String   @id @default(uuid())
+  userId              String   @unique @map("user_id")
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  displayName       String
-  businessName      String?
-  bio               String?
-  location          String
-  languages         String[]
-  specialtyTags     String[]
-  priceRangeMin     Int?      // in pence/kobo (smallest currency unit)
-  priceRangeMax     Int?
-  currency          Currency  @default(GBP)
-  tier              TailorTier @default(VERIFIED)
-  availability      AvailabilityStatus @default(OPEN)
-  isVerified        Boolean   @default(false)
-  isLive            Boolean   @default(false) // true after ID approved + 4 photos + payout
-  avgRating         Float     @default(0)
-  totalReviews      Int       @default(0)
-  totalOrders       Int       @default(0)
-  avgResponseHours  Float?
-  shipsInternationally Boolean @default(false)
+  displayName         String   @map("display_name")
+  businessName        String?  @map("business_name")
+  bio                 String?
+  location            String
+  languages           String[]
+  specialtyTags       String[] @map("specialty_tags")
+  priceRangeMin       Int?     @map("price_range_min")
+  priceRangeMax       Int?     @map("price_range_max")
+  currency            Currency @default(GBP)
+  tier                TailorTier @default(VERIFIED)
+  availability        AvailabilityStatus @default(OPEN)
+  isVerified          Boolean  @default(false) @map("is_verified")
+  isLive              Boolean  @default(false) @map("is_live")
+  avgRating           Float    @default(0) @map("avg_rating")
+  totalReviews        Int      @default(0) @map("total_reviews")
+  totalOrders         Int      @default(0) @map("total_orders")
+  avgResponseHours    Float?   @map("avg_response_hours")
+  shipsInternationally Boolean @default(false) @map("ships_internationally")
+  stripeAccountId     String?  @map("stripe_account_id")
+  paystackAccountId   String?  @map("paystack_account_id")
+  idDocumentPath      String?  @map("id_document_path")
+  idVerifiedAt        DateTime? @map("id_verified_at")
+  bypassAttempts      Int      @default(0) @map("bypass_attempts")
+  tierLostAt          DateTime? @map("tier_lost_at")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
 
-  // Stripe / Paystack
-  stripeAccountId   String?
-  paystackAccountId String?
-
-  // ID verification
-  idDocumentPath    String?   // Supabase storage path
-  idVerifiedAt      DateTime?
-
-  // Contact bypass tracking
-  bypassAttempts    Int       @default(0)
-  tierLostAt        DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  portfolioPhotos   PortfolioPhoto[]
-  orders            Order[]          @relation("TailorOrders")
-  clients           TailorClient[]
-  reviews           Review[]         @relation("TailorReviews")
+  portfolioPhotos PortfolioPhoto[]
+  orders          Order[]          @relation("TailorOrders")
+  clients         TailorClient[]
+  reviews         Review[]         @relation("TailorReviews")
+  payouts         Payout[]
 
   @@map("tailor_profiles")
 }
@@ -232,61 +247,49 @@ model TailorProfile {
 // ─────────────────────────────────────────────
 
 model PortfolioPhoto {
-  id            String        @id @default(uuid())
-  tailorProfileId String
-  tailorProfile TailorProfile @relation(fields: [tailorProfileId], references: [id], onDelete: Cascade)
+  id              String        @id @default(uuid())
+  tailorProfileId String        @map("tailor_profile_id")
+  tailorProfile   TailorProfile @relation(fields: [tailorProfileId], references: [id], onDelete: Cascade)
 
-  storagePath   String  // Supabase Storage path
-  publicUrl     String
+  storagePath   String   @map("storage_path")
+  publicUrl     String   @map("public_url")
   caption       String?
-  displayOrder  Int     @default(0)
-
-  // OCR moderation
-  ocrFlagged    Boolean   @default(false)
-  ocrReviewedAt DateTime?
-
-  createdAt DateTime @default(now())
+  displayOrder  Int      @default(0) @map("display_order")
+  ocrFlagged    Boolean  @default(false) @map("ocr_flagged")
+  ocrReviewedAt DateTime? @map("ocr_reviewed_at")
+  createdAt     DateTime @default(now()) @map("created_at")
 
   @@map("portfolio_photos")
 }
 
 // ─────────────────────────────────────────────
-// TAILOR CRM â CLIENTS
+// TAILOR CRM — CLIENTS
 // ─────────────────────────────────────────────
 
 model TailorClient {
-  id            String        @id @default(uuid())
-  tailorProfileId String
-  tailorProfile TailorProfile @relation(fields: [tailorProfileId], references: [id], onDelete: Cascade)
+  id              String        @id @default(uuid())
+  tailorProfileId String        @map("tailor_profile_id")
+  tailorProfile   TailorProfile @relation(fields: [tailorProfileId], references: [id], onDelete: Cascade)
 
-  clientType    ClientType    @default(PRIVATE)
-  // If ON_DRAPE, links to user
-  linkedUserId  String?
-
-  // Stored for both private and on-drape clients
-  name          String
-  email         String?       // private, tailor-only
-  phone         String?       // private, tailor-only
-
-  // Measurements (manually entered for private clients)
-  chestCm         Float?
-  waistCm         Float?
-  hipsCm          Float?
-  shoulderWidthCm Float?
-  inseamCm        Float?
-  sleeveLengthCm  Float?
-  neckCircumferenceCm Float?
-  heightCm        Float?
-
-  fitNotes      String?   // private tailor notes per client
-  generalNotes  String?   // "Likes Ankara but not Kente. Birthday August."
-
-  // Invite
-  inviteToken   String?   @unique
-  inviteSentAt  DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  clientType            ClientType @default(PRIVATE) @map("client_type")
+  linkedUserId          String?    @map("linked_user_id")
+  name                  String
+  email                 String?
+  phone                 String?
+  chestCm               Float?     @map("chest_cm")
+  waistCm               Float?     @map("waist_cm")
+  hipsCm                Float?     @map("hips_cm")
+  shoulderWidthCm       Float?     @map("shoulder_width_cm")
+  inseamCm              Float?     @map("inseam_cm")
+  sleeveLengthCm        Float?     @map("sleeve_length_cm")
+  neckCircumferenceCm   Float?     @map("neck_circumference_cm")
+  heightCm              Float?     @map("height_cm")
+  fitNotes              String?    @map("fit_notes")
+  generalNotes          String?    @map("general_notes")
+  inviteToken           String?    @unique @map("invite_token")
+  inviteSentAt          DateTime?  @map("invite_sent_at")
+  createdAt             DateTime   @default(now()) @map("created_at")
+  updatedAt             DateTime   @updatedAt @map("updated_at")
 
   offlineOrders OfflineOrder[]
 
@@ -294,82 +297,67 @@ model TailorClient {
 }
 
 // ─────────────────────────────────────────────
-// OFFLINE ORDERS (CRM â manual logging)
+// OFFLINE ORDERS
 // ─────────────────────────────────────────────
 
 model OfflineOrder {
   id             String       @id @default(uuid())
-  tailorClientId String
+  tailorClientId String       @map("tailor_client_id")
   tailorClient   TailorClient @relation(fields: [tailorClientId], references: [id], onDelete: Cascade)
 
-  garmentType    String
-  description    String?
-  price          Int?         // in smallest currency unit
-  currency       Currency     @default(GBP)
-  status         String       @default("completed")
-  notes          String?
-  completedAt    DateTime?
-
-  createdAt DateTime @default(now())
+  garmentType  String   @map("garment_type")
+  description  String?
+  price        Int?
+  currency     Currency @default(GBP)
+  status       String   @default("completed")
+  notes        String?
+  completedAt  DateTime? @map("completed_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
 
   @@map("offline_orders")
 }
 
 // ─────────────────────────────────────────────
-// ORDERS (platform orders)
+// ORDERS
 // ─────────────────────────────────────────────
 
 model Order {
-  id              String   @id @default(uuid())
-  reference       String   @unique @default(cuid())
-
-  customerId      String
-  customer        User     @relation("CustomerOrders", fields: [customerId], references: [id])
-
-  tailorProfileId String
+  id              String        @id @default(uuid())
+  reference       String        @unique @default(cuid())
+  customerId      String        @map("customer_id")
+  customer        User          @relation("CustomerOrders", fields: [customerId], references: [id])
+  tailorProfileId String        @map("tailor_profile_id")
   tailor          TailorProfile @relation("TailorOrders", fields: [tailorProfileId], references: [id])
 
-  // Brief
-  garmentType     String
-  description     String
-  occasion        String?
-  deadline        DateTime?
-  fabricSource    FabricSource
-  deliveryMethod  DeliveryMethod
-  specialNote     String?
-  fabricTracking  String?  // tracking number if customer supplied
-
-  // Quote
-  quotedAmount    Int?     // in smallest currency unit
-  currency        Currency @default(GBP)
-  quotedCompletionDate DateTime?
-  quoteNote       String?
-  quoteExpiresAt  DateTime?
-
-  // State
-  stage           OrderStage @default(DRAFT)
-  stageUpdatedAt  DateTime   @default(now())
-
-  // Payment
-  paymentProvider PaymentProvider?
-  paymentIntentId String?  // Stripe PaymentIntent or Paystack reference
-  escrowReleased  Boolean  @default(false)
-  escrowReleasedAt DateTime?
-  autoReleaseAt   DateTime? // 14 days after shipped
-
-  // Collection
-  collectionCode        String?   // 4-digit, hashed
-  collectionCodeExpiry  DateTime?
-  collectionCodeUsed    Boolean   @default(false)
-
-  // Dispute
-  disputeId       String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  garmentType           String         @map("garment_type")
+  description           String
+  occasion              String?
+  deadline              DateTime?
+  fabricSource          FabricSource   @map("fabric_source")
+  deliveryMethod        DeliveryMethod @map("delivery_method")
+  specialNote           String?        @map("special_note")
+  fabricTracking        String?        @map("fabric_tracking")
+  quotedAmount          Int?           @map("quoted_amount")
+  currency              Currency       @default(GBP)
+  quotedCompletionDate  DateTime?      @map("quoted_completion_date")
+  quoteNote             String?        @map("quote_note")
+  quoteExpiresAt        DateTime?      @map("quote_expires_at")
+  stage                 OrderStage     @default(DRAFT)
+  stageUpdatedAt        DateTime       @default(now()) @map("stage_updated_at")
+  paymentProvider       PaymentProvider? @map("payment_provider")
+  paymentIntentId       String?        @map("payment_intent_id")
+  escrowReleased        Boolean        @default(false) @map("escrow_released")
+  escrowReleasedAt      DateTime?      @map("escrow_released_at")
+  autoReleaseAt         DateTime?      @map("auto_release_at")
+  collectionCode        String?        @map("collection_code")
+  collectionCodeExpiry  DateTime?      @map("collection_code_expiry")
+  collectionCodeUsed    Boolean        @default(false) @map("collection_code_used")
+  disputeId             String?        @map("dispute_id")
+  createdAt             DateTime       @default(now()) @map("created_at")
+  updatedAt             DateTime       @updatedAt @map("updated_at")
 
   stageHistory    OrderStageUpdate[]
-  referencePhotos OrderPhoto[]       @relation("ReferencePhotos")
+  referencePhotos OrderPhoto[]
   messages        Message[]
   review          Review?
   dispute         Dispute?
@@ -378,36 +366,32 @@ model Order {
 }
 
 // ─────────────────────────────────────────────
-// ORDER STAGE UPDATES (timeline)
+// ORDER STAGE UPDATES
 // ─────────────────────────────────────────────
 
 model OrderStageUpdate {
-  id      String @id @default(uuid())
-  orderId String
-  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
-
-  stage   OrderStage
-  note    String?
-  photoUrl String?  // Supabase Storage URL
-
-  createdAt DateTime @default(now())
+  id       String     @id @default(uuid())
+  orderId  String     @map("order_id")
+  order    Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  stage    OrderStage
+  note     String?
+  photoUrl String?    @map("photo_url")
+  createdAt DateTime  @default(now()) @map("created_at")
 
   @@map("order_stage_updates")
 }
 
 // ─────────────────────────────────────────────
-// ORDER PHOTOS (reference photos from customer)
+// ORDER PHOTOS
 // ─────────────────────────────────────────────
 
 model OrderPhoto {
-  id          String @id @default(uuid())
-  orderId     String
-  order       Order  @relation("ReferencePhotos", fields: [orderId], references: [id], onDelete: Cascade)
-
-  storagePath String
-  publicUrl   String
-
-  createdAt DateTime @default(now())
+  id          String   @id @default(uuid())
+  orderId     String   @map("order_id")
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  storagePath String   @map("storage_path")
+  publicUrl   String   @map("public_url")
+  createdAt   DateTime @default(now()) @map("created_at")
 
   @@map("order_photos")
 }
@@ -416,31 +400,19 @@ model OrderPhoto {
 // MESSAGES
 // ─────────────────────────────────────────────
 
-enum MessageType {
-  TEXT
-  PHOTO
-  VOICE_NOTE
-}
-
 model Message {
-  id       String @id @default(uuid())
-  orderId  String
-  order    Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
-
-  senderId String
-  sender   User   @relation("SentMessages", fields: [senderId], references: [id])
-
+  id       String      @id @default(uuid())
+  orderId  String      @map("order_id")
+  order    Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  senderId String      @map("sender_id")
+  sender   User        @relation("SentMessages", fields: [senderId], references: [id])
   type     MessageType @default(TEXT)
-  content  String?     // text content
-  mediaUrl String?     // Supabase Storage URL for photo/voice
-  duration Int?        // voice note duration in seconds
-
-  readAt   DateTime?
-
-  // Moderation
-  blocked  Boolean   @default(false)
-
-  createdAt DateTime @default(now())
+  content  String?
+  mediaUrl String?     @map("media_url")
+  duration Int?
+  readAt   DateTime?   @map("read_at")
+  blocked  Boolean     @default(false)
+  createdAt DateTime   @default(now()) @map("created_at")
 
   @@map("messages")
 }
@@ -450,26 +422,20 @@ model Message {
 // ─────────────────────────────────────────────
 
 model Review {
-  id      String @id @default(uuid())
-  orderId String @unique
-  order   Order  @relation(fields: [orderId], references: [id])
-
-  tailorProfileId String
+  id              String        @id @default(uuid())
+  orderId         String        @unique @map("order_id")
+  order           Order         @relation(fields: [orderId], references: [id])
+  tailorProfileId String        @map("tailor_profile_id")
   tailor          TailorProfile @relation("TailorReviews", fields: [tailorProfileId], references: [id])
 
-  rating     Int      // 1â5
-  content    String?
-  tags       String[] // ["PERFECT_FIT", "GREAT_COMMUNICATION", ...]
-
-  // Tailor response
-  tailorResponse   String?
-  tailorRespondedAt DateTime?
-
-  // Moderation
-  publishedAt DateTime? // 10-min hold before publish
-  flagged     Boolean   @default(false)
-
-  createdAt DateTime @default(now())
+  rating            Int
+  content           String?
+  tags              String[]
+  tailorResponse    String?   @map("tailor_response")
+  tailorRespondedAt DateTime? @map("tailor_responded_at")
+  publishedAt       DateTime? @map("published_at")
+  flagged           Boolean   @default(false)
+  createdAt         DateTime  @default(now()) @map("created_at")
 
   @@map("reviews")
 }
@@ -479,21 +445,19 @@ model Review {
 // ─────────────────────────────────────────────
 
 model Dispute {
-  id      String @id @default(uuid())
-  orderId String @unique
-  order   Order  @relation(fields: [orderId], references: [id])
+  id       String @id @default(uuid())
+  orderId  String @unique @map("order_id")
+  order    Order  @relation(fields: [orderId], references: [id])
 
-  reason      String
-  description String
-  evidenceUrls String[]
-
-  status      DisputeStatus @default(OPEN)
-  resolution  String?
-  resolvedAt  DateTime?
-  resolvedBy  String?       // admin user id
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  reason       String
+  description  String
+  evidenceUrls String[]      @map("evidence_urls")
+  status       DisputeStatus @default(OPEN)
+  resolution   String?
+  resolvedAt   DateTime?     @map("resolved_at")
+  resolvedBy   String?       @map("resolved_by")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
 
   @@map("disputes")
 }
@@ -503,35 +467,34 @@ model Dispute {
 // ─────────────────────────────────────────────
 
 model Payout {
-  id              String @id @default(uuid())
-  tailorProfileId String
+  id              String        @id @default(uuid())
+  tailorProfileId String        @map("tailor_profile_id")
+  tailorProfile   TailorProfile @relation(fields: [tailorProfileId], references: [id])
 
-  amount          Int      // in smallest currency unit
+  amount          Int
   currency        Currency
   provider        PaymentProvider
-  providerPayoutId String?
-  orderId         String?  // which order triggered this payout
-
-  processedAt     DateTime @default(now())
+  providerPayoutId String?       @map("provider_payout_id")
+  orderId         String?        @map("order_id")
+  processedAt     DateTime       @default(now()) @map("processed_at")
 
   @@map("payouts")
 }
 
 // ─────────────────────────────────────────────
-// CONTACT BYPASS LOG (moderation)
+// CONTACT BYPASS LOG
 // ─────────────────────────────────────────────
 
 model ContactBypassLog {
-  id        String   @id @default(uuid())
-  userId    String
-  surface   String   // "chat", "bio", "review", "brief", "display_name"
-  content   String   // the blocked content
-  attempt   Int      // which attempt number for this user
-  reviewed  Boolean  @default(false)
-  reviewedAt DateTime?
-  reviewedBy String?
-
-  createdAt DateTime @default(now())
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  surface    String
+  content    String
+  attempt    Int
+  reviewed   Boolean  @default(false)
+  reviewedAt DateTime? @map("reviewed_at")
+  reviewedBy String?   @map("reviewed_by")
+  createdAt  DateTime  @default(now()) @map("created_at")
 
   @@map("contact_bypass_logs")
 }
