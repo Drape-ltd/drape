@@ -1,0 +1,17 @@
+# Maestro e2e test configuration for Drape
+#
+# Install Maestro CLI:
+#   curl -Ls "https://get.maestro.mobile.dev" | bash
+#
+# Run all flows against iOS Simulator:
+#   maestro test .maestro/flows/
+#
+# Run a single flow:
+#   maestro test .maestro/flows/01-customer-signup.yaml
+#
+# Env vars used across flows (set in shell or CI):
+#   DRAPE_TEST_CUSTOMER_EMAIL   — seed test customer email
+#   DRAPE_TEST_TAILOR_EMAIL     — seed test tailor email
+#   DRAPE_TEST_PASSWORD         — shared test password
+
+appId: com.drape.app   # matches app.json / eas.json bundle ID

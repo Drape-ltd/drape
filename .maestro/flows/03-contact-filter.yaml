@@ -1,0 +1,75 @@
+appId: com.drape.app
+name: "Contact filter — blocks phone numbers and social handles in messages"
+env:
+  DRAPE_TEST_CUSTOMER_EMAIL: "e2e-customer@drape.test"
+  DRAPE_TEST_TAILOR_EMAIL: "e2e-tailor@drape.test"
+  DRAPE_TEST_PASSWORD: "Drape2025!"
+
+# Prerequisites:
+#   - Run: cd packages/db && npx tsx seed-e2e.ts
+#   - A seeded order in CONFIRMED stage exists for DRAPE_TEST_CUSTOMER_EMAIL
+---
+
+- launchApp:
+    clearState: true
+
+# ── Sign in ───────────────────────────────────────────────────────────────────
+- tapOn: "Sign in"
+- tapOn:
+    id: "email-input"
+- inputText: "${DRAPE_TEST_CUSTOMER_EMAIL}"
+- tapOn:
+    id: "password-input"
+- inputText: "${DRAPE_TEST_PASSWORD}"
+- tapOn: "Sign in"
+
+- extendedWaitUntil:
+    visible: "Tailors for you"
+    timeout: 10000
+
+# ── Navigate to orders ────────────────────────────────────────────────────────
+- tapOn:
+    id: "tab-orders"
+- assertVisible: "Orders"
+
+# Open the CONFIRMED order — wait for list to load then tap by stage testID
+- extendedWaitUntil:
+    visible:
+      id: "order-card-CONFIRMED"
+    timeout: 8000
+- tapOn:
+    id: "order-card-CONFIRMED"
+
+# Open message thread
+- tapOn:
+    id: "message-tailor-btn"
+- assertVisible: "Message…"
+
+# ── Attempt to send a phone number ───────────────────────────────────────────
+- tapOn:
+    id: "message-input"
+- inputText: "Reach me on 07911 123456"
+
+# Tap send — sendText() validates and blocks, warning now appears
+- tapOn: "→"
+- assertVisible: "Contact details can't be shared on Drape."
+
+# Tap send again — still blocked, warning persists
+- tapOn: "→"
+- assertVisible: "Contact details can't be shared on Drape."
+
+# ── Clear and send a clean message ───────────────────────────────────────────
+# Input is still focused after failed sends — erase without re-tapping (keeps cursor at end)
+- eraseText: 100
+- inputText: "Can you add an extra centimetre to the waist"
+
+# Warning should disappear (no contact info in clean message)
+- assertNotVisible: "Contact details can't be shared on Drape."
+
+- tapOn: "→"
+
+# Message appears in the thread — wait for Supabase realtime to deliver it
+# Uses .*…* because the whole screen is one accessibility element in the iOS tree
+- extendedWaitUntil:
+    visible: ".*centimetre.*"
+    timeout: 10000

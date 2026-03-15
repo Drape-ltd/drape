@@ -16,6 +16,10 @@
     },
     "typecheck": {
       "dependsOn": ["^typecheck"]
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**", "__tests__/**"]
     }
   }
 }

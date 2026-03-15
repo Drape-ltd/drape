@@ -1,0 +1,56 @@
+appId: com.drape.app
+name: "Customer — sign up with email"
+---
+
+- launchApp:
+    clearState: true
+
+# Sign out any existing session (optional — no-op if already on welcome screen)
+- tapOn:
+    id: "tab-profile"
+    optional: true
+- scroll
+- tapOn:
+    text: "Sign out"
+    optional: true
+- tapOn:
+    text: "Sign out"
+    optional: true
+
+# ── Welcome screen ────────────────────────────────────────────────────────────
+- extendedWaitUntil:
+    visible: "Create an account"
+    timeout: 8000
+
+- assertVisible: "drape"
+- tapOn: "Create an account"
+
+# ── Sign-up screen ────────────────────────────────────────────────────────────
+- assertVisible: "Create your account"
+- tapOn:
+    id: "role-customer"
+
+- tapOn:
+    id: "display-name-input"
+- inputText: "Test Customer"
+
+- tapOn:
+    id: "email-input"
+- inputText: "testcustomer+${Date.now()}@drape.test"
+
+# Scroll so password field rises above keyboard
+- scroll
+
+- tapOn:
+    id: "password-input"
+- inputText: "Drape2025!"
+
+# Scroll so "Create account" button rises above keyboard
+- scroll
+
+- tapOn: "Create account"
+
+# ── Expect redirect to Customer home ─────────────────────────────────────────
+- extendedWaitUntil:
+    visible: "Tailors for you"
+    timeout: 10000

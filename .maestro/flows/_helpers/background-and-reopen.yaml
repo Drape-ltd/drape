@@ -1,0 +1,6 @@
+appId: com.drape.app
+# Simulates backgrounding the app and bringing it back to the foreground.
+# Used to verify session persistence.
+---
+- pressKey: Home
+- launchApp
