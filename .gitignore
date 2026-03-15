@@ -58,3 +58,27 @@ ios/
 
 # Testing
 coverage
+.maestro/screenshots
+
+# Certificates & keys
+*.pem
+*.p7b
+*.cer
+
+# Packed packages
+*.tgz
+
+# Expo EAS
+.eas/build
+eas-update-metadata.json
+
+# React Native
+.metro-health-check*
+metro-cache/
+
+# Supabase local dev
+supabase/.env
+.supabase/
+
+# Misc
+.cache
