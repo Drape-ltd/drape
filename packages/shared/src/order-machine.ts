@@ -6,9 +6,12 @@
 export type OrderStage =
   | 'DRAFT'
   | 'PENDING_QUOTE'
+  | 'CONSULTATION'
   | 'QUOTE_SENT'
   | 'PAYMENT_PENDING'
   | 'CONFIRMED'
+  | 'DESIGNING'
+  | 'SOURCING'
   | 'CUTTING'
   | 'SEWING'
   | 'FINISHING'
@@ -36,9 +39,14 @@ export const ORDER_TRANSITIONS: Transition[] = [
   // Customer submits brief
   { from: 'DRAFT', to: 'PENDING_QUOTE', actor: 'CUSTOMER', trigger: 'submit_brief' },
 
-  // Tailor quotes or declines
+  // Tailor reviews brief: quote directly, request consultation, or decline
   { from: 'PENDING_QUOTE', to: 'QUOTE_SENT', actor: 'TAILOR', trigger: 'send_quote' },
+  { from: 'PENDING_QUOTE', to: 'CONSULTATION', actor: 'TAILOR', trigger: 'request_consultation' },
   { from: 'PENDING_QUOTE', to: 'DECLINED', actor: 'TAILOR', trigger: 'decline' },
+
+  // After consultation, tailor sends quote or declines
+  { from: 'CONSULTATION', to: 'QUOTE_SENT', actor: 'TAILOR', trigger: 'send_quote' },
+  { from: 'CONSULTATION', to: 'DECLINED', actor: 'TAILOR', trigger: 'decline' },
 
   // Customer accepts or declines quote
   { from: 'QUOTE_SENT', to: 'PAYMENT_PENDING', actor: 'CUSTOMER', trigger: 'accept_quote' },
@@ -48,8 +56,15 @@ export const ORDER_TRANSITIONS: Transition[] = [
   // Payment succeeds
   { from: 'PAYMENT_PENDING', to: 'CONFIRMED', actor: 'SYSTEM', trigger: 'payment_succeeded' },
 
-  // Tailor advances production stages
+  // Tailor pre-production stages (flexible order — tailor chooses what applies)
+  { from: 'CONFIRMED', to: 'DESIGNING', actor: 'TAILOR', trigger: 'start_designing' },
+  { from: 'CONFIRMED', to: 'SOURCING', actor: 'TAILOR', trigger: 'start_sourcing' },
   { from: 'CONFIRMED', to: 'CUTTING', actor: 'TAILOR', trigger: 'start_cutting' },
+  { from: 'DESIGNING', to: 'SOURCING', actor: 'TAILOR', trigger: 'start_sourcing' },
+  { from: 'DESIGNING', to: 'CUTTING', actor: 'TAILOR', trigger: 'start_cutting' },
+  { from: 'SOURCING', to: 'CUTTING', actor: 'TAILOR', trigger: 'start_cutting' },
+
+  // Core production stages
   { from: 'CUTTING', to: 'SEWING', actor: 'TAILOR', trigger: 'start_sewing' },
   { from: 'SEWING', to: 'FINISHING', actor: 'TAILOR', trigger: 'start_finishing' },
 
@@ -66,6 +81,8 @@ export const ORDER_TRANSITIONS: Transition[] = [
 
   // Disputes (can open from any confirmed+ stage)
   { from: 'CONFIRMED', to: 'IN_DISPUTE', actor: 'CUSTOMER', trigger: 'open_dispute' },
+  { from: 'DESIGNING', to: 'IN_DISPUTE', actor: 'CUSTOMER', trigger: 'open_dispute' },
+  { from: 'SOURCING', to: 'IN_DISPUTE', actor: 'CUSTOMER', trigger: 'open_dispute' },
   { from: 'CUTTING', to: 'IN_DISPUTE', actor: 'CUSTOMER', trigger: 'open_dispute' },
   { from: 'SEWING', to: 'IN_DISPUTE', actor: 'CUSTOMER', trigger: 'open_dispute' },
   { from: 'FINISHING', to: 'IN_DISPUTE', actor: 'CUSTOMER', trigger: 'open_dispute' },
@@ -74,9 +91,10 @@ export const ORDER_TRANSITIONS: Transition[] = [
   { from: 'IN_DISPUTE', to: 'REFUNDED', actor: 'PLATFORM', trigger: 'resolve_refund' },
   { from: 'IN_DISPUTE', to: 'COMPLETE', actor: 'PLATFORM', trigger: 'resolve_release' },
 
-  // Platform cancellations (pre-confirmation are fully refunded)
+  // Cancellations (pre-confirmation)
   { from: 'DRAFT', to: 'CANCELLED', actor: 'PLATFORM', trigger: 'cancel' },
   { from: 'PENDING_QUOTE', to: 'CANCELLED', actor: 'PLATFORM', trigger: 'cancel' },
+  { from: 'CONSULTATION', to: 'CANCELLED', actor: 'PLATFORM', trigger: 'cancel' },
   { from: 'QUOTE_SENT', to: 'CANCELLED', actor: 'PLATFORM', trigger: 'cancel' },
 ]
 
@@ -104,6 +122,8 @@ export function isTerminal(stage: OrderStage): boolean {
 
 export const PRODUCTION_STAGES: OrderStage[] = [
   'CONFIRMED',
+  'DESIGNING',
+  'SOURCING',
   'CUTTING',
   'SEWING',
   'FINISHING',
@@ -112,9 +132,12 @@ export const PRODUCTION_STAGES: OrderStage[] = [
 export const STAGE_LABELS: Record<OrderStage, string> = {
   DRAFT: 'Draft',
   PENDING_QUOTE: 'Pending Quote',
+  CONSULTATION: 'Consultation',
   QUOTE_SENT: 'Quote Sent',
   PAYMENT_PENDING: 'Payment Pending',
   CONFIRMED: 'Confirmed',
+  DESIGNING: 'Designing',
+  SOURCING: 'Sourcing',
   CUTTING: 'Cutting',
   SEWING: 'Sewing',
   FINISHING: 'Finishing',
@@ -128,4 +151,14 @@ export const STAGE_LABELS: Record<OrderStage, string> = {
   IN_DISPUTE: 'In Dispute',
   REFUNDED: 'Refunded',
   CANCELLED: 'Cancelled',
+}
+
+// Customer-facing descriptions for active production stages
+export const STAGE_DESCRIPTIONS: Partial<Record<OrderStage, string>> = {
+  CONSULTATION: 'Your tailor has requested a consultation before sending a quote.',
+  DESIGNING: 'Your tailor is working on patterns and design details.',
+  SOURCING: 'Your tailor is sourcing fabric and materials.',
+  CUTTING: 'Fabric is being cut to your measurements.',
+  SEWING: 'Your garment is being sewn together.',
+  FINISHING: 'Final touches, pressing, and quality checks.',
 }

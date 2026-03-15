@@ -1,0 +1,77 @@
+appId: com.drape.app
+name: "Tailor — advances through production stages to shipped"
+env:
+  DRAPE_TEST_CUSTOMER_EMAIL: "e2e-customer@drape.test"
+  DRAPE_TEST_TAILOR_EMAIL: "e2e-tailor@drape.test"
+  DRAPE_TEST_PASSWORD: "Drape2025!"
+
+# Prerequisites (created by seed-e2e.ts):
+#   - An order in CONFIRMED stage exists for DRAPE_TEST_TAILOR_EMAIL
+#   - Delivery method is SHIPPING
+---
+
+- launchApp:
+    clearState: true
+
+- tapOn: "Sign in"
+- tapOn:
+    id: "email-input"
+- inputText: "${DRAPE_TEST_TAILOR_EMAIL}"
+- tapOn:
+    id: "password-input"
+- inputText: "${DRAPE_TEST_PASSWORD}"
+- tapOn: "Sign in"
+
+- extendedWaitUntil:
+    visible: "Your orders"
+    timeout: 8000
+
+# Open confirmed order
+- tapOn:
+    index: 0
+    selector:
+      type: "View"
+      childWith:
+        text: "Confirmed"
+
+- assertVisible: "Update production stage"
+
+# CONFIRMED → CUTTING (flexible stage picker — tap Cutting directly)
+- tapOn: "Cutting"
+- assertVisible: "Advancing to"
+- assertVisible: "Cutting"
+- tapOn: "Confirm update"
+- extendedWaitUntil:
+    visible: "Cutting"
+    timeout: 5000
+
+# CUTTING → SEWING
+- tapOn: "Advance to Sewing"
+- assertVisible: "Advancing to"
+- assertVisible: "Sewing"
+- tapOn: "Confirm update"
+- extendedWaitUntil:
+    visible: "Sewing"
+    timeout: 5000
+
+# SEWING → FINISHING
+- tapOn: "Advance to Finishing"
+- assertVisible: "Advancing to"
+- assertVisible: "Finishing"
+- tapOn: "Confirm update"
+- extendedWaitUntil:
+    visible: "Finishing"
+    timeout: 5000
+
+# FINISHING → SHIPPED
+- tapOn: "Mark as shipped"
+- assertVisible: "Advancing to"
+- assertVisible: "Shipped"
+- tapOn:
+    id: "stage-note-input"
+- inputText: "Dispatched via Royal Mail."
+- tapOn: "Confirm update"
+
+- extendedWaitUntil:
+    visible: "Shipped"
+    timeout: 5000

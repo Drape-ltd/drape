@@ -1,0 +1,91 @@
+appId: com.drape.app
+name: "Tailor — sign up and complete profile setup"
+---
+
+- launchApp:
+    clearState: true
+
+# Sign out any existing session (optional — no-op if already on welcome screen)
+- tapOn:
+    id: "tab-profile"
+    optional: true
+- scroll
+- tapOn:
+    text: "Sign out"
+    optional: true
+- tapOn:
+    text: "Sign out"
+    optional: true
+
+# ── Welcome screen ────────────────────────────────────────────────────────────
+- extendedWaitUntil:
+    visible: "Create an account"
+    timeout: 8000
+
+- assertVisible: "drape"
+- tapOn: "Create an account"
+- assertVisible: "Create your account"
+
+# Select Tailor role
+- tapOn:
+    id: "role-tailor"
+
+- tapOn:
+    id: "display-name-input"
+- inputText: "Test Tailor"
+
+- tapOn:
+    id: "email-input"
+- inputText: "testtailor+${Date.now()}@drape.test"
+
+# Scroll so password field rises above keyboard
+- scroll
+
+- tapOn:
+    id: "password-input"
+- inputText: "Drape2025!"
+
+# Scroll so "Create account" button rises above keyboard
+- scroll
+
+- tapOn: "Create account"
+
+# ── Tailor profile setup ──────────────────────────────────────────────────────
+- extendedWaitUntil:
+    visible: "Your identity"
+    timeout: 8000
+
+- tapOn:
+    id: "display-name-input"
+- eraseText: 50
+- inputText: "Test Tailors Ltd"
+
+# Tap the step heading to dismiss the keyboard, then tap location field
+- tapOn: "Your identity"
+
+- tapOn:
+    id: "location-input"
+- inputText: "London, UK"
+
+# Scroll so Continue button rises above keyboard, then tap it
+- scroll
+
+# Language chip (English is pre-selected; tap Continue)
+- tapOn: "Continue"
+
+# ── Step 1: Specialties ───────────────────────────────────────────────────────
+- extendedWaitUntil:
+    visible: "Specialties & pricing"
+    timeout: 5000
+
+- tapOn: "Suits"
+
+- tapOn: "Continue"
+
+# ── Step 2: Portfolio (skip — tap Continue is disabled; use Submit profile path) ─
+# Portfolio step requires 4 photos — untestable in headless E2E
+# We navigate back via Back rather than completing portfolio
+# For now assert step 2 loads correctly and back out
+- extendedWaitUntil:
+    visible: "Portfolio"
+    timeout: 5000

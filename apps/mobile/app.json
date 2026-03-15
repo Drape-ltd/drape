@@ -47,10 +47,32 @@
         {
           "cameraPermission": "Drape uses your camera for photos and video."
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Drape accesses your photo library for reference and portfolio photos.",
+          "cameraPermission": "Drape uses your camera to take photos for orders."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#2D6A4F",
+          "sounds": []
+        }
+      ],
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Drape uses your microphone to record voice note messages."
+        }
       ]
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "newArchEnabled": true
   }
 }

@@ -1,0 +1,60 @@
+appId: com.drape.app
+name: "Customer — opens a dispute on a shipped order"
+env:
+  DRAPE_TEST_CUSTOMER_EMAIL: "e2e-customer@drape.test"
+  DRAPE_TEST_TAILOR_EMAIL: "e2e-tailor@drape.test"
+  DRAPE_TEST_PASSWORD: "Drape2025!"
+
+# Prerequisites:
+#   - An order in SHIPPED stage exists for DRAPE_TEST_CUSTOMER_EMAIL
+---
+
+- launchApp:
+    clearState: true
+
+# Sign in as customer
+- tapOn: "Sign in"
+- tapOn:
+    id: "email-input"
+- inputText: "${DRAPE_TEST_CUSTOMER_EMAIL}"
+- tapOn:
+    id: "password-input"
+- inputText: "${DRAPE_TEST_PASSWORD}"
+- tapOn: "Sign in"
+
+- extendedWaitUntil:
+    visible: "Discover tailors"
+    timeout: 8000
+
+- tapOn: "Orders"
+
+# Open the shipped order
+- tapOn:
+    index: 0
+    selector:
+      type: "View"
+      childWith:
+        text: "Shipped"
+
+- assertVisible: "Something wrong? Open a dispute"
+- tapOn: "Something wrong? Open a dispute"
+
+# ── Dispute modal ─────────────────────────────────────────────────────────────
+- assertVisible: "Open a dispute"
+
+# Select a reason
+- tapOn: "Order not delivered"
+
+# Description
+- tapOn:
+    id: "dispute-description-input"
+- inputText: "It has been 3 weeks since dispatch and my order has not arrived. No tracking update since day 1."
+
+- tapOn: "Submit dispute"
+
+- extendedWaitUntil:
+    visible: "In Dispute"
+    timeout: 8000
+
+# Confirm the order is now locked out of normal actions
+- assertNotVisible: "I've received my order"

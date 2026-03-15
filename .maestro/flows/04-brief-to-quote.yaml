@@ -1,0 +1,224 @@
+appId: com.drape.app
+name: "Full flow — customer places brief, tailor sends quote, customer accepts"
+env:
+  DRAPE_TEST_CUSTOMER_EMAIL: "e2e-customer@drape.test"
+  DRAPE_TEST_TAILOR_EMAIL: "e2e-tailor@drape.test"
+  DRAPE_TEST_PASSWORD: "Drape2025!"
+
+# Prerequisites (created by seed-e2e.ts):
+#   - DRAPE_TEST_CUSTOMER_EMAIL signed up as CUSTOMER with measurements on file
+#   - DRAPE_TEST_TAILOR_EMAIL signed up as TAILOR, is_live = true
+---
+
+# ════════════════════════════════════════════════════════════════════════
+# PART 1: Customer places a brief
+# ════════════════════════════════════════════════════════════════════════
+
+- launchApp:
+    clearState: true
+
+- extendedWaitUntil:
+    visible: "Sign in"
+    timeout: 8000
+- tapOn: "Sign in"
+- tapOn:
+    id: "email-input"
+- inputText: "${DRAPE_TEST_CUSTOMER_EMAIL}"
+- tapOn:
+    id: "password-input"
+- inputText: "${DRAPE_TEST_PASSWORD}"
+- tapOn: "Sign in"
+
+- extendedWaitUntil:
+    visible: "Tailors for you"
+    timeout: 8000
+
+# Navigate to search tab and wait for search input to be ready
+- tapOn:
+    id: "tab-search"
+- extendedWaitUntil:
+    visible:
+      id: "search-input"
+    timeout: 8000
+- tapOn:
+    id: "search-input"
+- inputText: "Test Tailor"
+- tapOn:
+    id: "search-submit-btn"
+- extendedWaitUntil:
+    visible: "Test Tailor card"
+    timeout: 8000
+- tapOn: "Test Tailor card"
+
+# Wait for tailor profile back button (interactive, reliable loaded indicator)
+- extendedWaitUntil:
+    visible:
+      id: "tailor-back-btn"
+    timeout: 8000
+- tapOn:
+    id: "book-tailor-btn"
+
+# ── Step 0: Garment details ───────────────────────────────────────────────────
+- extendedWaitUntil:
+    visible:
+      id: "description-input"
+    timeout: 8000
+- tapOn: "Suit"
+- tapOn:
+    id: "description-input"
+- inputText: "Two-piece navy suit, slim fit, for a wedding in June."
+- tapOn:
+    id: "occasion-input"
+- inputText: "Wedding"
+- tapOn:
+    id: "brief-continue-btn"
+
+# ── Step 1: Reference & inspiration (optional — skip through) ─────────────────
+- extendedWaitUntil:
+    visible:
+      id: "brief-continue-btn"
+    timeout: 5000
+- tapOn:
+    id: "brief-continue-btn"
+
+# ── Step 2: Measurements (seeded customer has measurements) ───────────────────
+- extendedWaitUntil:
+    visible:
+      id: "brief-continue-btn"
+    timeout: 5000
+- tapOn:
+    id: "brief-continue-btn"
+
+# ── Step 3: Fabric & delivery ─────────────────────────────────────────────────
+- extendedWaitUntil:
+    visible:
+      id: "brief-send-btn"
+    timeout: 5000
+- tapOn: "Tailor to source"
+- tapOn: "Ship to me"
+- tapOn:
+    id: "brief-send-btn"
+
+- extendedWaitUntil:
+    visible:
+      id: "order-pending-quote"
+    timeout: 10000
+
+# Sign out
+- tapOn:
+    id: "tab-profile"
+- scroll
+- tapOn: "Sign out"
+- tapOn: "Sign out"
+
+# ════════════════════════════════════════════════════════════════════════
+# PART 2: Tailor reviews brief and sends a quote
+# ════════════════════════════════════════════════════════════════════════
+
+- extendedWaitUntil:
+    visible: "Sign in"
+    timeout: 8000
+- tapOn: "Sign in"
+- tapOn:
+    id: "email-input"
+- inputText: "${DRAPE_TEST_TAILOR_EMAIL}"
+- tapOn:
+    id: "password-input"
+- inputText: "${DRAPE_TEST_PASSWORD}"
+- tapOn: "Sign in"
+
+- extendedWaitUntil:
+    visible:
+      id: "tailor-home-screen"
+    timeout: 8000
+
+- tapOn:
+    id: "tab-tailor-orders"
+
+# Open the new brief (first PENDING_QUOTE order)
+- extendedWaitUntil:
+    visible:
+      id: "tailor-order-card-PENDING_QUOTE"
+    timeout: 8000
+- tapOn:
+    id: "tailor-order-card-PENDING_QUOTE"
+
+# Wait for order detail to load and Send quote button to appear
+- extendedWaitUntil:
+    visible:
+      id: "tailor-send-quote-btn"
+    timeout: 8000
+- tapOn:
+    id: "tailor-send-quote-btn"
+
+# ── Quote modal ───────────────────────────────────────────────────────────────
+- extendedWaitUntil:
+    visible:
+      id: "quote-amount-input"
+    timeout: 5000
+- tapOn:
+    id: "quote-amount-input"
+- inputText: "450"
+- tapOn:
+    id: "quote-completion-date-input"
+- inputText: "2025-09-01"
+- tapOn: "Send quote"
+
+# Wait for modal to close and order to refresh showing updated stage
+- extendedWaitUntil:
+    visible:
+      id: "tailor-order-stage"
+    timeout: 8000
+
+# Sign out
+- tapOn:
+    id: "tab-profile"
+- scroll
+- tapOn: "Sign out"
+- tapOn: "Sign out"
+
+# ════════════════════════════════════════════════════════════════════════
+# PART 3: Customer reviews and accepts the quote
+# ════════════════════════════════════════════════════════════════════════
+
+- extendedWaitUntil:
+    visible: "Sign in"
+    timeout: 8000
+- tapOn: "Sign in"
+- tapOn:
+    id: "email-input"
+- inputText: "${DRAPE_TEST_CUSTOMER_EMAIL}"
+- tapOn:
+    id: "password-input"
+- inputText: "${DRAPE_TEST_PASSWORD}"
+- tapOn: "Sign in"
+
+- extendedWaitUntil:
+    visible: "Tailors for you"
+    timeout: 8000
+
+- tapOn:
+    id: "tab-orders"
+
+# Open the QUOTE_SENT order
+- extendedWaitUntil:
+    visible:
+      id: "order-card-QUOTE_SENT"
+    timeout: 10000
+- tapOn:
+    id: "order-card-QUOTE_SENT"
+
+# Wait for quote review screen to load
+- extendedWaitUntil:
+    visible:
+      id: "quote-received-card"
+    timeout: 8000
+- assertVisible: "£450"
+
+- tapOn: "Accept & pay"
+- tapOn: "Accept"
+
+- extendedWaitUntil:
+    visible:
+      id: "order-tracking-status"
+    timeout: 10000

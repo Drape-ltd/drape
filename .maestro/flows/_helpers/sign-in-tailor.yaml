@@ -1,0 +1,13 @@
+# Reusable: sign in as test tailor from Welcome or Sign In screen.
+---
+- tapOn: "Sign in"
+- tapOn:
+    id: "email-input"
+- inputText: "${DRAPE_TEST_TAILOR_EMAIL}"
+- tapOn:
+    id: "password-input"
+- inputText: "${DRAPE_TEST_PASSWORD}"
+- tapOn: "Sign in"
+- extendedWaitUntil:
+    visible: "Your orders"
+    timeout: 8000

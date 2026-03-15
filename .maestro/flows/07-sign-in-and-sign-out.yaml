@@ -1,0 +1,49 @@
+appId: com.drape.app
+name: "Auth — sign in, verify session persists after background, sign out"
+env:
+  DRAPE_TEST_CUSTOMER_EMAIL: "e2e-customer@drape.test"
+  DRAPE_TEST_TAILOR_EMAIL: "e2e-tailor@drape.test"
+  DRAPE_TEST_PASSWORD: "Drape2025!"
+---
+
+- launchApp:
+    clearState: true
+
+# ── Sign in ───────────────────────────────────────────────────────────────────
+- extendedWaitUntil:
+    visible: "Sign in"
+    timeout: 8000
+- tapOn: "Sign in"
+- tapOn:
+    id: "email-input"
+- inputText: "${DRAPE_TEST_CUSTOMER_EMAIL}"
+- tapOn:
+    id: "password-input"
+- inputText: "${DRAPE_TEST_PASSWORD}"
+- tapOn: "Sign in"
+
+- extendedWaitUntil:
+    visible: "Tailors for you"
+    timeout: 8000
+
+# ── Background and re-open — session should persist ───────────────────────────
+- runFlow:
+    file: _helpers/background-and-reopen.yaml
+
+- extendedWaitUntil:
+    visible: "Tailors for you"
+    timeout: 5000
+
+# ── Sign out ──────────────────────────────────────────────────────────────────
+- tapOn:
+    id: "tab-profile"
+- scroll
+- tapOn: "Sign out"
+- tapOn: "Sign out"
+
+- extendedWaitUntil:
+    visible: "drape"
+    timeout: 5000
+
+# Should not be able to reach protected screens without auth
+- assertNotVisible: "Tailors for you"
