@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Modal,
@@ -7,9 +7,14 @@ import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { TierBadgeChip } from '@/components/ui'
+import { shareTailorProfile } from '@/lib/invite'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
+import { stageColor } from '@/lib/stageColors'
+
+const CURRENCY_SYMBOL: Record<string, string> = {
+  GBP: '£', USD: '$', EUR: '€', NGN: '₦', GHS: '₵', KES: 'KSh',
+}
 
 type Availability = 'OPEN' | 'LIMITED' | 'FULLY_BOOKED'
 const AVAIL_OPTIONS: { value: Availability; label: string; desc: string; color: string }[] = [
@@ -23,9 +28,13 @@ type DashboardStats = {
   pendingQuotes: number
   monthEarnings: number
   avgRating: number
-  tier: string
+  tier: string | null
   displayName: string
   availability: Availability
+  currency: string
+  isLive: boolean
+  idVerificationStatus: string
+  profileId: string | null
 }
 
 type ActiveOrderRow = {
@@ -38,17 +47,6 @@ type ActiveOrderRow = {
   quotedAmount: number | null
 }
 
-const STAGE_COLOR: Partial<Record<OrderStage, string>> = {
-  PENDING_QUOTE: Colors.warning,
-  QUOTE_SENT: Colors.warning,
-  CONFIRMED: Colors.needleGreen,
-  CUTTING: Colors.needleGreen,
-  SEWING: Colors.needleGreen,
-  FINISHING: Colors.needleGreen,
-  SHIPPED: Colors.needleGreen,
-  READY_FOR_COLLECTION: Colors.needleGreen,
-  IN_DISPUTE: Colors.kanteRust,
-}
 
 export default function TailorDashboard() {
   const router = useRouter()
@@ -70,9 +68,9 @@ export default function TailorDashboard() {
     const [profileRes, ordersRes] = await Promise.all([
       supabase
         .from('tailor_profiles')
-        .select('display_name, tier, avg_rating, availability')
+        .select('id, display_name, tier, avg_rating, availability, currency, is_live, id_verification_status')
         .eq('user_id', user?.id)
-        .single(),
+        .maybeSingle(),
       supabase
         .from('orders')
         .select(`
@@ -111,9 +109,13 @@ export default function TailorDashboard() {
       pendingQuotes,
       monthEarnings,
       avgRating: profile?.avg_rating ?? 0,
-      tier: profile?.tier ?? 'VERIFIED',
+      tier: profile?.tier ?? null,
       displayName: profile?.display_name ?? user?.user_metadata?.display_name ?? '',
       availability: profile?.availability ?? 'OPEN',
+      currency: profile?.currency ?? 'GBP',
+      isLive: profile?.is_live ?? false,
+      idVerificationStatus: profile?.id_verification_status ?? 'NOT_SUBMITTED',
+      profileId: profile?.id ?? null,
     })
 
     setOrders(
@@ -163,8 +165,8 @@ export default function TailorDashboard() {
         {/* Header */}
         <View style={styles.header}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.greeting}>{greeting}, {stats?.displayName?.split(' ')[0] ?? '…'}</Text>
-            <Text style={styles.wordmark}>drape</Text>
+            <Text style={styles.greeting}>{greeting}</Text>
+            <Text style={styles.greetingName}>{stats?.displayName?.split(' ')[0] ?? '…'}</Text>
           </View>
           <View style={styles.headerRight}>
             {stats && (
@@ -175,7 +177,7 @@ export default function TailorDashboard() {
                 </Text>
               </TouchableOpacity>
             )}
-            {stats && <TierBadgeChip tier={stats.tier as any} size="lg" />}
+            {stats && <LiveStatusBadge isLive={stats.isLive} idStatus={stats.idVerificationStatus} />}
           </View>
         </View>
 
@@ -214,11 +216,11 @@ export default function TailorDashboard() {
         {(stats?.pendingQuotes ?? 0) > 0 && (
           <TouchableOpacity
             style={styles.alertCard}
-            onPress={() => router.push('/(tailor)/orders')}
+            onPress={() => router.navigate('/(tailor)/orders')}
           >
             <View style={styles.alertDot} />
             <Text style={styles.alertText}>
-              {stats!.pendingQuotes} brief{stats!.pendingQuotes > 1 ? 's' : ''} waiting for your quote
+              {stats!.pendingQuotes} order{stats!.pendingQuotes > 1 ? 's' : ''} waiting for your quote
             </Text>
             <Text style={styles.alertCta}>Review →</Text>
           </TouchableOpacity>
@@ -226,48 +228,80 @@ export default function TailorDashboard() {
 
         {/* Stats grid */}
         <View style={styles.statsGrid}>
-          <StatCard label="Active orders" value={String(stats?.activeOrders ?? '—')} />
-          <StatCard label="Awaiting quote" value={String(stats?.pendingQuotes ?? '—')} accent={!!stats?.pendingQuotes} />
-          <TouchableOpacity onPress={() => router.push('/(tailor)/earnings')} style={{ flex: 1 }}>
+          <View style={styles.statsRow}>
+            <StatCard label="Active orders" value={String(stats?.activeOrders ?? '—')} />
+            <StatCard label="Awaiting quote" value={String(stats?.pendingQuotes ?? '—')} accent={!!stats?.pendingQuotes} />
+          </View>
+          <View style={styles.statsRow}>
+            <TouchableOpacity onPress={() => router.navigate('/(tailor)/earnings')} style={{ flex: 1 }}>
+              <StatCard
+                label="This month"
+                value={(() => {
+                  const sym = CURRENCY_SYMBOL[stats?.currency ?? 'GBP'] ?? (stats?.currency ?? '£')
+                  return stats?.monthEarnings ? `${sym}${(stats.monthEarnings / 100).toFixed(0)}` : `${sym}0`
+                })()}
+              />
+            </TouchableOpacity>
             <StatCard
-              label="This month ↗"
-              value={stats?.monthEarnings ? `£${(stats.monthEarnings / 100).toFixed(0)}` : '£0'}
+              label="Rating"
+              value={stats?.avgRating ? `${stats.avgRating.toFixed(1)} ★` : '—'}
             />
-          </TouchableOpacity>
-          <StatCard
-            label="Rating"
-            value={stats?.avgRating ? `${stats.avgRating.toFixed(1)} ★` : '—'}
-          />
+          </View>
         </View>
 
         {/* Active orders list */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Active orders</Text>
-            <TouchableOpacity onPress={() => router.push('/(tailor)/orders')}>
+            <TouchableOpacity onPress={() => router.navigate('/(tailor)/orders')}>
               <Text style={styles.sectionLink}>See all →</Text>
             </TouchableOpacity>
           </View>
 
           {orders.length === 0 ? (
             <View style={styles.emptyOrders}>
-              <Text style={styles.emptyText}>No active orders yet.</Text>
-              <Text style={styles.emptyHint}>Your order queue will appear here once customers book you.</Text>
+              <Text style={styles.emptyText}>No active orders yet</Text>
+              {stats?.isLive ? (
+                <>
+                  <Text style={styles.emptyHint}>Share your profile to attract your first clients.</Text>
+                  {stats.profileId && (
+                    <TouchableOpacity style={styles.shareBtn} onPress={() => shareTailorProfile(stats.profileId!, stats.displayName)}>
+                      <Text style={styles.shareBtnText}>Share my profile</Text>
+                    </TouchableOpacity>
+                  )}
+                </>
+              ) : stats?.idVerificationStatus === 'PENDING' ? (
+                <Text style={styles.emptyHint}>Your profile is under review. You'll start receiving orders once verified.</Text>
+              ) : stats?.idVerificationStatus === 'REJECTED' ? (
+                <>
+                  <Text style={styles.emptyHint}>Your verification was declined. Update your ID to go live.</Text>
+                  <TouchableOpacity style={styles.shareBtn} onPress={() => router.navigate('/(tailor)/profile/setup')}>
+                    <Text style={styles.shareBtnText}>Resubmit verification</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.emptyHint}>Complete your profile and go live to start receiving orders.</Text>
+                  <TouchableOpacity style={styles.shareBtn} onPress={() => router.navigate('/(tailor)/profile/setup')}>
+                    <Text style={styles.shareBtnText}>Complete profile</Text>
+                  </TouchableOpacity>
+                </>
+              )}
             </View>
           ) : (
             orders.slice(0, 5).map((order) => (
               <TouchableOpacity
                 key={order.id}
                 style={styles.orderRow}
-                onPress={() => router.push(`/(tailor)/orders/${order.id}`)}
+                onPress={() => router.navigate(`/(tailor)/orders/${order.id}`)}
               >
                 <View style={styles.orderRowLeft}>
                   <Text style={styles.orderGarment}>{order.garmentType}</Text>
                   <Text style={styles.orderCustomer}>{order.customerName}</Text>
                 </View>
                 <View style={styles.orderRowRight}>
-                  <View style={[styles.stagePill, { backgroundColor: (STAGE_COLOR[order.stage] ?? Colors.midGrey) + '20' }]}>
-                    <Text style={[styles.stageText, { color: STAGE_COLOR[order.stage] ?? Colors.midGrey }]}>
+                  <View style={[styles.stagePill, { backgroundColor: stageColor(order.stage).bg }]}>
+                    <Text style={[styles.stageText, { color: stageColor(order.stage).text }]}>
                       {STAGE_LABELS[order.stage]}
                     </Text>
                   </View>
@@ -283,6 +317,24 @@ export default function TailorDashboard() {
         </View>
       </ScrollView>
     </SafeAreaView>
+  )
+}
+
+const STATUS_BADGE: Record<string, { label: string; color: string; bg: string; dot: boolean }> = {
+  LIVE:          { label: 'Live',          color: Colors.success,    bg: Colors.success + '25',  dot: true },
+  PENDING:       { label: 'In review',     color: Colors.warning,    bg: Colors.warning + '22',  dot: false },
+  REJECTED:      { label: 'Action needed', color: Colors.error,      bg: Colors.error + '18',    dot: false },
+  NOT_SUBMITTED: { label: 'Setup needed',  color: Colors.midGrey,    bg: Colors.lightGrey,       dot: false },
+}
+
+function LiveStatusBadge({ isLive, idStatus }: { isLive: boolean; idStatus: string }) {
+  const key = isLive ? 'LIVE' : (idStatus in STATUS_BADGE ? idStatus : 'NOT_SUBMITTED')
+  const cfg = STATUS_BADGE[key]
+  return (
+    <View style={[styles.availPill, { backgroundColor: cfg.bg }]}>
+      {cfg.dot && <View style={[styles.availDot, { backgroundColor: cfg.color }]} />}
+      <Text style={[styles.availLabel, { color: cfg.color }]}>{cfg.label}</Text>
+    </View>
   )
 }
 
@@ -303,7 +355,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   headerRight: { alignItems: 'flex-end', gap: Spacing.sm },
   greeting: { fontSize: FontSize.sm, color: Colors.inkLight },
-  wordmark: { fontSize: 32, fontWeight: FontWeight.bold, color: Colors.needleGreen, letterSpacing: -1 },
+  greetingName: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink, letterSpacing: -0.5 },
 
   availPill: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
@@ -344,9 +396,10 @@ const styles = StyleSheet.create({
   alertText: { flex: 1, fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink },
   alertCta: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.warning },
 
-  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  statsGrid: { gap: Spacing.sm },
+  statsRow: { flexDirection: 'row', gap: Spacing.sm },
   statCard: {
-    flex: 1, minWidth: '45%', backgroundColor: Colors.white,
+    flex: 1, backgroundColor: Colors.white,
     borderRadius: Radius.lg, padding: Spacing.lg, gap: 4, ...Shadow.sm,
   },
   statCardAccent: { backgroundColor: Colors.warning + '15', borderWidth: 1, borderColor: Colors.warning + '40' },
@@ -360,8 +413,16 @@ const styles = StyleSheet.create({
   sectionLink: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
 
   emptyOrders: { gap: Spacing.sm, alignItems: 'center', paddingVertical: Spacing.xl },
-  emptyText: { fontSize: FontSize.md, color: Colors.inkLight },
+  emptyText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   emptyHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center' },
+  shareBtn: {
+    marginTop: Spacing.sm,
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
+  },
+  shareBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
 
   orderRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',

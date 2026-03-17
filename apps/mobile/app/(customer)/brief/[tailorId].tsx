@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, KeyboardAvoidingView, Platform, Image, Modal,
+  Alert, KeyboardAvoidingView, Platform, Image, Modal, TextInput,
 } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -13,7 +13,7 @@ import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
 import { stripExif } from '@/lib/stripExif'
 import { Button, Input } from '@/components/ui'
-import { filterContactInfo } from '@drape/shared/contact-filter'
+import { filterContactInfo, rejectPlaceholder, filterStyleReference } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 const MEAS_PROMPT_KEY = 'drape_meas_prompt_shown'
@@ -28,7 +28,7 @@ const GARMENT_TYPES = [
   'Trousers', 'Shirt', 'Bespoke Dress', 'Wedding Gown', 'Blazer', 'Skirt', 'Other',
 ]
 
-const STEP_TITLES = ['Garment details', 'Reference & inspiration', 'Your measurements', 'Fabric & delivery']
+const STEP_TITLES = ['Garment details', 'Style references', 'Your measurements', 'Fabric & delivery']
 
 const CURATED_STYLE_HANDLES = [
   '@thesartorialist',
@@ -66,15 +66,22 @@ export default function OrderBriefScreen() {
   const [photos, setPhotos] = useState<string[]>([])
   const [inspirationLinks, setInspirationLinks] = useState<string[]>([])
   const [inspirationInput, setInspirationInput] = useState('')
+  const [linkError, setLinkError] = useState('')
 
   // Step 3 — measurement profile summary
   const [measurements, setMeasurements] = useState<any>(null)
   const [fitNote, setFitNote] = useState('')
   const [fitNoteError, setFitNoteError] = useState('')
 
+  // Inline measurement editing
+  const [editingField, setEditingField] = useState<{ key: string; label: string; value: string } | null>(null)
+  const [editValue, setEditValue] = useState('')
+
   // Step 4
   const [fabricSource, setFabricSource] = useState<FabricSource | null>(null)
   const [deliveryMethod, setDeliveryMethod] = useState<DeliveryMethod | null>(null)
+  const [deliveryAddress, setDeliveryAddress] = useState('')
+  const [deliveryAddressError, setDeliveryAddressError] = useState('')
 
   // Resolved tailor user_id (tailorId param is tailor_profiles.id)
   const [tailorUserId, setTailorUserId] = useState<string | null>(null)
@@ -109,13 +116,29 @@ export default function OrderBriefScreen() {
   }, [])
 
   function validateDescription(text: string) {
+    const placeholder = rejectPlaceholder(text, 'Description')
+    if (placeholder) { setDescriptionError(placeholder); return false }
     const res = filterContactInfo(text)
     if (res.blocked) { setDescriptionError("Contact details can't be included here."); return false }
     setDescriptionError('')
     return true
   }
 
+  function validateDeliveryAddress(text: string) {
+    const placeholder = rejectPlaceholder(text, 'Delivery address')
+    if (placeholder) { setDeliveryAddressError(placeholder); return false }
+    if (text.trim().length < 10) { setDeliveryAddressError('Please enter your full delivery address.'); return false }
+    setDeliveryAddressError('')
+    return true
+  }
+
   function validateFitNote(text: string) {
+    if (text.trim().length < 20) {
+      setFitNoteError('Tell your tailor about your deadline and any key fit details — at least 20 characters.')
+      return false
+    }
+    const placeholder = rejectPlaceholder(text, 'Note')
+    if (placeholder) { setFitNoteError(placeholder); return false }
     const res = filterContactInfo(text)
     if (res.blocked) { setFitNoteError("Contact details can't be included here."); return false }
     setFitNoteError('')
@@ -134,10 +157,14 @@ export default function OrderBriefScreen() {
   }
 
   function canProceed(): boolean {
-    if (step === 0) return !!garmentType && !!description.trim() && !descriptionError
+    if (step === 0) return !!garmentType && description.trim().length >= 1 && !descriptionError && !!deadline
     if (step === 1) return true // photos optional
-    if (step === 2) return !!measurements
-    if (step === 3) return !!fabricSource && !!deliveryMethod
+    if (step === 2) return !!measurements && fitNote.trim().length >= 20 && !fitNoteError
+    if (step === 3) {
+      if (!fabricSource || !deliveryMethod) return false
+      if (deliveryMethod === 'SHIPPING' && (deliveryAddress.trim().length < 10 || !!deliveryAddressError)) return false
+      return true
+    }
     return false
   }
 
@@ -149,8 +176,22 @@ export default function OrderBriefScreen() {
 
   function addCustomInspirationLink() {
     const trimmed = inspirationInput.trim()
-    if (!trimmed || inspirationLinks.includes(trimmed)) return
-    setInspirationLinks((prev) => [...prev, trimmed])
+    if (!trimmed) return
+    if (inspirationLinks.length >= 5) {
+      setLinkError('Maximum 5 style references per order.')
+      return
+    }
+    if (inspirationLinks.includes(trimmed)) {
+      setLinkError("That link is already added.")
+      return
+    }
+    const result = filterStyleReference(trimmed)
+    if (!result.allowed) {
+      setLinkError(result.reason ?? 'This link isn\'t accepted.')
+      return
+    }
+    setLinkError('')
+    setInspirationLinks((prev) => [...prev, result.cleaned!])
     setInspirationInput('')
   }
 
@@ -163,6 +204,10 @@ export default function OrderBriefScreen() {
       Alert.alert('Error', 'Could not load tailor details. Please go back and try again.')
       return
     }
+    // Final guard — catches any placeholder values that bypassed per-field validation
+    if (!validateDescription(description)) return
+    if (!validateFitNote(fitNote)) return
+    if (deliveryMethod === 'SHIPPING' && !validateDeliveryAddress(deliveryAddress)) return
     setSubmitting(true)
 
     // Upload reference photos to Supabase Storage (EXIF stripped before upload)
@@ -201,6 +246,7 @@ export default function OrderBriefScreen() {
       fit_note: fitNote.trim() ? (inspirationLinks.length > 0 ? `${fitNote.trim()}\n\nStyle inspiration: ${inspirationLinks.join(', ')}` : fitNote.trim()) : (inspirationLinks.length > 0 ? `Style inspiration: ${inspirationLinks.join(', ')}` : null),
       fabric_source: fabricSource,
       delivery_method: deliveryMethod,
+      delivery_address: deliveryMethod === 'SHIPPING' ? deliveryAddress.trim() : null,
       stage: 'PENDING_QUOTE',
       stage_updated_at: new Date().toISOString(),
     }).select('id').single()
@@ -209,7 +255,7 @@ export default function OrderBriefScreen() {
 
     if (error || !data) {
       console.error('Order insert error:', JSON.stringify(error))
-      Alert.alert('Error', 'Could not submit your brief. Please try again.')
+      Alert.alert('Error', 'Could not submit your order. Please try again.')
       return
     }
 
@@ -229,9 +275,9 @@ export default function OrderBriefScreen() {
     if (step === 2 && !measurements) {
       Alert.alert(
         'Measurements required',
-        'Please set up your measurement profile before sending a brief. This helps your tailor give an accurate quote.',
+        'Please set up your measurement profile before placing an order. This helps your tailor give an accurate quote.',
         [
-          { text: 'Set up now', onPress: () => router.push('/(customer)/profile/measurements') },
+          { text: 'Set up now', onPress: () => router.navigate('/(customer)/profile/measurements') },
           { text: 'Cancel', style: 'cancel' },
         ]
       )
@@ -250,7 +296,7 @@ export default function OrderBriefScreen() {
   async function dismissMeasPrompt(goToMeasurements: boolean) {
     await AsyncStorage.setItem(MEAS_PROMPT_KEY, '1')
     setShowMeasPrompt(false)
-    if (goToMeasurements) router.push('/(customer)/profile/measurements')
+    if (goToMeasurements) router.navigate('/(customer)/profile/measurements')
   }
 
   return (
@@ -322,17 +368,18 @@ export default function OrderBriefScreen() {
                 />
 
                 <View>
-                  <Text style={styles.fieldLabel}>Deadline (optional)</Text>
-                  <TouchableOpacity style={styles.dateButton} onPress={() => setShowDatePicker(true)}>
+                  <Text style={styles.fieldLabel}>Deadline <Text style={styles.required}>*</Text></Text>
+                  <Text style={styles.fieldHint}>When do you need this by? Default is 4 weeks from today.</Text>
+                  <TouchableOpacity style={[styles.dateButton, !deadline && styles.dateButtonRequired]} onPress={() => setShowDatePicker(true)}>
                     <Text style={[styles.dateText, !deadline && styles.datePlaceholder]}>
                       {deadline
                         ? deadline.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' })
-                        : 'Select a date'}
+                        : 'Select your deadline'}
                     </Text>
                   </TouchableOpacity>
                   {showDatePicker && (
                     <DateTimePicker
-                      value={deadline ?? new Date()}
+                      value={deadline ?? (() => { const d = new Date(); d.setDate(d.getDate() + 28); return d })()}
                       mode="date"
                       minimumDate={new Date()}
                       onChange={(_, date) => { setShowDatePicker(false); if (date) setDeadline(date) }}
@@ -377,7 +424,7 @@ export default function OrderBriefScreen() {
                 <View style={styles.inspirationSection}>
                   <Text style={styles.fieldLabel}>Style inspiration</Text>
                   <Text style={styles.fieldHint}>
-                    Add Instagram handles or links to styles you like. We've suggested some accounts to explore.
+                    Add Instagram, Pinterest, or TikTok links to styles you like — up to 5. We've suggested some accounts below.
                   </Text>
 
                   {/* Curated handles */}
@@ -403,9 +450,9 @@ export default function OrderBriefScreen() {
                     <View style={{ flex: 1 }}>
                       <Input
                         label=""
-                        placeholder="Paste a link or @handle"
+                        placeholder="Paste an Instagram / Pinterest link or @handle"
                         value={inspirationInput}
-                        onChangeText={setInspirationInput}
+                        onChangeText={(v) => { setInspirationInput(v); if (linkError) setLinkError('') }}
                         containerStyle={{ marginBottom: 0 }}
                         onSubmitEditing={addCustomInspirationLink}
                         returnKeyType="done"
@@ -415,6 +462,7 @@ export default function OrderBriefScreen() {
                       <Text style={styles.inspirationAddText}>Add</Text>
                     </TouchableOpacity>
                   </View>
+                  {linkError ? <Text style={styles.linkError}>{linkError}</Text> : null}
 
                   {/* Selected inspiration links */}
                   {inspirationLinks.length > 0 && (
@@ -438,24 +486,34 @@ export default function OrderBriefScreen() {
               <View style={styles.fields}>
                 {measurements ? (
                   <View style={styles.measureSummaryCard}>
-                    <Text style={styles.measureSummaryTitle}>Your measurement profile</Text>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Text style={styles.measureSummaryTitle}>Your measurements</Text>
+                      <Text style={styles.measureEditHint}>Tap any field to edit</Text>
+                    </View>
                     <View style={styles.measureSummaryGrid}>
                       {[
-                        { label: 'Chest', value: measurements.chest },
-                        { label: 'Waist', value: measurements.waist },
-                        { label: 'Hips', value: measurements.hips },
-                        { label: 'Shoulders', value: measurements.shoulderWidth },
-                        { label: 'Inseam', value: measurements.inseam },
-                        { label: 'Sleeve', value: measurements.sleeveLength },
-                        { label: 'Neck', value: measurements.neckCircumference },
-                        { label: 'Height', value: measurements.height },
-                      ].map(({ label, value }) => (
-                        <View key={label} style={styles.measureSummaryItem}>
+                        { key: 'chest', label: 'Chest', value: measurements.chest },
+                        { key: 'waist', label: 'Waist', value: measurements.waist },
+                        { key: 'hips', label: 'Hips', value: measurements.hips },
+                        { key: 'shoulderWidth', label: 'Shoulders', value: measurements.shoulderWidth },
+                        { key: 'inseam', label: 'Inseam', value: measurements.inseam },
+                        { key: 'sleeveLength', label: 'Sleeve', value: measurements.sleeveLength },
+                        { key: 'neckCircumference', label: 'Neck', value: measurements.neckCircumference },
+                        { key: 'height', label: 'Height', value: measurements.height },
+                      ].map(({ key, label, value }) => (
+                        <TouchableOpacity
+                          key={key}
+                          style={styles.measureSummaryItem}
+                          onPress={() => {
+                            setEditingField({ key, label, value: value ? String(value) : '' })
+                            setEditValue(value ? String(value) : '')
+                          }}
+                        >
                           <Text style={styles.measureSummaryLabel}>{label}</Text>
                           <Text style={[styles.measureSummaryValue, !value && { color: Colors.lightGrey }]}>
                             {value ? `${value} ${measurements.unit}` : '—'}
                           </Text>
-                        </View>
+                        </TouchableOpacity>
                       ))}
                     </View>
                     {measurements.fitFlags?.length > 0 && (
@@ -467,9 +525,6 @@ export default function OrderBriefScreen() {
                         ))}
                       </View>
                     )}
-                    <Text style={styles.measureEditNote}>
-                      Update measurements in your profile tab.
-                    </Text>
                   </View>
                 ) : (
                   <View style={styles.noMeasureCard}>
@@ -479,7 +534,7 @@ export default function OrderBriefScreen() {
                     </Text>
                     <TouchableOpacity
                       style={styles.noMeasureBtn}
-                      onPress={() => router.push('/(customer)/profile/measurements')}
+                      onPress={() => router.navigate('/(customer)/profile/measurements')}
                     >
                       <Text style={styles.noMeasureBtnText}>Set up measurements</Text>
                     </TouchableOpacity>
@@ -487,17 +542,18 @@ export default function OrderBriefScreen() {
                 )}
 
                 <Input
-                  label="Extra note for your tailor (optional)"
-                  placeholder="Anything specific about fit you'd like them to know for this order"
+                  label="Note to your tailor"
+                  placeholder="Tell your tailor anything they need to know. e.g. I'd like a relaxed fit, I have broad shoulders, and I need this for a wedding on 14 June."
                   value={fitNote}
                   onChangeText={(v) => { setFitNote(v); if (fitNoteError) validateFitNote(v) }}
                   onBlur={() => validateFitNote(fitNote)}
                   error={fitNoteError}
                   multiline
-                  numberOfLines={3}
-                  maxLength={200}
+                  numberOfLines={4}
+                  maxLength={500}
                   filterContact
-                  hint={`${fitNote.length}/200`}
+                  required
+                  hint={`${fitNote.length}/500 · min 20 characters`}
                 />
               </View>
             )}
@@ -541,6 +597,21 @@ export default function OrderBriefScreen() {
                   </View>
                 </View>
 
+                {deliveryMethod === 'SHIPPING' && (
+                  <Input
+                    label="Delivery address"
+                    placeholder="Full address including postcode / ZIP / state"
+                    value={deliveryAddress}
+                    onChangeText={(v) => { setDeliveryAddress(v); if (deliveryAddressError) validateDeliveryAddress(v) }}
+                    onBlur={() => validateDeliveryAddress(deliveryAddress)}
+                    multiline
+                    numberOfLines={3}
+                    required
+                    hint="Your tailor ships the finished garment here."
+                    error={deliveryAddressError}
+                  />
+                )}
+
                 {/* Summary */}
                 {garmentType && (
                   <View style={styles.summaryCard}>
@@ -559,6 +630,9 @@ export default function OrderBriefScreen() {
                     {deliveryMethod && (
                       <SummaryRow label="Delivery" value={deliveryMethod === 'SHIPPING' ? 'Shipping' : 'Local collection'} />
                     )}
+                    {deliveryMethod === 'SHIPPING' && deliveryAddress.trim() && (
+                      <SummaryRow label="Ship to" value={deliveryAddress.trim()} />
+                    )}
                   </View>
                 )}
               </View>
@@ -569,7 +643,7 @@ export default function OrderBriefScreen() {
         {/* Bottom CTA */}
         <View style={styles.cta}>
           <Button
-            label={step < 3 ? 'Continue' : 'Send brief'}
+            label={step < 3 ? 'Continue' : 'Send order'}
             onPress={next}
             loading={submitting}
             disabled={!canProceed() && step !== 1}
@@ -577,6 +651,56 @@ export default function OrderBriefScreen() {
           />
         </View>
       </KeyboardAvoidingView>
+
+      {/* Inline measurement edit modal */}
+      <Modal visible={!!editingField} transparent animationType="slide">
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <TouchableOpacity style={styles.editOverlay} activeOpacity={1} onPress={() => setEditingField(null)} />
+          <View style={styles.editSheet}>
+            <Text style={styles.editSheetTitle}>Edit {editingField?.label}</Text>
+            <TextInput
+              style={styles.editSheetInput}
+              value={editValue}
+              onChangeText={setEditValue}
+              keyboardType="decimal-pad"
+              placeholder={`e.g. 38 ${measurements?.unit ?? 'in'}`}
+              autoFocus
+            />
+            <Button
+              label="Save for this order"
+              onPress={() => {
+                if (!editingField) return
+                const parsed = editValue.trim() ? parseFloat(editValue) : null
+                const updated = { ...measurements, [editingField.key]: parsed }
+                setMeasurements(updated)
+                setEditingField(null)
+                // Prompt to also update saved profile
+                Alert.alert(
+                  'Update your saved profile?',
+                  `Update your saved ${editingField.label} measurement to ${editValue.trim() || 'empty'} for future orders too?`,
+                  [
+                    { text: 'No, just this order', style: 'cancel' },
+                    {
+                      text: 'Yes, update profile',
+                      onPress: async () => {
+                        const { data } = await supabase.from('customer_profiles').select('measurements').eq('user_id', user?.id).single()
+                        if (data) {
+                          await supabase.from('customer_profiles').update({
+                            measurements: { ...data.measurements, [editingField.key]: parsed },
+                          }).eq('user_id', user?.id)
+                        }
+                      },
+                    },
+                  ]
+                )
+              }}
+            />
+            <TouchableOpacity onPress={() => setEditingField(null)} style={{ alignItems: 'center', paddingVertical: Spacing.sm }}>
+              <Text style={{ color: Colors.midGrey, fontSize: FontSize.sm }}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       {/* Profile completeness prompt — one-time modal */}
       <Modal visible={showMeasPrompt} transparent animationType="fade">
@@ -594,7 +718,7 @@ export default function OrderBriefScreen() {
               <Text style={styles.promptPrimaryText}>Set up measurements</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => dismissMeasPrompt(false)}>
-              <Text style={styles.promptSecondary}>Skip for now — continue with brief</Text>
+              <Text style={styles.promptSecondary}>Skip for now — continue with order</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -663,8 +787,9 @@ const styles = StyleSheet.create({
   // Date picker
   dateButton: {
     backgroundColor: Colors.white, borderRadius: Radius.md, borderWidth: 1,
-    borderColor: Colors.lightGrey, padding: Spacing.lg,
+    borderColor: Colors.lightGrey, padding: Spacing.lg, marginTop: Spacing.sm,
   },
+  dateButtonRequired: { borderColor: Colors.error + '60' },
   dateText: { fontSize: FontSize.md, color: Colors.ink },
   datePlaceholder: { color: Colors.midGrey },
 
@@ -698,6 +823,20 @@ const styles = StyleSheet.create({
   flagBadge: { paddingHorizontal: Spacing.sm, paddingVertical: 3, backgroundColor: Colors.kanteRustLight, borderRadius: Radius.full },
   flagBadgeText: { fontSize: FontSize.xs, color: Colors.kanteRust, fontWeight: FontWeight.medium },
   measureEditNote: { fontSize: FontSize.xs, color: Colors.midGrey },
+  measureEditHint: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+
+  // Inline edit sheet
+  editOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
+  editSheet: {
+    backgroundColor: Colors.white, borderTopLeftRadius: Radius.xl, borderTopRightRadius: Radius.xl,
+    padding: Spacing.xl, gap: Spacing.lg, paddingBottom: Spacing.xxxl,
+  },
+  editSheetTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  editSheetInput: {
+    backgroundColor: Colors.bone, borderRadius: Radius.md, padding: Spacing.lg,
+    fontSize: FontSize.xl, fontWeight: FontWeight.semibold, color: Colors.ink,
+    borderWidth: 1.5, borderColor: Colors.needleGreen,
+  },
 
   noMeasureCard: {
     backgroundColor: Colors.boneDeep, borderRadius: Radius.lg,
@@ -738,6 +877,7 @@ const styles = StyleSheet.create({
   },
   selectedLinkText: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium, flexShrink: 1 },
   selectedLinkRemove: { fontSize: 10, color: Colors.needleGreen },
+  linkError: { fontSize: FontSize.xs, color: Colors.error, marginTop: Spacing.xs, lineHeight: 18 },
 
   // Fabric & delivery options
   optionCards: { gap: Spacing.md },

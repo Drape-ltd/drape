@@ -110,6 +110,8 @@ export function validNextStages(from: OrderStage, actor: Actor): OrderStage[] {
 
 export const TERMINAL_STAGES: OrderStage[] = [
   'COMPLETE',
+  'DELIVERED',
+  'COLLECTED',
   'DECLINED',
   'EXPIRED',
   'REFUNDED',
@@ -148,7 +150,7 @@ export const STAGE_LABELS: Record<OrderStage, string> = {
   COMPLETE: 'Complete',
   DECLINED: 'Declined',
   EXPIRED: 'Expired',
-  IN_DISPUTE: 'In Dispute',
+  IN_DISPUTE: 'Under Review',
   REFUNDED: 'Refunded',
   CANCELLED: 'Cancelled',
 }

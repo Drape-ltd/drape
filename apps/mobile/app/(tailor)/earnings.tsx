@@ -16,6 +16,8 @@ import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { formatAmount, fetchRates } from '@/lib/currency'
+import type { CurrencyCode, Rates } from '@/lib/currency'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
@@ -55,6 +57,8 @@ export default function EarningsScreen() {
   const [data, setData] = useState<EarningsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [currency, setCurrency] = useState<CurrencyCode>('GBP')
+  const [rates, setRates] = useState<Rates>({})
 
   async function fetchEarnings() {
     const now = new Date()
@@ -63,11 +67,11 @@ export default function EarningsScreen() {
     weekStart.setDate(now.getDate() - 7)
     const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1)
 
-    const [completedRes, pendingRes, profileRes] = await Promise.all([
+    const [completedRes, pendingRes, profileRes, liveRates] = await Promise.all([
       // All completed orders (COMPLETE, DELIVERED, COLLECTED)
       supabase
         .from('orders')
-        .select('id, reference, garment_type, quoted_amount, updated_at')
+        .select('id, reference, garment_type, quoted_amount, quoted_currency, updated_at')
         .eq('tailor_id', user?.id)
         .in('stage', ['COMPLETE', 'DELIVERED', 'COLLECTED'])
         .order('updated_at', { ascending: false }),
@@ -75,29 +79,44 @@ export default function EarningsScreen() {
       // Orders in escrow (CONFIRMED → SHIPPED)
       supabase
         .from('orders')
-        .select('quoted_amount')
+        .select('quoted_amount, quoted_currency')
         .eq('tailor_id', user?.id)
         .in('stage', ['CONFIRMED', 'CUTTING', 'SEWING', 'FINISHING', 'SHIPPED', 'READY_FOR_COLLECTION']),
 
       supabase
         .from('tailor_profiles')
-        .select('avg_rating')
+        .select('avg_rating, currency')
         .eq('user_id', user?.id)
         .single(),
+
+      fetchRates(),
     ])
 
     const completed = (completedRes.data ?? []) as any[]
     const pending = (pendingRes.data ?? []) as any[]
     const profile = profileRes.data as any
 
-    const allTime = completed.reduce((s, o) => s + (o.quoted_amount ?? 0), 0)
+    // Use the tailor's stored currency, fall back to GBP
+    const tailorCurrency = (profile?.currency ?? 'GBP') as CurrencyCode
+    setCurrency(tailorCurrency)
+    setRates(liveRates)
+
+    // Normalise each order's amount to minor units of tailorCurrency
+    function toDisplay(amountMinor: number, fromCurrency: CurrencyCode = tailorCurrency): number {
+      if (fromCurrency === tailorCurrency) return amountMinor
+      const fromRate = liveRates[fromCurrency] ?? 1
+      const toRate = liveRates[tailorCurrency] ?? 1
+      return Math.round((amountMinor / fromRate) * toRate)
+    }
+
+    const allTime = completed.reduce((s, o) => s + toDisplay(o.quoted_amount ?? 0, (o.quoted_currency ?? tailorCurrency) as CurrencyCode), 0)
     const thisMonth = completed
       .filter((o) => new Date(o.updated_at) >= monthStart)
-      .reduce((s, o) => s + (o.quoted_amount ?? 0), 0)
+      .reduce((s, o) => s + toDisplay(o.quoted_amount ?? 0, (o.quoted_currency ?? tailorCurrency) as CurrencyCode), 0)
     const thisWeek = completed
       .filter((o) => new Date(o.updated_at) >= weekStart)
-      .reduce((s, o) => s + (o.quoted_amount ?? 0), 0)
-    const pendingEscrow = pending.reduce((s: number, o: any) => s + (o.quoted_amount ?? 0), 0)
+      .reduce((s, o) => s + toDisplay(o.quoted_amount ?? 0, (o.quoted_currency ?? tailorCurrency) as CurrencyCode), 0)
+    const pendingEscrow = pending.reduce((s: number, o: any) => s + toDisplay(o.quoted_amount ?? 0, (o.quoted_currency ?? tailorCurrency) as CurrencyCode), 0)
     const ordersThisMonth = completed.filter((o) => new Date(o.updated_at) >= monthStart).length
 
     // Build 6-month chart buckets
@@ -107,13 +126,13 @@ export default function EarningsScreen() {
       if (d < sixMonthsAgo) continue
       const key = d.toLocaleDateString('en-GB', { month: 'short' })
       const bucket = buckets.find((b) => b.label === key)
-      if (bucket) bucket.amount += order.quoted_amount ?? 0
+      if (bucket) bucket.amount += toDisplay(order.quoted_amount ?? 0, (order.quoted_currency ?? tailorCurrency) as CurrencyCode)
     }
 
     const history: PayoutRow[] = completed.slice(0, 20).map((o) => ({
       id: o.id,
       reference: o.reference,
-      amount: o.quoted_amount ?? 0,
+      amount: toDisplay(o.quoted_amount ?? 0, (o.quoted_currency ?? tailorCurrency) as CurrencyCode),
       garmentType: o.garment_type,
       completedAt: o.updated_at,
     }))
@@ -135,7 +154,7 @@ export default function EarningsScreen() {
     setRefreshing(false)
   }
 
-  const fmt = (pence: number) => `£${(pence / 100).toFixed(0)}`
+  const fmt = (minor: number) => formatAmount(minor, currency, currency, rates)
 
   if (loading) {
     return (
@@ -208,7 +227,7 @@ export default function EarningsScreen() {
                 return (
                   <View key={i} style={styles.chartBarWrap}>
                     <Text style={styles.chartBarValue}>
-                      {bucket.amount > 0 ? `£${Math.round(bucket.amount / 100)}` : ''}
+                      {bucket.amount > 0 ? fmt(bucket.amount) : ''}
                     </Text>
                     <View style={[styles.chartBar, { height: barHeight }]} />
                     <Text style={styles.chartBarLabel}>{bucket.label}</Text>
@@ -232,7 +251,7 @@ export default function EarningsScreen() {
                 <TouchableOpacity
                   key={row.id}
                   style={styles.historyRow}
-                  onPress={() => router.push(`/(tailor)/orders/${row.id}`)}
+                  onPress={() => router.navigate(`/(tailor)/orders/${row.id}`)}
                 >
                   <View style={{ flex: 1 }}>
                     <Text style={styles.historyGarment}>{row.garmentType}</Text>

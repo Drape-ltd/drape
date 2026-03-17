@@ -68,7 +68,7 @@ const STEP_TITLES = [
 ]
 
 const STEP_SUBTITLES = [
-  'Enter your measurements. Chest, waist, and fit style are required — add as many others as you can.',
+  'Add as many measurements as you can — the more detail, the better your tailor can quote and cut.',
   'This helps your tailor understand which cuts and shapes to use — this is a fit question, not a personal one.',
   'Pick the closest match. This helps your tailor visualise how a garment will fall before they start cutting.',
   'Where do clothes usually fit you badly off the rack? Select all that apply.',
@@ -264,8 +264,8 @@ export default function MeasurementsScreen() {
 
                 <View style={styles.measureGrid}>
                   {[
-                    { label: 'Chest *', value: chest, set: setChest },
-                    { label: 'Waist *', value: waist, set: setWaist },
+                    { label: 'Chest', value: chest, set: setChest },
+                    { label: 'Waist', value: waist, set: setWaist },
                     { label: 'Hips', value: hips, set: setHips },
                     { label: 'Shoulder width', value: shoulderWidth, set: setShoulderWidth },
                     { label: 'Inseam', value: inseam, set: setInseam },
@@ -287,7 +287,7 @@ export default function MeasurementsScreen() {
                 </View>
 
                 <View style={styles.fitStyleSection}>
-                  <Text style={styles.fieldLabel}>Fit style *</Text>
+                  <Text style={styles.fieldLabel}>Fit style</Text>
                   <View style={styles.fitStyleRow}>
                     {(['Slim', 'Regular', 'Relaxed'] as FitStyle[]).map((s) => (
                       <TouchableOpacity

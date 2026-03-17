@@ -3,14 +3,16 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Image, ActivityIndicator, Alert, Linking, Modal, KeyboardAvoidingView, Platform, TextInput,
 } from 'react-native'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { Sentry } from '@/lib/sentry'
 import { Button, Input } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, PRODUCTION_STAGES, type OrderStage } from '@drape/shared/order-machine'
 import { filterContactInfo } from '@drape/shared/contact-filter'
+import { useCurrency, formatAmount, SUPPORTED_CURRENCIES, type CurrencyCode } from '@/lib/currency'
 
 type StageUpdate = {
   id: string
@@ -29,11 +31,13 @@ type OrderDetail = {
   tailorId: string
   tailorName: string
   quotedAmount: number | null
+  quotedCurrency: CurrencyCode
   quotedCompletionDate: string | null
   fabricSource: string
   deliveryMethod: string
   fabricTracking: string | null
   collectionCode: string | null
+  videoCallUrl: string | null
   stageUpdates: StageUpdate[]
   createdAt: string
 }
@@ -54,7 +58,13 @@ function stageIndex(stage: OrderStage): number {
 export default function OrderTrackingScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
+
+  function goBack() {
+    if (navigation.canGoBack()) router.back()
+    else router.replace('/(customer)/orders')
+  }
   const [order, setOrder] = useState<OrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [confirming, setConfirming] = useState(false)
@@ -67,9 +77,9 @@ export default function OrderTrackingScreen() {
       .from('orders')
       .select(`
         id, reference, garment_type, garment_description, stage,
-        tailor_id, tailor_profile_id, quoted_amount, quoted_completion_date,
+        tailor_id, tailor_profile_id, quoted_amount, quoted_currency, quoted_completion_date,
         fabric_source, delivery_method, fabric_tracking,
-        collection_code, created_at,
+        collection_code, video_call_url, created_at,
         tailor_profiles!tailor_profile_id(display_name),
         order_stage_updates(id, stage, note, photo_url, created_at)
       `)
@@ -89,11 +99,13 @@ export default function OrderTrackingScreen() {
         tailorId: d.tailor_id,
         tailorName: d.tailor_profiles?.display_name ?? '',
         quotedAmount: d.quoted_amount,
+        quotedCurrency: (d.quoted_currency ?? 'USD') as CurrencyCode,
         quotedCompletionDate: d.quoted_completion_date,
         fabricSource: d.fabric_source,
         deliveryMethod: d.delivery_method,
         fabricTracking: d.fabric_tracking,
         collectionCode: d.collection_code,
+        videoCallUrl: d.video_call_url ?? null,
         stageUpdates: (d.order_stage_updates ?? [])
           .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
           .map((u: any) => ({
@@ -122,13 +134,12 @@ export default function OrderTrackingScreen() {
           style: 'default',
           onPress: async () => {
             setConfirming(true)
-            const { error } = await supabase
-              .from('orders')
-              .update({ stage: 'DELIVERED' })
-              .eq('id', id)
-              .eq('customer_id', user?.id)
+            const { error } = await supabase.functions.invoke('customer-order-action', {
+              body: { orderId: id, action: 'confirm-receipt' },
+            })
             setConfirming(false)
             if (error) {
+              Sentry.captureException(error, { extra: { context: 'confirm_receipt', orderId: id } })
               Alert.alert('Error', 'Could not confirm receipt. Please try again.')
             } else {
               router.replace(`/(customer)/review/${id}`)
@@ -141,6 +152,10 @@ export default function OrderTrackingScreen() {
 
   async function saveFabricTracking() {
     if (!fabricTracking.trim()) return
+    if (filterContactInfo(fabricTracking).blocked) {
+      Alert.alert('Invalid input', "Contact details can't be included in tracking numbers.")
+      return
+    }
     setSavingFabric(true)
     const { error } = await supabase
       .from('orders')
@@ -168,7 +183,7 @@ export default function OrderTrackingScreen() {
       <SafeAreaView style={styles.safe}>
         <View style={styles.notFound}>
           <Text style={styles.notFoundText}>Order not found.</Text>
-          <TouchableOpacity onPress={() => router.back()}>
+          <TouchableOpacity onPress={goBack}>
             <Text style={styles.backLink}>Go back</Text>
           </TouchableOpacity>
         </View>
@@ -189,7 +204,7 @@ export default function OrderTrackingScreen() {
   if (order.stage === 'PENDING_QUOTE') {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <TouchableOpacity style={styles.back} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.back} onPress={goBack}>
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
         <View style={styles.content}>
@@ -198,13 +213,19 @@ export default function OrderTrackingScreen() {
           <View style={styles.statusCard} testID="order-pending-quote">
             <Text style={styles.statusStage}>Awaiting quote</Text>
             <Text style={styles.statusNote}>
-              {order.tailorName.split(' ')[0]} is reviewing your brief. You'll be notified when they send a quote.
+              Your order has been sent to {order.tailorName.split(' ')[0]}. While you wait for their quote, you can message them with any extra details.
             </Text>
+          </View>
+          <View style={styles.nextStepsCard}>
+            <Text style={styles.nextStepsTitle}>What happens next</Text>
+            <Text style={styles.nextStepsItem}>1. {order.tailorName.split(' ')[0]} reviews your order and sends a quote</Text>
+            <Text style={styles.nextStepsItem}>2. You review the quote and accept or decline</Text>
+            <Text style={styles.nextStepsItem}>3. Production starts once you accept</Text>
           </View>
           <Button
             label={`Message ${order.tailorName.split(' ')[0]}`}
             variant="secondary"
-            onPress={() => router.push(`/(customer)/messages/${order.id}`)}
+            onPress={() => router.navigate(`/(customer)/messages/${order.id}`)}
           />
         </View>
       </SafeAreaView>
@@ -262,6 +283,24 @@ export default function OrderTrackingScreen() {
             )}
           </View>
 
+          {/* Call — show when in CONSULTATION and tailor has created a room */}
+          {order.stage === 'CONSULTATION' && order.videoCallUrl && (
+            <View style={styles.videoCallCard}>
+              <Text style={styles.videoCallTitle}>Consultation call ready</Text>
+              <Text style={styles.videoCallHint}>
+                Your tailor has started a call. Join with video or audio only.
+              </Text>
+              <View style={{ flexDirection: 'row', gap: Spacing.md }}>
+                <View style={{ flex: 1 }}>
+                  <Button label="📹 Join video" onPress={() => Linking.openURL(order.videoCallUrl!)} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Button label="🎙 Audio only" variant="secondary" onPress={() => Linking.openURL(order.videoCallUrl!)} />
+                </View>
+              </View>
+            </View>
+          )}
+
           {/* Collection code — show when ready for collection */}
           {order.stage === 'READY_FOR_COLLECTION' && order.collectionCode && (
             <View style={styles.collectionCard}>
@@ -311,7 +350,7 @@ export default function OrderTrackingScreen() {
               <View style={styles.timelineItem}>
                 <View style={[styles.timelineDot, { backgroundColor: Colors.lightGrey }]} />
                 <View style={styles.timelineContent}>
-                  <Text style={styles.timelineStage}>Brief submitted</Text>
+                  <Text style={styles.timelineStage}>Order submitted</Text>
                   <Text style={styles.timelineDate}>
                     {new Date(order.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                   </Text>
@@ -364,13 +403,13 @@ export default function OrderTrackingScreen() {
         <Button
           label={`Message ${order.tailorName.split(' ')[0]}`}
           variant="secondary"
-          onPress={() => router.push(`/(customer)/messages/${order.id}`)}
+          onPress={() => router.navigate(`/(customer)/messages/${order.id}`)}
           testID="message-tailor-btn"
         />
         {/* Dispute entry — available from CONFIRMED onward, before auto-release */}
         {['CONFIRMED','CUTTING','SEWING','FINISHING','SHIPPED','READY_FOR_COLLECTION'].includes(order.stage) && (
           <TouchableOpacity style={styles.disputeEntry} onPress={() => setShowDispute(true)}>
-            <Text style={styles.disputeEntryText}>Something wrong? Open a dispute</Text>
+            <Text style={styles.disputeEntryText}>Something wrong? Raise a concern</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -412,21 +451,22 @@ function DisputeModal({ visible, orderId, onClose, onSubmitted, userId }: {
   }
 
   async function submit() {
-    if (!reason) { Alert.alert('Select a reason', 'Please pick a reason for your dispute.'); return }
+    if (!reason) { Alert.alert('Select a reason', 'Please pick a reason for your concern.'); return }
     if (!description.trim()) { Alert.alert('Add details', 'Please describe the issue.'); return }
     if (!validateDesc(description)) return
 
     setSubmitting(true)
 
-    await supabase.from('orders').update({ stage: 'IN_DISPUTE' }).eq('id', orderId)
-    await supabase.from('disputes').insert({
-      order_id: orderId,
-      customer_id: userId,
-      reason,
-      description: description.trim(),
+    const { error } = await supabase.functions.invoke('customer-order-action', {
+      body: { orderId, action: 'open-dispute', reason, description: description.trim() },
     })
 
     setSubmitting(false)
+    if (error) {
+      Sentry.captureException(error, { extra: { context: 'open_dispute', orderId } })
+      Alert.alert('Error', 'Could not submit concern. Please try again.')
+      return
+    }
     onSubmitted()
   }
 
@@ -438,14 +478,14 @@ function DisputeModal({ visible, orderId, onClose, onSubmitted, userId }: {
             <TouchableOpacity onPress={onClose}>
               <Text style={disputeStyles.cancel}>Cancel</Text>
             </TouchableOpacity>
-            <Text style={disputeStyles.title}>Open a dispute</Text>
+            <Text style={disputeStyles.title}>Raise a concern</Text>
             <View style={{ width: 60 }} />
           </View>
 
           <ScrollView style={disputeStyles.scroll} contentContainerStyle={disputeStyles.content}>
             <View style={disputeStyles.infoCard}>
               <Text style={disputeStyles.infoText}>
-                Our team will review your dispute within 72 hours. Keep messaging your tailor in the meantime — many issues are resolved directly.
+                Our team will review your concern within 72 hours. Keep messaging your tailor in the meantime — many issues are resolved directly.
               </Text>
             </View>
 
@@ -479,12 +519,12 @@ function DisputeModal({ visible, orderId, onClose, onSubmitted, userId }: {
 
             <View style={disputeStyles.warningCard}>
               <Text style={disputeStyles.warningText}>
-                Opening a dispute pauses the order. Payment remains in escrow until the dispute is resolved.
+                Raising a concern pauses the order. Payment remains in escrow until the concern is resolved.
               </Text>
             </View>
 
             <Button
-              label="Submit dispute"
+              label="Submit concern"
               onPress={submit}
               loading={submitting}
               disabled={!reason || !description.trim()}
@@ -545,6 +585,12 @@ function QuoteReviewScreen({
 }) {
   const [accepting, setAccepting] = useState(false)
   const [declining, setDeclining] = useState(false)
+  const { currency, rates, setCurrency } = useCurrency()
+  const navigation = useNavigation()
+  function goBack() {
+    if (navigation.canGoBack()) router.back()
+    else router.replace('/(customer)/orders')
+  }
 
   // Find the quote from stage updates or a separate quote field
   // The tailor's quote note is in the QUOTE_SENT stage update
@@ -553,25 +599,23 @@ function QuoteReviewScreen({
   async function accept() {
     Alert.alert(
       'Accept quote',
-      `Accept the quote of £${order.quotedAmount ? (order.quotedAmount / 100).toFixed(0) : '—'} from ${order.tailorName}?\n\nYou'll be taken to payment next.`,
+      `Accept the quote of ${order.quotedAmount ? formatAmount(order.quotedAmount, order.quotedCurrency, currency, rates) : '—'} from ${order.tailorName}?\n\nYou'll be taken to payment next.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Accept',
           onPress: async () => {
             setAccepting(true)
-            const { error } = await supabase
-              .from('orders')
-              .update({ stage: 'PAYMENT_PENDING' })
-              .eq('id', order.id)
-              .eq('customer_id', userId)
+            // TODO: plug real payment screen in here before Stripe goes live.
+            // accept-quote transitions QUOTE_SENT → CONFIRMED via service role.
+            const { error } = await supabase.functions.invoke('customer-order-action', {
+              body: { orderId: order.id, action: 'accept-quote' },
+            })
             setAccepting(false)
             if (error) {
+              Sentry.captureException(error, { extra: { context: 'accept_quote', orderId: order.id } })
               Alert.alert('Error', 'Could not accept the quote. Please try again.')
             } else {
-              // TODO: In V1 with free launch, skip payment and go straight to CONFIRMED
-              // Real payment screen plugs in here when Stripe is wired
-              await supabase.from('orders').update({ stage: 'CONFIRMED' }).eq('id', order.id)
               onAction()
             }
           },
@@ -591,11 +635,9 @@ function QuoteReviewScreen({
           style: 'destructive',
           onPress: async () => {
             setDeclining(true)
-            await supabase
-              .from('orders')
-              .update({ stage: 'DECLINED' })
-              .eq('id', order.id)
-              .eq('customer_id', userId)
+            await supabase.functions.invoke('customer-order-action', {
+              body: { orderId: order.id, action: 'decline-quote' },
+            })
             setDeclining(false)
             router.replace('/(customer)/orders')
           },
@@ -606,7 +648,7 @@ function QuoteReviewScreen({
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <TouchableOpacity style={styles.back} onPress={() => router.back()}>
+      <TouchableOpacity style={styles.back} onPress={goBack}>
         <Text style={styles.backText}>← Back</Text>
       </TouchableOpacity>
 
@@ -619,12 +661,33 @@ function QuoteReviewScreen({
 
           {/* Quote card */}
           <View style={[styles.statusCard, { borderWidth: 1.5, borderColor: Colors.needleGreen + '40' }]} testID="quote-received-card">
-            <Text style={styles.sectionTitle}>Quote received</Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={styles.sectionTitle}>Quote received</Text>
+              {/* Currency picker */}
+              <View style={{ flexDirection: 'row', gap: 4, flexWrap: 'wrap' }}>
+                {SUPPORTED_CURRENCIES.slice(0, 5).map((c) => (
+                  <TouchableOpacity
+                    key={c.code}
+                    onPress={() => setCurrency(c.code as CurrencyCode)}
+                    style={{
+                      paddingHorizontal: 8, paddingVertical: 3,
+                      borderRadius: 12, borderWidth: 1,
+                      borderColor: currency === c.code ? Colors.needleGreen : Colors.lightGrey,
+                      backgroundColor: currency === c.code ? Colors.needleGreenLight : Colors.white,
+                    }}
+                  >
+                    <Text style={{ fontSize: 11, color: currency === c.code ? Colors.needleGreen : Colors.midGrey, fontWeight: currency === c.code ? '600' : '400' }}>
+                      {c.code}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
 
             {order.quotedAmount && (
               <View style={quoteDetailRow}>
                 <Text style={quoteLabel}>Amount</Text>
-                <Text style={quoteAmount}>£{(order.quotedAmount / 100).toFixed(0)}</Text>
+                <Text style={quoteAmount}>{formatAmount(order.quotedAmount, order.quotedCurrency, currency, rates)}</Text>
               </View>
             )}
 
@@ -678,7 +741,7 @@ function QuoteReviewScreen({
         <Button
           label={`Message ${order.tailorName.split(' ')[0]}`}
           variant="ghost"
-          onPress={() => router.push(`/(customer)/messages/${order.id}`)}
+          onPress={() => router.navigate(`/(customer)/messages/${order.id}`)}
         />
       </View>
     </SafeAreaView>
@@ -732,8 +795,25 @@ const styles = StyleSheet.create({
   statusCard: { backgroundColor: Colors.white, borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.md, ...Shadow.sm },
   statusStage: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
   statusNote: { fontSize: FontSize.md, color: Colors.inkLight, fontStyle: 'italic' },
+
+  nextStepsCard: {
+    backgroundColor: Colors.needleGreenLight, borderRadius: Radius.lg,
+    padding: Spacing.lg, gap: Spacing.sm,
+    borderWidth: 1, borderColor: Colors.needleGreen + '30',
+  },
+  nextStepsTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.needleGreen, marginBottom: Spacing.xs },
+  nextStepsItem: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   progressPhoto: { width: '100%', height: 200, borderRadius: Radius.md },
   statusEta: { fontSize: FontSize.sm, color: Colors.midGrey },
+
+  // Video call card
+  videoCallCard: {
+    backgroundColor: Colors.boneDeep, borderRadius: Radius.lg,
+    padding: Spacing.xl, gap: Spacing.md,
+    borderWidth: 1.5, borderColor: Colors.needleGreen,
+  },
+  videoCallTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  videoCallHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   // Collection code
   collectionCard: {

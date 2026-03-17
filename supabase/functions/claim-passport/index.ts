@@ -1,0 +1,269 @@
+/**
+ * claim-passport
+ *
+ * Allows a customer to preview or atomically claim a tailor-issued
+ * Client Passport (diary entry) identified by its passport_id UUID.
+ *
+ * Actions:
+ *   preview  — returns tailor display name, client name, and how many
+ *              measurements are filled in, without touching the database.
+ *              Used to render a confirmation screen before claiming.
+ *
+ *   claim    — atomically marks the diary_entry as CLAIMED and copies the
+ *              available measurements into the caller's customer_profile.
+ *              Fails if the entry is already claimed or the invite link has
+ *              expired (invite_expires_at < now()).
+ *
+ * Security:
+ *   - Caller must be authenticated (customer JWT).
+ *   - Role is verified by checking for a customer_profiles row — tailors
+ *     do not have one, so they cannot claim passports.
+ *   - Rate limited to 10 attempts per user per hour to prevent brute force.
+ *   - All passport lookups and the claim UPDATE use the service role client
+ *     so RLS on diary_entries is bypassed server-side (not from the client).
+ *   - claimed_by_user_id is never grantable to the authenticated role at DB
+ *     level; it can only be written here via service role.
+ *
+ * Required env vars:
+ *   SUPABASE_URL
+ *   SUPABASE_ANON_KEY
+ *   SUPABASE_SERVICE_ROLE_KEY
+ */
+
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { getAuthUser } from '../_shared/auth.ts'
+import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { getCorsHeaders } from '../_shared/cors.ts'
+import { z, parseBody, uuid } from '../_shared/validate.ts'
+
+const BodySchema = z.discriminatedUnion('action', [
+  z.object({ passportId: uuid, action: z.literal('preview') }),
+  z.object({ passportId: uuid, action: z.literal('claim') }),
+])
+
+// Diary → customer_profiles.measurements field mapping
+// Only fields that have a direct equivalent in the customer measurements schema
+const MEASUREMENT_MAP: Record<string, string> = {
+  chest:            'chest',
+  waist:            'waist',
+  hip:              'hips',
+  shoulder:         'shoulder',
+  sleeve:           'sleeveLength',
+  neck:             'neckCircumference',
+  inseam:           'inseam',
+  measurement_unit: 'unit',
+}
+
+const FN = 'claim-passport'
+
+Deno.serve(async (req: Request) => {
+  const cors = getCorsHeaders(req)
+
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: cors })
+  }
+
+  if (req.method !== 'POST') {
+    return new Response('Method not allowed', { status: 405, headers: cors })
+  }
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
+
+  const caller = await getAuthUser(req)
+  if (!caller) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    })
+  }
+
+  // ── Service-role client (bypasses RLS for passport lookups and claim write) ─
+
+  const service = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+    { auth: { persistSession: false } },
+  )
+
+  // ── Rate limit — 10 attempts per user per hour ────────────────────────────
+
+  const allowed = await checkRateLimit(service, `claim-passport:${caller.id}`, 3600, 10)
+  if (!allowed) {
+    return new Response(JSON.stringify({ error: 'Too many attempts. Try again later.' }), {
+      status: 429,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    })
+  }
+
+  // ── Role check — must be a customer ──────────────────────────────────────
+
+  const { data: customerProfile } = await service
+    .from('customer_profiles')
+    .select('id, measurements')
+    .eq('user_id', caller.id)
+    .maybeSingle()
+
+  if (!customerProfile) {
+    return new Response(
+      JSON.stringify({ error: 'Only customers can claim passports.' }),
+      { status: 403, headers: { ...cors, 'Content-Type': 'application/json' } },
+    )
+  }
+
+  // ── Parse body ────────────────────────────────────────────────────────────
+
+  let rawBody: unknown
+  try {
+    rawBody = await req.json()
+  } catch {
+    return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
+      status: 400,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    })
+  }
+
+  const parsed = parseBody(BodySchema, rawBody)
+  if (!parsed.ok) {
+    return new Response(JSON.stringify({ error: parsed.error }), {
+      status: 400,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    })
+  }
+
+  const { passportId, action } = parsed.data
+
+  // ── Fetch the diary entry ─────────────────────────────────────────────────
+
+  const { data: entry, error: fetchErr } = await service
+    .from('diary_entries')
+    .select(`
+      id, full_name, invite_status, invite_expires_at, claimed_by_user_id,
+      measurement_unit, chest, shoulder, sleeve, waist, hip, neck, inseam,
+      thigh, ankle, bicep, wrist, back_length, under_bust,
+      tailor_id,
+      tailor_profiles:tailor_profiles!diary_entries_tailor_id_fkey(display_name)
+    `)
+    .eq('passport_id', passportId)
+    .maybeSingle()
+
+  if (fetchErr) {
+    console.error(`[${FN}] fetch error:`, fetchErr.message)
+    return new Response(JSON.stringify({ error: 'Unexpected error. Please try again.' }), {
+      status: 500,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    })
+  }
+
+  if (!entry) {
+    return new Response(JSON.stringify({ error: 'Passport not found.' }), {
+      status: 404,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    })
+  }
+
+  // Count filled measurements (excluding unit field)
+  const MEASUREMENT_FIELDS = ['chest', 'shoulder', 'sleeve', 'waist', 'hip', 'neck', 'inseam', 'thigh', 'ankle', 'bicep', 'wrist', 'back_length', 'under_bust'] as const
+  const measurementCount = MEASUREMENT_FIELDS.filter((f) => (entry as any)[f] !== null).length
+
+  const tailorName = (entry as any).tailor_profiles?.display_name ?? 'Your tailor'
+
+  // ── PREVIEW ───────────────────────────────────────────────────────────────
+
+  if (action === 'preview') {
+    const expired = entry.invite_expires_at
+      ? new Date(entry.invite_expires_at) < new Date()
+      : false
+
+    return new Response(
+      JSON.stringify({
+        clientName:      entry.full_name,
+        tailorName,
+        measurementCount,
+        inviteStatus:    entry.invite_status,
+        expired,
+        alreadyClaimed:  entry.invite_status === 'CLAIMED',
+      }),
+      { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } },
+    )
+  }
+
+  // ── CLAIM ─────────────────────────────────────────────────────────────────
+
+  // Guard: already claimed
+  if (entry.invite_status === 'CLAIMED') {
+    // Allow the same user to re-claim their own passport (idempotent)
+    if (entry.claimed_by_user_id === caller.id) {
+      return new Response(
+        JSON.stringify({ success: true, alreadyOwned: true }),
+        { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } },
+      )
+    }
+    return new Response(
+      JSON.stringify({ error: 'This passport has already been claimed.' }),
+      { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+    )
+  }
+
+  // Guard: expired invite
+  if (entry.invite_expires_at && new Date(entry.invite_expires_at) < new Date()) {
+    return new Response(
+      JSON.stringify({ error: 'This invite link has expired. Ask your tailor to resend.' }),
+      { status: 410, headers: { ...cors, 'Content-Type': 'application/json' } },
+    )
+  }
+
+  // Atomic claim — WHERE clause prevents double-claim race condition
+  const { error: claimErr, count } = await service
+    .from('diary_entries')
+    .update({
+      invite_status:       'CLAIMED',
+      claimed_by_user_id:  caller.id,
+    })
+    .eq('passport_id', passportId)
+    .is('claimed_by_user_id', null) // only claim if not yet claimed
+    .select('id', { count: 'exact', head: true })
+
+  if (claimErr) {
+    console.error(`[${FN}] claim update error:`, claimErr.message)
+    return new Response(JSON.stringify({ error: 'Failed to claim passport. Please try again.' }), {
+      status: 500,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    })
+  }
+
+  if (!count || count === 0) {
+    // Race condition — another request claimed it between our read and write
+    return new Response(
+      JSON.stringify({ error: 'This passport has already been claimed.' }),
+      { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+    )
+  }
+
+  // Merge measurements into customer_profiles.measurements
+  const existing: Record<string, unknown> = (customerProfile.measurements as any) ?? {}
+  const merged: Record<string, unknown> = { ...existing }
+
+  for (const [diaryField, customerField] of Object.entries(MEASUREMENT_MAP)) {
+    const val = (entry as any)[diaryField]
+    if (val !== null && val !== undefined) {
+      merged[customerField] = val
+    }
+  }
+
+  const { error: profileErr } = await service
+    .from('customer_profiles')
+    .update({ measurements: merged })
+    .eq('user_id', caller.id)
+
+  if (profileErr) {
+    // Non-fatal — passport is claimed, measurement merge is best-effort
+    console.error(`[${FN}] measurement merge error:`, profileErr.message)
+  }
+
+  console.log(`[${FN}] passport ${passportId} claimed by user ${caller.id}`)
+
+  return new Response(
+    JSON.stringify({ success: true, measurementCount }),
+    { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } },
+  )
+})

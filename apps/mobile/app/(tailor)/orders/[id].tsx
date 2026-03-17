@@ -1,19 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, Image, TextInput, ActivityIndicator, Modal, KeyboardAvoidingView, Platform,
+  Alert, Image, TextInput, ActivityIndicator, Modal, KeyboardAvoidingView, Platform, Linking,
 } from 'react-native'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
+import { Sentry } from '@/lib/sentry'
 import { stripExif } from '@/lib/stripExif'
 import { Button, Input } from '@/components/ui'
-import { filterContactInfo } from '@drape/shared/contact-filter'
+import { filterContactInfo, rejectPlaceholder } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
+import { SUPPORTED_CURRENCIES, type CurrencyCode } from '@/lib/currency'
+import { stageColor } from '@/lib/stageColors'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -29,11 +32,12 @@ type OrderDetail = {
   id: string; reference: string; garmentType: string
   garmentDescription: string | null; stage: OrderStage
   customerId: string; customerName: string
-  quotedAmount: number | null; quotedCompletionDate: string | null
-  fabricSource: string; deliveryMethod: string
+  quotedAmount: number | null; quotedCurrency: string; quotedCompletionDate: string | null
+  fabricSource: string; deliveryMethod: string; deliveryAddress: string | null
   referencePhotos: string[]; fitNote: string | null
   measurements: Measurement | null
   collectionCode: string | null
+  videoCallUrl: string | null
   occasion: string | null; deadline: string | null
   createdAt: string
 }
@@ -67,7 +71,13 @@ const BODY_SHAPE_LABELS: Record<string, string> = {
 export default function TailorOrderDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
+
+  function goBack() {
+    if (navigation.canGoBack()) router.back()
+    else router.replace('/(tailor)/orders')
+  }
 
   const [order, setOrder] = useState<OrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -76,15 +86,16 @@ export default function TailorOrderDetailScreen() {
   const [stageModalTarget, setStageModalTarget] = useState<OrderStage | null>(null)
   const [showConsultationModal, setShowConsultationModal] = useState(false)
   const [showCodeModal, setShowCodeModal] = useState(false)
+  const [startingCall, setStartingCall] = useState<'audio' | 'video' | null>(null)
 
   async function fetchOrder() {
     const { data } = await supabase
       .from('orders')
       .select(`
         id, reference, garment_type, garment_description, stage,
-        customer_id, quoted_amount, quoted_completion_date,
-        fabric_source, delivery_method, reference_photos, fit_note,
-        customer_measurements_snapshot, collection_code,
+        customer_id, quoted_amount, quoted_currency, quoted_completion_date,
+        fabric_source, delivery_method, delivery_address, reference_photos, fit_note,
+        customer_measurements_snapshot, collection_code, video_call_url,
         occasion, deadline, created_at,
         customer_profiles!customer_id(display_name)
       `)
@@ -99,11 +110,11 @@ export default function TailorOrderDetailScreen() {
         garmentDescription: d.garment_description, stage: d.stage,
         customerId: d.customer_id,
         customerName: d.customer_profiles?.display_name ?? 'Customer',
-        quotedAmount: d.quoted_amount, quotedCompletionDate: d.quoted_completion_date,
-        fabricSource: d.fabric_source, deliveryMethod: d.delivery_method,
+        quotedAmount: d.quoted_amount, quotedCurrency: d.quoted_currency ?? 'USD', quotedCompletionDate: d.quoted_completion_date,
+        fabricSource: d.fabric_source, deliveryMethod: d.delivery_method, deliveryAddress: d.delivery_address ?? null,
         referencePhotos: d.reference_photos ?? [],
         fitNote: d.fit_note, measurements: d.customer_measurements_snapshot,
-        collectionCode: d.collection_code,
+        collectionCode: d.collection_code, videoCallUrl: d.video_call_url ?? null,
         occasion: d.occasion, deadline: d.deadline, createdAt: d.created_at,
       })
     }
@@ -125,7 +136,7 @@ export default function TailorOrderDetailScreen() {
       <SafeAreaView style={styles.safe}>
         <View style={styles.notFound}>
           <Text style={styles.notFoundText}>Order not found.</Text>
-          <TouchableOpacity onPress={() => router.back()}>
+          <TouchableOpacity onPress={goBack}>
             <Text style={styles.backLink}>← Back</Text>
           </TouchableOpacity>
         </View>
@@ -144,9 +155,29 @@ export default function TailorOrderDetailScreen() {
     setShowStageModal(true)
   }
 
+  async function startCall(callType: 'audio' | 'video') {
+    if (!order) return
+    setStartingCall(callType)
+    try {
+      const { data, error } = await supabase.functions.invoke('create-consultation-room', {
+        body: { orderId: order.id, callType },
+      })
+      if (error || !data?.url) {
+        Alert.alert('Error', 'Could not create call room. Please try again.')
+        return
+      }
+      fetchOrder()
+      await Linking.openURL(data.url)
+    } catch {
+      Alert.alert('Error', 'Could not start call.')
+    } finally {
+      setStartingCall(null)
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <TouchableOpacity style={styles.back} onPress={() => router.back()}>
+      <TouchableOpacity style={styles.back} onPress={goBack}>
         <Text style={styles.backText}>← Back</Text>
       </TouchableOpacity>
 
@@ -158,11 +189,19 @@ export default function TailorOrderDetailScreen() {
             <Text style={styles.heading}>{order.garmentType}</Text>
             <Text style={styles.subheading}>{order.customerName}  ·  #{order.reference}</Text>
             <View style={styles.stageRow}>
-              <View style={[styles.stagePill, { backgroundColor: Colors.needleGreenLight }]} testID="tailor-order-stage">
-                <Text style={styles.stageText}>{STAGE_LABELS[order.stage]}</Text>
+              <View
+                style={[styles.stagePill, { backgroundColor: stageColor(order.stage).bg }]}
+                testID="tailor-order-stage"
+              >
+                <Text style={[styles.stageText, { color: stageColor(order.stage).text }]}>
+                  {STAGE_LABELS[order.stage]}
+                </Text>
               </View>
               {order.quotedAmount && (
-                <Text style={styles.amount}>£{(order.quotedAmount / 100).toFixed(0)} held</Text>
+                <Text style={styles.amount}>
+                  {SUPPORTED_CURRENCIES.find((c) => c.code === order.quotedCurrency)?.symbol ?? order.quotedCurrency}
+                  {(order.quotedAmount / 100).toFixed(0)} held
+                </Text>
               )}
             </View>
           </View>
@@ -170,22 +209,24 @@ export default function TailorOrderDetailScreen() {
           {/* PENDING_QUOTE — show brief + quote/consultation CTAs */}
           {order.stage === 'PENDING_QUOTE' && (
             <View style={styles.alertCard}>
-              <Text style={styles.alertTitle}>New brief — your quote is needed</Text>
+              <Text style={styles.alertTitle}>New order — your quote is needed</Text>
               <Text style={styles.alertSub}>
-                Review the brief below and send your quote. You can also request a consultation first if you need to assess the brief in person.
+                Review the order details below and send your quote. You can also request a consultation first.
               </Text>
               <Button label="Send quote" onPress={() => setShowQuoteModal(true)} testID="tailor-send-quote-btn" />
               <Button label="Request consultation" variant="secondary" onPress={() => setShowConsultationModal(true)} />
               <Button
-                label="Decline this brief"
+                label="Decline this order"
                 variant="ghost"
                 onPress={() => {
-                  Alert.alert('Decline brief', 'Are you sure you want to decline this order?', [
+                  Alert.alert('Decline order', 'Are you sure you want to decline this order?', [
                     { text: 'Cancel', style: 'cancel' },
                     {
                       text: 'Decline', style: 'destructive',
                       onPress: async () => {
-                        await supabase.from('orders').update({ stage: 'DECLINED' }).eq('id', order.id)
+                        await supabase.functions.invoke('tailor-order-action', {
+                          body: { orderId: order.id, action: 'decline-order' },
+                        })
                         router.replace('/(tailor)/orders')
                       },
                     },
@@ -202,7 +243,24 @@ export default function TailorOrderDetailScreen() {
               <Text style={styles.alertSub}>
                 You've requested a consultation with this customer. Once done, send your quote or decline.
               </Text>
-              <Button label="Send quote" onPress={() => setShowQuoteModal(true)} />
+              <View style={{ flexDirection: 'row', gap: Spacing.md }}>
+                <View style={{ flex: 1 }}>
+                  <Button
+                    label={order.videoCallUrl ? 'Rejoin call' : '📹 Video call'}
+                    onPress={() => startCall('video')}
+                    loading={startingCall === 'video'}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Button
+                    label="🎙 Audio call"
+                    variant="secondary"
+                    onPress={() => startCall('audio')}
+                    loading={startingCall === 'audio'}
+                  />
+                </View>
+              </View>
+              <Button label="Send quote" variant="secondary" onPress={() => setShowQuoteModal(true)} />
               <Button
                 label="Decline"
                 variant="ghost"
@@ -212,7 +270,9 @@ export default function TailorOrderDetailScreen() {
                     {
                       text: 'Decline', style: 'destructive',
                       onPress: async () => {
-                        await supabase.from('orders').update({ stage: 'DECLINED' }).eq('id', order.id)
+                        await supabase.functions.invoke('tailor-order-action', {
+                          body: { orderId: order.id, action: 'decline-order' },
+                        })
                         router.replace('/(tailor)/orders')
                       },
                     },
@@ -298,6 +358,9 @@ export default function TailorOrderDetailScreen() {
               )}
               <BriefRow label="Fabric" value={order.fabricSource === 'CUSTOMER_SUPPLIES' ? 'Customer supplies' : 'You source'} />
               <BriefRow label="Delivery" value={order.deliveryMethod === 'LOCAL_COLLECTION' ? 'Local collection' : 'Shipping'} />
+              {order.deliveryMethod === 'SHIPPING' && order.deliveryAddress && (
+                <BriefRow label="Ship to" value={order.deliveryAddress} />
+              )}
             </View>
             {order.fitNote && (
               <View style={styles.fitNote}>
@@ -334,7 +397,7 @@ export default function TailorOrderDetailScreen() {
         <Button
           label={`Message ${order.customerName.split(' ')[0]}`}
           variant="secondary"
-          onPress={() => router.push(`/(tailor)/messages/${order.id}`)}
+          onPress={() => router.navigate(`/(tailor)/messages/${order.id}`)}
         />
       </View>
 
@@ -451,6 +514,7 @@ function QuoteModal({ visible, orderId, onClose, onSent }: {
   visible: boolean; orderId: string; onClose: () => void; onSent: () => void
 }) {
   const [amount, setAmount] = useState('')
+  const [currency, setCurrency] = useState<CurrencyCode>('USD')
   const [completionDate, setCompletionDate] = useState('')
   const [note, setNote] = useState('')
   const [noteError, setNoteError] = useState('')
@@ -477,17 +541,22 @@ function QuoteModal({ visible, orderId, onClose, onSent }: {
     try {
       const amountPence = Math.round(parseFloat(amount) * 100)
 
-      await supabase.from('orders').update({
-        stage: 'QUOTE_SENT',
-        quoted_amount: amountPence,
-        quoted_completion_date: parsedDate.toISOString(),
-      }).eq('id', orderId)
-
-      await supabase.from('order_stage_updates').insert({
-        order_id: orderId,
-        stage: 'QUOTE_SENT',
-        note: note.trim() || null,
+      const { data: efData, error: efError } = await supabase.functions.invoke('tailor-order-action', {
+        body: {
+          orderId,
+          action: 'send-quote',
+          amount: amountPence,
+          currency,
+          completionDate: parsedDate.toISOString(),
+          note: note.trim() || undefined,
+        },
       })
+
+      if (efError || !efData?.ok) {
+        const err = new Error(efData?.error ?? efError?.message ?? 'Edge Function error')
+        Sentry.captureException(err, { extra: { context: 'send_quote', orderId } })
+        throw err
+      }
 
       capture('quote_sent', { amount_pence: amountPence, has_note: !!note.trim() })
       onSent()
@@ -512,8 +581,26 @@ function QuoteModal({ visible, orderId, onClose, onSent }: {
           </View>
 
           <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
+            <View>
+              <Text style={styles.fieldLabel}>Currency <Text style={styles.required}>*</Text></Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: Spacing.sm }}>
+                <View style={{ flexDirection: 'row', gap: Spacing.sm, paddingBottom: 2 }}>
+                  {SUPPORTED_CURRENCIES.map((c) => (
+                    <TouchableOpacity
+                      key={c.code}
+                      style={[styles.currencyChip, currency === c.code && styles.currencyChipActive]}
+                      onPress={() => setCurrency(c.code)}
+                    >
+                      <Text style={[styles.currencyChipText, currency === c.code && styles.currencyChipTextActive]}>
+                        {c.symbol} {c.code}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
+            </View>
             <Input
-              label="Your price (£)"
+              label={`Your price (${SUPPORTED_CURRENCIES.find((c) => c.code === currency)?.symbol ?? currency})`}
               placeholder="e.g. 180"
               value={amount}
               onChangeText={setAmount}
@@ -570,6 +657,9 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
   const nextStage: OrderStage = targetStage
 
   function validateNote(t: string) {
+    if (t.trim().length < 10) { setNoteError('Tell your customer what you\'re working on — at least 10 characters.'); return false }
+    const placeholder = rejectPlaceholder(t, 'Note')
+    if (placeholder) { setNoteError(placeholder); return false }
     const res = filterContactInfo(t)
     if (res.blocked) { setNoteError("Contact details can't be included."); return false }
     setNoteError(''); return true
@@ -582,7 +672,15 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
 
   async function update() {
     if (!nextStage) return
+    if (note.trim().length < 10) {
+      Alert.alert('Note required', 'Tell your customer what you\'re working on — at least 10 characters.')
+      return
+    }
     if (!validateNote(note)) return
+    if (!photoUri) {
+      Alert.alert('Photo required', 'A photo at this stage builds trust. Please add at least one image before updating.')
+      return
+    }
     setUpdating(true)
 
     try {
@@ -594,34 +692,37 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
         try {
           const response = await fetch(cleanUri)
           const blob = await response.blob()
+          if (blob.size > 10 * 1024 * 1024) throw new Error('Photo exceeds 10 MB limit.')
           await supabase.storage.from('order-photos').upload(filename, blob, { contentType: `image/${ext}` })
           const { data } = supabase.storage.from('order-photos').getPublicUrl(filename)
           photoUrl = data.publicUrl
-        } catch {}
+        } catch (uploadErr: any) {
+          if (uploadErr?.message?.includes('10 MB')) throw uploadErr
+        }
       }
 
-      const updates: Record<string, any> = { stage: nextStage }
-      if (nextStage === 'READY_FOR_COLLECTION') {
-        updates.collection_code = String(Math.floor(1000 + Math.random() * 9000))
-      }
-
-      // Tracking number has no dedicated DB column — append to note so it's captured
-      const fullNote = [
-        trackingNumber.trim() ? `Tracking: ${trackingNumber.trim()}` : null,
-        note.trim() || null,
-      ].filter(Boolean).join('\n') || null
-
-      await supabase.from('orders').update(updates).eq('id', order.id)
-      await supabase.from('order_stage_updates').insert({
-        order_id: order.id, stage: nextStage,
-        note: fullNote, photo_url: photoUrl,
+      const { data: efData, error: efError } = await supabase.functions.invoke('tailor-order-action', {
+        body: {
+          orderId: order.id,
+          action: 'advance-stage',
+          targetStage: nextStage,
+          note: note.trim() || undefined,
+          photoUrl: photoUrl ?? undefined,
+          trackingNumber: nextStage === 'SHIPPED' ? trackingNumber.trim() || undefined : undefined,
+        },
       })
+
+      if (efError || !efData?.ok) {
+        const err = new Error(efData?.error ?? efError?.message ?? 'Edge Function error')
+        Sentry.captureException(err, { extra: { context: 'advance_stage', orderId: order.id, targetStage: nextStage } })
+        throw err
+      }
 
       capture('stage_advanced', {
         from_stage: order.stage,
         to_stage: nextStage,
         has_photo: !!photoUrl,
-        has_note: !!fullNote,
+        has_note: !!note.trim(),
       })
 
       onUpdated()
@@ -652,8 +753,8 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
             </View>
 
             <Input
-              label="Note to customer (optional)"
-              placeholder='e.g. "Working on the embroidery now."'
+              label="Note to customer"
+              placeholder='e.g. "Cutting the fabric — using the navy Ankara as planned."'
               value={note}
               onChangeText={(v) => { setNote(v); if (noteError) validateNote(v) }}
               onBlur={() => validateNote(note)}
@@ -662,12 +763,13 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
               numberOfLines={3}
               maxLength={300}
               filterContact
+              required
             />
 
             {/* Progress photo */}
             <View>
-              <Text style={styles.photoLabel}>Progress photo (optional)</Text>
-              <Text style={styles.photoHint}>Customers who receive progress photos leave 5-star reviews more often.</Text>
+              <Text style={styles.photoLabel}>Progress photo <Text style={{ color: Colors.error }}>*</Text></Text>
+              <Text style={styles.photoHint}>A photo at this stage builds trust with your customer.</Text>
               {photoUri ? (
                 <View style={styles.photoPreviewWrap}>
                   <Image source={{ uri: photoUri }} style={styles.photoPreview} resizeMode="cover" />
@@ -698,6 +800,7 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
               label="Confirm update"
               onPress={update}
               loading={updating}
+              disabled={note.trim().length < 10 || !!noteError || !photoUri}
             />
           </ScrollView>
         </SafeAreaView>
@@ -728,16 +831,22 @@ function ConsultationModal({ visible, orderId, onClose, onSent }: {
 
     const feePence = fee ? Math.round(parseFloat(fee) * 100) : null
 
-    await supabase.from('orders').update({
-      stage: 'CONSULTATION',
-      consultation_fee: feePence,
-    }).eq('id', orderId)
-
-    await supabase.from('order_stage_updates').insert({
-      order_id: orderId,
-      stage: 'CONSULTATION',
-      note: note.trim() || null,
+    const { data: efData, error: efError } = await supabase.functions.invoke('tailor-order-action', {
+      body: {
+        orderId,
+        action: 'request-consultation',
+        consultationFee: feePence,
+        note: note.trim() || undefined,
+      },
     })
+
+    if (efError || !efData?.ok) {
+      const err = new Error(efData?.error ?? efError?.message ?? 'Edge Function error')
+      Sentry.captureException(err, { extra: { context: 'request_consultation', orderId } })
+      Alert.alert('Error', 'Could not request consultation. Please try again.')
+      setSending(false)
+      return
+    }
 
     capture('consultation_requested', { has_fee: !!feePence })
     setSending(false)
@@ -759,11 +868,11 @@ function ConsultationModal({ visible, orderId, onClose, onSent }: {
           <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
             <View style={styles.consultationInfo}>
               <Text style={styles.consultationInfoText}>
-                A consultation lets you assess the brief in person before committing to a quote. The customer will be notified and can discuss further via messages.
+                A consultation lets you assess the order details before committing to a quote. The customer will be notified and can discuss further via messages.
               </Text>
             </View>
             <Input
-              label="Consultation fee (£, optional)"
+              label="Consultation fee (optional)"
               placeholder="e.g. 20"
               value={fee}
               onChangeText={setFee}
@@ -816,12 +925,19 @@ function CollectionCodeModal({ visible, orderId, expectedCode, onClose, onConfir
   async function confirm() {
     const entered = digits.join('')
     if (entered.length < 4) { setError('Enter all 4 digits.'); return }
-    if (entered !== expectedCode) { setError('Incorrect code. Ask the customer to check their app.'); return }
 
     setConfirming(true)
-    await supabase.from('orders').update({ stage: 'COLLECTED' }).eq('id', orderId)
-    await supabase.from('order_stage_updates').insert({ order_id: orderId, stage: 'COLLECTED' })
+    const { data, error } = await supabase.functions.invoke('tailor-order-action', {
+      body: { orderId, action: 'confirm-collection', code: entered },
+    })
     setConfirming(false)
+
+    if (error || !data?.ok) {
+      const msg = data?.error ?? 'Could not confirm collection. Please try again.'
+      const remaining = data?.attemptsRemaining
+      setError(remaining !== undefined ? `${msg} ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining.` : msg)
+      return
+    }
     onConfirmed()
   }
 
@@ -1022,4 +1138,16 @@ const styles = StyleSheet.create({
   codeInputFilled: { borderColor: Colors.needleGreen },
   codeError: { fontSize: FontSize.sm, color: Colors.error, textAlign: 'center' },
   amountNote: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center' },
+
+  // Quote modal — currency picker
+  fieldLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: Spacing.sm },
+  required: { color: Colors.error },
+  currencyChip: {
+    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
+    borderRadius: Radius.full, borderWidth: 1.5, borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+  },
+  currencyChipActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
+  currencyChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
+  currencyChipTextActive: { color: Colors.needleGreen },
 })

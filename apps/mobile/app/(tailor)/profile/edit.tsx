@@ -1,0 +1,580 @@
+/**
+ * Edit Profile — single source of truth for all tailor profile data.
+ * Onboarding writes here; this screen reads and updates the same row.
+ */
+import { useEffect, useRef, useState } from 'react'
+import {
+  View, Text, StyleSheet, ScrollView, TextInput,
+  TouchableOpacity, ActivityIndicator, Alert, Image,
+} from 'react-native'
+import { useRouter } from 'expo-router'
+import { SafeAreaView } from 'react-native-safe-area-context'
+import { Feather } from '@expo/vector-icons'
+import * as ImagePicker from 'expo-image-picker'
+import * as ImageManipulator from 'expo-image-manipulator'
+import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/lib/auth'
+import { useTailorProfile } from '@/lib/tailorProfile'
+import { TagSelector } from '@/components/ui'
+import type { TagGroup } from '@/components/ui'
+import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+
+// ─── Specialty options ────────────────────────────────────────────────────────
+
+const SPECIALTY_GROUPS: TagGroup[] = [
+  { label: 'West African', items: ['Agbada', 'Iro & Buba', 'Ankara', 'Kaftans', 'Dashiki', 'Boubou', 'Native Wear', 'Asoebi', 'Kente'] },
+  { label: 'Formal & Western', items: ['Suits', 'Wool Suits', 'Tuxedo', 'Shirts', 'Trousers', 'Blazers'] },
+  { label: 'Womenswear', items: ['Bespoke Dress', 'Wedding Gown', 'Prom Dress', 'Bridal', 'Jumpsuit', 'Skirts', 'Blouses'] },
+  { label: 'South Asian', items: ['Lehenga', 'Saree Blouse', 'Kurta', 'Shalwar Kameez', 'Sherwani'] },
+  { label: 'Middle Eastern & North African', items: ['Abaya', 'Jalabiya', 'Kaftan'] },
+  { label: 'East Asian', items: ['Qipao / Cheongsam'] },
+  { label: 'Craft & Textile', items: ['Embroidery', 'Adire', 'Batik'] },
+]
+
+type Availability = 'OPEN' | 'LIMITED' | 'FULLY_BOOKED'
+type VerificationStatus = 'NOT_SUBMITTED' | 'PENDING' | 'APPROVED' | 'REJECTED'
+
+const AVAIL_OPTIONS: { value: Availability; label: string; hint: string }[] = [
+  { value: 'OPEN',         label: 'Open',         hint: 'Accepting new order requests' },
+  { value: 'LIMITED',      label: 'Limited',       hint: 'Accepting orders; response time may be longer' },
+  { value: 'FULLY_BOOKED', label: 'Fully booked',  hint: '"Notify me" shown instead of booking button' },
+]
+
+const VERIFY_LABEL: Record<VerificationStatus, string> = {
+  NOT_SUBMITTED: 'Verification not submitted',
+  PENDING:       'ID under review — verified within 24 hours',
+  APPROVED:      'Identity verified',
+  REJECTED:      'Verification failed — please re-submit',
+}
+const VERIFY_COLOR: Record<VerificationStatus, string> = {
+  NOT_SUBMITTED: Colors.midGrey,
+  PENDING:       Colors.warning,
+  APPROVED:      Colors.success,
+  REJECTED:      Colors.error,
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
+
+export default function EditProfileScreen() {
+  const router = useRouter()
+  const { user } = useAuth()
+  const { avatarUrl, setAvatarUrl } = useTailorProfile()
+
+  // ── Form state ──────────────────────────────────────────────────────────────
+  const [displayName, setDisplayName]     = useState('')
+  const [location, setLocation]           = useState('')
+  const [bio, setBio]                     = useState('')
+  const [specialties, setSpecialties]     = useState<string[]>([])
+  const [availability, setAvailability]   = useState<Availability>('OPEN')
+  const [verifyStatus, setVerifyStatus]   = useState<VerificationStatus>('NOT_SUBMITTED')
+  const [portfolioCount, setPortfolioCount] = useState(0)
+
+  // Baseline snapshot to compute dirty state
+  const [base, setBase] = useState<{
+    displayName: string; location: string; bio: string
+    specialties: string[]; availability: Availability
+  } | null>(null)
+
+  const [loading, setLoading]             = useState(true)
+  const [saving, setSaving]               = useState(false)
+  const [uploadingAvatar, setUploadingAvatar] = useState(false)
+  const [errors, setErrors]               = useState<{ name?: string; location?: string; specialties?: string }>({})
+
+  // Location autocomplete
+  const [locationSuggestions, setLocationSuggestions] = useState<string[]>([])
+  const [showSuggestions, setShowSuggestions]          = useState(false)
+  const locationDebounce = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // ── Derived ─────────────────────────────────────────────────────────────────
+
+  const initials = (user?.user_metadata?.display_name ?? displayName)
+    .split(' ').slice(0, 2).map((w: string) => w[0]?.toUpperCase() ?? '').join('') || '?'
+
+  const dirty = base !== null && (
+    displayName    !== base.displayName ||
+    location       !== base.location ||
+    bio            !== base.bio ||
+    availability   !== base.availability ||
+    JSON.stringify(specialties) !== JSON.stringify(base.specialties)
+  )
+
+  // ── Load ────────────────────────────────────────────────────────────────────
+
+  useEffect(() => { load() }, [])
+
+  async function load() {
+    if (!user?.id) return
+    const { data } = await supabase
+      .from('tailor_profiles')
+      .select('id, display_name, location, bio, specialty_tags, availability, id_verification_status')
+      .eq('user_id', user.id)
+      .maybeSingle()
+
+    if (data) {
+      const d = data as any
+      const snap = {
+        displayName:  d.display_name    ?? '',
+        location:     d.location        ?? '',
+        bio:          d.bio             ?? '',
+        specialties:  d.specialty_tags  ?? [],
+        availability: (d.availability   ?? 'OPEN') as Availability,
+      }
+      setBase(snap)
+      setDisplayName(snap.displayName)
+      setLocation(snap.location)
+      setBio(snap.bio)
+      setSpecialties(snap.specialties)
+      setAvailability(snap.availability)
+      setVerifyStatus((d.id_verification_status ?? 'NOT_SUBMITTED') as VerificationStatus)
+
+      // Portfolio count
+      const { count } = await supabase
+        .from('portfolio_items')
+        .select('*', { count: 'exact', head: true })
+        .eq('tailor_profile_id', d.id)
+      setPortfolioCount(count ?? 0)
+    }
+    setLoading(false)
+  }
+
+  // ── Avatar ───────────────────────────────────────────────────────────────────
+
+  async function handleAvatarPress() {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Allow photo access to update your profile picture.')
+      return
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: 'images', allowsEditing: true, aspect: [1, 1], quality: 0.9,
+    })
+    if (result.canceled || !result.assets[0]) return
+
+    setUploadingAvatar(true)
+    try {
+      const compressed = await ImageManipulator.manipulateAsync(
+        result.assets[0].uri,
+        [{ resize: { width: 800, height: 800 } }],
+        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+      )
+      const fileName = `${user!.id}/avatar.jpg`
+      const blob = await (await fetch(compressed.uri)).blob()
+      const { error: uploadError } = await supabase.storage
+        .from('avatars')
+        .upload(fileName, blob, { contentType: 'image/jpeg', upsert: true })
+      if (uploadError) throw uploadError
+      const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(fileName)
+      const bustUrl = `${publicUrl}?t=${Date.now()}`
+      await supabase.from('tailor_profiles').update({ avatar_url: bustUrl }).eq('user_id', user!.id)
+      setAvatarUrl(bustUrl)
+    } catch {
+      Alert.alert('Upload failed', 'Could not update your photo. Please try again.')
+    } finally {
+      setUploadingAvatar(false)
+    }
+  }
+
+  // ── Location autocomplete ────────────────────────────────────────────────────
+
+  function onLocationChange(text: string) {
+    setLocation(text)
+    setShowSuggestions(false)
+    if (errors.location) setErrors((e) => ({ ...e, location: undefined }))
+    if (locationDebounce.current) clearTimeout(locationDebounce.current)
+    if (text.trim().length < 3) { setLocationSuggestions([]); return }
+    locationDebounce.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&addressdetails=1&limit=6&featuretype=city`,
+          { headers: { 'Accept-Language': 'en', 'User-Agent': 'Drape/1.0' } }
+        )
+        const data: any[] = await res.json()
+        const labels = data.map((item) => {
+          const a = item.address ?? {}
+          const city = a.city ?? a.town ?? a.village ?? a.county ?? item.display_name.split(',')[0]
+          const country = a.country ?? ''
+          return country ? `${city}, ${country}` : city
+        }).filter(Boolean)
+        const unique = [...new Set(labels)] as string[]
+        setLocationSuggestions(unique)
+        setShowSuggestions(unique.length > 0)
+      } catch { /* Nominatim unavailable — let user type freely */ }
+    }, 400)
+  }
+
+  // ── Validate + Save ─────────────────────────────────────────────────────────
+
+  function validate(): boolean {
+    const errs: typeof errors = {}
+    if (!displayName.trim()) errs.name      = 'Display name is required.'
+    if (!location.trim())    errs.location  = 'Location is required.'
+    if (specialties.length === 0) errs.specialties = 'Select at least one specialty.'
+    setErrors(errs)
+    return Object.keys(errs).length === 0
+  }
+
+  async function handleSave() {
+    if (!validate() || !user?.id) return
+    setSaving(true)
+    const { error } = await supabase
+      .from('tailor_profiles')
+      .update({
+        display_name:  displayName.trim(),
+        location:      location.trim(),
+        bio:           bio.trim() || null,
+        specialty_tags: specialties,
+        availability,
+        updated_at:    new Date().toISOString(),
+      })
+      .eq('user_id', user.id)
+    setSaving(false)
+    if (error) {
+      Alert.alert('Save failed', error.message)
+      return
+    }
+    // Update snapshot so the Save button disables again
+    setBase({ displayName: displayName.trim(), location: location.trim(), bio: bio.trim(), specialties, availability })
+    router.back()
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────────
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
+      </SafeAreaView>
+    )
+  }
+
+  return (
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={8}>
+          <Feather name="arrow-left" size={22} color={Colors.ink} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Edit profile</Text>
+        <TouchableOpacity
+          style={[styles.saveBtn, (!dirty || saving) && styles.saveBtnDisabled]}
+          onPress={handleSave}
+          disabled={!dirty || saving}
+        >
+          {saving
+            ? <ActivityIndicator size="small" color={Colors.white} />
+            : <Text style={styles.saveBtnText}>Save</Text>
+          }
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {/* ── Avatar ───────────────────────────────────────────────────── */}
+        <View style={styles.avatarSection}>
+          <TouchableOpacity
+            style={styles.avatarWrap}
+            onPress={handleAvatarPress}
+            disabled={uploadingAvatar}
+            activeOpacity={0.8}
+          >
+            {uploadingAvatar ? (
+              <View style={[styles.avatar, styles.avatarLoading]}>
+                <ActivityIndicator color={Colors.white} />
+              </View>
+            ) : avatarUrl ? (
+              <Image source={{ uri: avatarUrl }} style={styles.avatarImage} resizeMode="cover" />
+            ) : (
+              <View style={styles.avatar}>
+                <Text style={styles.avatarInitials}>{initials}</Text>
+              </View>
+            )}
+            <View style={styles.cameraBadge}>
+              <Feather name="camera" size={12} color={Colors.white} />
+            </View>
+          </TouchableOpacity>
+          <Text style={styles.avatarHint}>Tap to change photo</Text>
+        </View>
+
+        {/* ── Identity ─────────────────────────────────────────────────── */}
+        <Section title="Identity">
+          <Field label="Display name" required error={errors.name}>
+            <TextInput
+              style={[styles.input, errors.name && styles.inputError]}
+              value={displayName}
+              onChangeText={(v) => { setDisplayName(v); setErrors((e) => ({ ...e, name: undefined })) }}
+              placeholder="e.g. Emeka Obi"
+              placeholderTextColor={Colors.midGrey}
+              autoCapitalize="words"
+            />
+          </Field>
+
+          <Field label="Location" required error={errors.location}>
+            <View>
+              <TextInput
+                style={[styles.input, errors.location && styles.inputError]}
+                value={location}
+                onChangeText={onLocationChange}
+                onBlur={() => setShowSuggestions(false)}
+                placeholder="e.g. Lagos, Nigeria"
+                placeholderTextColor={Colors.midGrey}
+                autoCorrect={false}
+                autoComplete="off"
+              />
+              {showSuggestions && locationSuggestions.length > 0 && (
+                <View style={styles.suggestBox}>
+                  {locationSuggestions.map((s, i) => (
+                    <TouchableOpacity
+                      key={i}
+                      style={[styles.suggestRow, i === locationSuggestions.length - 1 && styles.suggestRowLast]}
+                      onPress={() => { setLocation(s); setLocationSuggestions([]); setShowSuggestions(false) }}
+                    >
+                      <Text style={styles.suggestText}>{s}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+            </View>
+          </Field>
+        </Section>
+
+        {/* ── Professional details ──────────────────────────────────────── */}
+        <Section title="Professional details">
+          <Field label="About you">
+            <TextInput
+              style={[styles.input, styles.multiline]}
+              value={bio}
+              onChangeText={setBio}
+              placeholder="Tell customers who you are, what you specialise in, and your experience…"
+              placeholderTextColor={Colors.midGrey}
+              multiline
+              numberOfLines={5}
+              maxLength={500}
+            />
+            <Text style={styles.charCount}>{bio.trim().length}/500</Text>
+          </Field>
+
+          <Field label="Specialties" required error={errors.specialties}>
+            <TagSelector
+              label=""
+              options={SPECIALTY_GROUPS}
+              selected={specialties}
+              onChange={(v) => { setSpecialties(v); setErrors((e) => ({ ...e, specialties: undefined })) }}
+              searchable
+            />
+          </Field>
+        </Section>
+
+        {/* ── Availability ──────────────────────────────────────────────── */}
+        <Section title="Availability">
+          {AVAIL_OPTIONS.map((opt) => (
+            <TouchableOpacity
+              key={opt.value}
+              style={[styles.availCard, availability === opt.value && styles.availCardActive]}
+              onPress={() => setAvailability(opt.value)}
+              activeOpacity={0.75}
+            >
+              <View style={[styles.availRadio, availability === opt.value && styles.availRadioActive]} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.availLabel, availability === opt.value && styles.availLabelActive]}>
+                  {opt.label}
+                </Text>
+                <Text style={styles.availHint}>{opt.hint}</Text>
+              </View>
+            </TouchableOpacity>
+          ))}
+        </Section>
+
+        {/* ── Portfolio ────────────────────────────────────────────────── */}
+        <Section title="Portfolio">
+          <TouchableOpacity
+            style={styles.portfolioLink}
+            onPress={() => router.push('/(tailor)/profile/portfolio')}
+            activeOpacity={0.75}
+          >
+            <View style={styles.portfolioLinkLeft}>
+              <Feather name="image" size={18} color={Colors.needleGreen} />
+              <View>
+                <Text style={styles.portfolioLinkTitle}>Manage portfolio</Text>
+                <Text style={styles.portfolioLinkSub}>
+                  {portfolioCount > 0 ? `${portfolioCount} item${portfolioCount !== 1 ? 's' : ''}` : 'No items yet — add your work'}
+                </Text>
+              </View>
+            </View>
+            <Feather name="chevron-right" size={18} color={Colors.midGrey} />
+          </TouchableOpacity>
+        </Section>
+
+        {/* ── Verification (read-only) ──────────────────────────────────── */}
+        <Section title="Verification">
+          <View style={[styles.verifyCard, { borderLeftColor: VERIFY_COLOR[verifyStatus] }]}>
+            <View style={[styles.verifyDot, { backgroundColor: VERIFY_COLOR[verifyStatus] }]} />
+            <Text style={[styles.verifyText, { color: VERIFY_COLOR[verifyStatus] }]}>
+              {VERIFY_LABEL[verifyStatus]}
+            </Text>
+          </View>
+          {(verifyStatus === 'NOT_SUBMITTED' || verifyStatus === 'REJECTED') && (
+            <TouchableOpacity
+              style={styles.verifyLink}
+              onPress={() => router.push('/(tailor)/profile/setup')}
+              activeOpacity={0.75}
+            >
+              <Text style={styles.verifyLinkText}>
+                {verifyStatus === 'REJECTED' ? 'Re-submit verification →' : 'Submit ID verification →'}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </Section>
+      </ScrollView>
+    </SafeAreaView>
+  )
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <View style={sectionStyles.wrap}>
+      <Text style={sectionStyles.title}>{title}</Text>
+      <View style={sectionStyles.body}>{children}</View>
+    </View>
+  )
+}
+
+function Field({
+  label, required, error, children,
+}: {
+  label: string; required?: boolean; error?: string; children: React.ReactNode
+}) {
+  return (
+    <View style={fieldStyles.wrap}>
+      <Text style={fieldStyles.label}>
+        {label}{required && <Text style={fieldStyles.required}> *</Text>}
+      </Text>
+      {children}
+      {error ? <Text style={fieldStyles.error}>{error}</Text> : null}
+    </View>
+  )
+}
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: Colors.bone },
+
+  header: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
+    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md,
+    borderBottomWidth: 1, borderBottomColor: Colors.boneDeep,
+    backgroundColor: Colors.bone,
+  },
+  headerTitle: { flex: 1, fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  saveBtn: {
+    backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
+    minWidth: 60, alignItems: 'center',
+  },
+  saveBtnDisabled: { opacity: 0.35 },
+  saveBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+
+  scroll: { padding: Spacing.xl, gap: Spacing.xl, paddingBottom: 60 },
+
+  // Avatar
+  avatarSection: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.md },
+  avatarWrap: { position: 'relative' },
+  avatar: {
+    width: 88, height: 88, borderRadius: 44,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 2, borderColor: Colors.needleGreen + '40',
+  },
+  avatarLoading: { opacity: 0.6 },
+  avatarImage: { width: 88, height: 88, borderRadius: 44, borderWidth: 2, borderColor: Colors.needleGreen + '40' },
+  avatarInitials: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.needleGreen },
+  cameraBadge: {
+    position: 'absolute', bottom: 0, right: 0,
+    width: 26, height: 26, borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreen, alignItems: 'center', justifyContent: 'center',
+    borderWidth: 2, borderColor: Colors.bone,
+  },
+  avatarHint: { fontSize: FontSize.xs, color: Colors.midGrey },
+
+  // Inputs
+  input: {
+    backgroundColor: Colors.white, borderRadius: Radius.md,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
+    fontSize: FontSize.md, color: Colors.ink, ...Shadow.sm,
+    borderWidth: 1.5, borderColor: 'transparent',
+  },
+  inputError: { borderColor: Colors.error },
+  multiline: { minHeight: 100, textAlignVertical: 'top' },
+  charCount: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'right', marginTop: 4 },
+
+  // Location suggestions
+  suggestBox: {
+    backgroundColor: Colors.white, borderRadius: Radius.md,
+    borderWidth: 1, borderColor: Colors.lightGrey,
+    marginTop: 2, overflow: 'hidden', ...Shadow.sm,
+  },
+  suggestRow: {
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.lightGrey,
+  },
+  suggestRowLast: { borderBottomWidth: 0 },
+  suggestText: { fontSize: FontSize.sm, color: Colors.ink },
+
+  // Availability
+  availCard: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
+    backgroundColor: Colors.white, borderRadius: Radius.lg,
+    padding: Spacing.lg, borderWidth: 1.5, borderColor: Colors.lightGrey,
+  },
+  availCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
+  availRadio: {
+    width: 20, height: 20, borderRadius: 10, marginTop: 2,
+    borderWidth: 2, borderColor: Colors.lightGrey, backgroundColor: Colors.white,
+  },
+  availRadioActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreen },
+  availLabel: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
+  availLabelActive: { color: Colors.needleGreen },
+  availHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
+
+  // Portfolio link
+  portfolioLink: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
+    backgroundColor: Colors.white, borderRadius: Radius.lg,
+    padding: Spacing.lg, ...Shadow.sm,
+  },
+  portfolioLinkLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
+  portfolioLinkTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  portfolioLinkSub: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
+
+  // Verification
+  verifyCard: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+    backgroundColor: Colors.white, borderRadius: Radius.lg,
+    padding: Spacing.lg, borderLeftWidth: 4, ...Shadow.sm,
+  },
+  verifyDot: { width: 8, height: 8, borderRadius: 4 },
+  verifyText: { flex: 1, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
+  verifyLink: { alignSelf: 'flex-start', paddingTop: Spacing.sm },
+  verifyLinkText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+})
+
+const sectionStyles = StyleSheet.create({
+  wrap: { gap: Spacing.md },
+  title: {
+    fontSize: FontSize.sm, fontWeight: FontWeight.semibold,
+    color: Colors.midGrey, textTransform: 'uppercase', letterSpacing: 0.8,
+  },
+  body: { gap: Spacing.md },
+})
+
+const fieldStyles = StyleSheet.create({
+  wrap: { gap: 6 },
+  label: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.inkLight },
+  required: { color: Colors.error },
+  error: { fontSize: FontSize.xs, color: Colors.error, marginTop: 4 },
+})
