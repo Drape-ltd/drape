@@ -64,7 +64,6 @@ export default function CustomerHomeScreen() {
   const [filteredTailors, setFilteredTailors] = useState<TailorCard[]>([])
   const [selectedCategory, setSelectedCategory] = useState('All')
   const [refreshing, setRefreshing] = useState(false)
-  const [showSearch, setShowSearch] = useState(false)
 
   async function fetchData() {
     const [ordersRes, tailorsRes] = await Promise.all([
