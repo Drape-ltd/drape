@@ -78,6 +78,8 @@ export default function TailorProfileScreen() {
   const [profile, setProfile] = useState<TailorProfile | null>(null)
   const [reviews, setReviews] = useState<ReviewRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState(false)
+  const [retryTrigger, setRetryTrigger] = useState(0)
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const [pendingQuoteCount, setPendingQuoteCount] = useState(0)
   const [replyOpen, setReplyOpen] = useState<string | null>(null)
@@ -95,6 +97,10 @@ export default function TailorProfileScreen() {
 
   useFocusEffect(useCallback(() => {
     async function load() {
+      setFetchError(false)
+      try {
+      // V1.1 TODO: replace Promise.all with independent fetches so a single query failure
+      // (e.g. reviews) doesn't block the entire profile from rendering.
       const [profileRes, reviewsRes, pendingRes] = await Promise.all([
         supabase
           .from('tailor_profiles')
@@ -148,9 +154,13 @@ export default function TailorProfileScreen() {
 
       setPendingQuoteCount(pendingRes.count ?? 0)
       setLoading(false)
+      } catch {
+        setFetchError(true)
+        setLoading(false)
+      }
     }
     load()
-  }, [user?.id]))
+  }, [user?.id, retryTrigger]))
 
   // ── Avatar upload ────────────────────────────────────────────────────────────
 
@@ -258,6 +268,22 @@ export default function TailorProfileScreen() {
   // Live status badge config
   const liveBadgeKey = profile?.isLive ? 'LIVE' : (idStatus in LIVE_BADGE ? idStatus : 'NOT_SUBMITTED')
   const liveBadge = LIVE_BADGE[liveBadgeKey]
+
+  if (fetchError) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', gap: Spacing.lg, padding: Spacing.xl }}>
+          <Text style={{ fontSize: FontSize.md, color: Colors.inkLight }}>Couldn't load your profile.</Text>
+          <TouchableOpacity
+            style={{ backgroundColor: Colors.needleGreen, borderRadius: Radius.full, paddingVertical: Spacing.md, paddingHorizontal: Spacing.xxxl }}
+            onPress={() => { setFetchError(false); setLoading(true); setRetryTrigger((n) => n + 1) }}
+          >
+            <Text style={{ color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm }}>Try again</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    )
+  }
 
   if (loading) {
     return (

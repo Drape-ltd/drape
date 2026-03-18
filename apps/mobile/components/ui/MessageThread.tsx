@@ -45,9 +45,14 @@ interface Props {
 const RATE_LIMIT_COUNT = 8
 const RATE_LIMIT_WINDOW_MS = 30_000
 
+const MSG_PAGE_SIZE = 50
+
 export function MessageThread({ orderId, currentUserId, currentUserRole, tailorName, customerName, locked = false }: Props) {
   const [messages, setMessages] = useState<Message[]>([])
   const [loading, setLoading] = useState(true)
+  const [hasEarlier, setHasEarlier] = useState(false)
+  const [loadingEarlier, setLoadingEarlier] = useState(false)
+  const loadingEarlierRef = useRef(false)
   const [text, setText] = useState('')
   const [textError, setTextError] = useState('')
   const [sending, setSending] = useState(false)
@@ -62,10 +67,40 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
       .from('messages')
       .select('*')
       .eq('order_id', orderId)
-      .order('created_at', { ascending: true })
+      .order('created_at', { ascending: false })
+      .limit(MSG_PAGE_SIZE)
 
-    if (data) setMessages(data as Message[])
+    if (data) {
+      setMessages([...data].reverse() as Message[])
+      setHasEarlier(data.length === MSG_PAGE_SIZE)
+    }
     setLoading(false)
+  }
+
+  async function loadEarlier() {
+    if (!hasEarlier || loadingEarlierRef.current || messages.length === 0) return
+    loadingEarlierRef.current = true
+    setLoadingEarlier(true)
+    const oldest = messages[0].created_at
+    try {
+      const { data } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('order_id', orderId)
+        .lt('created_at', oldest)
+        .order('created_at', { ascending: false })
+        .limit(MSG_PAGE_SIZE)
+
+      if (data) {
+        setMessages((prev) => [...([...data].reverse() as Message[]), ...prev])
+        setHasEarlier(data.length === MSG_PAGE_SIZE)
+      }
+    } catch {
+      // no-op — spinner cleared in finally
+    } finally {
+      loadingEarlierRef.current = false
+      setLoadingEarlier(false)
+    }
   }
 
   useEffect(() => {
@@ -249,6 +284,16 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
         onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+        ListHeaderComponent={
+          hasEarlier ? (
+            <TouchableOpacity style={styles.loadEarlierBtn} onPress={loadEarlier} disabled={loadingEarlier}>
+              {loadingEarlier
+                ? <ActivityIndicator size="small" color={Colors.needleGreen} />
+                : <Text style={styles.loadEarlierText}>↑ Load earlier messages</Text>
+              }
+            </TouchableOpacity>
+          ) : null
+        }
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text style={styles.emptyText}>Start the conversation with {otherName}.</Text>
@@ -387,9 +432,10 @@ function MessageBubble({ message, isOwn }: { message: Message; isOwn: boolean })
           <TouchableOpacity style={styles.voiceNote} onPress={toggleVoice}>
             <Text style={styles.voiceNoteIcon}>{playing ? '⏸' : '▶'}</Text>
             <View style={styles.voiceWave}>
-              {[...Array(12)].map((_, i) => (
-                <View key={i} style={[styles.voiceBar, { height: 6 + Math.sin(i) * 6 + Math.random() * 4 }]} />
-              ))}
+              {[...Array(12)].map((_, i) => {
+                const seed = message.id.charCodeAt(i % message.id.length)
+                return <View key={i} style={[styles.voiceBar, { height: (seed % 12) + 4 }]} />
+              })}
             </View>
             <Text style={styles.voiceNoteLabel}>Voice note</Text>
           </TouchableOpacity>
@@ -407,6 +453,12 @@ function MessageBubble({ message, isOwn }: { message: Message; isOwn: boolean })
 const styles = StyleSheet.create({
   container: { flex: 1 },
   list: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.md },
+
+  loadEarlierBtn: {
+    alignSelf: 'center', paddingVertical: Spacing.sm, paddingHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+  },
+  loadEarlierText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
 
   empty: { paddingTop: 60, alignItems: 'center', gap: Spacing.lg, paddingHorizontal: Spacing.xl },
   emptyText: { fontSize: FontSize.md, color: Colors.inkLight },

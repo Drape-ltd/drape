@@ -31,7 +31,7 @@ export default function CustomerMessagesScreen() {
       // or an actual order ID — handle both
 
       // Try as order ID first
-      const { data: order } = await supabase
+      const { data: order, error: orderError } = await supabase
         .from('orders')
         .select(`
           id, garment_type, stage, customer_id, video_call_url,
@@ -41,6 +41,10 @@ export default function CustomerMessagesScreen() {
         .eq('id', orderId)
         .eq('customer_id', user?.id)
         .single()
+
+      // Only fall through to the tailor-ID path if this was a genuine miss (PGRST116 = no rows).
+      // Network errors have a different code and should not trigger the second lookup.
+      const isGenuineMiss = !order && orderError?.code === 'PGRST116'
 
       if (order) {
         const o = order as any
@@ -53,7 +57,7 @@ export default function CustomerMessagesScreen() {
           stage: o.stage,
           videoCallUrl: o.video_call_url ?? null,
         })
-      } else {
+      } else if (isGenuineMiss) {
         // orderId is a tailor ID — find most recent active order with that tailor
         const { data: found } = await supabase
           .from('orders')
@@ -82,9 +86,12 @@ export default function CustomerMessagesScreen() {
             videoCallUrl: o.video_call_url ?? null,
           })
         } else {
-          // No active order — tailor profile message flow, no active order
+          // No active order with this tailor
           setOrderInfo(null)
         }
+      } else if (orderError && orderError.code !== 'PGRST116') {
+        // Network/DB error — show no-order fallback rather than an unhandled crash
+        setOrderInfo(null)
       }
       setLoading(false)
     }

@@ -53,7 +53,7 @@ export default function SearchScreen() {
       query = query.eq('tier', t)
     }
 
-    const { data } = await query.order('avg_rating', { ascending: false }).limit(30)
+    const { data } = await query.order('ranking_score', { ascending: false }).limit(30)
     setResults(
       (data ?? []).map((d: any) => ({
         id: d.id,

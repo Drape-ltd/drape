@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Image, ActivityIndicator, Alert, Linking, Modal, KeyboardAvoidingView, Platform, TextInput,
+  Image, ActivityIndicator, Alert, Linking, Modal, KeyboardAvoidingView, Platform, TextInput, RefreshControl,
 } from 'react-native'
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -42,21 +42,30 @@ type OrderDetail = {
   createdAt: string
 }
 
+const DISPUTES_EMAIL = 'disputes@drape.com'
+
 // The 5 production stages shown in the progress bar
 const PROGRESS_STAGES: OrderStage[] = ['CONFIRMED', 'CUTTING', 'SEWING', 'FINISHING', 'SHIPPED']
+
+// Stages that are before production starts — show a "Waiting" pre-step
+const PRE_PRODUCTION_STAGES: OrderStage[] = ['CONSULTATION', 'PAYMENT_PENDING']
 const PROGRESS_LABELS: Record<string, string> = {
   CONFIRMED: 'Confirmed', CUTTING: 'Cutting', SEWING: 'Sewing',
   FINISHING: 'Finishing', SHIPPED: 'Shipped',
 }
 
 function stageIndex(stage: OrderStage): number {
-  // Map READY_FOR_COLLECTION -> same level as SHIPPED
-  const normalised = stage === 'READY_FOR_COLLECTION' ? 'SHIPPED' : stage
+  // Map READY_FOR_COLLECTION -> same level as SHIPPED.
+  // Map DESIGNING / SOURCING -> CONFIRMED (tailor pre-production stages that customers see as "Confirmed")
+  const normalised =
+    stage === 'READY_FOR_COLLECTION' ? 'SHIPPED'
+    : (stage === 'DESIGNING' || stage === 'SOURCING') ? 'CONFIRMED'
+    : stage
   return PROGRESS_STAGES.indexOf(normalised as OrderStage)
 }
 
 export default function OrderTrackingScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>()
+  const { id, sent } = useLocalSearchParams<{ id: string; sent?: string }>()
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
@@ -67,25 +76,38 @@ export default function OrderTrackingScreen() {
   }
   const [order, setOrder] = useState<OrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [fetchError, setFetchError] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [showDispute, setShowDispute] = useState(false)
   const [fabricTracking, setFabricTracking] = useState('')
   const [savingFabric, setSavingFabric] = useState(false)
+  const [hasReview, setHasReview] = useState(false)
 
   async function fetchOrder() {
-    const { data } = await supabase
-      .from('orders')
-      .select(`
-        id, reference, garment_type, garment_description, stage,
-        tailor_id, tailor_profile_id, quoted_amount, quoted_currency, quoted_completion_date,
-        fabric_source, delivery_method, fabric_tracking,
-        collection_code, video_call_url, created_at,
-        tailor_profiles!tailor_profile_id(display_name),
-        order_stage_updates(id, stage, note, photo_url, created_at)
-      `)
-      .eq('id', id)
-      .eq('customer_id', user?.id)
-      .single()
+    setFetchError(false)
+    try {
+    const [{ data }, { count }] = await Promise.all([
+      supabase
+        .from('orders')
+        .select(`
+          id, reference, garment_type, garment_description, stage,
+          tailor_id, tailor_profile_id, quoted_amount, quoted_currency, quoted_completion_date,
+          fabric_source, delivery_method, fabric_tracking,
+          collection_code, video_call_url, created_at,
+          tailor_profiles!tailor_profile_id(display_name),
+          order_stage_updates(id, stage, note, photo_url, created_at)
+        `)
+        .eq('id', id)
+        .eq('customer_id', user?.id)
+        .order('created_at', { ascending: true, referencedTable: 'order_stage_updates' })
+        .single(),
+      supabase
+        .from('reviews')
+        .select('id', { count: 'exact', head: true })
+        .eq('order_id', id),
+    ])
+    setHasReview((count ?? 0) > 0)
 
     if (data) {
       const d = data as any
@@ -106,9 +128,7 @@ export default function OrderTrackingScreen() {
         fabricTracking: d.fabric_tracking,
         collectionCode: d.collection_code,
         videoCallUrl: d.video_call_url ?? null,
-        stageUpdates: (d.order_stage_updates ?? [])
-          .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
-          .map((u: any) => ({
+        stageUpdates: (d.order_stage_updates ?? []).map((u: any) => ({
             id: u.id,
             stage: u.stage,
             note: u.note,
@@ -119,6 +139,16 @@ export default function OrderTrackingScreen() {
       })
     }
     setLoading(false)
+    } catch {
+      setFetchError(true)
+      setLoading(false)
+    }
+  }
+
+  async function handleRefresh() {
+    setRefreshing(true)
+    await fetchOrder()
+    setRefreshing(false)
   }
 
   useEffect(() => { fetchOrder() }, [id])
@@ -164,6 +194,7 @@ export default function OrderTrackingScreen() {
       .eq('customer_id', user?.id)
     setSavingFabric(false)
     if (error) {
+      Sentry.captureException(error, { extra: { context: 'save_fabric_tracking', orderId: id } })
       Alert.alert('Error', 'Could not save tracking number. Please try again.')
     } else {
       setOrder((prev) => prev ? { ...prev, fabricTracking: fabricTracking.trim() } : prev)
@@ -174,6 +205,22 @@ export default function OrderTrackingScreen() {
     return (
       <SafeAreaView style={styles.safe}>
         <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
+      </SafeAreaView>
+    )
+  }
+
+  if (fetchError) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.notFound}>
+          <Text style={styles.notFoundText}>Couldn't load this order.</Text>
+          <TouchableOpacity onPress={fetchOrder} style={styles.retryBtn}>
+            <Text style={styles.retryBtnText}>Try again</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={goBack}>
+            <Text style={styles.backLink}>Go back</Text>
+          </TouchableOpacity>
+        </View>
       </SafeAreaView>
     )
   }
@@ -208,6 +255,13 @@ export default function OrderTrackingScreen() {
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
         <View style={styles.content}>
+          {sent === '1' && (
+            <View style={styles.sentBanner}>
+              <Text style={styles.sentBannerText}>
+                ✓  Brief sent to {order.tailorName.split(' ')[0]} · #{order.reference}
+              </Text>
+            </View>
+          )}
           <Text style={styles.heading}>{order.garmentType}</Text>
           <Text style={styles.subheading}>{order.tailorName}  ·  #{order.reference}</Text>
           <View style={styles.statusCard} testID="order-pending-quote">
@@ -238,7 +292,12 @@ export default function OrderTrackingScreen() {
         <Text style={styles.backText}>← Back</Text>
       </TouchableOpacity>
 
-      <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
+      <ScrollView
+        style={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 100 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={Colors.needleGreen} />}
+      >
         <View style={styles.content}>
           {/* Header */}
           <View>
@@ -247,6 +306,12 @@ export default function OrderTrackingScreen() {
           </View>
 
           {/* Stage progress bar */}
+          {PRE_PRODUCTION_STAGES.includes(order.stage) ? (
+            <View style={styles.preProductionBar}>
+              <View style={styles.preProductionDot} />
+              <Text style={styles.preProductionLabel}>Awaiting confirmation</Text>
+            </View>
+          ) : (
           <View style={styles.progressBar}>
             {PROGRESS_STAGES.map((s, i) => {
               const done = i <= currentStageIdx
@@ -266,6 +331,7 @@ export default function OrderTrackingScreen() {
               )
             })}
           </View>
+          )}
 
           {/* Current stage status */}
           <View style={styles.statusCard} testID="order-tracking-status">
@@ -316,7 +382,7 @@ export default function OrderTrackingScreen() {
                 ))}
               </View>
               <Text style={styles.collectionInstruction}>Show this to {order.tailorName}</Text>
-              <TouchableOpacity onPress={() => Alert.alert('Report issue', 'Email disputes@drape.com with your order reference: #' + order.reference)}>
+              <TouchableOpacity onPress={() => Alert.alert('Report issue', `Email ${DISPUTES_EMAIL} with your order reference: #${order.reference}`)}>
                 <Text style={styles.disputeLink}>Something wrong? Report issue</Text>
               </TouchableOpacity>
             </View>
@@ -329,6 +395,21 @@ export default function OrderTrackingScreen() {
               onPress={confirmReceipt}
               loading={confirming}
             />
+          )}
+
+          {/* Review CTA — terminal stages without a review yet */}
+          {['COMPLETE', 'DELIVERED', 'COLLECTED'].includes(order.stage) && !hasReview && (
+            <TouchableOpacity
+              style={styles.reviewCta}
+              onPress={() => router.push(`/(customer)/review/${order.id}`)}
+              activeOpacity={0.85}
+            >
+              <View style={styles.reviewCtaInner}>
+                <Text style={styles.reviewCtaTitle}>How was your order?</Text>
+                <Text style={styles.reviewCtaHint}>Leave a review for {order.tailorName.split(' ')[0]}</Text>
+              </View>
+              <Text style={styles.reviewCtaArrow}>★  Rate</Text>
+            </TouchableOpacity>
           )}
 
           {/* Timeline */}
@@ -361,7 +442,7 @@ export default function OrderTrackingScreen() {
 
 
           {/* Fabric tracking — editable when customer supplies own fabric */}
-          {order.fabricSource === 'CUSTOMER_SUPPLIED' && (
+          {order.fabricSource === 'CUSTOMER_SUPPLIES' && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Fabric shipping</Text>
               <Text style={styles.trackingHint}>
@@ -427,6 +508,7 @@ export default function OrderTrackingScreen() {
 
 // ─── Dispute Modal ────────────────────────────────────────────────────────────
 
+// V1.1 TODO: extract to locale strings for i18n
 const DISPUTE_REASONS = [
   'Garment not as described',
   'Wrong measurements / poor fit',
@@ -599,7 +681,7 @@ function QuoteReviewScreen({
   async function accept() {
     Alert.alert(
       'Accept quote',
-      `Accept the quote of ${order.quotedAmount ? formatAmount(order.quotedAmount, order.quotedCurrency, currency, rates) : '—'} from ${order.tailorName}?\n\nYou'll be taken to payment next.`,
+      `Accept the quote of ${order.quotedAmount ? formatAmount(order.quotedAmount, order.quotedCurrency, currency, rates) : '—'} from ${order.tailorName}?\n\nOnce accepted, the tailor will begin production.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -635,10 +717,14 @@ function QuoteReviewScreen({
           style: 'destructive',
           onPress: async () => {
             setDeclining(true)
-            await supabase.functions.invoke('customer-order-action', {
+            const { error } = await supabase.functions.invoke('customer-order-action', {
               body: { orderId: order.id, action: 'decline-quote' },
             })
             setDeclining(false)
+            if (error) {
+              Alert.alert('Error', 'Could not decline the quote. Please try again.')
+              return
+            }
             router.replace('/(customer)/orders')
           },
         },
@@ -711,13 +797,12 @@ function QuoteReviewScreen({
 
             <View style={styles.escrowNote}>
               <Text style={styles.escrowNoteText}>
-                Your payment is protected until your order is perfect. Funds are held in escrow and only released when you confirm delivery.
+                Accepting locks in the price and delivery date. Raise a dispute any time if something goes wrong.
               </Text>
             </View>
           </View>
 
-          {/* Expires note */}
-          <Text style={styles.expiryNote}>This quote expires in 48 hours.</Text>
+          {/* Expiry note intentionally removed — server-side expiry not yet implemented */}
         </View>
       </ScrollView>
 
@@ -732,7 +817,7 @@ function QuoteReviewScreen({
             style={{ flex: 1 }}
           />
           <Button
-            label="Accept & pay"
+            label="Accept quote"
             onPress={accept}
             loading={accepting}
             style={{ flex: 1.6 }}
@@ -753,13 +838,13 @@ const quoteDetailRow: import('react-native').ViewStyle = {
   flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
 }
 const quoteLabel: import('react-native').TextStyle = {
-  fontSize: 14, color: '#4A4A4A',
+  fontSize: 14, color: Colors.inkLight,
 }
 const quoteAmount: import('react-native').TextStyle = {
-  fontSize: 22, fontWeight: '700', color: '#2D6A4F',
+  fontSize: 22, fontWeight: '700', color: Colors.needleGreen,
 }
 const quoteValue: import('react-native').TextStyle = {
-  fontSize: 14, fontWeight: '600', color: '#1A1A1A',
+  fontSize: 14, fontWeight: '600', color: Colors.ink,
 }
 
 const styles = StyleSheet.create({
@@ -873,6 +958,17 @@ const styles = StyleSheet.create({
   fabricSaveBtnText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   fabricSavedNote: { fontSize: FontSize.xs, color: Colors.midGrey },
 
+  reviewCta: {
+    backgroundColor: Colors.white, borderRadius: Radius.lg,
+    padding: Spacing.lg, flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', ...Shadow.sm,
+    borderWidth: 1, borderColor: '#F59E0B40',
+  },
+  reviewCtaInner: { gap: 3 },
+  reviewCtaTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  reviewCtaHint: { fontSize: FontSize.sm, color: Colors.inkLight },
+  reviewCtaArrow: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: '#F59E0B' },
+
   messageCta: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     backgroundColor: Colors.white, padding: Spacing.xl,
@@ -880,9 +976,22 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.xxxl,
   },
 
+  sentBanner: {
+    backgroundColor: Colors.needleGreenLight, borderRadius: Radius.md,
+    padding: Spacing.md, borderLeftWidth: 3, borderLeftColor: Colors.needleGreen,
+  },
+  sentBannerText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+
   notFound: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: Spacing.lg },
   notFoundText: { fontSize: FontSize.lg, color: Colors.inkLight },
   backLink: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
+  retryBtn: { backgroundColor: Colors.needleGreen, borderRadius: Radius.full, paddingVertical: Spacing.md, paddingHorizontal: Spacing.xxxl },
+  retryBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
+
+  // Pre-production waiting bar
+  preProductionBar: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, paddingVertical: Spacing.sm },
+  preProductionDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.warning },
+  preProductionLabel: { fontSize: FontSize.sm, color: Colors.midGrey, fontWeight: FontWeight.medium },
 
   // Dispute entry
   disputeEntry: { alignItems: 'center', paddingTop: Spacing.sm },

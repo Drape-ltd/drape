@@ -51,7 +51,7 @@ export function usePushNotifications(userId: string | null) {
 
     responseListener.current = Notifications.addNotificationResponseReceivedListener((response) => {
       const data = response.notification.request.content.data as Record<string, string>
-      if (data?.orderId && /^[0-9a-f-]{36}$/i.test(data.orderId)) {
+      if (data?.orderId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.orderId)) {
         const base = role === 'TAILOR' ? '/(tailor)' : '/(customer)'
         router.push(`${base}/orders/${data.orderId}`)
       } else if (data?.screen && ALLOWED_SCREENS.has(data.screen)) {

@@ -17,7 +17,9 @@ import { useAuth } from '@/lib/auth'
 import { useTailorProfile } from '@/lib/tailorProfile'
 import { TagSelector } from '@/components/ui'
 import type { TagGroup } from '@/components/ui'
+import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import type { Availability } from '@/lib/shared-types'
 
 // ─── Specialty options ────────────────────────────────────────────────────────
 
@@ -31,8 +33,17 @@ const SPECIALTY_GROUPS: TagGroup[] = [
   { label: 'Craft & Textile', items: ['Embroidery', 'Adire', 'Batik'] },
 ]
 
-type Availability = 'OPEN' | 'LIMITED' | 'FULLY_BOOKED'
-type VerificationStatus = 'NOT_SUBMITTED' | 'PENDING' | 'APPROVED' | 'REJECTED'
+type VerificationStatus = 'NOT_SUBMITTED' | 'PENDING' | 'VERIFIED' | 'REJECTED'
+type Currency = 'GBP' | 'USD' | 'EUR' | 'NGN' | 'GHS' | 'KES'
+
+const CURRENCY_OPTIONS: { value: Currency; label: string }[] = [
+  { value: 'GBP', label: '£ GBP' },
+  { value: 'USD', label: '$ USD' },
+  { value: 'EUR', label: '€ EUR' },
+  { value: 'NGN', label: '₦ NGN' },
+  { value: 'GHS', label: '₵ GHS' },
+  { value: 'KES', label: 'KSh KES' },
+]
 
 const AVAIL_OPTIONS: { value: Availability; label: string; hint: string }[] = [
   { value: 'OPEN',         label: 'Open',         hint: 'Accepting new order requests' },
@@ -43,13 +54,13 @@ const AVAIL_OPTIONS: { value: Availability; label: string; hint: string }[] = [
 const VERIFY_LABEL: Record<VerificationStatus, string> = {
   NOT_SUBMITTED: 'Verification not submitted',
   PENDING:       'ID under review — verified within 24 hours',
-  APPROVED:      'Identity verified',
+  VERIFIED:      'Identity verified',
   REJECTED:      'Verification failed — please re-submit',
 }
 const VERIFY_COLOR: Record<VerificationStatus, string> = {
   NOT_SUBMITTED: Colors.midGrey,
   PENDING:       Colors.warning,
-  APPROVED:      Colors.success,
+  VERIFIED:      Colors.success,
   REJECTED:      Colors.error,
 }
 
@@ -72,8 +83,11 @@ export default function EditProfileScreen() {
   // Baseline snapshot to compute dirty state
   const [base, setBase] = useState<{
     displayName: string; location: string; bio: string
-    specialties: string[]; availability: Availability
+    specialties: string[]; availability: Availability; currency: Currency
   } | null>(null)
+
+  const [currency, setCurrency]           = useState<Currency>('GBP')
+  const [bioError, setBioError]           = useState('')
 
   const [loading, setLoading]             = useState(true)
   const [saving, setSaving]               = useState(false)
@@ -95,6 +109,7 @@ export default function EditProfileScreen() {
     location       !== base.location ||
     bio            !== base.bio ||
     availability   !== base.availability ||
+    currency       !== base.currency ||
     JSON.stringify(specialties) !== JSON.stringify(base.specialties)
   )
 
@@ -106,7 +121,7 @@ export default function EditProfileScreen() {
     if (!user?.id) return
     const { data } = await supabase
       .from('tailor_profiles')
-      .select('id, display_name, location, bio, specialty_tags, availability, id_verification_status')
+      .select('id, display_name, location, bio, specialty_tags, availability, currency, id_verification_status')
       .eq('user_id', user.id)
       .maybeSingle()
 
@@ -118,6 +133,7 @@ export default function EditProfileScreen() {
         bio:          d.bio             ?? '',
         specialties:  d.specialty_tags  ?? [],
         availability: (d.availability   ?? 'OPEN') as Availability,
+        currency:     (d.currency       ?? 'GBP') as Currency,
       }
       setBase(snap)
       setDisplayName(snap.displayName)
@@ -125,6 +141,7 @@ export default function EditProfileScreen() {
       setBio(snap.bio)
       setSpecialties(snap.specialties)
       setAvailability(snap.availability)
+      setCurrency(snap.currency)
       setVerifyStatus((d.id_verification_status ?? 'NOT_SUBMITTED') as VerificationStatus)
 
       // Portfolio count
@@ -213,18 +230,28 @@ export default function EditProfileScreen() {
     return Object.keys(errs).length === 0
   }
 
+  function validateBio(text: string): boolean {
+    if (!text.trim()) { setBioError(''); return true } // bio is optional in edit
+    const res = filterContactInfo(text)
+    if (res.blocked) { setBioError("Contact details aren't allowed in your bio."); return false }
+    setBioError('')
+    return true
+  }
+
   async function handleSave() {
     if (!validate() || !user?.id) return
+    if (!validateBio(bio)) return
     setSaving(true)
     const { error } = await supabase
       .from('tailor_profiles')
       .update({
-        display_name:  displayName.trim(),
-        location:      location.trim(),
-        bio:           bio.trim() || null,
+        display_name:   displayName.trim(),
+        location:       location.trim(),
+        bio:            bio.trim() || null,
         specialty_tags: specialties,
         availability,
-        updated_at:    new Date().toISOString(),
+        currency,
+        updated_at:     new Date().toISOString(),
       })
       .eq('user_id', user.id)
     setSaving(false)
@@ -232,8 +259,7 @@ export default function EditProfileScreen() {
       Alert.alert('Save failed', error.message)
       return
     }
-    // Update snapshot so the Save button disables again
-    setBase({ displayName: displayName.trim(), location: location.trim(), bio: bio.trim(), specialties, availability })
+    setBase({ displayName: displayName.trim(), location: location.trim(), bio: bio.trim(), specialties, availability, currency })
     router.back()
   }
 
@@ -342,11 +368,12 @@ export default function EditProfileScreen() {
 
         {/* ── Professional details ──────────────────────────────────────── */}
         <Section title="Professional details">
-          <Field label="About you">
+          <Field label="About you" error={bioError}>
             <TextInput
-              style={[styles.input, styles.multiline]}
+              style={[styles.input, styles.multiline, bioError ? styles.inputError : undefined]}
               value={bio}
-              onChangeText={setBio}
+              onChangeText={(v) => { setBio(v); if (bioError) validateBio(v) }}
+              onBlur={() => validateBio(bio)}
               placeholder="Tell customers who you are, what you specialise in, and your experience…"
               placeholderTextColor={Colors.midGrey}
               multiline
@@ -364,6 +391,22 @@ export default function EditProfileScreen() {
               onChange={(v) => { setSpecialties(v); setErrors((e) => ({ ...e, specialties: undefined })) }}
               searchable
             />
+          </Field>
+
+          <Field label="Pricing currency">
+            <View style={styles.currencyRow}>
+              {CURRENCY_OPTIONS.map((opt) => (
+                <TouchableOpacity
+                  key={opt.value}
+                  style={[styles.currencyChip, currency === opt.value && styles.currencyChipActive]}
+                  onPress={() => setCurrency(opt.value)}
+                >
+                  <Text style={[styles.currencyChipText, currency === opt.value && styles.currencyChipTextActive]}>
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </Field>
         </Section>
 
@@ -524,6 +567,17 @@ const styles = StyleSheet.create({
   },
   suggestRowLast: { borderBottomWidth: 0 },
   suggestText: { fontSize: FontSize.sm, color: Colors.ink },
+
+  // Currency
+  currencyRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  currencyChip: {
+    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
+    borderRadius: Radius.full, borderWidth: 1.5, borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+  },
+  currencyChipActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
+  currencyChipText: { fontSize: FontSize.sm, color: Colors.inkLight, fontWeight: FontWeight.medium },
+  currencyChipTextActive: { color: Colors.needleGreen },
 
   // Availability
   availCard: {

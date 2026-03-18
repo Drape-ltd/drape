@@ -268,7 +268,7 @@ export default function OrderBriefScreen() {
       has_deadline: !!deadline,
     })
 
-    router.replace(`/(customer)/orders/${data.id}`)
+    router.replace({ pathname: `/(customer)/orders/${data.id}` as any, params: { sent: '1' } })
   }
 
   function next() {
@@ -488,7 +488,13 @@ export default function OrderBriefScreen() {
                   <View style={styles.measureSummaryCard}>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                       <Text style={styles.measureSummaryTitle}>Your measurements</Text>
-                      <Text style={styles.measureEditHint}>Tap any field to edit</Text>
+                      <Text style={styles.measureEditHint}>
+                        {(() => {
+                          const FIELDS = ['chest','waist','hips','shoulderWidth','inseam','sleeveLength','neckCircumference','height']
+                          const filled = FIELDS.filter((k) => measurements[k] != null).length
+                          return filled < FIELDS.length ? `${filled}/${FIELDS.length} · Tap to edit` : 'Tap any field to edit'
+                        })()}
+                      </Text>
                     </View>
                     <View style={styles.measureSummaryGrid}>
                       {[

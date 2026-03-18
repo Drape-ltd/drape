@@ -90,9 +90,12 @@ export default function ReviewScreen() {
 
     // Move order to COMPLETE via Edge Function (stage column is service-role only).
     // avg_rating, total_reviews, total_orders are updated automatically by DB triggers.
-    await supabase.functions.invoke('customer-order-action', {
+    const { error: completeError } = await supabase.functions.invoke('customer-order-action', {
       body: { orderId, action: 'complete-order' },
     })
+    if (completeError) {
+      Sentry.captureException(completeError, { extra: { context: 'complete_order_after_review', orderId } })
+    }
 
     capture('review_submitted', {
       rating,
@@ -127,9 +130,12 @@ export default function ReviewScreen() {
   }
 
   async function skip() {
-    await supabase.functions.invoke('customer-order-action', {
+    const { error: skipCompleteError } = await supabase.functions.invoke('customer-order-action', {
       body: { orderId, action: 'complete-order' },
     })
+    if (skipCompleteError) {
+      Sentry.captureException(skipCompleteError, { extra: { context: 'complete_order_skip', orderId } })
+    }
     router.replace('/(customer)/orders')
   }
 
@@ -197,7 +203,7 @@ export default function ReviewScreen() {
               numberOfLines={5}
               maxLength={300}
               filterContact
-              hint={`${body.length}/300 · Published after a short review hold`}
+              hint={`${body.length}/300`}
             />
 
             {/* Reviewer note */}

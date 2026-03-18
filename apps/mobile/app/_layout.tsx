@@ -133,8 +133,14 @@ function RouteGuard() {
       .eq('user_id', user.id)
       .not('display_name', 'is', null)
       .maybeSingle()
-      .then(({ data }) => {
+      .then(({ data, error }) => {
         customerCheckInProgress.current = false
+        if (error) {
+          // Network/DB error — don't update profile state; unblock so splash can hide.
+          // The customer's profile screens have their own error handling.
+          setCustomerProfileChecked(true)
+          return
+        }
         setCustomerProfileComplete(!!data)
         setCustomerProfileChecked(true)
       })
@@ -154,8 +160,13 @@ function RouteGuard() {
       .select('id, profile_completed')
       .eq('user_id', user.id)
       .maybeSingle()
-      .then(({ data }) => {
+      .then(({ data, error }) => {
         tailorCheckInProgress.current = false
+        if (error) {
+          // Network/DB error — don't update profile state; unblock so splash can hide.
+          setTailorProfileChecked(true)
+          return
+        }
         setTailorHasProfile(!!data)
         setTailorProfileCompleted(!!(data as any)?.profile_completed)
         setTailorProfileChecked(true)

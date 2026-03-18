@@ -10,6 +10,11 @@
  *   accept-quote     QUOTE_SENT → CONFIRMED  (payment gateway plugs in here later)
  *   decline-quote    QUOTE_SENT → DECLINED
  *   complete-order   DELIVERED|COLLECTED → COMPLETE
+ *   collect-order    READY_FOR_COLLECTION → COLLECTED  (customer enters 4-digit code)
+ *                    NOTE: collect-order is currently dead from the UI. The active
+ *                    collection path is tailor-order-action/confirm-collection, which
+ *                    the tailor initiates by entering the code the customer shows them.
+ *                    This action is retained for future customer-side code entry flow.
  *
  * Required env vars:
  *   SUPABASE_URL
