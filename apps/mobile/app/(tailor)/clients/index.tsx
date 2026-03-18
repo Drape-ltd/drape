@@ -70,7 +70,6 @@ export default function TailorClientsScreen() {
   // Diary
   const [diary, setDiary] = useState<DiaryRow[]>([])
   const [diarySearch, setDiarySearch] = useState('')
-  const [diaryLoading, setDiaryLoading] = useState(false)
   const [showDiaryBanner, setShowDiaryBanner] = useState(false)
 
   useEffect(() => {
