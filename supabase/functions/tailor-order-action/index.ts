@@ -431,7 +431,9 @@ Deno.serve(async (req) => {
         )
       }
 
-      const attempts = (order as any).collection_code_attempts ?? 0
+      const attempts = order.collection_code_attempts ?? 0
+      // V1.1 TODO: add time-based reset (e.g. reset attempts after 24h) to prevent permanent lockout
+      // on legitimate collections where the code was misread multiple times.
       if (attempts >= MAX_ATTEMPTS) {
         await audit(supabase, {
           event: 'collection_code.order_locked',
@@ -447,7 +449,7 @@ Deno.serve(async (req) => {
         )
       }
 
-      if (code !== (order as any).collection_code) {
+      if (code !== order.collection_code) {
         await supabase.from('orders')
           .update({ collection_code_attempts: attempts + 1 })
           .eq('id', orderId)

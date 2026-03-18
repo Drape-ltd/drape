@@ -9,6 +9,10 @@
  *   - Order lists     : 30s  (frequent navigation but not real-time)
  *   - Profiles        : 5min (rarely changes mid-session)
  *   - Saved tailors   : 2min
+ *
+ * Realtime subscriptions: not implemented in V1.
+ * All screens use useRefreshOnFocus + pull-to-refresh for data freshness.
+ * Supabase Realtime can be added later per-screen if live updates are needed.
  */
 
 import { useCallback, useRef } from 'react'
@@ -71,6 +75,7 @@ export type CustomerOrderRow = {
   createdAt: string
   quotedAmount: number | null
   quotedCurrency: string
+  hasReview: boolean
 }
 
 export type TailorOrderRow = {
@@ -168,7 +173,8 @@ async function fetchCustomerOrders(
     .from('orders')
     .select(`
       id, reference, garment_type, stage, quoted_completion_date, created_at, quoted_amount, quoted_currency,
-      tailor_profiles!tailor_profile_id(id, display_name)
+      tailor_profiles!tailor_profile_id(id, display_name),
+      reviews!order_id(id)
     `)
     .eq('customer_id', userId)
     .in('stage', stages)
@@ -186,6 +192,7 @@ async function fetchCustomerOrders(
     createdAt: o.created_at,
     quotedAmount: o.quoted_amount,
     quotedCurrency: o.quoted_currency ?? 'USD',
+    hasReview: (o.reviews ?? []).length > 0,
   }))
 }
 
@@ -235,6 +242,7 @@ async function fetchCustomerOrderDetail(
     `)
     .eq('id', orderId)
     .eq('customer_id', userId)
+    .order('created_at', { ascending: true, referencedTable: 'order_stage_updates' })
     .single()
 
   if (!data) return null
@@ -255,9 +263,7 @@ async function fetchCustomerOrderDetail(
     fabricTracking: d.fabric_tracking,
     collectionCode: d.collection_code,
     videoCallUrl: d.video_call_url ?? null,
-    stageUpdates: (d.order_stage_updates ?? [])
-      .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
-      .map((u: any) => ({
+    stageUpdates: (d.order_stage_updates ?? []).map((u: any) => ({
         id: u.id,
         stage: u.stage,
         note: u.note,

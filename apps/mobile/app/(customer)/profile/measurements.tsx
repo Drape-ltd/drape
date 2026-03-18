@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, KeyboardAvoidingView, Platform,
 } from 'react-native'
@@ -70,7 +70,7 @@ const STEP_TITLES = [
 const STEP_SUBTITLES = [
   'Add as many measurements as you can — the more detail, the better your tailor can quote and cut.',
   'This helps your tailor understand which cuts and shapes to use — this is a fit question, not a personal one.',
-  'Pick the closest match. This helps your tailor visualise how a garment will fall before they start cutting.',
+  'Pick all that apply. This helps your tailor visualise how a garment will fall before they start cutting.',
   'Where do clothes usually fit you badly off the rack? Select all that apply.',
 ]
 
@@ -99,18 +99,59 @@ export default function MeasurementsScreen() {
   const [garmentContext, setGarmentContext] = useState<GarmentContext | null>(null)
 
   // Layer 3
-  const [bodyShape, setBodyShape] = useState<BodyShape | null>(null)
+  const [bodyShapes, setBodyShapes] = useState<BodyShape[]>([])
 
   // Layer 4
   const [fitFlags, setFitFlags] = useState<FitFlag[]>([])
   const [bodyNote, setBodyNote] = useState('')
   const [bodyNoteError, setBodyNoteError] = useState('')
 
+  useEffect(() => {
+    if (!user?.id) return
+    supabase
+      .from('customer_profiles')
+      .select('measurements')
+      .eq('user_id', user.id)
+      .single()
+      .then(({ data, error }) => {
+        if (error && error.code !== 'PGRST116') {
+          Alert.alert('Error', 'Could not load your measurements. Please try again.')
+          return
+        }
+        const m = data?.measurements as Record<string, unknown> | null
+        if (!m) return
+        if (m.unit === 'cm' || m.unit === 'in') setUnit(m.unit)
+        if (typeof m.chest === 'number') setChest(String(m.chest))
+        if (typeof m.waist === 'number') setWaist(String(m.waist))
+        if (typeof m.hips === 'number') setHips(String(m.hips))
+        if (typeof m.shoulderWidth === 'number') setShoulderWidth(String(m.shoulderWidth))
+        if (typeof m.inseam === 'number') setInseam(String(m.inseam))
+        if (typeof m.sleeveLength === 'number') setSleeveLength(String(m.sleeveLength))
+        if (typeof m.neckCircumference === 'number') setNeckCircumference(String(m.neckCircumference))
+        if (typeof m.height === 'number') setHeight(String(m.height))
+        if (m.fitStyle === 'Slim' || m.fitStyle === 'Regular' || m.fitStyle === 'Relaxed') setFitStyle(m.fitStyle)
+        if (m.garmentContext) setGarmentContext(m.garmentContext as GarmentContext)
+        if (Array.isArray(m.bodyShape)) setBodyShapes(m.bodyShape as BodyShape[])
+        else if (typeof m.bodyShape === 'string') setBodyShapes([m.bodyShape as BodyShape])
+        if (Array.isArray(m.fitFlags)) setFitFlags(m.fitFlags as FitFlag[])
+        if (typeof m.bodyNote === 'string') setBodyNote(m.bodyNote)
+        const standardKeys = new Set(['chest','waist','hips','shoulderWidth','inseam','sleeveLength','neckCircumference','height','unit','fitStyle','garmentContext','bodyShape','fitFlags','bodyNote'])
+        const extras = Object.entries(m).filter(([k]) => !standardKeys.has(k))
+        if (extras.length > 0) {
+          setCustomMeasurements(extras.map(([name, value]) => ({
+            id: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`,
+            name,
+            value: value != null ? String(value) : '',
+          })))
+        }
+      })
+  }, [user?.id])
+
   function canProceedStep(): boolean {
     switch (step) {
       case 0: return !!chest.trim() && !!waist.trim() && !!fitStyle
       case 1: return !!garmentContext
-      case 2: return !!bodyShape
+      case 2: return bodyShapes.length > 0
       case 3: return true
       default: return true
     }
@@ -128,7 +169,7 @@ export default function MeasurementsScreen() {
   function addCustomMeasurement() {
     setCustomMeasurements((prev) => [
       ...prev,
-      { id: Date.now().toString(), name: '', value: '' },
+      { id: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`, name: '', value: '' },
     ])
   }
 
@@ -140,6 +181,16 @@ export default function MeasurementsScreen() {
 
   function removeCustomMeasurement(id: string) {
     setCustomMeasurements((prev) => prev.filter((m) => m.id !== id))
+  }
+
+  function toggleBodyShape(shape: BodyShape) {
+    setBodyShapes((prev) => {
+      if (shape === 'PREFER_NOT') {
+        return prev.includes('PREFER_NOT') ? [] : ['PREFER_NOT']
+      }
+      const without = prev.filter((s) => s !== 'PREFER_NOT')
+      return without.includes(shape) ? without.filter((s) => s !== shape) : [...without, shape]
+    })
   }
 
   function toggleFlag(flag: FitFlag) {
@@ -158,6 +209,12 @@ export default function MeasurementsScreen() {
     return true
   }
 
+  function safeParse(v: string): number | null {
+    if (!v.trim()) return null
+    const n = parseFloat(v)
+    return isNaN(n) ? null : n
+  }
+
   async function save() {
     if (!validateBodyNote(bodyNote)) return
 
@@ -166,23 +223,23 @@ export default function MeasurementsScreen() {
     const customExtras: Record<string, number | null> = {}
     for (const m of customMeasurements) {
       if (m.name.trim()) {
-        customExtras[m.name.trim()] = m.value ? parseFloat(m.value) : null
+        customExtras[m.name.trim()] = safeParse(m.value)
       }
     }
 
     const payload = {
-      chest: chest ? parseFloat(chest) : null,
-      waist: waist ? parseFloat(waist) : null,
-      hips: hips ? parseFloat(hips) : null,
-      shoulderWidth: shoulderWidth ? parseFloat(shoulderWidth) : null,
-      inseam: inseam ? parseFloat(inseam) : null,
-      sleeveLength: sleeveLength ? parseFloat(sleeveLength) : null,
-      neckCircumference: neckCircumference ? parseFloat(neckCircumference) : null,
-      height: height ? parseFloat(height) : null,
+      chest: safeParse(chest),
+      waist: safeParse(waist),
+      hips: safeParse(hips),
+      shoulderWidth: safeParse(shoulderWidth),
+      inseam: safeParse(inseam),
+      sleeveLength: safeParse(sleeveLength),
+      neckCircumference: safeParse(neckCircumference),
+      height: safeParse(height),
       unit,
       fitStyle,
       garmentContext,
-      bodyShape,
+      bodyShape: bodyShapes,
       fitFlags,
       bodyNote: bodyNote.trim() || null,
       ...customExtras,
@@ -364,21 +421,26 @@ export default function MeasurementsScreen() {
             {/* ── Step 2: Body shape ── */}
             {step === 2 && (
               <View style={styles.optionList}>
-                {BODY_SHAPE_OPTIONS.map((opt) => (
-                  <TouchableOpacity
-                    key={opt.value}
-                    style={[styles.optionCard, bodyShape === opt.value && styles.optionCardActive]}
-                    onPress={() => setBodyShape(opt.value)}
-                  >
-                    <View style={[styles.optionRadio, bodyShape === opt.value && styles.optionRadioActive]} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.optionLabel, bodyShape === opt.value && styles.optionLabelActive]}>
-                        {opt.label}
-                      </Text>
-                      {opt.hint ? <Text style={styles.optionHint}>{opt.hint}</Text> : null}
-                    </View>
-                  </TouchableOpacity>
-                ))}
+                {BODY_SHAPE_OPTIONS.map((opt) => {
+                  const active = bodyShapes.includes(opt.value)
+                  return (
+                    <TouchableOpacity
+                      key={opt.value}
+                      style={[styles.optionCard, active && styles.optionCardActive]}
+                      onPress={() => toggleBodyShape(opt.value)}
+                    >
+                      <View style={[styles.optionCheck, active && styles.optionCheckActive]}>
+                        {active && <Text style={styles.optionCheckMark}>✓</Text>}
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.optionLabel, active && styles.optionLabelActive]}>
+                          {opt.label}
+                        </Text>
+                        {opt.hint ? <Text style={styles.optionHint}>{opt.hint}</Text> : null}
+                      </View>
+                    </TouchableOpacity>
+                  )
+                })}
               </View>
             )}
 
@@ -523,6 +585,13 @@ const styles = StyleSheet.create({
     borderWidth: 2, borderColor: Colors.lightGrey, backgroundColor: Colors.white,
   },
   optionRadioActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreen },
+  optionCheck: {
+    width: 22, height: 22, borderRadius: 4, marginTop: 2,
+    borderWidth: 2, borderColor: Colors.lightGrey, backgroundColor: Colors.white,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  optionCheckActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreen },
+  optionCheckMark: { color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold },
   optionLabel: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
   optionLabelActive: { color: Colors.needleGreen },
   optionHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2, lineHeight: 18 },

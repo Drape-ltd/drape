@@ -9,7 +9,7 @@ import { useAuth } from '@/lib/auth'
 import { useCustomerOrders, useRefreshOnFocus } from '@/lib/queries'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
-import { SUPPORTED_CURRENCIES } from '@/lib/currency'
+import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 
 const STAGE_COLOR: Partial<Record<OrderStage, string>> = {
   PENDING_QUOTE: Colors.warning,
@@ -41,7 +41,7 @@ export default function OrdersListScreen() {
   const { user } = useAuth()
   const [tab, setTab] = useState<Tab>('active')
 
-  const { data: orders = [], isLoading: loading, isFetching, refetch } = useCustomerOrders(user?.id, tab)
+  const { data: orders = [], isLoading: loading, isFetching, isError, refetch } = useCustomerOrders(user?.id, tab)
 
   // Refetch whenever this screen comes back into focus (e.g. returning from order detail)
   useRefreshOnFocus(refetch)
@@ -68,6 +68,13 @@ export default function OrdersListScreen() {
 
       {loading ? (
         <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
+      ) : isError ? (
+        <View style={styles.errorState}>
+          <Text style={styles.errorText}>Couldn't load your orders.</Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => refetch()}>
+            <Text style={styles.retryBtnText}>Try again</Text>
+          </TouchableOpacity>
+        </View>
       ) : (
         <FlatList
           data={orders}
@@ -109,11 +116,15 @@ export default function OrdersListScreen() {
                 )}
                 {item.quotedAmount && (
                   <Text style={styles.amount}>
-                    {SUPPORTED_CURRENCIES.find((c) => c.code === item.quotedCurrency)?.symbol ?? item.quotedCurrency}
-                    {(item.quotedAmount / 100).toFixed(0)}
+                    {formatAmount(item.quotedAmount, item.quotedCurrency as CurrencyCode, item.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)}
                   </Text>
                 )}
               </View>
+              {['COMPLETE', 'DELIVERED', 'COLLECTED'].includes(item.stage) && !item.hasReview && (
+                <View style={styles.reviewNudge}>
+                  <Text style={styles.reviewNudgeText}>★  Leave a review</Text>
+                </View>
+              )}
             </TouchableOpacity>
           )}
         />
@@ -261,6 +272,10 @@ const styles = StyleSheet.create({
   tabLabelActive: { color: Colors.ink, fontWeight: FontWeight.semibold },
 
   list: { padding: Spacing.xl, gap: Spacing.md, paddingBottom: Spacing.xxxl },
+  errorState: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: Spacing.lg },
+  errorText: { fontSize: FontSize.md, color: Colors.inkLight },
+  retryBtn: { backgroundColor: Colors.needleGreen, borderRadius: Radius.full, paddingVertical: Spacing.md, paddingHorizontal: Spacing.xxxl },
+  retryBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
   card: { backgroundColor: Colors.white, borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.md, ...Shadow.sm },
   cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md },
   garment: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
@@ -268,6 +283,13 @@ const styles = StyleSheet.create({
   stagePill: { paddingHorizontal: Spacing.md, paddingVertical: 4, borderRadius: Radius.full },
   stageText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   cardMeta: { flexDirection: 'row', gap: Spacing.lg, alignItems: 'center' },
+  reviewNudge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#FEF3C7',
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.md, paddingVertical: 4,
+  },
+  reviewNudgeText: { fontSize: FontSize.xs, color: '#92400E', fontWeight: FontWeight.semibold },
   ref: { fontSize: FontSize.xs, color: Colors.midGrey },
   eta: { fontSize: FontSize.xs, color: Colors.midGrey },
   amount: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginLeft: 'auto' },

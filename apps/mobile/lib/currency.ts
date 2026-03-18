@@ -37,7 +37,8 @@ export type Rates = Partial<Record<CurrencyCode, number>>
  * Fetch live exchange rates from Frankfurter (base USD).
  * Falls back to a static snapshot if unavailable.
  */
-const STATIC_FALLBACK_RATES: Rates = {
+// Snapshot: 2026-03-18. Update if rates diverge > 15% from live.
+export const STATIC_FALLBACK_RATES: Rates = {
   USD: 1,
   GBP: 0.79,
   EUR: 0.92,

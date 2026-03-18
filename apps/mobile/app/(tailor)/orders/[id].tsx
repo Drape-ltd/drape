@@ -81,6 +81,7 @@ export default function TailorOrderDetailScreen() {
 
   const [order, setOrder] = useState<OrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState(false)
   const [showQuoteModal, setShowQuoteModal] = useState(false)
   const [showStageModal, setShowStageModal] = useState(false)
   const [stageModalTarget, setStageModalTarget] = useState<OrderStage | null>(null)
@@ -89,7 +90,8 @@ export default function TailorOrderDetailScreen() {
   const [startingCall, setStartingCall] = useState<'audio' | 'video' | null>(null)
 
   async function fetchOrder() {
-    const { data } = await supabase
+    setFetchError(false)
+    const { data, error } = await supabase
       .from('orders')
       .select(`
         id, reference, garment_type, garment_description, stage,
@@ -102,6 +104,12 @@ export default function TailorOrderDetailScreen() {
       .eq('id', id)
       .eq('tailor_id', user?.id)
       .single()
+
+    if (error && error.code !== 'PGRST116') {
+      setFetchError(true)
+      setLoading(false)
+      return
+    }
 
     if (data) {
       const d = data as any
@@ -127,6 +135,25 @@ export default function TailorOrderDetailScreen() {
     return (
       <SafeAreaView style={styles.safe}>
         <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
+      </SafeAreaView>
+    )
+  }
+
+  if (fetchError) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.notFound}>
+          <Text style={styles.notFoundText}>Couldn't load this order.</Text>
+          <TouchableOpacity
+            style={styles.retryBtn}
+            onPress={() => { setLoading(true); fetchOrder() }}
+          >
+            <Text style={styles.retryBtnText}>Try again</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={goBack}>
+            <Text style={styles.backLink}>← Back</Text>
+          </TouchableOpacity>
+        </View>
       </SafeAreaView>
     )
   }
@@ -224,9 +251,13 @@ export default function TailorOrderDetailScreen() {
                     {
                       text: 'Decline', style: 'destructive',
                       onPress: async () => {
-                        await supabase.functions.invoke('tailor-order-action', {
+                        const { error } = await supabase.functions.invoke('tailor-order-action', {
                           body: { orderId: order.id, action: 'decline-order' },
                         })
+                        if (error) {
+                          Alert.alert('Error', 'Could not decline the order. Please try again.')
+                          return
+                        }
                         router.replace('/(tailor)/orders')
                       },
                     },
@@ -270,9 +301,13 @@ export default function TailorOrderDetailScreen() {
                     {
                       text: 'Decline', style: 'destructive',
                       onPress: async () => {
-                        await supabase.functions.invoke('tailor-order-action', {
+                        const { error } = await supabase.functions.invoke('tailor-order-action', {
                           body: { orderId: order.id, action: 'decline-order' },
                         })
+                        if (error) {
+                          Alert.alert('Error', 'Could not decline the order. Please try again.')
+                          return
+                        }
                         router.replace('/(tailor)/orders')
                       },
                     },
@@ -1092,6 +1127,8 @@ const styles = StyleSheet.create({
   notFound: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: Spacing.lg },
   notFoundText: { fontSize: FontSize.lg, color: Colors.inkLight },
   backLink: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
+  retryBtn: { backgroundColor: Colors.needleGreen, borderRadius: Radius.full, paddingVertical: Spacing.md, paddingHorizontal: Spacing.xxxl },
+  retryBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
 
   // Modal shared
   modalSafe: { flex: 1, backgroundColor: Colors.bone },

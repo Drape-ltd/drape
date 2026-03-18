@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Image, FlatList, ActivityIndicator, Dimensions, NativeSyntheticEvent, NativeScrollEvent,
+  Image, FlatList, ActivityIndicator, Alert, Dimensions, NativeSyntheticEvent, NativeScrollEvent,
 } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -62,13 +62,16 @@ export default function TailorProfileScreen() {
   const [profile, setProfile] = useState<TailorProfile | null>(null)
   const [reviews, setReviews] = useState<Review[]>([])
   const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState(false)
   const [isSaved, setIsSaved] = useState(false)
   const [savingHeart, setSavingHeart] = useState(false)
   const [carouselIndex, setCarouselIndex] = useState(0)
   const { currency, rates } = useCurrency()
 
-  useEffect(() => {
-    async function load() {
+  async function load() {
+    setFetchError(false)
+    setLoading(true)
+    try {
       const [profileRes, reviewsRes, savedRes] = await Promise.all([
         supabase
           .from('tailor_profiles')
@@ -125,7 +128,13 @@ export default function TailorProfileScreen() {
 
       setIsSaved(!!savedRes.data)
       setLoading(false)
+    } catch {
+      setFetchError(true)
+      setLoading(false)
     }
+  }
+
+  useEffect(() => {
     load()
   }, [id])
 
@@ -151,6 +160,18 @@ export default function TailorProfileScreen() {
     return (
       <SafeAreaView style={styles.safe}>
         <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
+      </SafeAreaView>
+    )
+  }
+
+  if (fetchError) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.notFound}>
+          <Text style={styles.notFoundText}>Couldn't load this profile.</Text>
+          <Button label="Try again" onPress={load} variant="secondary" />
+          <Button label="Go back" onPress={() => router.back()} variant="ghost" />
+        </View>
       </SafeAreaView>
     )
   }
@@ -293,9 +314,18 @@ export default function TailorProfileScreen() {
       {/* Sticky CTA */}
       <View style={styles.cta}>
         <Button
-          label="Message"
+          label={profile.avgResponseHours ? `Message · ~${Math.round(profile.avgResponseHours)}h reply` : 'Message'}
           variant="secondary"
-          onPress={() => router.navigate(`/(customer)/messages/${profile.id}`)}
+          onPress={() =>
+            Alert.alert(
+              'Place an order first',
+              `Messages with ${profile.displayName} are tied to orders. Submit a brief to start the conversation.`,
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Book this tailor', onPress: () => router.push(`/(customer)/brief/${profile.id}`) },
+              ]
+            )
+          }
           style={{ flex: 1 }}
         />
         <Button

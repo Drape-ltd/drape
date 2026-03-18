@@ -20,6 +20,7 @@ import { Button, Input, TagSelector, ProgressStepper } from '@/components/ui'
 import type { TagGroup } from '@/components/ui'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import type { Availability } from '@/lib/shared-types'
 
 const STEP_TITLES = ['Your identity', 'Specialties & pricing', 'Portfolio', 'Availability & verification']
 const STEP_SUBS = [
@@ -92,11 +93,29 @@ const SPECIALTY_GROUPS: TagGroup[] = [
   },
 ]
 
-type Availability = 'OPEN' | 'LIMITED' | 'FULLY_BOOKED'
-
 export default function TailorSetupScreen() {
   const router = useRouter()
   const { user, signOut } = useAuth()
+
+  // Guard: if the profile is already complete and ID is not pending re-submission,
+  // prevent direct-URL re-entry which would allow upsert-overwrite of existing data.
+  useEffect(() => {
+    if (!user?.id) return
+    supabase
+      .from('tailor_profiles')
+      .select('profile_completed, id_verification_status')
+      .eq('user_id', user.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (
+          data?.profile_completed &&
+          data?.id_verification_status !== 'NOT_SUBMITTED' &&
+          data?.id_verification_status !== 'REJECTED'
+        ) {
+          router.replace('/(tailor)/profile')
+        }
+      })
+  }, [user?.id])
 
   function handleSignOut() {
     Alert.alert('Sign out', 'Are you sure?', [
@@ -148,12 +167,15 @@ export default function TailorSetupScreen() {
           { headers: { 'Accept-Language': 'en', 'User-Agent': 'Drape/1.0' } }
         )
         const data: any[] = await res.json()
-        const labels = data.map((item) => {
-          const a = item.address ?? {}
-          const city = a.city ?? a.town ?? a.village ?? a.county ?? item.display_name.split(',')[0]
-          const country = a.country ?? ''
-          return country ? `${city}, ${country}` : city
-        }).filter(Boolean)
+        const labels = data
+          .filter((item: any) => item && typeof item.display_name === 'string' && item.display_name.length > 0)
+          .map((item: any) => {
+            const a = item.address ?? {}
+            const city = a.city ?? a.town ?? a.village ?? a.county ?? item.display_name.split(',')[0]
+            const country = a.country ?? ''
+            return country ? `${city}, ${country}` : city
+          })
+          .filter((label: string) => label.trim().length > 0)
         const unique = [...new Set(labels)] as string[]
         setLocationSuggestions(unique)
         setShowSuggestions(unique.length > 0)
@@ -506,10 +528,14 @@ export default function TailorSetupScreen() {
               <View style={styles.fields}>
                 <View style={styles.portfolioStatus}>
                   <View style={styles.portfolioBar}>
-                    <View style={[styles.portfolioBarFill, { width: `${Math.min(100, (portfolioItems.length / 4) * 100)}%` }]} />
+                    <View style={[styles.portfolioBarFill, { width: `${(portfolioItems.length / 12) * 100}%` }]} />
+                    <View style={styles.portfolioBarMinMarker} />
                   </View>
                   <Text style={styles.portfolioCount}>
-                    {portfolioItems.length}/4 minimum {portfolioItems.length >= 4 ? '✓' : ''} · {portfolioItems.filter((i) => i.type === 'video').length}/2 videos
+                    {portfolioItems.length >= 4
+                      ? `${portfolioItems.length}/12 ✓ minimum met`
+                      : `${portfolioItems.length}/4 needed — ${4 - portfolioItems.length} more to continue`}
+                    {' · '}{portfolioItems.filter((i) => i.type === 'video').length}/2 videos
                   </Text>
                 </View>
 
@@ -542,7 +568,7 @@ export default function TailorSetupScreen() {
 
                 <View style={styles.infoBox}>
                   <Text style={styles.infoText}>
-                    Photos and videos (max 30s, up to 2) are scanned before going live. EXIF location data is stripped automatically.
+                    Photos and videos (max 30s, up to 2) are scanned before going live. EXIF location data is stripped from photos automatically.
                   </Text>
                 </View>
               </View>
@@ -665,8 +691,12 @@ const styles = StyleSheet.create({
 
   // Portfolio
   portfolioStatus: { gap: Spacing.xs },
-  portfolioBar: { height: 4, backgroundColor: Colors.lightGrey, borderRadius: 2 },
+  portfolioBar: { height: 4, backgroundColor: Colors.lightGrey, borderRadius: 2, position: 'relative' },
   portfolioBarFill: { height: '100%', backgroundColor: Colors.needleGreen, borderRadius: 2 },
+  portfolioBarMinMarker: {
+    position: 'absolute', left: `${(4 / 12) * 100}%` as any,
+    top: -2, width: 2, height: 8, backgroundColor: Colors.needleGreen, borderRadius: 1,
+  },
   portfolioCount: { fontSize: FontSize.xs, color: Colors.midGrey },
   portfolioGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   portfolioThumb: { width: 100, height: 100, borderRadius: Radius.md, position: 'relative', overflow: 'hidden' },

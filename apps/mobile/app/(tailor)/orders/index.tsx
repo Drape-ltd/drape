@@ -11,7 +11,7 @@ import { useTailorOrders, useRefreshOnFocus } from '@/lib/queries'
 import { shareTailorProfile } from '@/lib/invite'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
-import { SUPPORTED_CURRENCIES } from '@/lib/currency'
+import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { stageColor } from '@/lib/stageColors'
 
 type Tab = 'active' | 'completed'
@@ -95,8 +95,12 @@ export default function TailorOrdersScreen() {
         </View>
       )}
 
-      {loading ? (
-        <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
+      {(loading || (isFetching && orders.length === 0)) ? (
+        <View style={styles.list}>
+          <GhostCard opacity={1} />
+          <GhostCard opacity={0.6} />
+          <GhostCard opacity={0.35} />
+        </View>
       ) : (
         <FlatList
           data={sortedOrders}
@@ -148,8 +152,7 @@ export default function TailorOrdersScreen() {
                   )}
                   {item.quotedAmount && (
                     <Text style={styles.amount}>
-                      {SUPPORTED_CURRENCIES.find((c) => c.code === item.quotedCurrency)?.symbol ?? item.quotedCurrency}
-                      {(item.quotedAmount / 100).toFixed(0)}
+                      {formatAmount(item.quotedAmount, item.quotedCurrency as CurrencyCode, item.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)}
                     </Text>
                   )}
                 </View>

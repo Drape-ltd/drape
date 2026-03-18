@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert,
@@ -56,12 +56,16 @@ const STAGE_COLOR: Partial<Record<OrderStage, string>> = {
 
 function SkeletonBox({ width, height, style }: { width?: number | string; height: number; style?: object }) {
   const anim = useRef(new Animated.Value(0.4)).current
-  Animated.loop(
-    Animated.sequence([
-      Animated.timing(anim, { toValue: 1, duration: 700, useNativeDriver: true }),
-      Animated.timing(anim, { toValue: 0.4, duration: 700, useNativeDriver: true }),
-    ])
-  ).start()
+  useEffect(() => {
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(anim, { toValue: 1, duration: 700, useNativeDriver: true }),
+        Animated.timing(anim, { toValue: 0.4, duration: 700, useNativeDriver: true }),
+      ])
+    )
+    animation.start()
+    return () => animation.stop()
+  }, [anim])
   return (
     <Animated.View style={[{ width, height, borderRadius: Radius.sm, backgroundColor: Colors.lightGrey, opacity: anim }, style]} />
   )
@@ -77,6 +81,8 @@ export default function CustomerProfileScreen() {
   const [recentOrders, setRecentOrders] = useState<RecentOrder[]>([])
   const [createdAt, setCreatedAt] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState(false)
+  const [retryTrigger, setRetryTrigger] = useState(0)
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const [notifCount, setNotifCount] = useState(0)
 
@@ -91,6 +97,8 @@ export default function CustomerProfileScreen() {
   useFocusEffect(
     useCallback(() => {
       async function load() {
+        setFetchError(false)
+        try {
         const [profileRes, ordersRes] = await Promise.all([
           supabase
             .from('customer_profiles')
@@ -137,9 +145,13 @@ export default function CustomerProfileScreen() {
         )
 
         setLoading(false)
+        } catch {
+          setFetchError(true)
+          setLoading(false)
+        }
       }
       load()
-    }, [user?.id]),
+    }, [user?.id, retryTrigger]),
   )
 
   const filledCount = measurements
@@ -222,6 +234,22 @@ export default function CustomerProfileScreen() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Log out', style: 'destructive', onPress: signOut },
     ])
+  }
+
+  if (fetchError) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', gap: Spacing.lg, padding: Spacing.xl }}>
+          <Text style={{ fontSize: FontSize.md, color: Colors.inkLight }}>Couldn't load your profile.</Text>
+          <TouchableOpacity
+            style={{ backgroundColor: Colors.needleGreen, borderRadius: Radius.full, paddingVertical: Spacing.md, paddingHorizontal: Spacing.xxxl }}
+            onPress={() => { setFetchError(false); setLoading(true); setRetryTrigger((n) => n + 1) }}
+          >
+            <Text style={{ color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm }}>Try again</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    )
   }
 
   return (
