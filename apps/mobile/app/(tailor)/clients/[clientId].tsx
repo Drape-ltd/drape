@@ -15,6 +15,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
+import { stageColor } from '@/lib/stageColors'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -45,22 +46,6 @@ type OrderHistoryRow = {
   quotedAmount: number | null
 }
 
-const STAGE_COLOR: Partial<Record<OrderStage, string>> = {
-  PENDING_QUOTE: Colors.warning,
-  QUOTE_SENT: Colors.warning,
-  CONFIRMED: Colors.needleGreen,
-  CUTTING: Colors.needleGreen,
-  SEWING: Colors.needleGreen,
-  FINISHING: Colors.needleGreen,
-  SHIPPED: Colors.needleGreen,
-  READY_FOR_COLLECTION: Colors.needleGreen,
-  IN_DISPUTE: Colors.kanteRust,
-  COMPLETE: Colors.midGrey,
-  DELIVERED: Colors.midGrey,
-  COLLECTED: Colors.midGrey,
-  DECLINED: Colors.midGrey,
-  CANCELLED: Colors.midGrey,
-}
 
 const MEAS_LABELS: Array<{ key: keyof Measurements; label: string }> = [
   { key: 'chest', label: 'Chest' },
@@ -228,7 +213,7 @@ export default function ClientDetailScreen() {
             {orders.length > 0 && (
               <TouchableOpacity
                 style={styles.messageBtn}
-                onPress={() => router.push(`/(tailor)/messages/${orders[0].id}`)}
+                onPress={() => router.navigate(`/(tailor)/messages/${orders[0].id}`)}
               >
                 <Text style={styles.messageBtnText}>Message</Text>
               </TouchableOpacity>
@@ -359,7 +344,7 @@ export default function ClientDetailScreen() {
                   <TouchableOpacity
                     key={order.id}
                     style={styles.orderRow}
-                    onPress={() => router.push(`/(tailor)/orders/${order.id}`)}
+                    onPress={() => router.navigate(`/(tailor)/orders/${order.id}`)}
                   >
                     <View style={{ flex: 1 }}>
                       <Text style={styles.orderGarment}>{order.garmentType}</Text>
@@ -374,11 +359,11 @@ export default function ClientDetailScreen() {
                       <View
                         style={[
                           styles.stagePill,
-                          { backgroundColor: (STAGE_COLOR[order.stage] ?? Colors.midGrey) + '20' },
+                          { backgroundColor: stageColor(order.stage).bg },
                         ]}
                       >
                         <Text
-                          style={[styles.stageText, { color: STAGE_COLOR[order.stage] ?? Colors.midGrey }]}
+                          style={[styles.stageText, { color: stageColor(order.stage).text }]}
                         >
                           {STAGE_LABELS[order.stage]}
                         </Text>

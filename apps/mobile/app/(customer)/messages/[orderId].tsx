@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native'
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, Linking } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { MessageThread } from '@/components/ui/MessageThread'
 import { Colors, FontSize, FontWeight, Spacing } from '@/constants/theme'
+import { TERMINAL_STAGES, type OrderStage } from '@drape/shared/order-machine'
 
 export default function CustomerMessagesScreen() {
   const { orderId } = useLocalSearchParams<{ orderId: string }>()
@@ -18,20 +19,22 @@ export default function CustomerMessagesScreen() {
     tailorId: string
     customerId: string
     customerName: string
+    stage: OrderStage
+    videoCallUrl: string | null
   } | null>(null)
+  const [resolvedOrderId, setResolvedOrderId] = useState(orderId)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     async function fetch() {
       // orderId may be a tailor ID (from "Message" on profile) — find their active order
       // or an actual order ID — handle both
-      let resolvedOrderId = orderId
 
       // Try as order ID first
       const { data: order } = await supabase
         .from('orders')
         .select(`
-          id, garment_type, customer_id,
+          id, garment_type, stage, customer_id, video_call_url,
           tailor_profiles!tailor_profile_id(id, display_name),
           customer_profiles!customer_id(display_name)
         `)
@@ -47,13 +50,15 @@ export default function CustomerMessagesScreen() {
           tailorId: o.tailor_profiles?.id,
           customerId: o.customer_id,
           customerName: o.customer_profiles?.display_name ?? user?.user_metadata?.display_name ?? 'Customer',
+          stage: o.stage,
+          videoCallUrl: o.video_call_url ?? null,
         })
       } else {
         // orderId is a tailor ID — find most recent active order with that tailor
         const { data: found } = await supabase
           .from('orders')
           .select(`
-            id, garment_type, customer_id,
+            id, garment_type, stage, customer_id,
             tailor_profiles!inner(id, display_name),
             customer_profiles(display_name)
           `)
@@ -65,14 +70,16 @@ export default function CustomerMessagesScreen() {
           .single()
 
         if (found) {
-          resolvedOrderId = (found as any).id
           const o = found as any
+          setResolvedOrderId(o.id)
           setOrderInfo({
             garmentType: o.garment_type,
             tailorName: o.tailor_profiles?.display_name ?? 'Tailor',
             tailorId: o.tailor_profiles?.id,
             customerId: o.customer_id,
             customerName: o.customer_profiles?.display_name ?? user?.user_metadata?.display_name ?? 'Customer',
+            stage: o.stage,
+            videoCallUrl: o.video_call_url ?? null,
           })
         } else {
           // No active order — tailor profile message flow, no active order
@@ -102,7 +109,7 @@ export default function CustomerMessagesScreen() {
         </View>
         <View style={styles.noOrder}>
           <Text style={styles.noOrderText}>No active order with this tailor.</Text>
-          <Text style={styles.noOrderHint}>Submit a brief to start a conversation.</Text>
+          <Text style={styles.noOrderHint}>Place an order to start a conversation.</Text>
         </View>
       </SafeAreaView>
     )
@@ -120,15 +127,35 @@ export default function CustomerMessagesScreen() {
           <Text style={styles.headerName}>{orderInfo.tailorName}</Text>
           <Text style={styles.headerSub}>{orderInfo.garmentType}</Text>
         </View>
-        <View style={{ width: 60 }} />
+        {orderInfo.stage === 'CONSULTATION' && orderInfo.videoCallUrl ? (
+          <TouchableOpacity
+            style={styles.callBtn}
+            onPress={() => {
+              Alert.alert(
+                'Join call',
+                `Join your consultation with ${orderInfo.tailorName}.`,
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: '📹 Video', onPress: () => Linking.openURL(orderInfo.videoCallUrl!) },
+                  { text: '🎙 Audio only', onPress: () => Linking.openURL(orderInfo.videoCallUrl!) },
+                ]
+              )
+            }}
+          >
+            <Text style={styles.callBtnText}>📞</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={{ width: 60 }} />
+        )}
       </View>
 
       <MessageThread
-        orderId={orderId}
+        orderId={resolvedOrderId}
         currentUserId={user?.id ?? ''}
         currentUserRole="CUSTOMER"
         tailorName={orderInfo.tailorName}
         customerName={orderInfo.customerName}
+        locked={TERMINAL_STAGES.includes(orderInfo.stage)}
       />
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -146,6 +173,11 @@ const styles = StyleSheet.create({
   headerCenter: { alignItems: 'center' },
   headerName: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   headerSub: { fontSize: FontSize.xs, color: Colors.midGrey },
+  callBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: Colors.needleGreen, alignItems: 'center', justifyContent: 'center',
+  },
+  callBtnText: { fontSize: 18 },
   noOrder: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: Spacing.md, padding: Spacing.xl },
   noOrderText: { fontSize: FontSize.md, color: Colors.inkLight },
   noOrderHint: { fontSize: FontSize.sm, color: Colors.midGrey },

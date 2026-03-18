@@ -8,6 +8,10 @@
 -- ─── Schema access ────────────────────────────────────────────────────────────
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
 
+-- ─── NOTE: public.users does not exist in this project ───────────────────────
+-- Profile data lives in customer_profiles / tailor_profiles referencing
+-- auth.users(id) directly. No grant on public.users is needed.
+
 -- ─── Sequences (needed for any INSERT that uses a serial/uuid default) ────────
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO authenticated;
 

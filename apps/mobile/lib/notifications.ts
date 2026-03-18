@@ -40,13 +40,21 @@ export function usePushNotifications(userId: string | null) {
       // Already displayed by setNotificationHandler above
     })
 
-    // Tap on notification — navigate to relevant screen by role
+    // Tap on notification — navigate to relevant screen by role.
+    // Only accept orderId navigations or a strict allowlist of internal screens
+    // to prevent deep-link injection via a crafted push payload.
+    const ALLOWED_SCREENS = new Set([
+      '/(customer)/orders',
+      '/(customer)/profile/notifications',
+      '/(tailor)/orders',
+    ])
+
     responseListener.current = Notifications.addNotificationResponseReceivedListener((response) => {
       const data = response.notification.request.content.data as Record<string, string>
-      if (data?.orderId) {
+      if (data?.orderId && /^[0-9a-f-]{36}$/i.test(data.orderId)) {
         const base = role === 'TAILOR' ? '/(tailor)' : '/(customer)'
         router.push(`${base}/orders/${data.orderId}`)
-      } else if (data?.screen) {
+      } else if (data?.screen && ALLOWED_SCREENS.has(data.screen)) {
         router.push(data.screen as any)
       }
     })

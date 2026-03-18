@@ -20,7 +20,8 @@
         "NSCameraUsageDescription": "Drape uses your camera to upload reference photos and progress updates.",
         "NSPhotoLibraryUsageDescription": "Drape accesses your photo library for order references and portfolio photos.",
         "NSMicrophoneUsageDescription": "Drape uses your microphone for voice note messages.",
-        "NSLocationWhenInUseUsageDescription": "Drape uses your location to show nearby tailors."
+        "NSLocationWhenInUseUsageDescription": "Drape uses your location to show nearby tailors.",
+        "NSFaceIDUsageDescription": "Drape uses Face ID to quickly and securely verify your identity when you return to the app."
       }
     },
     "android": {
@@ -32,7 +33,9 @@
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
       ]
     },
     "web": {
@@ -42,6 +45,7 @@
     "plugins": [
       "expo-router",
       "expo-secure-store",
+      "expo-local-authentication",
       [
         "expo-camera",
         {
@@ -51,8 +55,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Drape accesses your photo library for reference and portfolio photos.",
-          "cameraPermission": "Drape uses your camera to take photos for orders."
+          "photosPermission": "Drape uses your photo library so you can upload portfolio photos and order references. Your photos are only accessed when you choose to upload.",
+          "cameraPermission": "Drape uses your camera to take portfolio photos and order references."
         }
       ],
       [

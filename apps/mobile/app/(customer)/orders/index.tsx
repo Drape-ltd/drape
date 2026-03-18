@@ -1,40 +1,24 @@
-import { useCallback, useEffect, useState } from 'react'
-import { useFocusEffect } from 'expo-router'
+import { useState } from 'react'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, RefreshControl,
 } from 'react-native'
 import { useRouter } from 'expo-router'
+import { Feather } from '@expo/vector-icons'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { useCustomerOrders, useRefreshOnFocus } from '@/lib/queries'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
-
-type Order = {
-  id: string
-  reference: string
-  garmentType: string
-  stage: OrderStage
-  tailorName: string
-  tailorId: string
-  estimatedDate: string | null
-  createdAt: string
-  quotedAmount: number | null
-}
-
-const ACTIVE_STAGES: OrderStage[] = [
-  'PENDING_QUOTE', 'QUOTE_SENT', 'PAYMENT_PENDING',
-  'CONFIRMED', 'CUTTING', 'SEWING', 'FINISHING',
-  'SHIPPED', 'READY_FOR_COLLECTION', 'IN_DISPUTE',
-]
-
-const TERMINAL_STAGES: OrderStage[] = ['COMPLETE', 'DELIVERED', 'COLLECTED', 'DECLINED', 'EXPIRED', 'REFUNDED', 'CANCELLED']
+import { SUPPORTED_CURRENCIES } from '@/lib/currency'
 
 const STAGE_COLOR: Partial<Record<OrderStage, string>> = {
   PENDING_QUOTE: Colors.warning,
+  CONSULTATION: Colors.warning,
   QUOTE_SENT: Colors.warning,
   PAYMENT_PENDING: Colors.warning,
   CONFIRMED: Colors.needleGreen,
+  DESIGNING: Colors.needleGreen,
+  SOURCING: Colors.needleGreen,
   CUTTING: Colors.needleGreen,
   SEWING: Colors.needleGreen,
   FINISHING: Colors.needleGreen,
@@ -56,50 +40,11 @@ export default function OrdersListScreen() {
   const router = useRouter()
   const { user } = useAuth()
   const [tab, setTab] = useState<Tab>('active')
-  const [orders, setOrders] = useState<Order[]>([])
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
 
-  async function fetchOrders(activeTab: Tab) {
-    const stages = activeTab === 'active' ? ACTIVE_STAGES : TERMINAL_STAGES
-    const stageList = stages.map((s) => `"${s}"`).join(',')
+  const { data: orders = [], isLoading: loading, isFetching, refetch } = useCustomerOrders(user?.id, tab)
 
-    const { data } = await supabase
-      .from('orders')
-      .select(`
-        id, reference, garment_type, stage, quoted_completion_date, created_at, quoted_amount,
-        tailor_profiles!tailor_profile_id(id, display_name)
-      `)
-      .eq('customer_id', user?.id)
-      .in('stage', stages)
-      .order('created_at', { ascending: false })
-      .limit(50)
-
-    setOrders(
-      (data ?? []).map((o: any) => ({
-        id: o.id,
-        reference: o.reference,
-        garmentType: o.garment_type,
-        stage: o.stage,
-        tailorName: o.tailor_profiles?.display_name ?? '',
-        tailorId: o.tailor_profiles?.id ?? '',
-        estimatedDate: o.quoted_completion_date,
-        createdAt: o.created_at,
-        quotedAmount: o.quoted_amount,
-      }))
-    )
-  }
-
-  useFocusEffect(useCallback(() => {
-    setLoading(true)
-    fetchOrders(tab).finally(() => setLoading(false))
-  }, [tab]))
-
-  async function onRefresh() {
-    setRefreshing(true)
-    await fetchOrders(tab)
-    setRefreshing(false)
-  }
+  // Refetch whenever this screen comes back into focus (e.g. returning from order detail)
+  useRefreshOnFocus(refetch)
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -129,16 +74,13 @@ export default function OrdersListScreen() {
           keyExtractor={(o) => o.id}
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />}
+          refreshControl={<RefreshControl refreshing={isFetching && !loading} onRefresh={refetch} tintColor={Colors.needleGreen} />}
           ListEmptyComponent={
-            <View style={styles.empty}>
-              <Text style={styles.emptyText}>
-                {tab === 'active' ? 'No active orders.' : 'No completed orders yet.'}
-              </Text>
-              {tab === 'active' && (
-                <Text style={styles.emptyHint}>Browse tailors and submit your first brief.</Text>
-              )}
-            </View>
+            <EmptyOrdersView
+              tab={tab}
+              onExplore={() => router.navigate('/(customer)')}
+              onViewCompleted={() => setTab('completed')}
+            />
           }
           renderItem={({ item }) => (
             <TouchableOpacity
@@ -167,7 +109,8 @@ export default function OrdersListScreen() {
                 )}
                 {item.quotedAmount && (
                   <Text style={styles.amount}>
-                    £{(item.quotedAmount / 100).toFixed(0)}
+                    {SUPPORTED_CURRENCIES.find((c) => c.code === item.quotedCurrency)?.symbol ?? item.quotedCurrency}
+                    {(item.quotedAmount / 100).toFixed(0)}
                   </Text>
                 )}
               </View>
@@ -178,6 +121,131 @@ export default function OrdersListScreen() {
     </SafeAreaView>
   )
 }
+
+function EmptyOrdersView({
+  tab,
+  onExplore,
+  onViewCompleted,
+}: {
+  tab: Tab
+  onExplore: () => void
+  onViewCompleted: () => void
+}) {
+  if (tab === 'completed') {
+    return (
+      <View style={emptyStyles.container}>
+        <View style={emptyStyles.textBlock}>
+          <Text style={emptyStyles.heading}>No completed orders yet</Text>
+          <Text style={emptyStyles.sub}>Orders you finish with a tailor will appear here.</Text>
+        </View>
+      </View>
+    )
+  }
+
+  const GHOST_ROWS: Array<{ icon: React.ComponentProps<typeof Feather>['name']; label: string }> = [
+    { icon: 'scissors', label: 'Custom garment' },
+    { icon: 'package', label: 'Ready to collect' },
+    { icon: 'tag', label: 'Quote received' },
+  ]
+
+  return (
+    <View style={emptyStyles.container}>
+      {/* Ghost preview cards — Airbnb Trips style */}
+      <View style={emptyStyles.previewStack}>
+        {GHOST_ROWS.map(({ icon }, i) => (
+          <View key={i} style={[emptyStyles.ghostCard, { opacity: 1 - i * 0.22 }]}>
+            <View style={emptyStyles.ghostImage}>
+              <Feather name={icon} size={22} color={Colors.midGrey} />
+            </View>
+            <View style={emptyStyles.ghostLines}>
+              <View style={[emptyStyles.ghostLine, { width: '65%' }]} />
+              <View style={[emptyStyles.ghostLine, { width: '45%', marginTop: 8 }]} />
+            </View>
+          </View>
+        ))}
+      </View>
+
+      {/* Heading + copy */}
+      <View style={emptyStyles.textBlock}>
+        <Text style={emptyStyles.heading}>Your orders, all in one place</Text>
+        <Text style={emptyStyles.sub}>
+          Browse tailors and book a custom garment.{'\n'}When you do, they'll show up right here.
+        </Text>
+      </View>
+
+      {/* Primary CTA */}
+      <TouchableOpacity style={emptyStyles.ctaBtn} onPress={onExplore}>
+        <Text style={emptyStyles.ctaBtnText}>Explore tailors</Text>
+      </TouchableOpacity>
+
+      {/* Secondary — view completed */}
+      <TouchableOpacity style={emptyStyles.secondaryCard} onPress={onViewCompleted}>
+        <Text style={emptyStyles.secondaryText}>Find past orders</Text>
+        <Text style={emptyStyles.secondaryChevron}>›</Text>
+      </TouchableOpacity>
+    </View>
+  )
+}
+
+const emptyStyles = StyleSheet.create({
+  container: {
+    paddingTop: Spacing.xl,
+    paddingHorizontal: Spacing.xl,
+    paddingBottom: Spacing.xxxl,
+    alignItems: 'center',
+    gap: Spacing.xl,
+  },
+  previewStack: { width: '100%', gap: Spacing.md },
+  ghostCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    ...Shadow.sm,
+  },
+  ghostImage: {
+    width: 64,
+    height: 64,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.boneDeep,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ghostLines: { flex: 1, gap: 0 },
+  ghostLine: {
+    height: 10,
+    borderRadius: 6,
+    backgroundColor: Colors.boneDeep,
+  },
+
+  textBlock: { alignItems: 'center', gap: Spacing.sm },
+  heading: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  sub: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 22 },
+
+  ctaBtn: {
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xxxl,
+  },
+  ctaBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.md },
+
+  secondaryCard: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    width: '100%',
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    ...Shadow.sm,
+  },
+  secondaryText: { fontSize: FontSize.md, fontWeight: FontWeight.medium, color: Colors.ink },
+  secondaryChevron: { fontSize: 22, color: Colors.midGrey },
+})
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
@@ -204,7 +272,4 @@ const styles = StyleSheet.create({
   eta: { fontSize: FontSize.xs, color: Colors.midGrey },
   amount: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginLeft: 'auto' },
 
-  empty: { flex: 1, paddingTop: Spacing.xxxl * 2, alignItems: 'center', gap: Spacing.md },
-  emptyText: { fontSize: FontSize.md, color: Colors.inkLight },
-  emptyHint: { fontSize: FontSize.sm, color: Colors.midGrey },
 })

@@ -8,11 +8,14 @@
 --   3. message-media      public: true
 --   4. id-documents       public: false  ← private (ID verification)
 --
--- Then run this SQL to lock down who can upload/delete.
+-- Idempotent — safe to re-run.
 -- ============================================================
 
 -- ─── portfolio-photos ─────────────────────────────────────────────────────────
--- Tailors upload to their own folder: portfolio/{user_id}/*
+DROP POLICY IF EXISTS "tailors: upload portfolio photos"     ON storage.objects;
+DROP POLICY IF EXISTS "tailors: delete own portfolio photos" ON storage.objects;
+DROP POLICY IF EXISTS "public: read portfolio photos"        ON storage.objects;
+
 CREATE POLICY "tailors: upload portfolio photos"
   ON storage.objects FOR INSERT
   TO authenticated
@@ -36,8 +39,9 @@ CREATE POLICY "public: read portfolio photos"
   USING (bucket_id = 'portfolio-photos');
 
 -- ─── order-photos ─────────────────────────────────────────────────────────────
--- Customers upload briefs: briefs/{user_id}/*
--- Tailors upload progress: progress/{order_id}/*
+DROP POLICY IF EXISTS "authenticated: upload order photos" ON storage.objects;
+DROP POLICY IF EXISTS "authenticated: read order photos"   ON storage.objects;
+
 CREATE POLICY "authenticated: upload order photos"
   ON storage.objects FOR INSERT
   TO authenticated
@@ -49,6 +53,9 @@ CREATE POLICY "authenticated: read order photos"
   USING (bucket_id = 'order-photos');
 
 -- ─── message-media ────────────────────────────────────────────────────────────
+DROP POLICY IF EXISTS "authenticated: upload message media" ON storage.objects;
+DROP POLICY IF EXISTS "authenticated: read message media"   ON storage.objects;
+
 CREATE POLICY "authenticated: upload message media"
   ON storage.objects FOR INSERT
   TO authenticated
@@ -60,8 +67,8 @@ CREATE POLICY "authenticated: read message media"
   USING (bucket_id = 'message-media');
 
 -- ─── id-documents (private) ───────────────────────────────────────────────────
--- Only the tailor who owns the document can upload. No reads for authenticated.
--- Service role (Drape admin) accesses this via the Supabase dashboard.
+DROP POLICY IF EXISTS "tailors: upload own id document" ON storage.objects;
+
 CREATE POLICY "tailors: upload own id document"
   ON storage.objects FOR INSERT
   TO authenticated

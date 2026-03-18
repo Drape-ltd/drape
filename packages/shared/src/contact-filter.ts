@@ -10,8 +10,11 @@ export interface FilterResult {
   userMessage: string
 }
 
-const BLOCK_MESSAGE =
+const CONTACT_BLOCK_MESSAGE =
   "Contact details can't be shared on Drape. This protects your payment, your measurements, and your order history — for both of you. Everything you need to complete this order is right here."
+
+const ABUSE_BLOCK_MESSAGE =
+  "That message can't be sent. Keep all communication respectful — our team reviews flagged messages."
 
 // Phone number patterns
 const PHONE_PATTERNS: RegExp[] = [
@@ -23,6 +26,8 @@ const PHONE_PATTERNS: RegExp[] = [
   /\b(zero|oh|nought|o)\s*(seven|7)\b/i,
   // Dotted or spaced number blocks
   /\b\d{3,5}[\s.\-]\d{3,5}[\s.\-]\d{3,5}\b/,
+  // Long unformatted digit sequences (9+ digits) — international numbers without + or separators
+  /\b\d{9,}\b/,
 ]
 
 // Social handle and platform patterns
@@ -43,10 +48,18 @@ const URL_PATTERNS: RegExp[] = [
   /\b(linktree|link\.tree|beacons\.ai|bio\.site|allmylinks|taplink)\b/i,
 ]
 
+// Threat and abuse patterns
+const ABUSE_PATTERNS: RegExp[] = [
+  // Explicit threats
+  /\b(i('ll| will|'m going to| am going to)) (kill|hurt|harm|beat|attack|destroy|ruin) (you|u|your|ur)\b/i,
+  /\b(you('re| are) (dead|finished|done)|watch your back|i know where you live)\b/i,
+]
+
 const ALL_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   ...PHONE_PATTERNS.map((p) => ({ pattern: p, label: 'phone number' })),
   ...SOCIAL_PATTERNS.map((p) => ({ pattern: p, label: 'social handle or platform' })),
   ...URL_PATTERNS.map((p) => ({ pattern: p, label: 'URL or web address' })),
+  ...ABUSE_PATTERNS.map((p) => ({ pattern: p, label: 'threatening language' })),
 ]
 
 /**
@@ -56,10 +69,11 @@ const ALL_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
 export function filterContactInfo(text: string): FilterResult {
   for (const { pattern, label } of ALL_PATTERNS) {
     if (pattern.test(text)) {
+      const isAbuse = label === 'threatening language'
       return {
         blocked: true,
         matchedPattern: label,
-        userMessage: BLOCK_MESSAGE,
+        userMessage: isAbuse ? ABUSE_BLOCK_MESSAGE : CONTACT_BLOCK_MESSAGE,
       }
     }
   }
@@ -83,6 +97,98 @@ export function sanitiseText(text: string): { sanitised: string; hadViolation: b
   }
 
   return { sanitised, hadViolation }
+}
+
+const PLACEHOLDER_VALUES = new Set([
+  'n/a', 'na', 'none', 'nil', 'tbd', 'n.a.', 'null', 'undefined',
+  '-', '--', '—', '–', '.', '..', '...', 'ok', 'okay', 'yes', 'no',
+  'nothing', 'idk', 'dunno', 'same', 'see above', 'as above',
+])
+
+/**
+ * Check whether a string is a placeholder / non-answer value.
+ * Returns an error string if it is a placeholder, or null if valid.
+ */
+export function rejectPlaceholder(text: string, fieldName = 'This field'): string | null {
+  const normalised = text.trim().toLowerCase()
+  if (PLACEHOLDER_VALUES.has(normalised)) {
+    return `${fieldName} needs a real answer — not "${text.trim()}".`
+  }
+  return null
+}
+
+/**
+ * Style reference link filtering pipeline — 7 steps.
+ * Used in the order brief to validate social media / inspiration links.
+ * Returns { allowed: true, cleaned: string } or { allowed: false, reason: string }.
+ */
+const ALLOWED_STYLE_DOMAINS = [
+  'instagram.com', 'www.instagram.com',
+  'pinterest.com', 'www.pinterest.com', 'pin.it',
+  'tiktok.com', 'www.tiktok.com',
+  'behance.net', 'www.behance.net',
+  'dribbble.com', 'www.dribbble.com',
+  'vogue.com', 'www.vogue.com', 'en.vogue.com',
+  'harpersbazaar.com', 'www.harpersbazaar.com',
+  'essence.com', 'www.essence.com',
+  'lookbook.nu',
+]
+
+const TRACKING_PARAMS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'fbclid', 'igshid', 'ref']
+
+export interface StyleRefResult {
+  allowed: boolean
+  cleaned?: string
+  reason?: string
+}
+
+export function filterStyleReference(input: string): StyleRefResult {
+  // Step 1: Normalize
+  const trimmed = input.trim()
+
+  // Step 2: Reject empty
+  if (!trimmed) return { allowed: false, reason: 'Please enter a link or handle.' }
+
+  // Step 3 & 4 — max / dedup checks are caller's responsibility
+
+  // Step 5: If it starts with @, it's a handle — allow (max 30 chars)
+  if (trimmed.startsWith('@')) {
+    if (trimmed.length > 30) return { allowed: false, reason: 'Handle is too long.' }
+    return { allowed: true, cleaned: trimmed }
+  }
+
+  // Step 6: Validate URL
+  let url: URL
+  try {
+    url = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`)
+  } catch {
+    // Not a URL and not a handle — reject
+    return { allowed: false, reason: 'Please paste a valid link (e.g. instagram.com/p/…) or an @handle.' }
+  }
+
+  const hostname = url.hostname.replace(/^www\./, '')
+  const fullHostname = url.hostname
+  const isAllowed = ALLOWED_STYLE_DOMAINS.includes(hostname) || ALLOWED_STYLE_DOMAINS.includes(fullHostname)
+
+  if (!isAllowed) {
+    return {
+      allowed: false,
+      reason: 'Only links from Instagram, Pinterest, TikTok, Behance, or Vogue are accepted as style references.',
+    }
+  }
+
+  // Block profile DMs, story links, and redirect paths
+  const blockedPaths = ['/direct', '/messages', '/accounts/login', '/inbox']
+  if (blockedPaths.some((p) => url.pathname.startsWith(p))) {
+    return { allowed: false, reason: 'Direct messages or login links aren\'t accepted. Share a post or style page instead.' }
+  }
+
+  // Step 7: Strip tracking params
+  for (const param of TRACKING_PARAMS) {
+    url.searchParams.delete(param)
+  }
+
+  return { allowed: true, cleaned: url.toString() }
 }
 
 /**

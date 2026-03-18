@@ -38,17 +38,24 @@ interface Props {
   currentUserRole: 'CUSTOMER' | 'TAILOR'
   tailorName: string
   customerName: string
+  locked?: boolean
 }
 
-export function MessageThread({ orderId, currentUserId, currentUserRole, tailorName, customerName }: Props) {
+// Rate limit: max 8 sends in 30 seconds
+const RATE_LIMIT_COUNT = 8
+const RATE_LIMIT_WINDOW_MS = 30_000
+
+export function MessageThread({ orderId, currentUserId, currentUserRole, tailorName, customerName, locked = false }: Props) {
   const [messages, setMessages] = useState<Message[]>([])
   const [loading, setLoading] = useState(true)
   const [text, setText] = useState('')
   const [textError, setTextError] = useState('')
   const [sending, setSending] = useState(false)
+  const [rateLimited, setRateLimited] = useState(false)
   const [recording, setRecording] = useState<Audio.Recording | null>(null)
   const [isRecording, setIsRecording] = useState(false)
   const flatListRef = useRef<FlatList>(null)
+  const sendTimestamps = useRef<number[]>([])
 
   async function fetchMessages() {
     const { data } = await supabase
@@ -97,6 +104,18 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
     }
   }, [messages])
 
+  function checkRateLimit(): boolean {
+    const now = Date.now()
+    sendTimestamps.current = sendTimestamps.current.filter((ts) => now - ts < RATE_LIMIT_WINDOW_MS)
+    if (sendTimestamps.current.length >= RATE_LIMIT_COUNT) {
+      setRateLimited(true)
+      setTimeout(() => setRateLimited(false), RATE_LIMIT_WINDOW_MS)
+      return false
+    }
+    sendTimestamps.current.push(now)
+    return true
+  }
+
   function validateText(t: string): boolean {
     const res = filterContactInfo(t)
     if (res.blocked) {
@@ -109,6 +128,7 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
 
   async function sendText() {
     if (!text.trim() || !validateText(text)) return
+    if (!checkRateLimit()) return
     setSending(true)
     const { error } = await supabase.from('messages').insert({
       order_id: orderId,
@@ -130,6 +150,7 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
   }
 
   async function sendPhoto() {
+    if (!checkRateLimit()) return
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.8,
@@ -144,6 +165,11 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
     try {
       const response = await fetch(cleanUri)
       const blob = await response.blob()
+      if (blob.size > 10 * 1024 * 1024) {
+        setSending(false)
+        Alert.alert('File too large', 'Photos must be under 10 MB.')
+        return
+      }
       await supabase.storage.from('message-media').upload(filename, blob, { contentType: `image/${ext}` })
       const { data: urlData } = supabase.storage.from('message-media').getPublicUrl(filename)
 
@@ -188,6 +214,11 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
     try {
       const response = await fetch(uri)
       const blob = await response.blob()
+      if (blob.size > 25 * 1024 * 1024) {
+        setSending(false)
+        Alert.alert('Recording too large', 'Voice notes must be under 25 MB.')
+        return
+      }
       await supabase.storage.from('message-media').upload(filename, blob, { contentType: 'audio/m4a' })
       const { data: urlData } = supabase.storage.from('message-media').getPublicUrl(filename)
 
@@ -220,8 +251,13 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
         onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Text style={styles.emptyText}>No messages yet.</Text>
-            <Text style={styles.emptyHint}>Start the conversation with {otherName}.</Text>
+            <Text style={styles.emptyText}>Start the conversation with {otherName}.</Text>
+            <View style={styles.preMessageCard}>
+              <Text style={styles.preMessageTitle}>Keep all communication on Drape</Text>
+              <Text style={styles.preMessageBody}>
+                Sharing phone numbers, email addresses, or social handles isn't allowed and may result in account suspension. This protects both parties.
+              </Text>
+            </View>
           </View>
         }
         renderItem={({ item }) => (
@@ -229,60 +265,76 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
         )}
       />
 
-      {/* Contact filter warning */}
-      {textError ? (
-        <View style={styles.filterWarning}>
-          <Text style={styles.filterWarningText}>{textError}</Text>
+      {/* Locked banner — shown when order is terminal */}
+      {locked ? (
+        <View style={styles.lockedBar}>
+          <Text style={styles.lockedText}>This conversation is closed. You can still read previous messages.</Text>
         </View>
-      ) : null}
+      ) : (
+        <>
+          {/* Contact filter warning */}
+          {textError ? (
+            <View style={styles.filterWarning}>
+              <Text style={styles.filterWarningText}>{textError}</Text>
+            </View>
+          ) : null}
 
-      {/* Recording indicator */}
-      {isRecording && (
-        <View style={styles.recordingBar}>
-          <View style={styles.recordingDot} />
-          <Text style={styles.recordingText}>Recording… release to send</Text>
-        </View>
+          {/* Rate limit warning */}
+          {rateLimited ? (
+            <View style={styles.filterWarning}>
+              <Text style={styles.filterWarningText}>You're sending messages too quickly. Please wait a moment.</Text>
+            </View>
+          ) : null}
+
+          {/* Recording indicator */}
+          {isRecording && (
+            <View style={styles.recordingBar}>
+              <View style={styles.recordingDot} />
+              <Text style={styles.recordingText}>Recording… release to send</Text>
+            </View>
+          )}
+
+          {/* Input bar */}
+          <View style={styles.inputBar}>
+            <TouchableOpacity style={styles.iconBtn} onPress={sendPhoto} disabled={sending || rateLimited}>
+              <Text style={styles.iconBtnText}>📎</Text>
+            </TouchableOpacity>
+
+            <TextInput
+              style={styles.textInput}
+              placeholder="Message…"
+              placeholderTextColor={Colors.midGrey}
+              value={text}
+              onChangeText={(v) => {
+                setText(v)
+                if (textError) validateText(v)
+              }}
+              multiline
+              maxLength={1000}
+              returnKeyType="default"
+              testID="message-input"
+            />
+
+            {text.trim() ? (
+              <TouchableOpacity style={styles.sendBtn} onPress={sendText} disabled={sending || !!textError || rateLimited}>
+                {sending
+                  ? <ActivityIndicator color={Colors.white} size="small" />
+                  : <Text style={styles.sendBtnText}>→</Text>
+                }
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[styles.voiceBtn, isRecording && styles.voiceBtnActive]}
+                onPressIn={startRecording}
+                onPressOut={stopRecording}
+                disabled={sending}
+              >
+                <Text style={styles.iconBtnText}>🎤</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </>
       )}
-
-      {/* Input bar */}
-      <View style={styles.inputBar}>
-        <TouchableOpacity style={styles.iconBtn} onPress={sendPhoto} disabled={sending}>
-          <Text style={styles.iconBtnText}>📎</Text>
-        </TouchableOpacity>
-
-        <TextInput
-          style={styles.textInput}
-          placeholder="Message…"
-          placeholderTextColor={Colors.midGrey}
-          value={text}
-          onChangeText={(v) => {
-            setText(v)
-            if (textError) validateText(v)
-          }}
-          multiline
-          maxLength={1000}
-          returnKeyType="default"
-          testID="message-input"
-        />
-
-        {text.trim() ? (
-          <TouchableOpacity style={styles.sendBtn} onPress={sendText} disabled={sending || !!textError}>
-            {sending
-              ? <ActivityIndicator color={Colors.white} size="small" />
-              : <Text style={styles.sendBtnText}>→</Text>
-            }
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            style={[styles.voiceBtn, isRecording && styles.voiceBtnActive]}
-            onPressIn={startRecording}
-            onPressOut={stopRecording}
-            disabled={sending}
-          >
-            <Text style={styles.iconBtnText}>🎤</Text>
-          </TouchableOpacity>
-        )}
-      </View>
     </View>
   )
 }
@@ -356,9 +408,24 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   list: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.md },
 
-  empty: { paddingTop: 80, alignItems: 'center', gap: Spacing.sm },
+  empty: { paddingTop: 60, alignItems: 'center', gap: Spacing.lg, paddingHorizontal: Spacing.xl },
   emptyText: { fontSize: FontSize.md, color: Colors.inkLight },
-  emptyHint: { fontSize: FontSize.sm, color: Colors.midGrey },
+
+  preMessageCard: {
+    backgroundColor: Colors.boneDeep, borderRadius: Radius.md,
+    padding: Spacing.lg, gap: Spacing.sm,
+    borderLeftWidth: 3, borderLeftColor: Colors.needleGreen,
+    alignSelf: 'stretch',
+  },
+  preMessageTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  preMessageBody: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+
+  lockedBar: {
+    backgroundColor: Colors.lightGrey, paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md, borderTopWidth: 1, borderTopColor: Colors.lightGrey,
+    alignItems: 'center',
+  },
+  lockedText: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center' as const, lineHeight: 20 },
 
   filterWarning: {
     backgroundColor: Colors.kanteRustLight, paddingHorizontal: Spacing.xl,

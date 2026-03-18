@@ -8,6 +8,8 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
+import { Sentry } from '@/lib/sentry'
+import { referToTailor } from '@/lib/invite'
 import { Button, Input } from '@/components/ui'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -48,10 +50,10 @@ export default function ReviewScreen() {
 
     setSubmitting(true)
 
-    // Get tailor_id + tailor_profile_id from order
+    // Get tailor_id + tailor_profile_id + tailor name from order
     const { data: order } = await supabase
       .from('orders')
-      .select('tailor_id, tailor_profile_id')
+      .select('tailor_id, tailor_profile_id, tailor_profiles!tailor_profile_id(display_name)')
       .eq('id', orderId)
       .eq('customer_id', user?.id)
       .single()
@@ -80,38 +82,16 @@ export default function ReviewScreen() {
     })
 
     if (error) {
+      Sentry.captureException(error, { extra: { context: 'review_submit', orderId } })
       setSubmitting(false)
       Alert.alert('Error', 'Could not submit review. Please try again.')
       return
     }
 
-    // Move order to COMPLETE
-    await supabase
-      .from('orders')
-      .update({ stage: 'COMPLETE' })
-      .eq('id', orderId)
-
-    // Update tailor avg_rating in profile (best-effort)
-    const { data: allReviews } = await supabase
-      .from('reviews')
-      .select('rating')
-      .eq('tailor_id', (order as any).tailor_id)
-
-    if (allReviews && allReviews.length > 0) {
-      const avg = allReviews.reduce((s: number, r: any) => s + r.rating, 0) / allReviews.length
-      await supabase
-        .from('tailor_profiles')
-        .update({
-          avg_rating: Math.round(avg * 10) / 10,
-          total_reviews: allReviews.length,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('user_id', (order as any).tailor_id)
-    }
-
-    // Increment total_orders on the tailor profile
-    await supabase.rpc('increment_tailor_orders', { tailor_user_id: (order as any).tailor_id }).catch(() => {
-      // Non-fatal if RPC doesn't exist yet — total_orders can be back-filled
+    // Move order to COMPLETE via Edge Function (stage column is service-role only).
+    // avg_rating, total_reviews, total_orders are updated automatically by DB triggers.
+    await supabase.functions.invoke('customer-order-action', {
+      body: { orderId, action: 'complete-order' },
     })
 
     capture('review_submitted', {
@@ -122,11 +102,34 @@ export default function ReviewScreen() {
     })
 
     setSubmitting(false)
-    router.replace('/(customer)/orders')
+
+    // After a 4 or 5 star review, prompt to refer the tailor to a friend
+    const tailorName = (order as any).tailor_profiles?.display_name ?? 'your tailor'
+    const tailorProfileId = (order as any).tailor_profile_id
+    if (rating >= 4 && tailorProfileId) {
+      Alert.alert(
+        'Glad it went well!',
+        `Know someone who could use a great tailor? Share ${tailorName}'s profile with them.`,
+        [
+          {
+            text: 'Share',
+            onPress: () => {
+              referToTailor(tailorProfileId, tailorName, user?.id ?? '')
+              router.replace('/(customer)/orders')
+            },
+          },
+          { text: 'Maybe later', onPress: () => router.replace('/(customer)/orders') },
+        ]
+      )
+    } else {
+      router.replace('/(customer)/orders')
+    }
   }
 
   async function skip() {
-    await supabase.from('orders').update({ stage: 'COMPLETE' }).eq('id', orderId)
+    await supabase.functions.invoke('customer-order-action', {
+      body: { orderId, action: 'complete-order' },
+    })
     router.replace('/(customer)/orders')
   }
 

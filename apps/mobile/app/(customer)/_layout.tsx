@@ -1,6 +1,33 @@
 import { Tabs } from 'expo-router'
-import { Pressable } from 'react-native'
-import { Colors, FontSize } from '@/constants/theme'
+import { Image, Pressable, View } from 'react-native'
+import { Feather } from '@expo/vector-icons'
+import { Colors, FontSize, Radius } from '@/constants/theme'
+import { useCustomerProfile } from '@/lib/customerProfile'
+
+function ProfileTabIcon({ color, focused }: { color: string; focused: boolean }) {
+  const { avatarUrl } = useCustomerProfile()
+
+  if (avatarUrl) {
+    return (
+      <View
+        style={{
+          width: 28, height: 28, borderRadius: Radius.full,
+          borderWidth: focused ? 2 : 1.5,
+          borderColor: focused ? Colors.needleGreen : color,
+          overflow: 'hidden',
+        }}
+      >
+        <Image
+          source={{ uri: avatarUrl }}
+          style={{ width: '100%', height: '100%' }}
+          resizeMode="cover"
+        />
+      </View>
+    )
+  }
+
+  return <Feather name="user" size={22} color={color} />
+}
 
 export default function CustomerTabLayout() {
   return (
@@ -25,51 +52,54 @@ export default function CustomerTabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <TabIcon emoji="🏠" color={color} />,
+          title: 'Explore',
+          tabBarIcon: ({ color }) => <Feather name="search" size={22} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => <Pressable {...props} testID="tab-home" />,
         }}
       />
       <Tabs.Screen
-        name="search"
+        name="saved"
         options={{
-          title: 'Search',
-          tabBarIcon: ({ color }) => <TabIcon emoji="🔍" color={color} />,
+          title: 'Wishlists',
+          tabBarIcon: ({ color }) => <Feather name="heart" size={22} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tabBarButton: (props: any) => <Pressable {...props} testID="tab-search" />,
+          tabBarButton: (props: any) => <Pressable {...props} testID="tab-saved" />,
         }}
       />
       <Tabs.Screen
-        name="orders/index"
+        name="orders"
         options={{
           title: 'Orders',
-          tabBarIcon: ({ color }) => <TabIcon emoji="📦" color={color} />,
+          tabBarIcon: ({ color }) => <Feather name="package" size={22} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => <Pressable {...props} testID="tab-orders" />,
         }}
       />
       <Tabs.Screen
-        name="profile/index"
+        name="messages"
+        options={{
+          title: 'Messages',
+          tabBarIcon: ({ color }) => <Feather name="message-circle" size={22} color={color} />,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          tabBarButton: (props: any) => <Pressable {...props} testID="tab-messages" />,
+        }}
+      />
+      <Tabs.Screen
+        name="profile"
         options={{
           title: 'Profile',
-          tabBarIcon: ({ color }) => <TabIcon emoji="👤" color={color} />,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          tabBarIcon: ({ color, focused }: any) => <ProfileTabIcon color={color} focused={focused} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => <Pressable {...props} testID="tab-profile" />,
         }}
       />
-      {/* Hidden stack routes — not shown in tab bar */}
-      <Tabs.Screen name="tailor/[id]" options={{ href: null }} />
-      <Tabs.Screen name="orders/[id]" options={{ href: null }} />
-      <Tabs.Screen name="brief/[tailorId]" options={{ href: null }} />
-      <Tabs.Screen name="messages/[orderId]" options={{ href: null }} />
-      <Tabs.Screen name="profile/measurements" options={{ href: null }} />
-      <Tabs.Screen name="review/[orderId]" options={{ href: null }} />
+      {/* Hidden stack groups — not shown in tab bar */}
+      <Tabs.Screen name="search" options={{ href: null }} />
+      <Tabs.Screen name="tailor" options={{ href: null }} />
+      <Tabs.Screen name="brief" options={{ href: null }} />
+      <Tabs.Screen name="review" options={{ href: null }} />
     </Tabs>
   )
-}
-
-function TabIcon({ emoji, color }: { emoji: string; color: string }) {
-  const { Text } = require('react-native')
-  return <Text style={{ fontSize: 20, opacity: color === Colors.needleGreen ? 1 : 0.5 }}>{emoji}</Text>
 }

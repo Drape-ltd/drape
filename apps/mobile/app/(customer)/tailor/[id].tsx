@@ -1,18 +1,20 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Image, FlatList, ActivityIndicator, Dimensions,
+  Image, FlatList, ActivityIndicator, Dimensions, NativeSyntheticEvent, NativeScrollEvent,
 } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { useCurrency, formatAmount } from '@/lib/currency'
 import { TierBadgeChip, StarRating, Tag, Button } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
-const { width } = Dimensions.get('window')
+const { width: SCREEN_WIDTH } = Dimensions.get('window')
+const HERO_HEIGHT = 320
 const PORTFOLIO_COLS = 3
-const PORTFOLIO_SIZE = (width - Spacing.xl * 2 - Spacing.sm * 2) / PORTFOLIO_COLS
+const PORTFOLIO_SIZE = (SCREEN_WIDTH - Spacing.xl * 2 - Spacing.sm * 2) / PORTFOLIO_COLS
 
 type TailorProfile = {
   id: string
@@ -42,7 +44,7 @@ type Review = {
 }
 
 const AVAILABILITY_LABEL: Record<string, string> = {
-  OPEN: 'Available',
+  OPEN: 'Available now',
   LIMITED: 'Limited availability',
   FULLY_BOOKED: 'Fully booked',
 }
@@ -60,10 +62,14 @@ export default function TailorProfileScreen() {
   const [profile, setProfile] = useState<TailorProfile | null>(null)
   const [reviews, setReviews] = useState<Review[]>([])
   const [loading, setLoading] = useState(true)
+  const [isSaved, setIsSaved] = useState(false)
+  const [savingHeart, setSavingHeart] = useState(false)
+  const [carouselIndex, setCarouselIndex] = useState(0)
+  const { currency, rates } = useCurrency()
 
   useEffect(() => {
-    async function fetch() {
-      const [profileRes, reviewsRes] = await Promise.all([
+    async function load() {
+      const [profileRes, reviewsRes, savedRes] = await Promise.all([
         supabase
           .from('tailor_profiles')
           .select('id, display_name, location, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, bio, specialty_tags, languages, price_range_min, price_range_max, portfolio_photo_urls')
@@ -75,6 +81,12 @@ export default function TailorProfileScreen() {
           .eq('tailor_id', id)
           .order('created_at', { ascending: false })
           .limit(10),
+        supabase
+          .from('saved_tailors')
+          .select('id')
+          .eq('user_id', user?.id)
+          .eq('tailor_profile_id', id)
+          .maybeSingle(),
       ])
 
       if (profileRes.data) {
@@ -111,10 +123,29 @@ export default function TailorProfileScreen() {
         )
       }
 
+      setIsSaved(!!savedRes.data)
       setLoading(false)
     }
-    fetch()
+    load()
   }, [id])
+
+  async function toggleSave() {
+    if (!user?.id || savingHeart) return
+    setSavingHeart(true)
+    if (isSaved) {
+      await supabase.from('saved_tailors').delete().eq('user_id', user.id).eq('tailor_profile_id', id)
+      setIsSaved(false)
+    } else {
+      await supabase.from('saved_tailors').insert({ user_id: user.id, tailor_profile_id: id })
+      setIsSaved(true)
+    }
+    setSavingHeart(false)
+  }
+
+  function onCarouselScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
+    const index = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH)
+    setCarouselIndex(index)
+  }
 
   if (loading) {
     return (
@@ -135,30 +166,65 @@ export default function TailorProfileScreen() {
     )
   }
 
-  const priceLabel = profile.priceRangeMin
-    ? '£'.repeat(Math.min(3, Math.ceil(profile.priceRangeMin / 5000)))
+  const heroImages = profile.portfolioPhotos.length > 0 ? profile.portfolioPhotos : []
+  const priceLabel = (profile.priceRangeMin && profile.priceRangeMax)
+    ? `${formatAmount(profile.priceRangeMin, 'USD', currency, rates)} – ${formatAmount(profile.priceRangeMax, 'USD', currency, rates)}`
     : null
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Back button */}
-      <TouchableOpacity style={styles.back} onPress={() => router.back()} testID="tailor-back-btn">
-        <Text style={styles.backText}>← Back</Text>
-      </TouchableOpacity>
-
+    <SafeAreaView style={styles.safe} edges={[]}>
       <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
 
-        {/* Hero — first portfolio photo or placeholder */}
-        <View style={styles.hero}>
-          {profile.portfolioPhotos[0] ? (
-            <Image source={{ uri: profile.portfolioPhotos[0] }} style={styles.heroImage} resizeMode="cover" />
+        {/* Swipeable Hero Carousel */}
+        <View style={styles.heroContainer}>
+          {heroImages.length > 0 ? (
+            <>
+              <FlatList
+                data={heroImages}
+                keyExtractor={(_, i) => String(i)}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onScroll={onCarouselScroll}
+                scrollEventThrottle={16}
+                renderItem={({ item }) => (
+                  <Image source={{ uri: item }} style={styles.heroImage} resizeMode="cover" />
+                )}
+              />
+              {/* Dot indicators */}
+              {heroImages.length > 1 && (
+                <View style={styles.dotRow}>
+                  {heroImages.map((_, i) => (
+                    <View key={i} style={[styles.dot, i === carouselIndex && styles.dotActive]} />
+                  ))}
+                </View>
+              )}
+            </>
           ) : (
             <View style={[styles.heroImage, styles.heroPlaceholder]}>
               <Text style={styles.heroEmoji}>🧵</Text>
             </View>
           )}
+
+          {/* Overlay controls */}
+          <View style={styles.heroOverlay}>
+            <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+              <Text style={styles.backBtnText}>←</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.heartBtn} onPress={toggleSave} disabled={savingHeart}>
+              <Text style={styles.heartBtnText}>{isSaved ? '❤️' : '🤍'}</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Photo count badge */}
+          {heroImages.length > 1 && (
+            <View style={styles.photoCount}>
+              <Text style={styles.photoCountText}>{carouselIndex + 1} / {heroImages.length}</Text>
+            </View>
+          )}
         </View>
 
+        {/* Profile body */}
         <View style={styles.body}>
           {/* Identity */}
           <View style={styles.identityRow}>
@@ -180,7 +246,7 @@ export default function TailorProfileScreen() {
             <StatPill label="Rating" value={`${profile.avgRating.toFixed(1)} ★`} />
             <StatPill label="Reviews" value={String(profile.totalReviews)} />
             <StatPill label="Orders" value={`${profile.totalOrders}+`} />
-            {profile.avgResponseHours && (
+            {profile.avgResponseHours != null && (
               <StatPill label="Response" value={`~${Math.round(profile.avgResponseHours)}h`} />
             )}
           </View>
@@ -189,30 +255,18 @@ export default function TailorProfileScreen() {
           {profile.specialtyTags.length > 0 && (
             <View style={styles.section}>
               <View style={styles.tagWrap}>
-                {(profile.specialtyTags ?? []).map((t) => <Tag key={t} label={t} />)}
+                {profile.specialtyTags.map((t) => <Tag key={t} label={t} />)}
               </View>
             </View>
           )}
 
           {/* Price & languages */}
           <View style={styles.metaRow}>
-            {priceLabel && <Text style={styles.metaText}>Pricing: {priceLabel}–{priceLabel}{'£'.repeat(Math.min(5, (priceLabel.length || 1) + 2))}</Text>}
+            {priceLabel && <Text style={styles.metaText}>Typical price: {priceLabel}</Text>}
             {profile.languages.length > 0 && (
-              <Text style={styles.metaText}>Languages: {(profile.languages ?? []).join(', ')}</Text>
+              <Text style={styles.metaText}>Languages: {profile.languages.join(', ')}</Text>
             )}
           </View>
-
-          {/* Portfolio */}
-          {profile.portfolioPhotos.length > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Portfolio</Text>
-              <View style={styles.portfolioGrid}>
-                {profile.portfolioPhotos.map((url, i) => (
-                  <Image key={i} source={{ uri: url }} style={styles.portfolioThumb} resizeMode="cover" />
-                ))}
-              </View>
-            </View>
-          )}
 
           {/* About */}
           {profile.bio && (
@@ -225,7 +279,9 @@ export default function TailorProfileScreen() {
           {/* Reviews */}
           {reviews.length > 0 && (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Reviews  <Text style={styles.ratingHeading}>★ {profile.avgRating.toFixed(1)}</Text></Text>
+              <Text style={styles.sectionTitle}>
+                Reviews  <Text style={styles.ratingHeading}>★ {profile.avgRating.toFixed(1)}</Text>
+              </Text>
               {reviews.map((r) => (
                 <ReviewCard key={r.id} review={r} />
               ))}
@@ -239,7 +295,7 @@ export default function TailorProfileScreen() {
         <Button
           label="Message"
           variant="secondary"
-          onPress={() => router.push(`/(customer)/messages/${profile.id}`)}
+          onPress={() => router.navigate(`/(customer)/messages/${profile.id}`)}
           style={{ flex: 1 }}
         />
         <Button
@@ -292,14 +348,42 @@ function ReviewCard({ review }: { review: Review }) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
-  back: { paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md, position: 'absolute', top: 48, left: 0, zIndex: 10 },
-  backText: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
   scroll: { flex: 1 },
 
-  hero: { width: '100%', height: 280 },
-  heroImage: { width: '100%', height: '100%' },
+  // Hero carousel
+  heroContainer: { width: SCREEN_WIDTH, height: HERO_HEIGHT, position: 'relative' },
+  heroImage: { width: SCREEN_WIDTH, height: HERO_HEIGHT },
   heroPlaceholder: { backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center' },
   heroEmoji: { fontSize: 64 },
+  heroOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0,
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start',
+    paddingTop: 52, paddingHorizontal: Spacing.xl,
+  },
+  backBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  backBtnText: { fontSize: 18, color: Colors.ink },
+  heartBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  heartBtnText: { fontSize: 18 },
+  dotRow: {
+    position: 'absolute', bottom: 12, left: 0, right: 0,
+    flexDirection: 'row', justifyContent: 'center', gap: 6,
+  },
+  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.5)' },
+  dotActive: { backgroundColor: Colors.white, width: 18 },
+  photoCount: {
+    position: 'absolute', bottom: 12, right: Spacing.xl,
+    backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: Radius.full,
+    paddingHorizontal: 10, paddingVertical: 4,
+  },
+  photoCountText: { fontSize: FontSize.xs, color: Colors.white, fontWeight: FontWeight.semibold },
 
   body: { padding: Spacing.xl, gap: Spacing.xl },
 
@@ -326,12 +410,6 @@ const styles = StyleSheet.create({
   tagWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   metaRow: { gap: Spacing.xs, marginTop: -Spacing.md },
   metaText: { fontSize: FontSize.sm, color: Colors.inkLight },
-
-  portfolioGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  portfolioThumb: {
-    width: PORTFOLIO_SIZE, height: PORTFOLIO_SIZE,
-    borderRadius: Radius.sm, backgroundColor: Colors.boneDeep,
-  },
 
   bio: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 24 },
 
