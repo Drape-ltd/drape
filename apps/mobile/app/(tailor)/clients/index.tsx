@@ -70,6 +70,7 @@ export default function TailorClientsScreen() {
   // Diary
   const [diary, setDiary] = useState<DiaryRow[]>([])
   const [diarySearch, setDiarySearch] = useState('')
+  const [diaryLoading, setDiaryLoading] = useState(false)
   const [showDiaryBanner, setShowDiaryBanner] = useState(false)
 
   useEffect(() => {
@@ -293,6 +294,7 @@ export default function TailorClientsScreen() {
 
       {tab === 'diary' ? (
         <>
+        {diaryLoading && <ActivityIndicator style={{ marginTop: Spacing.xl }} color={Colors.needleGreen} />}
         <FlatList
           data={filteredDiary}
           keyExtractor={(item) => item.id}
