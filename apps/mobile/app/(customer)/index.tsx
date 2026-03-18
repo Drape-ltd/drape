@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  RefreshControl, Image, FlatList, Dimensions, Modal,
+  RefreshControl, Image, Dimensions,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
