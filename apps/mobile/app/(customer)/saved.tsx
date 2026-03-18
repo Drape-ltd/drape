@@ -98,7 +98,6 @@ export default function SavedScreen() {
     )
   }
 
-  const CARD_GAP = Spacing.md
   const CARD_WIDTH = '48%'
 
   return (
