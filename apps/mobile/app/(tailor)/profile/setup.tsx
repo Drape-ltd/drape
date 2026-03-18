@@ -5,7 +5,7 @@
  * Step 2: Portfolio (min 4 photos)
  * Step 3: Availability + ID verification upload
  */
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Image, Alert, KeyboardAvoidingView, Platform, FlatList,
