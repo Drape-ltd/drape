@@ -35,7 +35,7 @@ const DEFAULT_PREFS: PrivacyPrefs = {
 
 export default function PrivacyScreen() {
   const router = useRouter()
-  const { user, signOut } = useAuth()
+  const { user } = useAuth()
   const [prefs, setPrefs] = useState<PrivacyPrefs>(DEFAULT_PREFS)
   const [saving, setSaving] = useState(false)
 
