@@ -4,6 +4,8 @@
 -- Safe to run multiple times (all statements are idempotent).
 -- ─────────────────────────────────────────────────────────────────────────────
 
+create extension if not exists "pgcrypto";
+
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- NOTE: public.users table does not exist in this Supabase project.
@@ -20,7 +22,7 @@
 -- ═══════════════════════════════════════════════════════════════════════════
 
 CREATE TABLE IF NOT EXISTS saved_tailors (
-  id                uuid    PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id                uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id           uuid    NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   tailor_profile_id text    NOT NULL,
   created_at        timestamptz DEFAULT now(),
@@ -159,13 +161,13 @@ END $$;
 
 DROP POLICY IF EXISTS "parties: mark messages read" ON messages;
 DROP POLICY IF EXISTS "Order parties mark messages read" ON messages;
+DROP POLICY IF EXISTS "parties: mark received messages read" ON messages;
 
 CREATE POLICY "parties: mark received messages read"
   ON messages FOR UPDATE
   USING (
     -- can only mark messages you did NOT send
-    -- sender_id is text in the live schema; auth.uid() is uuid — cast to text
-    sender_id != auth.uid()::text
+    sender_id::text != auth.uid()::text
     AND EXISTS (
       SELECT 1 FROM orders o
       WHERE o.id = messages.order_id
@@ -197,6 +199,7 @@ GRANT UPDATE (read_at) ON TABLE messages TO authenticated;
 
 DROP POLICY IF EXISTS "customers: insert review" ON reviews;
 DROP POLICY IF EXISTS "Customer creates review for their order" ON reviews;
+DROP POLICY IF EXISTS "customers: insert review for completed orders" ON reviews;
 
 CREATE POLICY "customers: insert review for completed orders"
   ON reviews FOR INSERT

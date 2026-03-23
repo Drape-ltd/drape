@@ -46,3 +46,30 @@ secret = "env(GOOGLE_CLIENT_SECRET)"
 enabled = true
 client_id = "env(APPLE_CLIENT_ID)"
 secret = "env(APPLE_CLIENT_SECRET)"
+
+# All functions handle their own JWT verification via getAuthUser() in _shared/auth.ts.
+# verify_jwt = false skips the runtime's built-in HS256 check, which would reject ES256
+# user JWTs (Supabase's current JWT format). Auth is enforced at the function level.
+[functions.tailor-order-action]
+verify_jwt = false
+
+[functions.customer-order-action]
+verify_jwt = false
+
+[functions.claim-passport]
+verify_jwt = false
+
+[functions.create-consultation-room]
+verify_jwt = false
+
+[functions.delivery-webhook]
+verify_jwt = false
+
+[functions.handle-verification-decision]
+verify_jwt = false
+
+[functions.notify-ops-verification]
+verify_jwt = false
+
+[functions.on-message-created]
+verify_jwt = false

@@ -1,0 +1,28 @@
+<svg width="1200" height="560" viewBox="0 0 1200 560" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="560" rx="40" fill="#F5EEE2"/>
+  <circle cx="1015" cy="121" r="78" fill="#E7EFEA"/>
+  <rect x="74" y="72" width="1052" height="416" rx="30" fill="#FFFDFC" stroke="#E7DED0" stroke-width="2"/>
+  <rect x="112" y="112" width="650" height="336" rx="28" fill="#FBF7F0"/>
+  <rect x="790" y="112" width="290" height="336" rx="28" fill="#F7F0E6"/>
+  <rect x="142" y="146" width="148" height="18" rx="9" fill="#2D6A4F" fill-opacity="0.18"/>
+  <rect x="142" y="179" width="472" height="12" rx="6" fill="#1A1A1A" fill-opacity="0.12"/>
+  <rect x="142" y="214" width="290" height="68" rx="20" fill="#FFFDFC" stroke="#E7DED0"/>
+  <rect x="450" y="214" width="282" height="68" rx="20" fill="#FFFDFC" stroke="#E7DED0"/>
+  <rect x="142" y="302" width="590" height="92" rx="22" fill="#FFFDFC" stroke="#E7DED0"/>
+  <rect x="166" y="236" width="92" height="12" rx="6" fill="#1A1A1A" fill-opacity="0.16"/>
+  <rect x="166" y="257" width="64" height="10" rx="5" fill="#1A1A1A" fill-opacity="0.10"/>
+  <rect x="474" y="236" width="78" height="12" rx="6" fill="#1A1A1A" fill-opacity="0.16"/>
+  <rect x="474" y="257" width="90" height="10" rx="5" fill="#1A1A1A" fill-opacity="0.10"/>
+  <rect x="166" y="326" width="144" height="12" rx="6" fill="#1A1A1A" fill-opacity="0.16"/>
+  <rect x="166" y="350" width="522" height="10" rx="5" fill="#1A1A1A" fill-opacity="0.10"/>
+  <rect x="166" y="372" width="486" height="10" rx="5" fill="#1A1A1A" fill-opacity="0.10"/>
+  <rect x="818" y="144" width="116" height="18" rx="9" fill="#2D6A4F" fill-opacity="0.18"/>
+  <rect x="818" y="186" width="232" height="120" rx="22" fill="#FFFDFC" stroke="#E7DED0"/>
+  <rect x="840" y="208" width="86" height="86" rx="18" fill="#DDEADF"/>
+  <rect x="946" y="208" width="82" height="12" rx="6" fill="#1A1A1A" fill-opacity="0.16"/>
+  <rect x="946" y="232" width="66" height="10" rx="5" fill="#1A1A1A" fill-opacity="0.10"/>
+  <rect x="818" y="328" width="232" height="88" rx="22" fill="#2D6A4F"/>
+  <rect x="850" y="362" width="98" height="14" rx="7" fill="white" fill-opacity="0.92"/>
+  <rect x="961" y="362" width="57" height="14" rx="7" fill="white" fill-opacity="0.58"/>
+  <text x="142" y="102" fill="#2D6A4F" font-family="Arial, sans-serif" font-size="18" font-weight="700" letter-spacing="0.18em">CUSTOMER BRIEF</text>
+</svg>

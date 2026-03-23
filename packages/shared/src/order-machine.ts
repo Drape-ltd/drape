@@ -48,10 +48,10 @@ export const ORDER_TRANSITIONS: Transition[] = [
   { from: 'CONSULTATION', to: 'QUOTE_SENT', actor: 'TAILOR', trigger: 'send_quote' },
   { from: 'CONSULTATION', to: 'DECLINED', actor: 'TAILOR', trigger: 'decline' },
 
-  // Customer accepts or declines quote
-  // PAYMENT_PENDING is reserved for Stripe integration (V2).
-  // In V1, accept-quote transitions directly QUOTE_SENT → CONFIRMED (skipping payment).
-  { from: 'QUOTE_SENT', to: 'PAYMENT_PENDING', actor: 'CUSTOMER', trigger: 'accept_quote' },
+  // Customer accepts or declines quote.
+  // PAYMENT_PENDING is reserved for Stripe integration (V2), but in V1
+  // accept-quote transitions directly QUOTE_SENT → CONFIRMED.
+  { from: 'QUOTE_SENT', to: 'CONFIRMED', actor: 'CUSTOMER', trigger: 'accept_quote' },
   { from: 'QUOTE_SENT', to: 'DECLINED', actor: 'CUSTOMER', trigger: 'decline_quote' },
   { from: 'QUOTE_SENT', to: 'EXPIRED', actor: 'SYSTEM', trigger: 'quote_expired_48h' },
 
@@ -74,11 +74,15 @@ export const ORDER_TRANSITIONS: Transition[] = [
   { from: 'FINISHING', to: 'SHIPPED', actor: 'TAILOR', trigger: 'mark_shipped' },
   { from: 'SHIPPED', to: 'DELIVERED', actor: 'CUSTOMER', trigger: 'confirm_receipt' },
   { from: 'SHIPPED', to: 'DELIVERED', actor: 'SYSTEM', trigger: 'auto_release_14d' },
+  { from: 'DELIVERED', to: 'COMPLETE', actor: 'CUSTOMER', trigger: 'complete_order' },
   { from: 'DELIVERED', to: 'COMPLETE', actor: 'SYSTEM', trigger: 'review_submitted_or_skipped' },
 
   // Local collection path
   { from: 'FINISHING', to: 'READY_FOR_COLLECTION', actor: 'TAILOR', trigger: 'mark_ready' },
+  { from: 'READY_FOR_COLLECTION', to: 'COLLECTED', actor: 'TAILOR', trigger: 'confirm_collection' },
+  { from: 'READY_FOR_COLLECTION', to: 'COLLECTED', actor: 'CUSTOMER', trigger: 'collect_order' },
   { from: 'READY_FOR_COLLECTION', to: 'COLLECTED', actor: 'SYSTEM', trigger: 'collection_code_verified' },
+  { from: 'COLLECTED', to: 'COMPLETE', actor: 'CUSTOMER', trigger: 'complete_order' },
   { from: 'COLLECTED', to: 'COMPLETE', actor: 'SYSTEM', trigger: 'escrow_released' },
 
   // Disputes (can open from any confirmed+ stage)
@@ -112,8 +116,6 @@ export function validNextStages(from: OrderStage, actor: Actor): OrderStage[] {
 
 export const TERMINAL_STAGES: OrderStage[] = [
   'COMPLETE',
-  'DELIVERED',
-  'COLLECTED',
   'DECLINED',
   'EXPIRED',
   'REFUNDED',

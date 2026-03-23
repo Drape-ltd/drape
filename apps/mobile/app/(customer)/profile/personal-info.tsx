@@ -10,48 +10,124 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   TextInput, Alert, ActivityIndicator,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { syncUserRow } from '@/lib/syncUserRow'
+import { validateDisplayName } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 export default function PersonalInfoScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const [displayName, setDisplayName] = useState(user?.user_metadata?.display_name ?? '')
   const [phone, setPhone] = useState(user?.user_metadata?.phone ?? '')
   const [saving, setSaving] = useState(false)
+  const [nameError, setNameError] = useState('')
+  const [phoneError, setPhoneError] = useState('')
+
+  const normalizedDisplayName = displayName.trim()
+  const normalizedPhone = phone.trim()
+  const initialDisplayName = user?.user_metadata?.display_name ?? ''
+  const initialPhone = user?.user_metadata?.phone ?? ''
+  const dirty = normalizedDisplayName !== initialDisplayName || normalizedPhone !== initialPhone
+
+  function validateName(value: string) {
+    const error = validateDisplayName(value)
+    setNameError(error ?? '')
+    return !error
+  }
+
+  function validatePhone(value: string) {
+    const normalized = value.trim()
+    if (!normalized) {
+      setPhoneError('Phone number is required.')
+      return false
+    }
+    if (normalized.replace(/\D/g, '').length < 7) {
+      setPhoneError('Enter a valid phone number.')
+      return false
+    }
+    setPhoneError('')
+    return true
+  }
+
+  function goBack() {
+    if (navigation.canGoBack()) router.back()
+    else router.replace('/(customer)/profile')
+  }
 
   async function save() {
-    if (!displayName.trim()) {
-      Alert.alert('Required', 'Display name cannot be empty.')
+    if (saving) return
+    if (!validateName(displayName)) {
+      Alert.alert('Invalid name', 'Please fix your display name before saving.')
       return
     }
+    if (!validatePhone(phone)) {
+      Alert.alert('Invalid phone number', 'Please enter a valid phone number before saving.')
+      return
+    }
+    if (!dirty) return
     setSaving(true)
+    const { error: profileError } = await supabase
+      .from('customer_profiles')
+      .update({ phone: normalizedPhone || null })
+      .eq('user_id', user?.id)
+
+    if (profileError) {
+      setSaving(false)
+      Alert.alert('Error', profileError.message)
+      return
+    }
+
     const { error } = await supabase.auth.updateUser({
-      data: { display_name: displayName.trim(), phone: phone.trim() || null },
+      data: { display_name: normalizedDisplayName, phone: normalizedPhone || null },
     })
     setSaving(false)
     if (error) {
       Alert.alert('Error', error.message)
     } else {
+      await syncUserRow({
+        userId: user?.id,
+        displayName: normalizedDisplayName,
+        role: 'CUSTOMER',
+      })
       Alert.alert('Saved', 'Your personal information has been updated.')
-      router.back()
+      goBack()
     }
   }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Personal information</Text>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
+        <View style={styles.heroCard}>
+          <View style={styles.heroBadge}>
+            <Text style={styles.heroBadgeText}>Profile identity</Text>
+          </View>
+          <Text style={styles.heroTitle}>Keep the details tailors rely on accurate and up to date.</Text>
+          <Text style={styles.heroSub}>
+            Your name and phone number help keep quotes, delivery coordination, and support
+            conversations clear throughout each order.
+          </Text>
+        </View>
+
+        <View style={styles.guideCard}>
+          <Text style={styles.guideEyebrow}>Used across Drape</Text>
+          <Text style={styles.guideTitle}>These details help keep quotes, support, and delivery coordination clear.</Text>
+          <Text style={styles.guideCopy}>
+            Your email stays tied to account identity, while your display name and phone can be updated here as your ordering needs change.
+          </Text>
+        </View>
 
         <View style={styles.card}>
 
@@ -72,13 +148,18 @@ export default function PersonalInfoScreen() {
             <TextInput
               style={styles.input}
               value={displayName}
-              onChangeText={setDisplayName}
+              onChangeText={(value) => {
+                setDisplayName(value)
+                if (nameError) validateName(value)
+              }}
+              onBlur={() => validateName(displayName)}
               placeholder="Your name"
               placeholderTextColor={Colors.midGrey}
               maxLength={50}
               autoCorrect={false}
               returnKeyType="next"
             />
+            {nameError ? <Text style={styles.errorText}>{nameError}</Text> : null}
           </View>
 
           <View style={styles.divider} />
@@ -89,21 +170,26 @@ export default function PersonalInfoScreen() {
             <TextInput
               style={styles.input}
               value={phone}
-              onChangeText={setPhone}
+              onChangeText={(value) => {
+                setPhone(value)
+                if (phoneError) validatePhone(value)
+              }}
+              onBlur={() => validatePhone(phone)}
               placeholder="+44 7700 000000"
               placeholderTextColor={Colors.midGrey}
               keyboardType="phone-pad"
               maxLength={20}
               returnKeyType="done"
             />
+            {phoneError ? <Text style={styles.errorText}>{phoneError}</Text> : null}
           </View>
 
         </View>
 
         <TouchableOpacity
-          style={[styles.saveBtn, saving && { opacity: 0.6 }]}
+          style={[styles.saveBtn, (!dirty || saving || !!nameError || !!phoneError) && { opacity: 0.6 }]}
           onPress={save}
-          disabled={saving}
+          disabled={saving || !dirty || !!nameError || !!phoneError}
         >
           {saving
             ? <ActivityIndicator color={Colors.white} size="small" />
@@ -130,6 +216,64 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
 
   body: { padding: Spacing.xl, paddingBottom: 64, gap: Spacing.lg },
+  heroCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  heroTitle: {
+    fontSize: FontSize.xxl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 38,
+  },
+  heroSub: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 24,
+  },
+  guideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  guideEyebrow: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  guideTitle: {
+    fontSize: FontSize.md,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+    lineHeight: 22,
+  },
+  guideCopy: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 21,
+  },
 
   card: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.lg },
@@ -143,6 +287,7 @@ const styles = StyleSheet.create({
   },
   readOnlyText: { fontSize: FontSize.md, color: Colors.midGrey },
   hint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
+  errorText: { fontSize: FontSize.xs, color: Colors.error, marginTop: 2 },
 
   input: {
     backgroundColor: Colors.bone, borderRadius: Radius.md,

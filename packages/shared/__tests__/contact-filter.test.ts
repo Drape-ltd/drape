@@ -1,4 +1,4 @@
-import { filterContactInfo, sanitiseText, validateDisplayName } from '../src/contact-filter'
+import { filterContactInfo, filterStyleReference, sanitiseText, validateDisplayName } from '../src/contact-filter'
 
 // ─── filterContactInfo ────────────────────────────────────────────────────────
 
@@ -118,5 +118,42 @@ describe('validateDisplayName', () => {
 
   it('accepts names exactly 60 characters', () => {
     expect(validateDisplayName('A'.repeat(60))).toBeNull()
+  })
+})
+
+describe('filterStyleReference', () => {
+  it('rejects arbitrary social handles', () => {
+    expect(filterStyleReference('@ada_okafor')).toEqual({
+      allowed: false,
+      reason: 'Only post or video links are accepted here — not profile handles.',
+    })
+  })
+
+  it('accepts supported content links', () => {
+    const result = filterStyleReference('instagram.com/p/abc123/?utm_source=test')
+    expect(result.allowed).toBe(true)
+    expect(result.cleaned).toContain('instagram.com/p/abc123/')
+    expect(result.cleaned).not.toContain('utm_source')
+  })
+
+  it('rejects profile pages even on allowed domains', () => {
+    expect(filterStyleReference('https://instagram.com/ada_okafor')).toEqual({
+      allowed: false,
+      reason: 'Only post and video links are accepted here — not profile or landing pages.',
+    })
+  })
+
+  it('accepts YouTube, TikTok, Pinterest, and X content links', () => {
+    expect(filterStyleReference('https://youtu.be/abc123').allowed).toBe(true)
+    expect(filterStyleReference('https://www.tiktok.com/@stylist/video/123456789').allowed).toBe(true)
+    expect(filterStyleReference('https://pin.it/abc123').allowed).toBe(true)
+    expect(filterStyleReference('https://x.com/designer/status/123456789').allowed).toBe(true)
+  })
+
+  it('rejects invalid non-link text', () => {
+    expect(filterStyleReference('my favorite tailor page')).toEqual({
+      allowed: false,
+      reason: 'Please paste a valid post or video link (e.g. instagram.com/p/…).',
+    })
   })
 })

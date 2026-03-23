@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react'
 import { Platform } from 'react-native'
 import { type Session, type User } from '@supabase/supabase-js'
 import * as WebBrowser from 'expo-web-browser'
-import { supabase } from './supabase'
+import { supabase, setCurrentAccessToken } from './supabase'
 
 // Required for expo-web-browser OAuth redirect handling on Android
 WebBrowser.maybeCompleteAuthSession()
@@ -11,7 +11,12 @@ interface AuthContextValue {
   session: Session | null
   user: User | null
   loading: boolean
-  signUp: (email: string, password: string, displayName: string, role: 'CUSTOMER' | 'TAILOR') => Promise<{ error: string | null }>
+  signUp: (
+    email: string,
+    password: string,
+    displayName: string,
+    role: 'CUSTOMER' | 'TAILOR'
+  ) => Promise<{ error: string | null; requiresEmailConfirmation: boolean }>
   signIn: (email: string, password: string) => Promise<{ error: string | null }>
   signInWithGoogle: () => Promise<{ error: string | null }>
   signInWithApple: () => Promise<{ error: string | null }>
@@ -20,6 +25,14 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase()
+}
+
+function isValidEmail(email: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
@@ -27,11 +40,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
+      setCurrentAccessToken(session?.access_token ?? null)
       setLoading(false)
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session)
+      setCurrentAccessToken(session?.access_token ?? null)
     })
 
     return () => subscription.unsubscribe()
@@ -43,18 +58,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     displayName: string,
     role: 'CUSTOMER' | 'TAILOR'
   ) {
-    const { error } = await supabase.auth.signUp({
-      email,
+    const normalizedEmail = normalizeEmail(email)
+    if (!isValidEmail(normalizedEmail)) {
+      return {
+        error: 'Enter a valid email address.',
+        requiresEmailConfirmation: false,
+      }
+    }
+    const { data, error } = await supabase.auth.signUp({
+      email: normalizedEmail,
       password,
       options: {
         data: { display_name: displayName, role },
       },
     })
-    return { error: error?.message ?? null }
+    return {
+      error: error?.message ?? null,
+      requiresEmailConfirmation: !error && !data.session,
+    }
   }
 
   async function signIn(email: string, password: string) {
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    const normalizedEmail = normalizeEmail(email)
+    if (!isValidEmail(normalizedEmail)) {
+      return { error: 'Enter a valid email address.' }
+    }
+    const { error } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password })
     return { error: error?.message ?? null }
   }
 
@@ -76,9 +105,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const accessToken = params.get('access_token')
       const refreshToken = params.get('refresh_token')
 
-      if (accessToken && refreshToken) {
-        await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken })
+      if (!accessToken || !refreshToken) {
+        return { error: 'Google sign-in completed, but the session could not be created. Please try again.' }
       }
+
+      const { error: sessionError } = await supabase.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      })
+      if (sessionError) {
+        return { error: sessionError.message }
+      }
+
       return { error: null }
     } catch (e: unknown) {
       return { error: (e as Error).message ?? 'Google sign-in failed' }
@@ -111,7 +149,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signOut() {
-    await supabase.auth.signOut()
+    const { error } = await supabase.auth.signOut()
+    if (error) {
+      throw error
+    }
   }
 
   return (

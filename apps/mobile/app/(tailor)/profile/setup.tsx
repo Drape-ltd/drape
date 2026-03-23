@@ -10,15 +10,16 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Image, Alert, KeyboardAvoidingView, Platform, FlatList,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
-import { supabase } from '@/lib/supabase'
+import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { syncUserRow } from '@/lib/syncUserRow'
 import { stripExif } from '@/lib/stripExif'
 import { Button, Input, TagSelector, ProgressStepper } from '@/components/ui'
 import type { TagGroup } from '@/components/ui'
-import { filterContactInfo } from '@drape/shared/contact-filter'
+import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { Availability } from '@/lib/shared-types'
 
@@ -95,18 +96,26 @@ const SPECIALTY_GROUPS: TagGroup[] = [
 
 export default function TailorSetupScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user, signOut } = useAuth()
+  const oauthName = user?.user_metadata?.display_name
+    ?? user?.user_metadata?.full_name
+    ?? user?.user_metadata?.name
+    ?? ''
 
   // Guard: if the profile is already complete and ID is not pending re-submission,
   // prevent direct-URL re-entry which would allow upsert-overwrite of existing data.
   useEffect(() => {
     if (!user?.id) return
+    let cancelled = false
     supabase
       .from('tailor_profiles')
       .select('profile_completed, id_verification_status')
       .eq('user_id', user.id)
       .maybeSingle()
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        if (cancelled) return
+        if (error || !data) return
         if (
           data?.profile_completed &&
           data?.id_verification_status !== 'NOT_SUBMITTED' &&
@@ -115,12 +124,23 @@ export default function TailorSetupScreen() {
           router.replace('/(tailor)/profile')
         }
       })
+    return () => {
+      cancelled = true
+    }
   }, [user?.id])
 
   function handleSignOut() {
     Alert.alert('Sign out', 'Are you sure?', [
       { text: 'Cancel' },
-      { text: 'Sign out', style: 'destructive', onPress: signOut },
+      {
+        text: 'Sign out',
+        style: 'destructive',
+        onPress: () => {
+          void signOut().catch(() => {
+            Alert.alert('Unable to sign out', 'Please try again in a moment.')
+          })
+        },
+      },
     ])
   }
 
@@ -128,7 +148,8 @@ export default function TailorSetupScreen() {
   const [saving, setSaving] = useState(false)
 
   // Step 0
-  const [displayName, setDisplayName] = useState(user?.user_metadata?.display_name ?? '')
+  const [displayName, setDisplayName] = useState(oauthName)
+  const [nameError, setNameError] = useState('')
   const [bio, setBio] = useState('')
   const [bioError, setBioError] = useState('')
   const [location, setLocation] = useState('')
@@ -152,6 +173,72 @@ export default function TailorSetupScreen() {
   const [availability, setAvailability] = useState<Availability>('OPEN')
   const [idPhotoUri, setIdPhotoUri] = useState<string | null>(null)
   const [uploadingId, setUploadingId] = useState(false)
+
+  useEffect(() => {
+    if (!user?.id) return
+    let cancelled = false
+
+    supabase
+      .from('tailor_profiles')
+      .select(`
+        display_name, bio, location, languages, specialty_tags,
+        price_range_min, price_range_max, currency,
+        portfolio_photo_urls, portfolio_video_urls, availability
+      `)
+      .eq('user_id', user.id)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelled) return
+        if (error || !data) return
+
+        const row = data as any
+        const nextDisplayName = row.display_name ?? oauthName
+        const nextBio = row.bio ?? ''
+        const nextLocation = row.location ?? ''
+        const nextLanguages = Array.isArray(row.languages) ? row.languages.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0) : []
+        const nextSpecialties = Array.isArray(row.specialty_tags) ? row.specialty_tags.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0) : []
+        const nextPhotos = Array.isArray(row.portfolio_photo_urls)
+          ? row.portfolio_photo_urls.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0).map((url: string) => ({ type: 'photo' as const, url }))
+          : []
+        const nextVideos = Array.isArray(row.portfolio_video_urls)
+          ? row.portfolio_video_urls.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0).map((url: string) => ({ type: 'video' as const, url }))
+          : []
+
+        if (typeof nextDisplayName === 'string' && nextDisplayName.trim().length > 0) {
+          setDisplayName(nextDisplayName)
+        }
+        if (typeof nextBio === 'string' && nextBio.trim().length > 0) {
+          setBio(nextBio)
+        }
+        if (typeof nextLocation === 'string' && nextLocation.trim().length > 0) {
+          setLocation(nextLocation)
+        }
+        if (nextLanguages.length > 0) {
+          setLanguages(nextLanguages)
+        }
+        if (nextSpecialties.length > 0) {
+          setSpecialties(nextSpecialties)
+        }
+        if (typeof row.price_range_min === 'number' && row.price_range_min > 0) {
+          setPriceMin(String(row.price_range_min / 100))
+        }
+        if (typeof row.price_range_max === 'number' && row.price_range_max > 0) {
+          setPriceMax(String(row.price_range_max / 100))
+        }
+        if (typeof row.currency === 'string' && ['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES'].includes(row.currency)) {
+          setCurrency(row.currency)
+        }
+        if (nextPhotos.length > 0 || nextVideos.length > 0) {
+          setPortfolioItems([...nextPhotos, ...nextVideos])
+        }
+        if (typeof row.availability === 'string' && ['OPEN', 'LIMITED', 'FULLY_BOOKED'].includes(row.availability)) {
+          setAvailability(row.availability as Availability)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [user?.id, oauthName])
 
   // ── Location autocomplete via Nominatim (OSM, no API key) ───────────────────
 
@@ -210,6 +297,12 @@ export default function TailorSetupScreen() {
     const avgLen = words.reduce((s, w) => s + w.length, 0) / words.length
     if (avgLen > 14) return true
     return false
+  }
+
+  function validateName(value: string) {
+    const error = validateDisplayName(value)
+    setNameError(error ?? '')
+    return !error
   }
 
   function validateBio(text: string) {
@@ -295,7 +388,8 @@ export default function TailorSetupScreen() {
     try {
       const blob = await (await fetch(idPhotoUri)).blob()
       if (blob.size > 20 * 1024 * 1024) throw new Error('ID photo exceeds 20 MB limit.')
-      await supabase.storage.from('id-documents').upload(filename, blob, { contentType: `image/${ext}` })
+      const { error } = await supabase.storage.from('id-documents').upload(filename, blob, { contentType: `image/${ext}` })
+      if (error) throw error
       const { data } = supabase.storage.from('id-documents').getPublicUrl(filename)
       setUploadingId(false)
       return data.publicUrl
@@ -306,13 +400,26 @@ export default function TailorSetupScreen() {
   }
 
   async function finish() {
+    if (saving || uploadingId) return
     setSaving(true)
+
+    if (!user?.id) {
+      setSaving(false)
+      Alert.alert('Session expired', 'Please sign in again and retry profile setup.')
+      return
+    }
 
     const idUrl = await uploadIdAndSave()
 
+    if (idPhotoUri && !idUrl) {
+      setSaving(false)
+      Alert.alert('ID upload failed', 'We could not upload your ID document. Please try again before submitting.')
+      return
+    }
+
     const now = new Date().toISOString()
     const { error } = await supabase.from('tailor_profiles').upsert({
-      user_id: user?.id,
+      user_id: user.id,
       display_name: displayName.trim(),
       bio: bio.trim() || null,
       location: location.trim(),
@@ -336,9 +443,24 @@ export default function TailorSetupScreen() {
       return
     }
 
+    const { error: authError } = await supabase.auth.updateUser({
+      data: { display_name: displayName.trim() },
+    })
+
+    if (authError) {
+      Alert.alert('Profile saved', 'Your profile was saved, but we could not finish updating your account name. Please reopen setup and try again.')
+      return
+    }
+
+    await syncUserRow({
+      userId: user.id,
+      displayName: displayName.trim(),
+      role: 'TAILOR',
+    })
+
     if (idUrl) {
-      supabase.functions.invoke('notify-ops-verification', {
-        body: { tailorId: user?.id },
+      invokeFunction('notify-ops-verification', {
+        body: { tailorId: user.id },
       }).catch(() => {})
     }
 
@@ -354,6 +476,7 @@ export default function TailorSetupScreen() {
   function canProceed(): boolean {
     if (step === 0) return (
       !!displayName.trim() &&
+      !nameError &&
       !!location.trim() &&
       bio.trim().length >= 80 &&
       !bioError &&
@@ -376,9 +499,20 @@ export default function TailorSetupScreen() {
   }
 
   function next() {
+    if (saving || uploadingId) return
+    if (step === 0 && !validateName(displayName)) return
     if (!canProceed()) return
     if (step < 3) setStep(step + 1)
     else finish()
+  }
+
+  function goBack() {
+    if (step > 0) {
+      setStep(step - 1)
+      return
+    }
+    if (navigation.canGoBack()) router.back()
+    else router.replace('/(tailor)/profile')
   }
 
   return (
@@ -387,7 +521,7 @@ export default function TailorSetupScreen() {
 
         {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => step > 0 ? setStep(step - 1) : router.back()}>
+          <TouchableOpacity onPress={goBack}>
             <Text style={styles.backText}>← Back</Text>
           </TouchableOpacity>
           <Text style={styles.stepCount}>{step + 1} / 4</Text>
@@ -399,19 +533,55 @@ export default function TailorSetupScreen() {
 
         <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
           <View style={styles.content}>
-            <View>
-              <Text style={styles.stepTitle}>{STEP_TITLES[step]}</Text>
-              <Text style={styles.stepSub}>{STEP_SUBS[step]}</Text>
+            <View style={styles.heroCard}>
+              <View style={styles.heroBadge}>
+                <Text style={styles.heroBadgeText}>Tailor profile setup</Text>
+              </View>
+              <View>
+                <Text style={styles.stepTitle}>{STEP_TITLES[step]}</Text>
+                <Text style={styles.stepSub}>{STEP_SUBS[step]}</Text>
+              </View>
+              <View style={styles.heroMeta}>
+                <View style={styles.heroMetaCard}>
+                  <Text style={styles.heroMetaLabel}>Step {step + 1}</Text>
+                  <Text style={styles.heroMetaValue}>{STEP_LABELS[step]}</Text>
+                </View>
+                <View style={styles.heroMetaCard}>
+                  <Text style={styles.heroMetaLabel}>Why it matters</Text>
+                  <Text style={styles.heroMetaValue}>
+                    {step === 0
+                      ? 'This becomes your public first impression.'
+                      : step === 1
+                        ? 'Customers use this to decide if you are the right fit.'
+                        : step === 2
+                          ? 'Your portfolio is what wins trust before a message is sent.'
+                          : 'Availability and verification control whether customers can confidently book you.'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.guideCard}>
+              <Text style={styles.guideTitle}>What you are building</Text>
+              <Text style={styles.guideText}>
+                This setup becomes the storefront customers trust before they send a brief. Keep it clear, honest, and representative of how you actually work.
+              </Text>
             </View>
 
             {/* ── Step 0: Identity ── */}
             {step === 0 && (
-              <View style={styles.fields}>
+              <View style={styles.formCard}>
+                <View style={styles.fields}>
                 <Input
                   label="Display name"
                   placeholder="e.g. Emeka Obi"
                   value={displayName}
-                  onChangeText={setDisplayName}
+                  onChangeText={(value) => {
+                    setDisplayName(value)
+                    if (nameError) validateName(value)
+                  }}
+                  onBlur={() => validateName(displayName)}
+                  error={nameError}
                   required
                   autoCapitalize="words"
                   hint="No @, URLs, or phone numbers. This is your public name."
@@ -467,11 +637,13 @@ export default function TailorSetupScreen() {
                   searchable
                 />
               </View>
+              </View>
             )}
 
             {/* ── Step 1: Specialties + pricing ── */}
             {step === 1 && (
-              <View style={styles.fields}>
+              <View style={styles.formCard}>
+                <View style={styles.fields}>
                 <TagSelector
                   label="What do you make?"
                   required
@@ -521,11 +693,13 @@ export default function TailorSetupScreen() {
                   )}
                 </View>
               </View>
+              </View>
             )}
 
             {/* ── Step 2: Portfolio ── */}
             {step === 2 && (
-              <View style={styles.fields}>
+              <View style={styles.formCard}>
+                <View style={styles.fields}>
                 <View style={styles.portfolioStatus}>
                   <View style={styles.portfolioBar}>
                     <View style={[styles.portfolioBarFill, { width: `${(portfolioItems.length / 12) * 100}%` }]} />
@@ -572,11 +746,13 @@ export default function TailorSetupScreen() {
                   </Text>
                 </View>
               </View>
+              </View>
             )}
 
             {/* ── Step 3: Availability + ID verification ── */}
             {step === 3 && (
-              <View style={styles.fields}>
+              <View style={styles.formCard}>
+                <View style={styles.fields}>
                 <View>
                   <Text style={styles.fieldLabel}>Availability</Text>
                   {([
@@ -625,20 +801,33 @@ export default function TailorSetupScreen() {
                   </Text>
                 </View>
               </View>
+              </View>
             )}
           </View>
         </ScrollView>
 
         {/* CTA */}
         <View style={styles.cta}>
+          <View style={styles.ctaGuideCard}>
+            <Text style={styles.ctaGuideTitle}>Best next move</Text>
+            <Text style={styles.ctaGuideText}>
+              {step === 0
+                ? 'Make this feel like the public version of you that a serious customer can trust at first glance.'
+                : step === 1
+                  ? 'Set expectations honestly so the right briefs reach you and the wrong ones filter themselves out.'
+                  : step === 2
+                    ? 'Show clear, varied work that matches the kinds of orders you want more of.'
+                    : 'Choose the availability you can genuinely support, then submit once your profile feels representative.'}
+            </Text>
+          </View>
           <Button
             label={step < 3 ? 'Continue' : (saving || uploadingId ? 'Submitting…' : 'Submit profile')}
             onPress={next}
             loading={saving || uploadingId}
-            disabled={!canProceed()}
+            disabled={!canProceed() || saving || uploadingId}
           />
           {step === 0 && (
-            <TouchableOpacity onPress={handleSignOut} style={styles.signOutLink}>
+            <TouchableOpacity onPress={handleSignOut} style={styles.signOutLink} disabled={saving || uploadingId}>
               <Text style={styles.signOutText}>Sign out</Text>
             </TouchableOpacity>
           )}
@@ -665,6 +854,55 @@ const styles = StyleSheet.create({
 
   scroll: { flex: 1 },
   content: { padding: Spacing.xl, gap: Spacing.xl },
+  heroCard: {
+    backgroundColor: Colors.white,
+    borderRadius: 28,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    backgroundColor: Colors.needleGreenLight,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+  },
+  heroMeta: { gap: Spacing.sm },
+  heroMetaCard: {
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: 4,
+  },
+  heroMetaLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  heroMetaValue: { fontSize: FontSize.sm, color: Colors.ink, lineHeight: 20, fontWeight: FontWeight.medium },
+  guideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  formCard: {
+    backgroundColor: Colors.white,
+    borderRadius: 24,
+    padding: Spacing.xl,
+  },
   stepTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
   stepSub: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20, marginTop: 4 },
 
@@ -756,6 +994,24 @@ const styles = StyleSheet.create({
   cta: {
     padding: Spacing.xl, backgroundColor: Colors.white,
     borderTopWidth: 1, borderTopColor: Colors.lightGrey, gap: Spacing.sm,
+  },
+  ctaGuideCard: {
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: 4,
+  },
+  ctaGuideTitle: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  ctaGuideText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
   },
   signOutLink: { alignSelf: 'center' },
   signOutText: { fontSize: FontSize.sm, color: Colors.error },

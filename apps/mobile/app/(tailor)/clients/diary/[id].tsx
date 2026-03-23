@@ -10,7 +10,7 @@ import {
   TouchableOpacity, ActivityIndicator, Alert,
   KeyboardAvoidingView, Platform, Modal,
 } from 'react-native'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker'
@@ -73,6 +73,7 @@ export default function DiaryEntryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const isNew = id === 'new'
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
 
   const [form, setForm] = useState<DiaryForm>(EMPTY_FORM)
@@ -86,50 +87,74 @@ export default function DiaryEntryScreen() {
   const [inviteStatus, setInviteStatus] = useState<string>('NOT_INVITED')
   const [tailorDisplayName, setTailorDisplayName] = useState('')
   const [saving, setSaving] = useState(false)
+  const [inviting, setInviting] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [loading, setLoading] = useState(!isNew)
   const [showDatePicker, setShowDatePicker] = useState(false)
+  const [fetchError, setFetchError] = useState(false)
+
+  function goBack() {
+    if (navigation.canGoBack()) router.back()
+    else router.replace('/(tailor)/clients')
+  }
+
+  async function loadEntry() {
+    if (isNew || !id) return
+    setFetchError(false)
+    setLoading(true)
+    const { data, error } = await supabase
+      .from('diary_entries')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle()
+
+    if (error) {
+      setFetchError(true)
+      setLoading(false)
+      return
+    }
+
+    if (!data) {
+      setLoading(false)
+      return
+    }
+
+    const r = data as any
+    setPassportId(r.passport_id)
+    setInviteStatus(r.invite_status)
+    setForm({
+      fullName: r.full_name ?? '',
+      gender: r.gender ?? '',
+      clientNotes: r.client_notes ?? '',
+      unit: r.measurement_unit ?? 'cm',
+      chest: r.chest != null ? String(r.chest) : '',
+      shoulder: r.shoulder != null ? String(r.shoulder) : '',
+      sleeve: r.sleeve != null ? String(r.sleeve) : '',
+      waist: r.waist != null ? String(r.waist) : '',
+      hip: r.hip != null ? String(r.hip) : '',
+      trouserLength: r.trouser_length != null ? String(r.trouser_length) : '',
+      neck: r.neck != null ? String(r.neck) : '',
+      thigh: r.thigh != null ? String(r.thigh) : '',
+      inseam: r.inseam != null ? String(r.inseam) : '',
+      ankle: r.ankle != null ? String(r.ankle) : '',
+      bicep: r.bicep != null ? String(r.bicep) : '',
+      wrist: r.wrist != null ? String(r.wrist) : '',
+      backLength: r.back_length != null ? String(r.back_length) : '',
+      underBust: r.under_bust != null ? String(r.under_bust) : '',
+      fabricPreference: r.fabric_preference ?? '',
+      stylePreference: r.style_preference ?? '',
+      eventType: r.event_type ?? '',
+      specialFittingNotes: r.special_fitting_notes ?? '',
+      measuredAt: r.measured_at ? new Date(r.measured_at) : null,
+      measuredLocation: r.measured_location ?? 'SHOP',
+    })
+    setLoading(false)
+  }
 
   // Load existing entry
   useEffect(() => {
     if (!isNew && id) {
-      supabase
-        .from('diary_entries')
-        .select('*')
-        .eq('id', id)
-        .single()
-        .then(({ data, error }) => {
-          if (error || !data) { router.back(); return }
-          const r = data as any
-          setPassportId(r.passport_id)
-          setInviteStatus(r.invite_status)
-          setForm({
-            fullName: r.full_name ?? '',
-            gender: r.gender ?? '',
-            clientNotes: r.client_notes ?? '',
-            unit: r.measurement_unit ?? 'cm',
-            chest: r.chest != null ? String(r.chest) : '',
-            shoulder: r.shoulder != null ? String(r.shoulder) : '',
-            sleeve: r.sleeve != null ? String(r.sleeve) : '',
-            waist: r.waist != null ? String(r.waist) : '',
-            hip: r.hip != null ? String(r.hip) : '',
-            trouserLength: r.trouser_length != null ? String(r.trouser_length) : '',
-            neck: r.neck != null ? String(r.neck) : '',
-            thigh: r.thigh != null ? String(r.thigh) : '',
-            inseam: r.inseam != null ? String(r.inseam) : '',
-            ankle: r.ankle != null ? String(r.ankle) : '',
-            bicep: r.bicep != null ? String(r.bicep) : '',
-            wrist: r.wrist != null ? String(r.wrist) : '',
-            backLength: r.back_length != null ? String(r.back_length) : '',
-            underBust: r.under_bust != null ? String(r.under_bust) : '',
-            fabricPreference: r.fabric_preference ?? '',
-            stylePreference: r.style_preference ?? '',
-            eventType: r.event_type ?? '',
-            specialFittingNotes: r.special_fitting_notes ?? '',
-            measuredAt: r.measured_at ? new Date(r.measured_at) : null,
-            measuredLocation: r.measured_location ?? 'SHOP',
-          })
-          setLoading(false)
-        })
+      void loadEntry()
     }
 
     if (user?.id) {
@@ -190,6 +215,7 @@ export default function DiaryEntryScreen() {
   }
 
   async function handleSave() {
+    if (saving) return
     if (!validate()) return
     setSaving(true)
 
@@ -236,24 +262,32 @@ export default function DiaryEntryScreen() {
     if (error) {
       Alert.alert('Save failed', error.message)
     } else {
-      if (isNew) router.back()
+      if (isNew) goBack()
     }
   }
 
   async function handleInvite() {
+    if (inviting) return
     if (!passportId) {
       Alert.alert('Save first', 'Save the entry before sending an invite.')
       return
     }
-    await sharePassportInvite(passportId, form.fullName.trim() || 'your client', tailorDisplayName)
-    const { error } = await supabase
-      .from('diary_entries')
-      .update({ invite_status: 'INVITE_SENT', updated_at: new Date().toISOString() })
-      .eq('id', id)
-    if (!error) setInviteStatus('INVITE_SENT')
+    setInviting(true)
+    try {
+      await sharePassportInvite(passportId, form.fullName.trim() || 'your client', tailorDisplayName)
+      const { error } = await supabase
+        .from('diary_entries')
+        .update({ invite_status: 'INVITE_SENT', updated_at: new Date().toISOString() })
+        .eq('id', id)
+      if (!error) setInviteStatus('INVITE_SENT')
+      else Alert.alert('Invite not marked', error.message)
+    } finally {
+      setInviting(false)
+    }
   }
 
   async function handleDelete() {
+    if (deleting) return
     Alert.alert(
       'Delete entry?',
       `This will permanently remove ${form.fullName || 'this client'} from your diary.`,
@@ -262,8 +296,15 @@ export default function DiaryEntryScreen() {
         {
           text: 'Delete', style: 'destructive',
           onPress: async () => {
-            await supabase.from('diary_entries').delete().eq('id', id)
-            router.back()
+            if (deleting) return
+            setDeleting(true)
+            const { error } = await supabase.from('diary_entries').delete().eq('id', id)
+            if (error) {
+              setDeleting(false)
+              Alert.alert('Delete failed', error.message)
+              return
+            }
+            goBack()
           },
         },
       ]
@@ -278,7 +319,41 @@ export default function DiaryEntryScreen() {
   if (loading) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Diary entry</Text>
+            <ActivityIndicator color={Colors.needleGreen} size="large" />
+            <Text style={styles.stateTitle}>Loading this entry…</Text>
+            <Text style={styles.stateHint}>
+              We’re pulling together measurements, notes, and invite status so you can continue this client relationship cleanly.
+            </Text>
+          </View>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  if (fetchError && !isNew) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Diary entry</Text>
+            <Text style={styles.stateTitle}>Couldn't load this diary entry.</Text>
+            <Text style={styles.stateHint}>
+              This page should help you carry an offline measurement session into Drape without losing fit details or client context.
+            </Text>
+            <TouchableOpacity style={styles.errorBtn} onPress={() => { void loadEntry() }}>
+              <Text style={styles.errorBtnText}>Try again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => router.replace('/(tailor)/clients')}>
+              <Text style={styles.errorLink}>Open diary</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={goBack}>
+              <Text style={styles.errorLink}>Go back</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </SafeAreaView>
     )
   }
@@ -288,17 +363,20 @@ export default function DiaryEntryScreen() {
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} hitSlop={8}>
+          <TouchableOpacity onPress={goBack} hitSlop={8}>
             <Feather name="arrow-left" size={22} color={Colors.ink} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>{isNew ? 'New client' : form.fullName || 'Edit client'}</Text>
           <View style={{ flexDirection: 'row', gap: Spacing.sm }}>
             {!isNew && (
-              <TouchableOpacity onPress={handleDelete} hitSlop={8}>
-                <Feather name="trash-2" size={20} color={Colors.error} />
+              <TouchableOpacity onPress={handleDelete} disabled={saving || deleting} hitSlop={8}>
+                {deleting
+                  ? <ActivityIndicator size="small" color={Colors.error} />
+                  : <Feather name="trash-2" size={20} color={Colors.error} />
+                }
               </TouchableOpacity>
             )}
-            <TouchableOpacity onPress={handleSave} disabled={saving} hitSlop={8} style={styles.saveBtn}>
+            <TouchableOpacity onPress={handleSave} disabled={saving || deleting} hitSlop={8} style={styles.saveBtn}>
               {saving
                 ? <ActivityIndicator size="small" color={Colors.white} />
                 : <Text style={styles.saveBtnText}>Save</Text>
@@ -324,6 +402,24 @@ export default function DiaryEntryScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
+          <View style={styles.heroCard}>
+            <View style={styles.heroBadge}>
+              <Text style={styles.heroBadgeText}>Offline client diary</Text>
+            </View>
+            <Text style={styles.heroTitle}>Capture measurements and fitting context even before a client joins the app.</Text>
+            <Text style={styles.heroSub}>
+              Use this diary to preserve session details, tailoring notes, and a clean path into a
+              future passport invite when the client is ready.
+            </Text>
+          </View>
+
+          <View style={styles.guideCard}>
+            <Text style={styles.guideTitle}>Best diary habit</Text>
+            <Text style={styles.guideText}>
+              Record the fit details you would want before the next appointment, then use the passport invite only when the client is ready to continue on Drape.
+            </Text>
+          </View>
+
           {/* ── Client info ─────────────────────────────────────────────── */}
           <View onLayout={(e) => { nameFieldY.current = e.nativeEvent.layout.y }}>
           <Section title="Client info">
@@ -498,10 +594,18 @@ export default function DiaryEntryScreen() {
                   </View>
                 </View>
                 {inviteStatus !== 'CLAIMED' && (
-                  <TouchableOpacity style={styles.inviteBtn} onPress={handleInvite}>
-                    <Feather name="send" size={15} color={Colors.white} />
+                  <TouchableOpacity
+                    style={[styles.inviteBtn, inviting && styles.inviteBtnDisabled]}
+                    onPress={() => { void handleInvite() }}
+                    disabled={inviting}
+                  >
+                    {inviting ? (
+                      <ActivityIndicator size="small" color={Colors.white} />
+                    ) : (
+                      <Feather name="send" size={15} color={Colors.white} />
+                    )}
                     <Text style={styles.inviteBtnText}>
-                      {inviteStatus === 'INVITE_SENT' ? 'Resend invite' : 'Send invite'}
+                      {inviting ? 'Sending…' : inviteStatus === 'INVITE_SENT' ? 'Resend invite' : 'Send invite'}
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -621,6 +725,32 @@ function SegmentPicker({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  stateCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    alignItems: 'center',
+    ...Shadow.lg,
+  },
+  stateEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
+  errorBtn: {
+    backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
+    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.sm,
+  },
+  errorBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  errorLink: { fontSize: FontSize.sm, color: Colors.midGrey, fontWeight: FontWeight.medium },
 
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
@@ -637,6 +767,49 @@ const styles = StyleSheet.create({
   saveBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
 
   scroll: { padding: Spacing.xl, gap: Spacing.xl, paddingBottom: Spacing.xxxl },
+  heroCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  heroTitle: {
+    fontSize: FontSize.xxl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 38,
+  },
+  heroSub: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 24,
+  },
+  guideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   input: {
     backgroundColor: Colors.white, borderRadius: Radius.md,
@@ -695,6 +868,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
     alignSelf: 'flex-start',
   },
+  inviteBtnDisabled: { opacity: 0.7 },
   inviteBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
 })
 

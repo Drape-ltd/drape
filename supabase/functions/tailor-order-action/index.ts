@@ -8,7 +8,7 @@
  *   send-quote            PENDING_QUOTE|CONSULTATION → QUOTE_SENT  (sets amount, currency, completion_date)
  *   decline-order         PENDING_QUOTE|CONSULTATION → DECLINED
  *   request-consultation  PENDING_QUOTE → CONSULTATION  (sets optional consultation_fee)
- *   advance-stage         CONFIRMED → CUTTING → SEWING → FINISHING → READY_FOR_COLLECTION|SHIPPED
+ *   advance-stage         CONFIRMED → DESIGNING|SOURCING|CUTTING → SEWING → FINISHING → READY_FOR_COLLECTION|SHIPPED
  *                         When advancing to READY_FOR_COLLECTION: generates collection_code server-side
  *
  * Required env vars:
@@ -24,6 +24,7 @@ import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import { z, parseBody, uuid, isoDate } from '../_shared/validate.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
+import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
@@ -48,10 +49,11 @@ const BodySchema = z.discriminatedUnion('action', [
   z.object({
     orderId:        uuid,
     action:         z.literal('advance-stage'),
-    targetStage:    z.enum(['CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_COLLECTION', 'SHIPPED']),
+    targetStage:    z.enum(['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_COLLECTION', 'SHIPPED']),
     note:           z.string().trim().min(10).max(300),
     photoUrl:       z.string().url().optional(),
     trackingNumber: z.string().trim().max(50).optional(),
+    carrier:        z.string().trim().max(50).optional(),
   }),
   z.object({
     orderId: uuid,
@@ -68,7 +70,9 @@ type Action = 'send-quote' | 'decline-order' | 'request-consultation' | 'advance
 
 // Valid source stages for each advance-stage target
 const ADVANCE_VALID_FROM: Record<string, string[]> = {
-  CUTTING:              ['CONFIRMED'],
+  DESIGNING:            ['CONFIRMED'],
+  SOURCING:             ['CONFIRMED', 'DESIGNING'],
+  CUTTING:              ['CONFIRMED', 'DESIGNING', 'SOURCING'],
   SEWING:               ['CUTTING'],
   FINISHING:            ['SEWING'],
   READY_FOR_COLLECTION: ['FINISHING'],
@@ -80,6 +84,8 @@ const CUSTOMER_NOTIFICATION: Record<string, { title: string; body: string }> = {
   'send-quote':            { title: 'Quote received 💰',       body: 'Your tailor sent you a quote. Review it now.' },
   'decline-order':         { title: 'Order declined',           body: 'Your tailor was unable to accept this order.' },
   'request-consultation':  { title: 'Consultation requested',   body: 'Your tailor wants to schedule a quick consultation first.' },
+  DESIGNING:               { title: 'Order update ✏️',          body: 'Your tailor is working through design details for your order.' },
+  SOURCING:                { title: 'Order update 🧵',          body: 'Your tailor is sourcing materials for your order.' },
   CUTTING:                 { title: 'Order update ✂️',          body: 'Your tailor has started cutting the fabric.' },
   SEWING:                  { title: 'Order update 🧵',          body: 'Your tailor is now sewing your garment.' },
   FINISHING:               { title: 'Almost ready ✨',          body: 'Your tailor is putting the finishing touches on your order.' },
@@ -115,8 +121,8 @@ Deno.serve(async (req) => {
     const { orderId, action } = body
 
     const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+      getSupabaseUrl(),
+      getServiceRoleKey(),
     )
 
     // Rate limit: 60 actions per hour per tailor
@@ -133,12 +139,22 @@ Deno.serve(async (req) => {
       return new Response('Too many requests', { status: 429, headers: cors })
     }
 
+    // Only collection confirmation needs the collection code fields.
+    const orderSelect = action === 'confirm-collection'
+      ? 'id, stage, tailor_id, customer_id, collection_code, collection_code_attempts'
+      : 'id, stage, tailor_id, customer_id'
+
     // Fetch order — verify tailor ownership and current stage
-    const { data: order } = await supabase
+    const { data: order, error: orderError } = await supabase
       .from('orders')
-      .select('id, stage, tailor_id, customer_id, collection_code, collection_code_attempts')
+      .select(orderSelect)
       .eq('id', orderId)
       .single()
+
+    if (orderError) {
+      log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: orderError.message })
+      return new Response('Database error', { status: 500, headers: cors })
+    }
 
     if (!order) return new Response('Order not found', { status: 404, headers: cors })
 
@@ -334,7 +350,7 @@ Deno.serve(async (req) => {
     // ── advance-stage ─────────────────────────────────────────────────────────
     if (action === 'advance-stage') {
       // Zod already validated targetStage against the enum
-      const { targetStage, photoUrl, trackingNumber } = body as Extract<typeof body, { action: 'advance-stage' }>
+      const { targetStage, photoUrl, trackingNumber, carrier } = body as Extract<typeof body, { action: 'advance-stage' }>
 
       // Idempotent: if already in the target stage, the previous request succeeded
       if (order.stage === targetStage) {
@@ -358,6 +374,13 @@ Deno.serve(async (req) => {
         )
       }
 
+      if (targetStage === 'SHIPPED' && !trackingNumber?.trim()) {
+        return new Response(
+          JSON.stringify({ error: 'Tracking number is required when marking an order as shipped.' }),
+          { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
       const updates: Record<string, unknown> = { stage: targetStage }
 
       // Server-generated collection code — never trusted from client
@@ -367,6 +390,7 @@ Deno.serve(async (req) => {
 
       if (targetStage === 'SHIPPED' && trackingNumber?.trim()) {
         updates.tracking_number = trackingNumber.trim().toUpperCase()
+        if (carrier?.trim()) updates.carrier = carrier.trim()
       }
 
       const { error } = await supabase
@@ -469,7 +493,7 @@ Deno.serve(async (req) => {
       }
 
       const { error } = await supabase.from('orders')
-        .update({ stage: 'COLLECTED' })
+        .update({ stage: 'COLLECTED', collection_code_attempts: 0 })
         .eq('id', orderId)
 
       if (error) {

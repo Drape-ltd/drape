@@ -1,21 +1,36 @@
-import { View, Text, StyleSheet, Image } from 'react-native'
+import { View, Text, StyleSheet, TouchableOpacity, Alert, Linking } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Button, Divider } from '@/components/ui'
-import { Colors, FontSize, FontWeight, Spacing } from '@/constants/theme'
+import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 
 export default function WelcomeScreen() {
   const router = useRouter()
 
+  async function openLegal(url: string) {
+    const supported = await Linking.canOpenURL(url)
+    if (!supported) {
+      Alert.alert('Unable to open link', `Please visit ${url.replace('https://', '')} manually.`)
+      return
+    }
+
+    try {
+      await Linking.openURL(url)
+    } catch {
+      Alert.alert('Unable to open link', `Please visit ${url.replace('https://', '')} manually.`)
+    }
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.hero}>
-        <Text style={styles.wordmark}>drape</Text>
-        <Text style={styles.tagline}>Custom clothing, crafted for you.</Text>
-        <Text style={styles.sub}>
-          Connect with master tailors worldwide.{'\n'}
-          Get measured once. Clothes that always fit.
-        </Text>
+        <View style={styles.brandCard}>
+          <Text style={styles.wordmark}>drape</Text>
+          <Text style={styles.tagline}>Custom clothing, handled beautifully from both sides.</Text>
+          <Text style={styles.sub}>
+            Customers discover trusted tailors, place one clear order, and track every step. Tailors receive serious briefs, send quotes, and manage production in one calm workspace.
+          </Text>
+        </View>
       </View>
 
       <View style={styles.actions}>
@@ -28,8 +43,8 @@ export default function WelcomeScreen() {
         />
         <Text style={styles.legal}>
           By continuing you agree to our{' '}
-          <Text style={styles.link}>Terms</Text> and{' '}
-          <Text style={styles.link}>Privacy Policy</Text>.
+          <Text style={styles.link} onPress={() => { void openLegal('https://drapeon.co/terms') }}>Terms</Text> and{' '}
+          <Text style={styles.link} onPress={() => { void openLegal('https://drapeon.co/privacy') }}>Privacy Policy</Text>.
         </Text>
       </View>
     </SafeAreaView>
@@ -46,7 +61,13 @@ const styles = StyleSheet.create({
   hero: {
     flex: 1,
     justifyContent: 'center',
+  },
+  brandCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xxl,
     gap: Spacing.lg,
+    ...Shadow.lg,
   },
   wordmark: {
     fontSize: 52,
@@ -55,10 +76,10 @@ const styles = StyleSheet.create({
     letterSpacing: -2,
   },
   tagline: {
-    fontSize: FontSize.xl,
+    fontSize: 32,
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
-    lineHeight: 30,
+    lineHeight: 38,
   },
   sub: {
     fontSize: FontSize.md,

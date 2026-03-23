@@ -6,9 +6,9 @@
 
 import { useState } from 'react'
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Alert,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -24,7 +24,7 @@ const FAQ: Array<{ q: string; a: string }> = [
   },
   {
     q: "When do I get paid?",
-    a: "Payment is held securely until the customer marks the order complete or it is auto-released 7 days after delivery. Funds are then transferred to your connected Stripe or Paystack account, minus Drape's platform fee.",
+    a: "Customer payment stays protected while the order is active. Once the customer completes the handoff and closes the order out in Drape, the payout can move forward under your payout setup and Drape's platform fee terms.",
   },
   {
     q: "How does ID verification work?",
@@ -36,7 +36,7 @@ const FAQ: Array<{ q: string; a: string }> = [
   },
   {
     q: "What happens if a customer raises a dispute?",
-    a: "You'll be notified immediately. Respond to the customer through Messages and try to reach a resolution. If unresolved, our team reviews both sides and may mediate a partial or full refund. Keep all communication within Drape.",
+    a: "You'll be notified immediately. Respond through Messages, keep the full conversation inside Drape, and share any context that helps explain what happened. If the concern is not resolved directly, our team reviews the order history and next steps from there.",
   },
   {
     q: "How do I build my reputation on Drape?",
@@ -50,27 +50,73 @@ const FAQ: Array<{ q: string; a: string }> = [
 
 export default function TailorHelpScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const [openIndex, setOpenIndex] = useState<number | null>(null)
+
+  function goBack() {
+    if (navigation.canGoBack()) router.back()
+    else router.replace('/(tailor)/profile')
+  }
 
   function toggleFaq(i: number) {
     setOpenIndex(openIndex === i ? null : i)
   }
 
+  async function openExternal(url: string) {
+    const supported = await Linking.canOpenURL(url)
+    if (!supported) {
+      alertOpenFailed(url)
+      return
+    }
+
+    try {
+      await Linking.openURL(url)
+    } catch {
+      alertOpenFailed(url)
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Get help</Text>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.xl, paddingBottom: 64, gap: Spacing.xl }}>
+        <View style={styles.heroCard}>
+          <View style={styles.heroBadge}>
+            <Text style={styles.heroBadgeText}>Tailor support</Text>
+          </View>
+          <Text style={styles.heroTitle}>Help with orders, payouts, verification, and client communication.</Text>
+          <Text style={styles.heroSub}>
+            Use this space when something needs clarification or escalation. We’ll help you keep work moving and resolve issues cleanly inside Drape.
+          </Text>
+        </View>
+
+        <View style={styles.supportGuideCard}>
+          <View style={styles.supportGuideBadge}>
+            <Text style={styles.supportGuideBadgeText}>Best next step</Text>
+          </View>
+          <Text style={styles.supportGuideTitle}>Keep live work inside the order and message thread whenever you can.</Text>
+          <Text style={styles.supportGuideBody}>
+            Quotes, consultations, production updates, and concerns are easiest to resolve from the active order. Come here when you need policy clarity, account help, or an escalation.
+          </Text>
+        </View>
+
+        <View style={styles.contactGuideCard}>
+          <Text style={styles.contactGuideTitle}>Contact us when…</Text>
+          <Text style={styles.contactGuideBody}>
+            you need policy clarification, escalation help, verification guidance, or support once the normal order flow is no longer enough.
+          </Text>
+        </View>
 
         {/* ── Visit Help Centre ── */}
         <TouchableOpacity
           style={styles.helpCentreCard}
-          onPress={() => Linking.openURL('https://drapeon.co/help')}
+          onPress={() => { void openExternal('https://drapeon.co/help') }}
           activeOpacity={0.8}
         >
           <View style={styles.helpCentreIcon}>
@@ -91,14 +137,14 @@ export default function TailorHelpScreen() {
               icon="mail"
               title="Email support"
               sub="tailors@drapeon.co · we reply within 24h"
-              onPress={() => Linking.openURL('mailto:tailors@drapeon.co?subject=Tailor%20support%20request')}
+              onPress={() => { void openExternal('mailto:tailors@drapeon.co?subject=Tailor%20support%20request') }}
             />
             <View style={styles.divider} />
             <ContactRow
               icon="message-circle"
               title="WhatsApp"
               sub="Chat with the tailor success team"
-              onPress={() => Linking.openURL('https://wa.me/message/drapeon')}
+              onPress={() => { void openExternal('https://wa.me/message/drapeon') }}
               last
             />
           </View>
@@ -129,14 +175,14 @@ export default function TailorHelpScreen() {
               icon="file-text"
               title="Terms of service"
               sub="drapeon.co/terms"
-              onPress={() => Linking.openURL('https://drapeon.co/terms')}
+              onPress={() => { void openExternal('https://drapeon.co/terms') }}
             />
             <View style={styles.divider} />
             <ContactRow
               icon="shield"
               title="Privacy policy"
               sub="drapeon.co/privacy"
-              onPress={() => Linking.openURL('https://drapeon.co/privacy')}
+              onPress={() => { void openExternal('https://drapeon.co/privacy') }}
               last
             />
           </View>
@@ -145,6 +191,25 @@ export default function TailorHelpScreen() {
       </ScrollView>
     </SafeAreaView>
   )
+}
+
+function alertOpenFailed(url: string) {
+  if (url.startsWith('mailto:')) {
+    Alert.alert('Unable to open link', 'Please email tailors@drapeon.co directly with the subject "Tailor support request".')
+    return
+  }
+
+  if (url.startsWith('https://wa.me/')) {
+    Alert.alert('Unable to open link', 'Please open WhatsApp and message us directly, or email tailors@drapeon.co with the subject "Tailor support request".')
+    return
+  }
+
+  if (url.startsWith('https://')) {
+    Alert.alert('Unable to open link', `Please visit ${url} manually.`)
+    return
+  }
+
+  Alert.alert('Unable to open link', 'Please try again in a moment or email tailors@drapeon.co directly with the subject "Tailor support request".')
 }
 
 function FaqItem({
@@ -208,6 +273,77 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
+  heroCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+  },
+  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 30 },
+  heroSub: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 22 },
+  supportGuideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  supportGuideBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: Radius.full,
+    backgroundColor: Colors.bone,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+  },
+  supportGuideBadgeText: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    fontWeight: FontWeight.semibold,
+  },
+  supportGuideTitle: {
+    fontSize: FontSize.lg,
+    color: Colors.ink,
+    fontWeight: FontWeight.bold,
+    lineHeight: 26,
+  },
+  supportGuideBody: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 22,
+  },
+  contactGuideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  contactGuideTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  contactGuideBody: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+  },
 
   helpCentreCard: {
     backgroundColor: Colors.needleGreenLight,

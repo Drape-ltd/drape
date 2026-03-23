@@ -6,7 +6,7 @@
  *
  * Actions:
  *   confirm-receipt  SHIPPED → DELIVERED
- *   open-dispute     CONFIRMED|CUTTING|SEWING|FINISHING|SHIPPED|READY_FOR_COLLECTION → IN_DISPUTE
+ *   open-dispute     CONFIRMED|DESIGNING|SOURCING|CUTTING|SEWING|FINISHING|SHIPPED|READY_FOR_COLLECTION → IN_DISPUTE
  *   accept-quote     QUOTE_SENT → CONFIRMED  (payment gateway plugs in here later)
  *   decline-quote    QUOTE_SENT → DECLINED
  *   complete-order   DELIVERED|COLLECTED → COMPLETE
@@ -29,6 +29,7 @@ import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import { z, parseBody, uuid, optionalNote } from '../_shared/validate.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
+import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 
 const BodySchema = z.object({
   orderId:     uuid,
@@ -46,7 +47,7 @@ type Action = 'confirm-receipt' | 'open-dispute' | 'accept-quote' | 'decline-quo
 // Which stages each action is valid FROM
 const VALID_FROM: Record<Action, string[]> = {
   'confirm-receipt': ['SHIPPED'],
-  'open-dispute':    ['CONFIRMED', 'CUTTING', 'SEWING', 'FINISHING', 'SHIPPED', 'READY_FOR_COLLECTION'],
+  'open-dispute':    ['CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'SHIPPED', 'READY_FOR_COLLECTION'],
   'accept-quote':    ['QUOTE_SENT'],
   'decline-quote':   ['QUOTE_SENT'],
   'complete-order':  ['DELIVERED', 'COLLECTED'],
@@ -101,8 +102,8 @@ Deno.serve(async (req) => {
     const { orderId, action, reason, description } = parsed.data
 
     const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+      getSupabaseUrl(),
+      getServiceRoleKey(),
     )
 
     // Rate limit: 20 actions per hour per customer
@@ -119,13 +120,22 @@ Deno.serve(async (req) => {
       return new Response('Too many requests', { status: 429, headers: cors })
     }
 
+    // Only collect-order needs the collection code fields.
+    const orderSelect = action === 'collect-order'
+      ? 'id, stage, customer_id, tailor_id, collection_code, collection_code_attempts'
+      : 'id, stage, customer_id, tailor_id'
+
     // Fetch order — verify ownership and current stage
-    // Also fetch collection_code + attempts for the collect-order action
-    const { data: order } = await supabase
+    const { data: order, error: orderError } = await supabase
       .from('orders')
-      .select('id, stage, customer_id, tailor_id, collection_code, collection_code_attempts')
+      .select(orderSelect)
       .eq('id', orderId)
       .single()
+
+    if (orderError) {
+      log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: orderError.message })
+      return new Response('Database error', { status: 500, headers: cors })
+    }
 
     if (!order) return new Response('Order not found', { status: 404, headers: cors })
 
@@ -269,12 +279,22 @@ Deno.serve(async (req) => {
         return new Response('Database error', { status: 500, headers: cors })
       }
 
-      await supabase.from('disputes').insert({
+      const { error: disputeError } = await supabase.from('disputes').insert({
         order_id: orderId,
         customer_id: caller.id,
         reason: reason.trim(),
         description: description.trim(),
       })
+
+      if (disputeError) {
+        await supabase
+          .from('orders')
+          .update({ stage: order.stage })
+          .eq('id', orderId)
+
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: disputeError.message })
+        return new Response('Database error', { status: 500, headers: cors })
+      }
 
       await supabase.from('order_stage_updates').insert({
         order_id: orderId,

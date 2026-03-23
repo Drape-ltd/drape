@@ -10,8 +10,8 @@
 
 import { PrismaClient } from '@prisma/client'
 
-const URL_BASE    = 'https://pqptfuqogvrajozfsqzi.supabase.co'
-const SERVICE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBxcHRmdXFvZ3ZyYWpvemZzcXppIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzQ1NDEyOCwiZXhwIjoyMDg5MDMwMTI4fQ.dMm1eh_b0fsr2xvCk-qdqQlk-hH4Jk-tVpXMjJJccTI'
+const URL_BASE    = process.env.E2E_SUPABASE_URL ?? process.env.SUPABASE_URL ?? ''
+const SERVICE_KEY = process.env.E2E_SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
 
 const CUSTOMER_EMAIL = 'e2e-customer@drape.test'
 const TAILOR_EMAIL   = 'e2e-tailor@drape.test'
@@ -69,6 +69,13 @@ async function createAuthUser(email: string, role: 'CUSTOMER' | 'TAILOR', displa
 
 async function main() {
   console.log('\n🌱  Seeding e2e test data…\n')
+
+  if (!URL_BASE || !SERVICE_KEY) {
+    await bail(
+      'Missing E2E Supabase config.',
+      'Set E2E_SUPABASE_URL and E2E_SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY) before running the seed script.',
+    )
+  }
 
   console.log('Cleaning up old accounts…')
   await deleteUserByEmail(CUSTOMER_EMAIL)
@@ -201,7 +208,7 @@ async function main() {
   PASSWORD  ${PASSWORD}
 
 Run tests:
-  cd /Users/onaopemipodimowo/drape
+  cd ${process.cwd().includes('/packages/db') ? process.cwd().replace(/\/packages\/db$/, '') : process.cwd()}
   source .maestro/env.sh && maestro test .maestro/flows/
 `)
 }

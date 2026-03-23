@@ -8,7 +8,7 @@ import {
   TextInput, ActivityIndicator, Alert, Modal, ScrollView, Image,
   Dimensions,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
@@ -43,19 +43,28 @@ type EditForm = {
   category: string
 }
 
+function asStringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+  if (typeof value === 'string' && value.length > 0) return [value]
+  return []
+}
+
 const EMPTY_EDIT: EditForm = {
   id: null, imageUrl: '', imageUri: '', title: '', description: '', category: '',
 }
 
 export default function PortfolioScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
 
   const [items, setItems] = useState<PortfolioItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState(false)
   const [tailorProfileId, setTailorProfileId] = useState<string | null>(null)
   const [editModal, setEditModal] = useState<EditForm | null>(null)
   const [saving, setSaving] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [expandedUrl, setExpandedUrl] = useState<string | null>(null)
 
   useEffect(() => {
@@ -64,66 +73,79 @@ export default function PortfolioScreen() {
 
   async function loadData() {
     if (!user?.id) return
-    const profileRes = await supabase
-      .from('tailor_profiles')
-      .select('id, portfolio_photo_urls')
-      .eq('user_id', user.id)
-      .maybeSingle()
-    const pid = (profileRes.data as any)?.id ?? null
-    const setupPhotoUrls: string[] = (profileRes.data as any)?.portfolio_photo_urls ?? []
-    setTailorProfileId(pid)
-    if (!pid) { setLoading(false); return }
+    setFetchError(false)
+    try {
+      const profileRes = await supabase
+        .from('tailor_profiles')
+        .select('id, portfolio_photo_urls')
+        .eq('user_id', user.id)
+        .maybeSingle()
+      if (profileRes.error) throw profileRes.error
+      const pid = (profileRes.data as any)?.id ?? null
+      const setupPhotoUrls = asStringList((profileRes.data as any)?.portfolio_photo_urls)
+      setTailorProfileId(pid)
+      if (!pid) { setLoading(false); return }
 
-    const { data } = await supabase
-      .from('portfolio_items')
-      .select('id, image_url, title, description, category, sort_order')
-      .eq('tailor_profile_id', pid)
-      .order('sort_order', { ascending: true })
-
-    const existing = ((data ?? []) as any[]).map((r) => ({
-      id: r.id,
-      imageUrl: r.image_url,
-      title: r.title,
-      description: r.description ?? null,
-      category: r.category ?? null,
-      sortOrder: r.sort_order,
-    }))
-
-    // One-time seed: migrate setup wizard photos into portfolio_items.
-    // Also re-seeds if all existing items have blank image URLs (stale records from before bucket fix).
-    const allBlank = existing.length > 0 && existing.every((i) => !i.imageUrl)
-    if (allBlank) {
-      await supabase.from('portfolio_items').delete().eq('tailor_profile_id', pid)
-    }
-    if ((existing.length === 0 || allBlank) && setupPhotoUrls.length > 0) {
-      await supabase.from('portfolio_items').insert(
-        setupPhotoUrls.map((url, i) => ({
-          tailor_profile_id: pid,
-          image_url: url,
-          title: `Portfolio photo ${i + 1}`,
-          description: null,
-          category: null,
-          sort_order: i,
-        }))
-      )
-      const { data: seeded } = await supabase
+      const { data, error } = await supabase
         .from('portfolio_items')
         .select('id, image_url, title, description, category, sort_order')
         .eq('tailor_profile_id', pid)
         .order('sort_order', { ascending: true })
-      setItems(((seeded ?? []) as any[]).map((r) => ({
+      if (error) throw error
+
+      const existing = ((data ?? []) as any[]).map((r) => ({
         id: r.id,
         imageUrl: r.image_url,
         title: r.title,
         description: r.description ?? null,
         category: r.category ?? null,
         sortOrder: r.sort_order,
-      })))
-    } else {
-      setItems(existing)
-    }
+      }))
 
-    setLoading(false)
+      let finalItems = existing
+
+      const allBlank = existing.length > 0 && existing.every((i) => !i.imageUrl)
+      if (allBlank) {
+        const { error: deleteError } = await supabase.from('portfolio_items').delete().eq('tailor_profile_id', pid)
+        if (deleteError) throw deleteError
+        finalItems = []
+      }
+      if ((existing.length === 0 || allBlank) && setupPhotoUrls.length > 0) {
+        const { error: seedError } = await supabase.from('portfolio_items').insert(
+          setupPhotoUrls.map((url, i) => ({
+            tailor_profile_id: pid,
+            image_url: url,
+            title: `Portfolio photo ${i + 1}`,
+            description: null,
+            category: null,
+            sort_order: i,
+          }))
+        )
+        if (seedError) throw seedError
+        const { data: seeded } = await supabase
+          .from('portfolio_items')
+          .select('id, image_url, title, description, category, sort_order')
+          .eq('tailor_profile_id', pid)
+          .order('sort_order', { ascending: true })
+        finalItems = ((seeded ?? []) as any[]).map((r) => ({
+          id: r.id,
+          imageUrl: r.image_url,
+          title: r.title,
+          description: r.description ?? null,
+          category: r.category ?? null,
+          sortOrder: r.sort_order,
+        }))
+      }
+
+      setItems(finalItems)
+      await syncProfilePhotoUrls(pid, finalItems)
+    } catch {
+      setFetchError(true)
+      setItems([])
+      setTailorProfileId(null)
+    } finally {
+      setLoading(false)
+    }
   }
 
   async function pickImage(onPicked: (uri: string) => void) {
@@ -165,6 +187,19 @@ export default function PortfolioScreen() {
     }
   }
 
+  async function syncProfilePhotoUrls(profileId: string, nextItems: PortfolioItem[]) {
+    const nextUrls = nextItems
+      .map((item) => item.imageUrl)
+      .filter((url): url is string => typeof url === 'string' && url.length > 0)
+
+    const { error } = await supabase
+      .from('tailor_profiles')
+      .update({ portfolio_photo_urls: nextUrls })
+      .eq('id', profileId)
+
+    if (error) throw error
+  }
+
   function openNew() {
     setEditModal({ ...EMPTY_EDIT })
   }
@@ -178,6 +213,11 @@ export default function PortfolioScreen() {
       description: item.description ?? '',
       category: item.category ?? '',
     })
+  }
+
+  function goBack() {
+    if (navigation.canGoBack()) router.back()
+    else router.replace('/(tailor)/profile')
   }
 
   async function handleSave() {
@@ -238,6 +278,7 @@ export default function PortfolioScreen() {
   }
 
   async function handleDelete(item: PortfolioItem) {
+    if (deletingId) return
     Alert.alert(
       'Delete item?',
       `Remove "${item.title}" from your portfolio?`,
@@ -246,8 +287,24 @@ export default function PortfolioScreen() {
         {
           text: 'Delete', style: 'destructive',
           onPress: async () => {
-            await supabase.from('portfolio_items').delete().eq('id', item.id)
-            setItems((prev) => prev.filter((i) => i.id !== item.id))
+            if (deletingId) return
+            setDeletingId(item.id)
+            const { error } = await supabase.from('portfolio_items').delete().eq('id', item.id)
+            if (error) {
+              setDeletingId(null)
+              Alert.alert('Delete failed', error.message)
+              return
+            }
+            const nextItems = items.filter((i) => i.id !== item.id)
+            try {
+              await syncProfilePhotoUrls(tailorProfileId!, nextItems)
+            } catch (syncError: any) {
+              setDeletingId(null)
+              Alert.alert('Delete failed', syncError?.message ?? 'Could not update your public portfolio.')
+              return
+            }
+            setItems(nextItems)
+            setDeletingId(null)
           },
         },
       ]
@@ -257,7 +314,47 @@ export default function PortfolioScreen() {
   if (loading) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Portfolio</Text>
+            <ActivityIndicator color={Colors.needleGreen} size="large" />
+            <Text style={styles.stateTitle}>Loading your portfolio…</Text>
+            <Text style={styles.stateHint}>
+              We’re pulling in the work customers use to judge your craft, taste, and fit for their order.
+            </Text>
+          </View>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  if (fetchError) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Portfolio</Text>
+            <Text style={styles.stateTitle}>Couldn't load your portfolio.</Text>
+            <Text style={styles.stateHint}>
+              This screen should help you keep the visual proof of your craft polished and current for new customers.
+            </Text>
+            <TouchableOpacity
+              style={styles.retryBtn}
+              onPress={() => {
+                setLoading(true)
+                loadData()
+              }}
+            >
+              <Text style={styles.retryBtnText}>Try again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.secondaryBtn}
+              onPress={() => router.replace('/(tailor)/profile')}
+            >
+              <Text style={styles.secondaryBtnText}>Open profile</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </SafeAreaView>
     )
   }
@@ -266,13 +363,32 @@ export default function PortfolioScreen() {
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={8}>
+        <TouchableOpacity onPress={goBack} hitSlop={8}>
           <Feather name="arrow-left" size={22} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Portfolio</Text>
         <TouchableOpacity style={styles.addBtn} onPress={openNew} hitSlop={8}>
           <Feather name="plus" size={20} color={Colors.white} />
         </TouchableOpacity>
+      </View>
+
+      <View style={styles.heroCard}>
+        <View style={styles.heroBadge}>
+          <Text style={styles.heroBadgeText}>Proof of craft</Text>
+        </View>
+        <Text style={styles.heroTitle}>Show the work that makes customers stop and trust.</Text>
+        <Text style={styles.heroSub}>
+          A strong portfolio helps customers understand your range, quality, and aesthetic before
+          they ever send a brief.
+        </Text>
+      </View>
+
+      <View style={styles.guideCard}>
+        <Text style={styles.guideEyebrow}>Best approach</Text>
+        <Text style={styles.guideTitle}>Lead with the work you most want to be booked for.</Text>
+        <Text style={styles.guideCopy}>
+          A few strong pieces beat a crowded gallery. Use this space to signal your taste, quality, and the kind of commissions you want more of.
+        </Text>
       </View>
 
       <FlatList
@@ -284,9 +400,14 @@ export default function PortfolioScreen() {
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={
           <View style={styles.empty}>
+            <View style={styles.emptyBadge}>
+              <Text style={styles.emptyBadgeText}>Portfolio</Text>
+            </View>
             <Feather name="image" size={40} color={Colors.lightGrey} style={{ marginBottom: Spacing.md }} />
             <Text style={styles.emptyTitle}>No portfolio items yet</Text>
-            <Text style={styles.emptyHint}>Showcase your work to attract more clients.</Text>
+            <Text style={styles.emptyHint}>
+              Showcase your best work so future customers can judge your craft, style, and fit before they book.
+            </Text>
             <TouchableOpacity style={styles.emptyAddBtn} onPress={openNew}>
               <Feather name="plus" size={16} color={Colors.white} />
               <Text style={styles.emptyAddBtnText}>Add first item</Text>
@@ -413,14 +534,21 @@ export default function PortfolioScreen() {
               {/* Delete button (edit mode only) */}
               {editModal.id && (
                 <TouchableOpacity
-                  style={styles.deleteBtn}
+                  style={[styles.deleteBtn, deletingId === editModal.id && { opacity: 0.6 }]}
+                  disabled={saving || deletingId === editModal.id}
                   onPress={() => {
                     const item = items.find((i) => i.id === editModal.id)
                     if (item) { setEditModal(null); handleDelete(item) }
                   }}
                 >
-                  <Feather name="trash-2" size={16} color={Colors.error} />
-                  <Text style={styles.deleteBtnText}>Delete item</Text>
+                  {deletingId === editModal.id ? (
+                    <ActivityIndicator size="small" color={Colors.error} />
+                  ) : (
+                    <>
+                      <Feather name="trash-2" size={16} color={Colors.error} />
+                      <Text style={styles.deleteBtnText}>Delete item</Text>
+                    </>
+                  )}
                 </TouchableOpacity>
               )}
             </ScrollView>
@@ -445,12 +573,94 @@ export default function PortfolioScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  stateCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    alignItems: 'center',
+    ...Shadow.lg,
+  },
+  stateEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
     paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md,
     borderBottomWidth: 1, borderBottomColor: Colors.boneDeep,
   },
   headerTitle: { flex: 1, fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  heroCard: {
+    marginHorizontal: Spacing.xl,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  heroTitle: {
+    fontSize: FontSize.xxl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 38,
+  },
+  heroSub: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 24,
+  },
+  guideCard: {
+    marginHorizontal: Spacing.xl,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  guideEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.midGrey,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  guideTitle: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    lineHeight: 22,
+  },
+  guideCopy: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 21,
+  },
   addBtn: {
     width: 36, height: 36, borderRadius: Radius.full,
     backgroundColor: Colors.needleGreen, alignItems: 'center', justifyContent: 'center',
@@ -478,6 +688,19 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center',
   },
   empty: { alignItems: 'center', paddingTop: Spacing.xxxl, gap: Spacing.sm },
+  emptyBadge: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  emptyBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
   emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
   emptyHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', maxWidth: 260 },
   emptyAddBtn: {
@@ -486,6 +709,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md, marginTop: Spacing.md,
   },
   emptyAddBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  retryBtn: {
+    backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
+    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.sm, marginTop: Spacing.md,
+  },
+  retryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  secondaryBtn: {
+    backgroundColor: Colors.white,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.sm,
+  },
+  secondaryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   // Modal
   modalSafe: { flex: 1, backgroundColor: Colors.white },
   modalHeader: {

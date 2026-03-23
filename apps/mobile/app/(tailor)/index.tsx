@@ -1,20 +1,17 @@
 import { useCallback, useState } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Modal,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Modal, ActivityIndicator, Alert,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { shareTailorProfile } from '@/lib/invite'
+import { inviteCustomerFromTailor, shareTailorProfile } from '@/lib/invite'
+import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
 import { stageColor } from '@/lib/stageColors'
-
-const CURRENCY_SYMBOL: Record<string, string> = {
-  GBP: '£', USD: '$', EUR: '€', NGN: '₦', GHS: '₵', KES: 'KSh',
-}
 
 type Availability = 'OPEN' | 'LIMITED' | 'FULLY_BOOKED'
 const AVAIL_OPTIONS: { value: Availability; label: string; desc: string; color: string }[] = [
@@ -47,13 +44,38 @@ type ActiveOrderRow = {
   quotedAmount: number | null
 }
 
+function dashboardOrderHint(stage: OrderStage): string | null {
+  switch (stage) {
+    case 'PENDING_QUOTE':
+      return 'Send your quote'
+    case 'CONSULTATION':
+      return 'Run consultation, then quote'
+    case 'QUOTE_SENT':
+      return 'Waiting for customer acceptance'
+    case 'READY_FOR_COLLECTION':
+      return 'Confirm collection code at pickup'
+    case 'SHIPPED':
+      return 'Waiting for delivery confirmation'
+    case 'DELIVERED':
+      return 'Customer needs to finish the order'
+    case 'COLLECTED':
+      return 'Customer needs to finish the order'
+    case 'IN_DISPUTE':
+      return 'Concern under review'
+    default:
+      return null
+  }
+}
+
 
 export default function TailorDashboard() {
   const router = useRouter()
   const { user, signOut } = useAuth()
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [orders, setOrders] = useState<ActiveOrderRow[]>([])
+  const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [fetchError, setFetchError] = useState(false)
   const [availModal, setAvailModal] = useState(false)
   const [availSaving, setAvailSaving] = useState(false)
 
@@ -65,73 +87,103 @@ export default function TailorDashboard() {
   })()
 
   async function fetchDashboard() {
-    const [profileRes, ordersRes] = await Promise.all([
-      supabase
-        .from('tailor_profiles')
-        .select('id, display_name, tier, avg_rating, availability, currency, is_live, id_verification_status')
-        .eq('user_id', user?.id)
-        .maybeSingle(),
-      supabase
+    setFetchError(false)
+    try {
+      const [profileRes, ordersRes] = await Promise.allSettled([
+        supabase
+          .from('tailor_profiles')
+          .select('id, display_name, tier, avg_rating, availability, currency, is_live, id_verification_status')
+          .eq('user_id', user?.id)
+          .maybeSingle(),
+        supabase
+          .from('orders')
+          .select(`
+            id, reference, garment_type, stage, quoted_completion_date, quoted_amount,
+            customer_profiles!customer_id(display_name)
+          `)
+          .eq('tailor_id', user?.id)
+          .not('stage', 'in', '("COMPLETE","DECLINED","EXPIRED","CANCELLED","REFUNDED")')
+          .order('created_at', { ascending: false })
+          .limit(20),
+      ])
+
+      const profile =
+        profileRes.status === 'fulfilled' && !profileRes.value.error
+          ? (profileRes.value.data as any)
+          : null
+
+      const orderList =
+        ordersRes.status === 'fulfilled' && !ordersRes.value.error
+          ? ((ordersRes.value.data ?? []) as any[])
+          : []
+
+      if (
+        (profileRes.status === 'rejected' || (profileRes.status === 'fulfilled' && profileRes.value.error)) &&
+        (ordersRes.status === 'rejected' || (ordersRes.status === 'fulfilled' && ordersRes.value.error))
+      ) {
+        setFetchError(true)
+        setStats(null)
+        setOrders([])
+        return
+      }
+
+      const pendingQuotes = orderList.filter((o) => o.stage === 'PENDING_QUOTE').length
+      const activeOrders = orderList.filter((o) => o.stage !== 'PENDING_QUOTE').length
+
+      const monthStart = new Date()
+      monthStart.setDate(1)
+      monthStart.setHours(0, 0, 0, 0)
+
+      let monthEarnings = 0
+      const { data: monthOrders, error: monthOrdersError } = await supabase
         .from('orders')
-        .select(`
-          id, reference, garment_type, stage, quoted_completion_date, quoted_amount,
-          customer_profiles!customer_id(display_name)
-        `)
+        .select('quoted_amount')
         .eq('tailor_id', user?.id)
-        .not('stage', 'in', '("COMPLETE","DECLINED","EXPIRED","CANCELLED","REFUNDED","DELIVERED","COLLECTED")')
-        .order('created_at', { ascending: false })
-        .limit(20),
-    ])
+        .in('stage', ['COMPLETE', 'DELIVERED', 'COLLECTED'])
+        .gte('updated_at', monthStart.toISOString())
 
-    const profile = profileRes.data as any
+      if (!monthOrdersError) {
+        monthEarnings = (monthOrders ?? []).reduce((sum: number, o: any) => sum + (o.quoted_amount ?? 0), 0)
+      }
 
-    const orderList = (ordersRes.data ?? []) as any[]
+      setStats({
+        activeOrders,
+        pendingQuotes,
+        monthEarnings,
+        avgRating: profile?.avg_rating ?? 0,
+        tier: profile?.tier ?? null,
+        displayName: profile?.display_name ?? user?.user_metadata?.display_name ?? '',
+        availability: profile?.availability ?? 'OPEN',
+        currency: profile?.currency ?? 'GBP',
+        isLive: profile?.is_live ?? false,
+        idVerificationStatus: profile?.id_verification_status ?? 'NOT_SUBMITTED',
+        profileId: profile?.id ?? null,
+      })
 
-    const pendingQuotes = orderList.filter((o) => o.stage === 'PENDING_QUOTE').length
-    const activeOrders = orderList.filter((o) => o.stage !== 'PENDING_QUOTE').length
-
-    // Month earnings: sum completed orders this calendar month
-    const monthStart = new Date()
-    monthStart.setDate(1)
-    monthStart.setHours(0, 0, 0, 0)
-
-    const { data: monthOrders } = await supabase
-      .from('orders')
-      .select('quoted_amount')
-      .eq('tailor_id', user?.id)
-      .in('stage', ['COMPLETE', 'DELIVERED', 'COLLECTED'])
-      .gte('updated_at', monthStart.toISOString())
-
-    const monthEarnings = (monthOrders ?? []).reduce((sum: number, o: any) => sum + (o.quoted_amount ?? 0), 0)
-
-    setStats({
-      activeOrders,
-      pendingQuotes,
-      monthEarnings,
-      avgRating: profile?.avg_rating ?? 0,
-      tier: profile?.tier ?? null,
-      displayName: profile?.display_name ?? user?.user_metadata?.display_name ?? '',
-      availability: profile?.availability ?? 'OPEN',
-      currency: profile?.currency ?? 'GBP',
-      isLive: profile?.is_live ?? false,
-      idVerificationStatus: profile?.id_verification_status ?? 'NOT_SUBMITTED',
-      profileId: profile?.id ?? null,
-    })
-
-    setOrders(
-      orderList.map((o) => ({
-        id: o.id,
-        reference: o.reference,
-        garmentType: o.garment_type,
-        stage: o.stage,
-        customerName: o.customer_profiles?.display_name ?? 'Customer',
-        estimatedDate: o.quoted_completion_date,
-        quotedAmount: o.quoted_amount,
-      }))
-    )
+      setOrders(
+        orderList.map((o) => ({
+          id: o.id,
+          reference: o.reference,
+          garmentType: o.garment_type,
+          stage: o.stage,
+          customerName: o.customer_profiles?.display_name ?? 'Customer',
+          estimatedDate: o.quoted_completion_date,
+          quotedAmount: o.quoted_amount,
+        }))
+      )
+    } catch {
+      setFetchError(true)
+      setStats(null)
+      setOrders([])
+    } finally {
+      setLoading(false)
+    }
   }
 
-  useFocusEffect(useCallback(() => { fetchDashboard() }, [user?.id]))
+  useFocusEffect(useCallback(() => {
+    setLoading(true)
+    fetchDashboard()
+  }, [user?.id]))
 
   async function onRefresh() {
     setRefreshing(true)
@@ -141,10 +193,15 @@ export default function TailorDashboard() {
 
   async function setAvailability(value: Availability) {
     setAvailSaving(true)
-    await supabase
+    const { error } = await supabase
       .from('tailor_profiles')
       .update({ availability: value })
       .eq('user_id', user?.id)
+    if (error) {
+      Alert.alert('Error', 'Could not update your availability. Please try again.')
+      setAvailSaving(false)
+      return
+    }
     setStats((prev) => prev ? { ...prev, availability: value } : prev)
     setAvailSaving(false)
     setAvailModal(false)
@@ -154,6 +211,54 @@ export default function TailorDashboard() {
     OPEN: Colors.success, LIMITED: Colors.warning, FULLY_BOOKED: Colors.error,
   }[stats?.availability ?? 'OPEN']
 
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']} testID="tailor-home-screen">
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Tailor dashboard</Text>
+            <ActivityIndicator color={Colors.needleGreen} size="large" />
+            <Text style={styles.stateTitle}>Loading your dashboard…</Text>
+            <Text style={styles.stateHint}>
+              We’re pulling together orders, reviews, and business activity so you can start from one clear control surface.
+            </Text>
+          </View>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  if (fetchError) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']} testID="tailor-home-screen">
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Tailor dashboard</Text>
+            <Text style={styles.stateTitle}>Couldn't load your dashboard.</Text>
+            <Text style={styles.stateHint}>
+              This screen should give you a calm, reliable view of your order book, availability, and next actions.
+            </Text>
+            <View style={styles.stateGuideCard}>
+              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
+              <Text style={styles.stateGuideText}>
+                Refresh here first. If the dashboard still does not load, open Orders first, then Profile if needed, so you can keep working while the overview catches up.
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.retryBtn} onPress={() => { setLoading(true); fetchDashboard() }}>
+              <Text style={styles.retryBtnText}>Try again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.secondaryErrorBtn} onPress={() => router.push('/(tailor)/orders')}>
+              <Text style={styles.secondaryErrorBtnText}>Open orders</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.secondaryErrorBtn} onPress={() => router.push('/(tailor)/profile')}>
+              <Text style={styles.secondaryErrorBtnText}>Open profile</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']} testID="tailor-home-screen">
       <ScrollView
@@ -162,6 +267,24 @@ export default function TailorDashboard() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />}
       >
+        <View style={styles.heroCard}>
+          <View style={styles.heroBadge}>
+            <Text style={styles.heroBadgeText}>Tailor dashboard</Text>
+          </View>
+          <Text style={styles.heroTitle}>Run your order book, availability, and momentum from one place.</Text>
+          <Text style={styles.heroSub}>
+            This dashboard is your daily control surface for quotes, production progress, customer
+            trust, and the health of your tailoring business on Drape.
+          </Text>
+        </View>
+
+        <View style={styles.guideCard}>
+          <Text style={styles.guideTitle}>Best daily habit</Text>
+          <Text style={styles.guideText}>
+            Check quotes first, keep availability honest, and use this screen to spot anything that needs a faster reply or stage update.
+          </Text>
+        </View>
+
         {/* Header */}
         <View style={styles.header}>
           <View style={{ flex: 1 }}>
@@ -173,7 +296,7 @@ export default function TailorDashboard() {
               <TouchableOpacity style={styles.availPill} onPress={() => setAvailModal(true)}>
                 <View style={[styles.availDot, { backgroundColor: availColor }]} />
                 <Text style={styles.availLabel}>
-                  {stats.availability === 'OPEN' ? 'Open' : stats.availability === 'LIMITED' ? 'Limited' : 'Booked'}
+                  {stats.availability === 'OPEN' ? 'Open' : stats.availability === 'LIMITED' ? 'Limited' : 'Fully booked'}
                 </Text>
               </TouchableOpacity>
             )}
@@ -236,10 +359,12 @@ export default function TailorDashboard() {
             <TouchableOpacity onPress={() => router.navigate('/(tailor)/earnings')} style={{ flex: 1 }}>
               <StatCard
                 label="This month"
-                value={(() => {
-                  const sym = CURRENCY_SYMBOL[stats?.currency ?? 'GBP'] ?? (stats?.currency ?? '£')
-                  return stats?.monthEarnings ? `${sym}${(stats.monthEarnings / 100).toFixed(0)}` : `${sym}0`
-                })()}
+                value={formatAmount(
+                  stats?.monthEarnings ?? 0,
+                  (stats?.currency ?? 'GBP') as CurrencyCode,
+                  (stats?.currency ?? 'GBP') as CurrencyCode,
+                  STATIC_FALLBACK_RATES
+                )}
               />
             </TouchableOpacity>
             <StatCard
@@ -260,14 +385,25 @@ export default function TailorDashboard() {
 
           {orders.length === 0 ? (
             <View style={styles.emptyOrders}>
+              <View style={styles.emptyOrdersBadge}>
+                <Text style={styles.emptyOrdersBadgeText}>Order book</Text>
+              </View>
               <Text style={styles.emptyText}>No active orders yet</Text>
               {stats?.isLive ? (
                 <>
                   <Text style={styles.emptyHint}>Share your profile to attract your first clients.</Text>
                   {stats.profileId && (
-                    <TouchableOpacity style={styles.shareBtn} onPress={() => shareTailorProfile(stats.profileId!, stats.displayName)}>
-                      <Text style={styles.shareBtnText}>Share my profile</Text>
-                    </TouchableOpacity>
+                    <View style={styles.emptyActions}>
+                      <TouchableOpacity style={styles.shareBtn} onPress={() => shareTailorProfile(stats.profileId!, stats.displayName)}>
+                        <Text style={styles.shareBtnText}>Share my profile</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.shareBtn, styles.shareBtnSecondary]}
+                        onPress={() => inviteCustomerFromTailor(stats.profileId!, stats.displayName)}
+                      >
+                        <Text style={[styles.shareBtnText, styles.shareBtnTextSecondary]}>Invite a customer</Text>
+                      </TouchableOpacity>
+                    </View>
                   )}
                 </>
               ) : stats?.idVerificationStatus === 'PENDING' ? (
@@ -298,6 +434,9 @@ export default function TailorDashboard() {
                 <View style={styles.orderRowLeft}>
                   <Text style={styles.orderGarment}>{order.garmentType}</Text>
                   <Text style={styles.orderCustomer}>{order.customerName}</Text>
+                  {dashboardOrderHint(order.stage) && (
+                    <Text style={styles.orderHint}>{dashboardOrderHint(order.stage)}</Text>
+                  )}
                 </View>
                 <View style={styles.orderRowRight}>
                   <View style={[styles.stagePill, { backgroundColor: stageColor(order.stage).bg }]}>
@@ -349,8 +488,92 @@ function StatCard({ label, value, accent }: { label: string; value: string; acce
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  stateCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    alignItems: 'center',
+    ...Shadow.lg,
+  },
+  stateEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
+  stateGuideCard: {
+    alignSelf: 'stretch',
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: 4,
+  },
+  stateGuideTitle: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    textAlign: 'center',
+  },
+  stateGuideText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
   scroll: { flex: 1 },
   content: { padding: Spacing.xl, gap: Spacing.xl, paddingBottom: Spacing.xxxl },
+  heroCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  heroTitle: {
+    fontSize: FontSize.xxl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 38,
+  },
+  heroSub: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 24,
+  },
+  guideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   headerRight: { alignItems: 'flex-end', gap: Spacing.sm },
@@ -395,6 +618,22 @@ const styles = StyleSheet.create({
   alertDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.warning },
   alertText: { flex: 1, fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink },
   alertCta: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.warning },
+  retryBtn: {
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xxxl,
+  },
+  retryBtnText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  secondaryErrorBtn: {
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xl,
+  },
+  secondaryErrorBtnText: { color: Colors.ink, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
 
   statsGrid: { gap: Spacing.sm },
   statsRow: { flexDirection: 'row', gap: Spacing.sm },
@@ -413,16 +652,41 @@ const styles = StyleSheet.create({
   sectionLink: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
 
   emptyOrders: { gap: Spacing.sm, alignItems: 'center', paddingVertical: Spacing.xl },
+  emptyOrdersBadge: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  emptyOrdersBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
   emptyText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   emptyHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center' },
-  shareBtn: {
+  emptyActions: {
     marginTop: Spacing.sm,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+    justifyContent: 'center',
+  },
+  shareBtn: {
     backgroundColor: Colors.needleGreen,
     borderRadius: Radius.full,
     paddingHorizontal: Spacing.xl,
     paddingVertical: Spacing.md,
   },
+  shareBtnSecondary: {
+    backgroundColor: Colors.white,
+    borderWidth: 1.5,
+    borderColor: Colors.needleGreen,
+  },
   shareBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  shareBtnTextSecondary: { color: Colors.needleGreen },
 
   orderRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
@@ -431,6 +695,7 @@ const styles = StyleSheet.create({
   orderRowLeft: { gap: 2 },
   orderGarment: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   orderCustomer: { fontSize: FontSize.sm, color: Colors.inkLight },
+  orderHint: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium, marginTop: 4 },
   orderRowRight: { alignItems: 'flex-end', gap: 4 },
   stagePill: { paddingHorizontal: Spacing.sm, paddingVertical: 3, borderRadius: Radius.full },
   stageText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },

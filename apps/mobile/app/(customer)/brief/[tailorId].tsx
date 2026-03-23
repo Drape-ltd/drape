@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Alert, KeyboardAvoidingView, Platform, Image, Modal, TextInput,
 } from 'react-native'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as ImagePicker from 'expo-image-picker'
@@ -29,37 +29,59 @@ const GARMENT_TYPES = [
 ]
 
 const STEP_TITLES = ['Garment details', 'Style references', 'Your measurements', 'Fabric & delivery']
-
-const CURATED_STYLE_HANDLES = [
-  '@thesartorialist',
-  '@drapeofficial',
-  '@agbada_styles',
-  '@bespoketailoring',
-  '@africanbespoke',
-  '@mens_fashion',
-  '@couturefashion',
-  '@weddingdressstyle',
-  '@ankara_fashion',
-  '@nigerian_fashion',
+const STEP_SUBS = [
+  'Tell your tailor exactly what you want to make, what it is for, and when you need it by.',
+  'Show visual references so the tailor can understand your taste, shape, and finishing direction faster.',
+  'Share the fit context your tailor needs to quote accurately and make the garment feel right on your body.',
+  'Clarify who handles fabric and how the finished garment gets to you, so the order can move cleanly once quoted.',
 ]
+
+const SUPPORTED_STYLE_LINK_LABELS = [
+  'Instagram posts',
+  'Instagram reels',
+  'Pinterest pins',
+  'TikTok videos',
+  'YouTube videos',
+  'X posts',
+]
+
+function defaultDeadline() {
+  const next = new Date()
+  next.setDate(next.getDate() + 28)
+  return next
+}
+
+function asStringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+  if (typeof value === 'string' && value.length > 0) return [value]
+  return []
+}
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function OrderBriefScreen() {
   const { tailorId } = useLocalSearchParams<{ tailorId: string }>()
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
+
+  function goBack() {
+    if (navigation.canGoBack()) router.back()
+    else router.replace('/(customer)')
+  }
 
   const [step, setStep] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [showMeasPrompt, setShowMeasPrompt] = useState(false)
+  const [fetchError, setFetchError] = useState(false)
+  const [initialLoading, setInitialLoading] = useState(true)
 
   // Step 1
   const [garmentType, setGarmentType] = useState('')
   const [description, setDescription] = useState('')
   const [descriptionError, setDescriptionError] = useState('')
   const [occasion, setOccasion] = useState('')
-  const [deadline, setDeadline] = useState<Date | null>(null)
+  const [deadline, setDeadline] = useState<Date | null>(() => defaultDeadline())
   const [showDatePicker, setShowDatePicker] = useState(false)
 
   // Step 2
@@ -80,40 +102,96 @@ export default function OrderBriefScreen() {
   // Step 4
   const [fabricSource, setFabricSource] = useState<FabricSource | null>(null)
   const [deliveryMethod, setDeliveryMethod] = useState<DeliveryMethod | null>(null)
-  const [deliveryAddress, setDeliveryAddress] = useState('')
+  const [deliveryAddressLine1, setDeliveryAddressLine1] = useState('')
+  const [deliveryAddressLine2, setDeliveryAddressLine2] = useState('')
+  const [deliveryCity, setDeliveryCity] = useState('')
+  const [deliveryStateRegion, setDeliveryStateRegion] = useState('')
+  const [deliveryPostalCode, setDeliveryPostalCode] = useState('')
+  const [deliveryCountry, setDeliveryCountry] = useState('')
   const [deliveryAddressError, setDeliveryAddressError] = useState('')
 
-  // Resolved tailor user_id (tailorId param is tailor_profiles.id)
-  const [tailorUserId, setTailorUserId] = useState<string | null>(null)
-
-  // Load tailor user_id + customer measurements; show one-time completeness prompt
   useEffect(() => {
-    async function load() {
-      const [tailorRes, measRes] = await Promise.all([
-        supabase
-          .from('tailor_profiles')
-          .select('user_id')
-          .eq('id', tailorId)
-          .single(),
-        supabase
-          .from('customer_profiles')
-          .select('measurements')
-          .eq('user_id', user?.id)
-          .single(),
-      ])
+    setStep(0)
+    setSubmitting(false)
+    setShowMeasPrompt(false)
+    setFetchError(false)
+    setInitialLoading(true)
+    setGarmentType('')
+    setDescription('')
+    setDescriptionError('')
+    setOccasion('')
+    setDeadline(defaultDeadline())
+    setShowDatePicker(false)
+    setPhotos([])
+    setInspirationLinks([])
+    setInspirationInput('')
+    setLinkError('')
+    setMeasurements(null)
+    setFitNote('')
+    setFitNoteError('')
+    setEditingField(null)
+    setEditValue('')
+    setFabricSource(null)
+    setDeliveryMethod(null)
+    setDeliveryAddressLine1('')
+    setDeliveryAddressLine2('')
+    setDeliveryCity('')
+    setDeliveryStateRegion('')
+    setDeliveryPostalCode('')
+    setDeliveryCountry('')
+    setDeliveryAddressError('')
+  }, [tailorId])
 
-      if (tailorRes.data) setTailorUserId(tailorRes.data.user_id)
+  async function loadInitialData() {
+    setFetchError(false)
+    setInitialLoading(true)
+    setMeasurements(null)
 
-      const hasMeasurements = !!(measRes.data?.measurements && Object.keys(measRes.data.measurements).length > 0)
-      if (hasMeasurements) {
-        setMeasurements(measRes.data.measurements)
-      } else {
-        const alreadyShown = await AsyncStorage.getItem(MEAS_PROMPT_KEY)
-        if (!alreadyShown) setShowMeasPrompt(true)
-      }
+    const [tailorRes, measRes] = await Promise.allSettled([
+      supabase
+        .from('tailor_profiles')
+        .select('id')
+        .eq('id', tailorId)
+        .maybeSingle(),
+      supabase
+        .from('customer_profiles')
+        .select('measurements')
+        .eq('user_id', user?.id)
+        .maybeSingle(),
+    ])
+
+    const tailorData =
+      tailorRes.status === 'fulfilled' && !tailorRes.value.error
+        ? tailorRes.value.data
+        : null
+    const measurementData =
+      measRes.status === 'fulfilled' && !measRes.value.error
+        ? measRes.value.data
+        : null
+
+    if (!tailorData?.id) {
+      setFetchError(true)
     }
-    load()
-  }, [])
+
+    const hasMeasurements = !!(measurementData?.measurements && Object.keys(measurementData.measurements).length > 0)
+    if (hasMeasurements) {
+      setMeasurements(measurementData?.measurements ?? null)
+      setInitialLoading(false)
+      return
+    }
+
+    setMeasurements(null)
+    const alreadyShown = await AsyncStorage.getItem(MEAS_PROMPT_KEY)
+    if (!alreadyShown) setShowMeasPrompt(true)
+    setInitialLoading(false)
+  }
+
+  // Load tailor profile existence + customer measurements; show one-time completeness prompt
+  useFocusEffect(
+    useCallback(() => {
+      void loadInitialData()
+    }, [tailorId, user?.id])
+  )
 
   function validateDescription(text: string) {
     const placeholder = rejectPlaceholder(text, 'Description')
@@ -124,10 +202,25 @@ export default function OrderBriefScreen() {
     return true
   }
 
-  function validateDeliveryAddress(text: string) {
-    const placeholder = rejectPlaceholder(text, 'Delivery address')
+  function composeDeliveryAddress() {
+    return [
+      deliveryAddressLine1.trim(),
+      deliveryAddressLine2.trim() || null,
+      [deliveryCity.trim(), deliveryStateRegion.trim()].filter(Boolean).join(', '),
+      deliveryPostalCode.trim(),
+      deliveryCountry.trim(),
+    ].filter(Boolean).join('\n')
+  }
+
+  function validateDeliveryAddress() {
+    const fullAddress = composeDeliveryAddress()
+    const placeholder = rejectPlaceholder(fullAddress, 'Delivery address')
     if (placeholder) { setDeliveryAddressError(placeholder); return false }
-    if (text.trim().length < 10) { setDeliveryAddressError('Please enter your full delivery address.'); return false }
+    if (!deliveryAddressLine1.trim()) { setDeliveryAddressError('Please enter the first line of your address.'); return false }
+    if (!deliveryCity.trim()) { setDeliveryAddressError('Please enter your city.'); return false }
+    if (!deliveryStateRegion.trim()) { setDeliveryAddressError('Please enter your state, region, or county.'); return false }
+    if (!deliveryPostalCode.trim()) { setDeliveryAddressError('Please enter your postcode or ZIP code.'); return false }
+    if (!deliveryCountry.trim()) { setDeliveryAddressError('Please enter your country.'); return false }
     setDeliveryAddressError('')
     return true
   }
@@ -146,6 +239,7 @@ export default function OrderBriefScreen() {
   }
 
   async function pickPhoto() {
+    if (submitting) return
     if (photos.length >= 5) { Alert.alert('Maximum 5 reference photos'); return }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -162,16 +256,10 @@ export default function OrderBriefScreen() {
     if (step === 2) return !!measurements && fitNote.trim().length >= 20 && !fitNoteError
     if (step === 3) {
       if (!fabricSource || !deliveryMethod) return false
-      if (deliveryMethod === 'SHIPPING' && (deliveryAddress.trim().length < 10 || !!deliveryAddressError)) return false
+      if (deliveryMethod === 'SHIPPING' && (!composeDeliveryAddress().trim() || !!deliveryAddressError)) return false
       return true
     }
     return false
-  }
-
-  function addInspirationHandle(handle: string) {
-    if (!inspirationLinks.includes(handle)) {
-      setInspirationLinks((prev) => [...prev, handle])
-    }
   }
 
   function addCustomInspirationLink() {
@@ -200,14 +288,11 @@ export default function OrderBriefScreen() {
   }
 
   async function submit() {
-    if (!tailorUserId) {
-      Alert.alert('Error', 'Could not load tailor details. Please go back and try again.')
-      return
-    }
+    if (submitting) return
     // Final guard — catches any placeholder values that bypassed per-field validation
     if (!validateDescription(description)) return
     if (!validateFitNote(fitNote)) return
-    if (deliveryMethod === 'SHIPPING' && !validateDeliveryAddress(deliveryAddress)) return
+    if (deliveryMethod === 'SHIPPING' && !validateDeliveryAddress()) return
     setSubmitting(true)
 
     // Upload reference photos to Supabase Storage (EXIF stripped before upload)
@@ -225,7 +310,9 @@ export default function OrderBriefScreen() {
           uploadedUrls.push(urlData.publicUrl)
         }
       } catch {
-        // Skip failed uploads — don't block submission
+        setSubmitting(false)
+        Alert.alert('Upload failed', 'One of your reference photos could not be uploaded. Please try again.')
+        return
       }
     }
 
@@ -234,7 +321,6 @@ export default function OrderBriefScreen() {
 
     const { data, error } = await supabase.from('orders').insert({
       customer_id: user?.id,
-      tailor_id: tailorUserId,       // auth UUID — for tailor's own queries
       tailor_profile_id: tailorId,   // tailor_profiles.id — for joins
       reference,
       garment_type: garmentType,
@@ -246,7 +332,7 @@ export default function OrderBriefScreen() {
       fit_note: fitNote.trim() ? (inspirationLinks.length > 0 ? `${fitNote.trim()}\n\nStyle inspiration: ${inspirationLinks.join(', ')}` : fitNote.trim()) : (inspirationLinks.length > 0 ? `Style inspiration: ${inspirationLinks.join(', ')}` : null),
       fabric_source: fabricSource,
       delivery_method: deliveryMethod,
-      delivery_address: deliveryMethod === 'SHIPPING' ? deliveryAddress.trim() : null,
+      delivery_address: deliveryMethod === 'SHIPPING' ? composeDeliveryAddress() : null,
       stage: 'PENDING_QUOTE',
       stage_updated_at: new Date().toISOString(),
     }).select('id').single()
@@ -272,12 +358,13 @@ export default function OrderBriefScreen() {
   }
 
   function next() {
+    if (submitting) return
     if (step === 2 && !measurements) {
       Alert.alert(
         'Measurements required',
         'Please set up your measurement profile before placing an order. This helps your tailor give an accurate quote.',
         [
-          { text: 'Set up now', onPress: () => router.navigate('/(customer)/profile/measurements') },
+          { text: 'Set up now', onPress: () => router.push('/(customer)/profile/measurements') },
           { text: 'Cancel', style: 'cancel' },
         ]
       )
@@ -290,13 +377,62 @@ export default function OrderBriefScreen() {
 
   function back() {
     if (step > 0) setStep(step - 1)
-    else router.back()
+    else goBack()
   }
 
   async function dismissMeasPrompt(goToMeasurements: boolean) {
     await AsyncStorage.setItem(MEAS_PROMPT_KEY, '1')
     setShowMeasPrompt(false)
-    if (goToMeasurements) router.navigate('/(customer)/profile/measurements')
+    if (goToMeasurements) router.push('/(customer)/profile/measurements')
+  }
+
+  if (fetchError) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <View style={styles.errorState}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Order brief</Text>
+            <Text style={styles.errorTitle}>Couldn't load this order form</Text>
+            <Text style={styles.errorHint}>Please go back and try again in a moment.</Text>
+            <View style={styles.stateGuideCard}>
+              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
+              <Text style={styles.stateGuideText}>
+                Refresh here first. If it still fails, explore tailors first, then open your measurements if needed, so the next booking can keep moving.
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.errorBtn} onPress={() => void loadInitialData()}>
+              <Text style={styles.errorBtnText}>Try again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.errorBtn, styles.errorBtnSecondary]} onPress={() => router.replace('/(customer)')}>
+              <Text style={[styles.errorBtnText, styles.errorBtnTextSecondary]}>Explore tailors</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.errorBtn, styles.errorBtnSecondary]}
+              onPress={() => router.push('/(customer)/profile/measurements')}
+            >
+              <Text style={[styles.errorBtnText, styles.errorBtnTextSecondary]}>Open measurements</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.errorBtn, styles.errorBtnSecondary]} onPress={goBack}>
+              <Text style={[styles.errorBtnText, styles.errorBtnTextSecondary]}>Go back</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  if (initialLoading) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <View style={styles.loadingState}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Order brief</Text>
+            <Text style={styles.loadingTitle}>Preparing your order brief…</Text>
+            <Text style={styles.loadingHint}>We’re loading your tailor details and measurement profile so the quote can start from the right context.</Text>
+          </View>
+        </View>
+      </SafeAreaView>
+    )
   }
 
   return (
@@ -321,6 +457,16 @@ export default function OrderBriefScreen() {
         <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
           <View style={styles.content}>
             <Text style={styles.stepTitle}>{STEP_TITLES[step]}</Text>
+            <View style={styles.stepIntroCard}>
+              <Text style={styles.stepIntroEyebrow}>Why this step matters</Text>
+              <Text style={styles.stepIntroText}>{STEP_SUBS[step]}</Text>
+            </View>
+            <View style={styles.guideCard}>
+              <Text style={styles.guideTitle}>Best brief habit</Text>
+              <Text style={styles.guideText}>
+                Be specific, stay visual, and keep everything in one clear order. A sharper brief usually leads to a faster, better quote.
+              </Text>
+            </View>
 
             {/* ── Step 0: Garment details ── */}
             {step === 0 && (
@@ -424,24 +570,17 @@ export default function OrderBriefScreen() {
                 <View style={styles.inspirationSection}>
                   <Text style={styles.fieldLabel}>Style inspiration</Text>
                   <Text style={styles.fieldHint}>
-                    Add Instagram, Pinterest, or TikTok links to styles you like — up to 5. We've suggested some accounts below.
+                    Add Instagram, Pinterest, or TikTok post links to styles you like — up to 5. We've suggested some accounts below.
                   </Text>
 
-                  {/* Curated handles */}
+                  {/* Supported link types */}
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.handlesScroll}>
                     <View style={styles.handlesRow}>
-                      {CURATED_STYLE_HANDLES.map((handle) => {
-                        const selected = inspirationLinks.includes(handle)
-                        return (
-                          <TouchableOpacity
-                            key={handle}
-                            style={[styles.handleChip, selected && styles.handleChipActive]}
-                            onPress={() => selected ? removeInspirationLink(handle) : addInspirationHandle(handle)}
-                          >
-                            <Text style={[styles.handleChipText, selected && styles.handleChipTextActive]}>{handle}</Text>
-                          </TouchableOpacity>
-                        )
-                      })}
+                      {SUPPORTED_STYLE_LINK_LABELS.map((label) => (
+                        <View key={label} style={styles.handleChip}>
+                          <Text style={styles.handleChipText}>{label}</Text>
+                        </View>
+                      ))}
                     </View>
                   </ScrollView>
 
@@ -450,7 +589,7 @@ export default function OrderBriefScreen() {
                     <View style={{ flex: 1 }}>
                       <Input
                         label=""
-                        placeholder="Paste an Instagram / Pinterest link or @handle"
+                        placeholder="Paste an Instagram / Pinterest / TikTok post link"
                         value={inspirationInput}
                         onChangeText={(v) => { setInspirationInput(v); if (linkError) setLinkError('') }}
                         containerStyle={{ marginBottom: 0 }}
@@ -522,9 +661,9 @@ export default function OrderBriefScreen() {
                         </TouchableOpacity>
                       ))}
                     </View>
-                    {measurements.fitFlags?.length > 0 && (
+                    {asStringList(measurements.fitFlags).length > 0 && (
                       <View style={styles.flagsRow}>
-                        {measurements.fitFlags.map((f: string) => (
+                        {asStringList(measurements.fitFlags).map((f) => (
                           <View key={f} style={styles.flagBadge}>
                             <Text style={styles.flagBadgeText}>{f.replace(/_/g, ' ').toLowerCase()}</Text>
                           </View>
@@ -540,7 +679,7 @@ export default function OrderBriefScreen() {
                     </Text>
                     <TouchableOpacity
                       style={styles.noMeasureBtn}
-                      onPress={() => router.navigate('/(customer)/profile/measurements')}
+                      onPress={() => router.push('/(customer)/profile/measurements')}
                     >
                       <Text style={styles.noMeasureBtnText}>Set up measurements</Text>
                     </TouchableOpacity>
@@ -604,18 +743,68 @@ export default function OrderBriefScreen() {
                 </View>
 
                 {deliveryMethod === 'SHIPPING' && (
-                  <Input
-                    label="Delivery address"
-                    placeholder="Full address including postcode / ZIP / state"
-                    value={deliveryAddress}
-                    onChangeText={(v) => { setDeliveryAddress(v); if (deliveryAddressError) validateDeliveryAddress(v) }}
-                    onBlur={() => validateDeliveryAddress(deliveryAddress)}
-                    multiline
-                    numberOfLines={3}
-                    required
-                    hint="Your tailor ships the finished garment here."
-                    error={deliveryAddressError}
-                  />
+                  <View style={styles.addressFields}>
+                    <Input
+                      label="Address line 1"
+                      placeholder="Street address"
+                      value={deliveryAddressLine1}
+                      onChangeText={(v) => { setDeliveryAddressLine1(v); if (deliveryAddressError) setDeliveryAddressError('') }}
+                      onBlur={() => { if (deliveryMethod === 'SHIPPING') validateDeliveryAddress() }}
+                      required
+                    />
+                    <Input
+                      label="Address line 2 (optional)"
+                      placeholder="Apartment, suite, building"
+                      value={deliveryAddressLine2}
+                      onChangeText={(v) => { setDeliveryAddressLine2(v); if (deliveryAddressError) setDeliveryAddressError('') }}
+                    />
+                    <View style={styles.addressRow}>
+                      <View style={styles.addressHalf}>
+                        <Input
+                          label="City"
+                          placeholder="City"
+                          value={deliveryCity}
+                          onChangeText={(v) => { setDeliveryCity(v); if (deliveryAddressError) setDeliveryAddressError('') }}
+                          onBlur={() => { if (deliveryMethod === 'SHIPPING') validateDeliveryAddress() }}
+                          required
+                        />
+                      </View>
+                      <View style={styles.addressHalf}>
+                        <Input
+                          label="State / region"
+                          placeholder="State"
+                          value={deliveryStateRegion}
+                          onChangeText={(v) => { setDeliveryStateRegion(v); if (deliveryAddressError) setDeliveryAddressError('') }}
+                          onBlur={() => { if (deliveryMethod === 'SHIPPING') validateDeliveryAddress() }}
+                          required
+                        />
+                      </View>
+                    </View>
+                    <View style={styles.addressRow}>
+                      <View style={styles.addressHalf}>
+                        <Input
+                          label="Postcode / ZIP"
+                          placeholder="Postcode"
+                          value={deliveryPostalCode}
+                          onChangeText={(v) => { setDeliveryPostalCode(v); if (deliveryAddressError) setDeliveryAddressError('') }}
+                          onBlur={() => { if (deliveryMethod === 'SHIPPING') validateDeliveryAddress() }}
+                          required
+                        />
+                      </View>
+                      <View style={styles.addressHalf}>
+                        <Input
+                          label="Country"
+                          placeholder="Country"
+                          value={deliveryCountry}
+                          onChangeText={(v) => { setDeliveryCountry(v); if (deliveryAddressError) setDeliveryAddressError('') }}
+                          onBlur={() => { if (deliveryMethod === 'SHIPPING') validateDeliveryAddress() }}
+                          required
+                        />
+                      </View>
+                    </View>
+                    <Text style={styles.fieldHint}>Your tailor ships the finished garment here.</Text>
+                    {deliveryAddressError ? <Text style={styles.linkError}>{deliveryAddressError}</Text> : null}
+                  </View>
                 )}
 
                 {/* Summary */}
@@ -636,8 +825,8 @@ export default function OrderBriefScreen() {
                     {deliveryMethod && (
                       <SummaryRow label="Delivery" value={deliveryMethod === 'SHIPPING' ? 'Shipping' : 'Local collection'} />
                     )}
-                    {deliveryMethod === 'SHIPPING' && deliveryAddress.trim() && (
-                      <SummaryRow label="Ship to" value={deliveryAddress.trim()} />
+                    {deliveryMethod === 'SHIPPING' && composeDeliveryAddress().trim() && (
+                      <SummaryRow label="Ship to" value={composeDeliveryAddress()} />
                     )}
                   </View>
                 )}
@@ -648,11 +837,23 @@ export default function OrderBriefScreen() {
 
         {/* Bottom CTA */}
         <View style={styles.cta}>
+          <View style={styles.ctaGuideCard}>
+            <Text style={styles.ctaGuideTitle}>Best next move</Text>
+            <Text style={styles.ctaGuideText}>
+              {step === 0
+                ? 'Be clear about what you want made so the tailor can tell quickly whether they are the right fit.'
+                : step === 1
+                  ? 'Use references that show the outcome you want, not just the category you are shopping for.'
+                  : step === 2
+                    ? 'Accurate measurements and delivery details help the tailor quote with much less guesswork.'
+                    : 'Send the brief once it feels complete enough that a tailor could price and plan the work confidently.'}
+            </Text>
+          </View>
           <Button
             label={step < 3 ? 'Continue' : 'Send order'}
             onPress={next}
             loading={submitting}
-            disabled={!canProceed() && step !== 1}
+            disabled={submitting || (!canProceed() && step !== 1)}
             testID={step < 3 ? 'brief-continue-btn' : 'brief-send-btn'}
           />
         </View>
@@ -689,12 +890,39 @@ export default function OrderBriefScreen() {
                     {
                       text: 'Yes, update profile',
                       onPress: async () => {
-                        const { data } = await supabase.from('customer_profiles').select('measurements').eq('user_id', user?.id).single()
-                        if (data) {
-                          await supabase.from('customer_profiles').update({
-                            measurements: { ...data.measurements, [editingField.key]: parsed },
-                          }).eq('user_id', user?.id)
+                        const { data, error } = await supabase
+                          .from('customer_profiles')
+                          .select('measurements')
+                          .eq('user_id', user?.id)
+                          .maybeSingle()
+
+                        if (error) {
+                          Alert.alert('Could not update profile', 'Your measurement was updated for this order only. Please try again from your profile.')
+                          return
                         }
+
+                        const nextMeasurements = {
+                          ...(data?.measurements ?? {}),
+                          [editingField.key]: parsed,
+                        }
+
+                        const { error: updateError } = await supabase
+                          .from('customer_profiles')
+                          .upsert(
+                            {
+                              user_id: user?.id,
+                              measurements: nextMeasurements,
+                              updated_at: new Date().toISOString(),
+                            },
+                            { onConflict: 'user_id' }
+                          )
+
+                        if (updateError) {
+                          Alert.alert('Could not update profile', 'Your measurement was updated for this order only. Please try again from your profile.')
+                          return
+                        }
+
+                        setMeasurements(nextMeasurements)
                       },
                     },
                   ]
@@ -760,6 +988,59 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
+  errorState: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.md, padding: Spacing.xl },
+  loadingState: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.sm, padding: Spacing.xl },
+  stateCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: Colors.white,
+    borderRadius: 28,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    alignItems: 'center',
+    ...Shadow.lg,
+  },
+  stateEyebrow: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  loadingTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  loadingHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
+  errorTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  errorHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
+  stateGuideCard: {
+    width: '100%',
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+  },
+  stateGuideTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  stateGuideText: {
+    fontSize: FontSize.sm,
+    color: Colors.midGrey,
+    lineHeight: 20,
+  },
+  errorBtn: {
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
+  },
+  errorBtnSecondary: {
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  errorBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  errorBtnTextSecondary: { color: Colors.ink },
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md,
@@ -773,11 +1054,52 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   content: { padding: Spacing.xl, gap: Spacing.xl },
   stepTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
+  stepIntroCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    ...Shadow.sm,
+  },
+  stepIntroEyebrow: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  stepIntroText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 21,
+  },
+  guideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  guideTitle: {
+    fontSize: FontSize.sm,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+  },
+  guideText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+  },
 
   fields: { gap: Spacing.xl },
   fieldLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: Spacing.sm },
   required: { color: Colors.error },
   fieldHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  addressFields: { gap: Spacing.sm },
+  addressRow: { flexDirection: 'row', gap: Spacing.md },
+  addressHalf: { flex: 1 },
 
   // Garment type chips
   garmentRow: { flexDirection: 'row', gap: Spacing.sm, paddingBottom: Spacing.xs },
@@ -913,6 +1235,25 @@ const styles = StyleSheet.create({
   cta: {
     padding: Spacing.xl, backgroundColor: Colors.white,
     borderTopWidth: 1, borderTopColor: Colors.lightGrey,
+  },
+  ctaGuideCard: {
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: 4,
+    marginBottom: Spacing.md,
+  },
+  ctaGuideTitle: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  ctaGuideText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
   },
 
   // Profile completeness prompt modal

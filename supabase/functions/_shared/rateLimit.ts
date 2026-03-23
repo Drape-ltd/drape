@@ -6,8 +6,8 @@ import { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
  * Returns true  → request is within the limit, proceed.
  * Returns false → limit exceeded, return 429.
  *
- * Fails open (returns true) on database errors to avoid blocking
- * legitimate traffic during transient infra issues.
+ * Fails closed (returns false) on database errors. These call sites are
+ * security-sensitive and should not silently disable abuse protection.
  */
 export async function checkRateLimit(
   supabase: SupabaseClient,
@@ -22,7 +22,7 @@ export async function checkRateLimit(
   })
   if (error) {
     console.error(`[rateLimit] DB error for key "${key}":`, error.message)
-    return true // fail open
+    return false
   }
   return data === true
 }

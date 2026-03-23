@@ -45,11 +45,37 @@ const MEASUREMENT_KEYS: Array<keyof MeasurementProfile> = [
 
 const STAGE_COLOR: Partial<Record<OrderStage, string>> = {
   PENDING_QUOTE: Colors.warning, CONSULTATION: Colors.warning, QUOTE_SENT: Colors.warning,
-  CONFIRMED: Colors.needleGreen, CUTTING: Colors.needleGreen, SEWING: Colors.needleGreen,
+  CONFIRMED: Colors.needleGreen, DESIGNING: Colors.needleGreen, SOURCING: Colors.needleGreen,
+  CUTTING: Colors.needleGreen, SEWING: Colors.needleGreen,
   FINISHING: Colors.needleGreen, SHIPPED: Colors.needleGreen, READY_FOR_COLLECTION: Colors.needleGreen,
   IN_DISPUTE: Colors.kanteRust,
-  COMPLETE: Colors.midGrey, DELIVERED: Colors.midGrey, COLLECTED: Colors.midGrey,
-  DECLINED: Colors.midGrey, CANCELLED: Colors.midGrey,
+  COMPLETE: Colors.midGrey, DELIVERED: Colors.needleGreen, COLLECTED: Colors.needleGreen,
+  DECLINED: Colors.midGrey, CANCELLED: Colors.midGrey, EXPIRED: Colors.midGrey, REFUNDED: Colors.midGrey,
+}
+
+function recentOrderHint(stage: OrderStage): string {
+  switch (stage) {
+    case 'PENDING_QUOTE':
+      return 'Waiting for quote'
+    case 'CONSULTATION':
+      return 'Consultation requested'
+    case 'QUOTE_SENT':
+      return 'Review quote'
+    case 'READY_FOR_COLLECTION':
+      return 'Bring your collection code'
+    case 'SHIPPED':
+      return 'Track delivery'
+    case 'DELIVERED':
+      return 'Finish and review'
+    case 'COLLECTED':
+      return 'Finish and review'
+    case 'IN_DISPUTE':
+      return 'Concern under review'
+    case 'COMPLETE':
+      return 'Order complete'
+    default:
+      return STAGE_LABELS[stage] ?? stage
+  }
 }
 
 // ─── Skeleton ─────────────────────────────────────────────────────────────────
@@ -82,6 +108,20 @@ export default function CustomerProfileScreen() {
   const [createdAt, setCreatedAt] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState(false)
+
+  async function openExternalUrl(url: string, fallbackMessage: string) {
+    const supported = await Linking.canOpenURL(url)
+    if (!supported) {
+      Alert.alert('Unable to open link', fallbackMessage)
+      return
+    }
+
+    try {
+      await Linking.openURL(url)
+    } catch {
+      Alert.alert('Unable to open link', fallbackMessage)
+    }
+  }
   const [retryTrigger, setRetryTrigger] = useState(0)
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const [notifCount, setNotifCount] = useState(0)
@@ -98,8 +138,9 @@ export default function CustomerProfileScreen() {
     useCallback(() => {
       async function load() {
         setFetchError(false)
-        try {
-        const [profileRes, ordersRes] = await Promise.all([
+        setLoading(true)
+      try {
+        const [profileRes, ordersRes] = await Promise.allSettled([
           supabase
             .from('customer_profiles')
             .select('measurements, created_at, avatar_url')
@@ -113,28 +154,59 @@ export default function CustomerProfileScreen() {
             .limit(3),
         ])
 
-        // Count unread notifications — order_stage_updates since last check
-        const lastCheck = user?.user_metadata?.last_notif_check ?? new Date(0).toISOString()
-        const { count } = await supabase
-          .from('order_stage_updates')
-          .select('id', { count: 'exact', head: true })
-          .gte('created_at', lastCheck)
-          .in('order_id',
-            ((ordersRes.data ?? []) as any[]).map((o) => o.id)
-          )
+        const profileFailed =
+          profileRes.status === 'rejected' ||
+          (profileRes.status === 'fulfilled' && !!profileRes.value.error)
+        const ordersFailed =
+          ordersRes.status === 'rejected' ||
+          (ordersRes.status === 'fulfilled' && !!ordersRes.value.error)
 
-        if (profileRes.data) {
-          setMeasurements(profileRes.data.measurements as MeasurementProfile ?? null)
-          setCreatedAt(profileRes.data.created_at ?? null)
-          if (profileRes.data.avatar_url && !avatarUrl) {
-            setAvatarUrl(profileRes.data.avatar_url)
-          }
+        if (profileFailed && ordersFailed) {
+          setFetchError(true)
+          setMeasurements(null)
+          setCreatedAt(null)
+          setRecentOrders([])
+          setNotifCount(0)
+          setLoading(false)
+          return
         }
 
-        setNotifCount(count ?? 0)
+        const profile =
+          profileRes.status === 'fulfilled' && !profileRes.value.error
+            ? profileRes.value.data
+            : null
+        const orders =
+          ordersRes.status === 'fulfilled' && !ordersRes.value.error
+            ? ((ordersRes.value.data ?? []) as any[])
+            : []
+
+        // Count unread notifications — order_stage_updates since last check
+        const lastCheck = user?.user_metadata?.last_notif_check ?? new Date(0).toISOString()
+        let unreadCount = 0
+        if (orders.length > 0) {
+          const { count } = await supabase
+            .from('order_stage_updates')
+            .select('id', { count: 'exact', head: true })
+            .gte('created_at', lastCheck)
+            .in('order_id', orders.map((o) => o.id))
+          unreadCount = count ?? 0
+        }
+
+        if (profile) {
+          setMeasurements(profile.measurements as MeasurementProfile ?? null)
+          setCreatedAt(profile.created_at ?? null)
+          if (profile.avatar_url && !avatarUrl) {
+            setAvatarUrl(profile.avatar_url)
+          }
+        } else {
+          setMeasurements(null)
+          setCreatedAt(null)
+        }
+
+        setNotifCount(unreadCount)
 
         setRecentOrders(
-          ((ordersRes.data ?? []) as any[]).map((o) => ({
+          orders.map((o) => ({
             id: o.id,
             reference: o.reference,
             garmentType: o.garment_type,
@@ -213,10 +285,11 @@ export default function CustomerProfileScreen() {
       // Cache-bust so the new image replaces the old one immediately
       const bustUrl = `${publicUrl}?t=${Date.now()}`
 
-      await supabase
+      const { error: profileError } = await supabase
         .from('customer_profiles')
         .update({ avatar_url: bustUrl })
         .eq('user_id', user!.id)
+      if (profileError) throw profileError
 
       setAvatarUrl(bustUrl)
     } catch (err) {
@@ -232,21 +305,41 @@ export default function CustomerProfileScreen() {
   async function handleLogOut() {
     Alert.alert('Log out', 'Are you sure you want to log out?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Log out', style: 'destructive', onPress: signOut },
+      {
+        text: 'Log out',
+        style: 'destructive',
+        onPress: () => {
+          void signOut().catch(() => {
+            Alert.alert('Unable to log out', 'Please try again in a moment.')
+          })
+        },
+      },
     ])
   }
 
   if (fetchError) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', gap: Spacing.lg, padding: Spacing.xl }}>
-          <Text style={{ fontSize: FontSize.md, color: Colors.inkLight }}>Couldn't load your profile.</Text>
-          <TouchableOpacity
-            style={{ backgroundColor: Colors.needleGreen, borderRadius: Radius.full, paddingVertical: Spacing.md, paddingHorizontal: Spacing.xxxl }}
-            onPress={() => { setFetchError(false); setLoading(true); setRetryTrigger((n) => n + 1) }}
-          >
-            <Text style={{ color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm }}>Try again</Text>
-          </TouchableOpacity>
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Customer profile</Text>
+            <Text style={styles.stateTitle}>Couldn't load your profile.</Text>
+            <Text style={styles.stateHint}>
+              This is where your fit profile, recent orders, and account tools stay organised. Please try again in a moment.
+            </Text>
+            <TouchableOpacity
+              style={styles.statePrimaryBtn}
+              onPress={() => { setFetchError(false); setLoading(true); setRetryTrigger((n) => n + 1) }}
+            >
+              <Text style={styles.statePrimaryBtnText}>Try again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.stateSecondaryBtn}
+              onPress={() => router.replace('/(customer)')}
+            >
+              <Text style={styles.stateSecondaryBtnText}>Open home</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </SafeAreaView>
     )
@@ -308,6 +401,19 @@ export default function CustomerProfileScreen() {
         </View>
 
         <View style={styles.body}>
+          <View style={styles.workspaceCard}>
+            <Text style={styles.workspaceEyebrow}>Your account hub</Text>
+            <Text style={styles.workspaceText}>
+              Keep your measurements, orders, and support paths together here so every booking stays easy to manage.
+            </Text>
+          </View>
+
+          <View style={styles.guideCard}>
+            <Text style={styles.guideTitle}>Best profile habit</Text>
+            <Text style={styles.guideText}>
+              Keep your measurements and contact details current here so new bookings start with cleaner fit context and fewer back-and-forth questions.
+            </Text>
+          </View>
 
           {/* ── Measurements ── */}
           <View style={styles.section}>
@@ -381,48 +487,62 @@ export default function CustomerProfileScreen() {
           </View>
 
           {/* ── Recent orders ── */}
-          {(recentOrders.length > 0 || loading) && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>Recent orders</Text>
-                <TouchableOpacity onPress={() => router.navigate('/(customer)/orders')} style={styles.sectionLink}>
-                  <Text style={styles.sectionLinkText}>See all</Text>
-                  <Feather name="chevron-right" size={14} color={Colors.needleGreen} />
-                </TouchableOpacity>
-              </View>
-              {loading ? (
-                <View style={styles.card}>
-                  {[0, 1].map((i) => <SkeletonBox key={i} width="100%" height={48} style={{ marginBottom: 8 }} />)}
-                </View>
-              ) : (
-                <View style={styles.menuList}>
-                  {recentOrders.map((order, i) => (
-                    <TouchableOpacity
-                      key={order.id}
-                      style={[styles.orderRow, i === recentOrders.length - 1 && styles.rowLast]}
-                      onPress={() => router.navigate(`/(customer)/orders/${order.id}` as any)}
-                      activeOpacity={0.6}
-                    >
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.orderTitle}>{order.garmentType}</Text>
-                        <Text style={styles.orderSub}>{order.tailorName} · #{order.reference}</Text>
-                      </View>
-                      <View style={[styles.stagePill, { backgroundColor: (STAGE_COLOR[order.stage] ?? Colors.midGrey) + '18' }]}>
-                        <Text style={[styles.stageText, { color: STAGE_COLOR[order.stage] ?? Colors.midGrey }]}>
-                          {STAGE_LABELS[order.stage] ?? order.stage}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Recent orders</Text>
+              <TouchableOpacity onPress={() => router.navigate('/(customer)/orders')} style={styles.sectionLink}>
+                <Text style={styles.sectionLinkText}>See all orders</Text>
+                <Feather name="chevron-right" size={14} color={Colors.needleGreen} />
+              </TouchableOpacity>
             </View>
-          )}
+            {loading ? (
+              <View style={styles.card}>
+                {[0, 1].map((i) => <SkeletonBox key={i} width="100%" height={48} style={{ marginBottom: 8 }} />)}
+              </View>
+            ) : recentOrders.length > 0 ? (
+              <View style={styles.menuList}>
+                {recentOrders.map((order, i) => (
+                  <TouchableOpacity
+                    key={order.id}
+                    style={[styles.orderRow, i === recentOrders.length - 1 && styles.rowLast]}
+                    onPress={() => router.navigate(`/(customer)/orders/${order.id}` as any)}
+                    activeOpacity={0.6}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.orderTitle}>{order.garmentType}</Text>
+                      <Text style={styles.orderSub}>{order.tailorName} · #{order.reference}</Text>
+                      <Text style={styles.orderHint}>{recentOrderHint(order.stage)}</Text>
+                    </View>
+                    <View style={[styles.stagePill, { backgroundColor: (STAGE_COLOR[order.stage] ?? Colors.midGrey) + '18' }]}>
+                      <Text style={[styles.stageText, { color: STAGE_COLOR[order.stage] ?? Colors.midGrey }]}>
+                        {STAGE_LABELS[order.stage] ?? order.stage}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : (
+              <TouchableOpacity
+                style={styles.emptyRow}
+                onPress={() => router.navigate('/(customer)')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.emptyRowIcon}>
+                  <Feather name="shopping-bag" size={20} color={Colors.needleGreen} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.emptyRowTitle}>Start your first order</Text>
+                  <Text style={styles.emptyRowHint}>Browse tailors, place a brief, and track the whole journey here.</Text>
+                </View>
+                <Feather name="chevron-right" size={18} color={Colors.midGrey} />
+              </TouchableOpacity>
+            )}
+          </View>
 
           {/* ── Become a tailor ── */}
           <TouchableOpacity
             style={styles.becomeCard}
-            onPress={() => Linking.openURL('https://drapeon.co/tailors')}
+            onPress={() => { void openExternalUrl('https://drapeon.co/tailors', 'Please visit https://drapeon.co/tailors manually.') }}
             activeOpacity={0.8}
           >
             <Text style={styles.becomeEmoji}>✂️</Text>
@@ -445,19 +565,19 @@ export default function CustomerProfileScreen() {
           <View style={styles.flatList}>
             <FlatRow
               icon="user-plus"
-              label="Refer a friend"
+              label="Invite a friend to Drape"
               onPress={() => shareCustomerReferral(user?.id ?? '', displayName)}
             />
             <FlatRow
               icon="scissors"
-              label="Recommend a tailor"
+              label="Share tailor discovery"
               onPress={() => shareDiscoverTailors(user?.id ?? '')}
             />
             <FlatRow
               icon="file-text"
               label="Legal"
               last
-              onPress={() => Linking.openURL('https://drapeon.co/legal')}
+              onPress={() => { void openExternalUrl('https://drapeon.co/legal', 'Please visit https://drapeon.co/legal manually.') }}
             />
           </View>
 
@@ -501,6 +621,52 @@ function FlatRow({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   scroll: { flex: 1 },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  stateCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    alignItems: 'center',
+    ...Shadow.lg,
+  },
+  stateEyebrow: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  stateTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    textAlign: 'center',
+  },
+  stateHint: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    textAlign: 'center',
+    lineHeight: 21,
+  },
+  statePrimaryBtn: {
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xxxl,
+  },
+  statePrimaryBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
+  stateSecondaryBtn: {
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xl,
+  },
+  stateSecondaryBtnText: { color: Colors.ink, fontWeight: FontWeight.medium, fontSize: FontSize.sm },
 
   // Profile header strip
   profileHeader: {
@@ -569,6 +735,44 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.xl,
     gap: Spacing.xl,
   },
+  workspaceCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    ...Shadow.sm,
+  },
+  workspaceEyebrow: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  workspaceText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 21,
+  },
+  guideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  guideTitle: {
+    fontSize: FontSize.sm,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+  },
+  guideText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+  },
 
   // Sections
   section: { gap: Spacing.md },
@@ -620,6 +824,7 @@ const styles = StyleSheet.create({
   },
   orderTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   orderSub: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
+  orderHint: { fontSize: FontSize.xs, color: Colors.needleGreen, marginTop: 4, fontWeight: FontWeight.medium },
   stagePill: {
     paddingHorizontal: Spacing.sm, paddingVertical: 3,
     borderRadius: Radius.full,

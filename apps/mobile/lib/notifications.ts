@@ -63,7 +63,7 @@ export function usePushNotifications(userId: string | null) {
       if (notificationListener.current) Notifications.removeNotificationSubscription(notificationListener.current)
       if (responseListener.current) Notifications.removeNotificationSubscription(responseListener.current)
     }
-  }, [userId])
+  }, [userId, role, router])
 }
 
 async function registerAndStore(userId: string) {

@@ -14,7 +14,7 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   TextInput, Alert, ActivityIndicator, Switch, Platform,
 } from 'react-native'
-import { useFocusEffect, useRouter } from 'expo-router'
+import { useFocusEffect, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
@@ -29,6 +29,7 @@ type Step = 'reauth' | 'change'
 
 export default function LoginSecurityScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
 
   // ── Re-auth gate ─────────────────────────────────────────────────────────
@@ -68,18 +69,24 @@ export default function LoginSecurityScreen() {
 
   // ── Re-auth via biometric ────────────────────────────────────────────────
   async function reauthWithBiometric() {
-    setReauthLoading(true)
-    const ok = await authenticate('Verify your identity to change your password')
-    setReauthLoading(false)
-    if (ok) {
-      setStep('change')
-    } else {
-      Alert.alert('Verification failed', 'Could not verify your identity. Enter your current password instead.')
+    try {
+      setReauthLoading(true)
+      const ok = await authenticate('Verify your identity to change your password')
+      if (ok) {
+        setStep('change')
+      } else {
+        Alert.alert('Verification failed', 'Could not verify your identity. Enter your current password instead.')
+      }
+    } catch {
+      Alert.alert('Verification failed', 'Biometric verification is unavailable right now. Enter your current password instead.')
+    } finally {
+      setReauthLoading(false)
     }
   }
 
   // ── Re-auth via current password ─────────────────────────────────────────
   async function reauthWithPassword() {
+    if (reauthLoading) return
     if (!reauthPassword) {
       Alert.alert('Required', 'Enter your current password to continue.')
       return
@@ -100,6 +107,7 @@ export default function LoginSecurityScreen() {
 
   // ── Change password ──────────────────────────────────────────────────────
   async function changePassword() {
+    if (savingPassword) return
     if (!newPassword || newPassword.length < 8) {
       Alert.alert('Too short', 'New password must be at least 8 characters.')
       return
@@ -123,26 +131,54 @@ export default function LoginSecurityScreen() {
 
   // ── Biometric toggle ─────────────────────────────────────────────────────
   async function toggleBiometric(value: boolean) {
-    setTogglingBiometric(true)
-    if (value) {
-      const ok = await authenticate(`Confirm ${biometricLabel} to enable it for Drape`)
-      if (!ok) { setTogglingBiometric(false); return }
+    try {
+      setTogglingBiometric(true)
+      if (value) {
+        const ok = await authenticate(`Confirm ${biometricLabel} to enable it for Drape`)
+        if (!ok) return
+      }
+      await setBiometricEnabled(value)
+      setBiometricEnabledState(value)
+    } catch {
+      Alert.alert('Could not update setting', `We couldn't update ${biometricLabel} just now. Please try again.`)
+    } finally {
+      setTogglingBiometric(false)
     }
-    await setBiometricEnabled(value)
-    setBiometricEnabledState(value)
-    setTogglingBiometric(false)
+  }
+
+  function goBack() {
+    if (navigation.canGoBack()) router.back()
+    else router.replace('/(customer)/profile/account-settings')
   }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Login & security</Text>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
+        <View style={styles.heroCard}>
+          <View style={styles.heroBadge}>
+            <Text style={styles.heroBadgeText}>Security</Text>
+          </View>
+          <Text style={styles.heroTitle}>Protect the account your orders, messages, and measurements live inside.</Text>
+          <Text style={styles.heroSub}>
+            Keep your password and device lock settings current so your Drape experience stays
+            secure without slowing you down.
+          </Text>
+        </View>
+
+        <View style={styles.guideCard}>
+          <Text style={styles.guideEyebrow}>How this works</Text>
+          <Text style={styles.guideTitle}>You verify first, then change your password or device lock settings.</Text>
+          <Text style={styles.guideCopy}>
+            That extra step helps stop someone with an unlocked phone from changing security settings without your permission.
+          </Text>
+        </View>
 
         {/* ── Biometric toggle (always visible) ── */}
         {biometricAvailable && (
@@ -309,6 +345,64 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
   body: { padding: Spacing.xl, paddingBottom: 64, gap: Spacing.xl },
+  heroCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  heroTitle: {
+    fontSize: FontSize.xxl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 38,
+  },
+  heroSub: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 24,
+  },
+  guideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  guideEyebrow: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  guideTitle: {
+    fontSize: FontSize.md,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+    lineHeight: 22,
+  },
+  guideCopy: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 21,
+  },
 
   section: { gap: Spacing.md },
   sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },

@@ -10,9 +10,9 @@
 
 import { useState } from 'react'
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Alert,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -26,15 +26,15 @@ const FAQ: Array<{ q: string; a: string }> = [
   },
   {
     q: "Can I cancel or change my order?",
-    a: "Before accepting a quote you can cancel at any time with no charge. Once you've accepted a quote and confirmed payment, please contact your tailor via the Messages tab to discuss changes. Cancellations after confirmation may incur a fee at the tailor's discretion.",
+    a: "Before accepting a quote you can walk away with no charge. Once you accept, use Messages to discuss changes with your tailor as early as possible. If something goes wrong during production or handoff, raise a concern from the order before you finish it.",
   },
   {
     q: "How does payment work?",
-    a: "You pay only after reviewing and accepting your tailor's quote. Payment is held securely and only released to the tailor once you mark the order complete. If anything goes wrong you can raise a dispute.",
+    a: "You pay only after reviewing and accepting your tailor's quote. Payment stays protected while the order is in progress, then releases once the handoff is confirmed and the order is closed out in the app. If something goes wrong before that, raise a concern from the order screen.",
   },
   {
     q: "What if my garment doesn't fit?",
-    a: "Raise a concern via the order screen before marking it complete. Our team will review the dispute and help mediate a resolution — which could include alterations, a partial refund, or a full refund depending on the circumstances.",
+    a: "Raise a concern from the order screen before marking the order complete. Keep all communication in Drape so the full history stays visible while our team reviews what happened and helps mediate the next step.",
   },
   {
     q: "How are tailors verified?",
@@ -58,28 +58,74 @@ const FAQ: Array<{ q: string; a: string }> = [
 
 export default function HelpScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const [openIndex, setOpenIndex] = useState<number | null>(null)
+
+  function goBack() {
+    if (navigation.canGoBack()) router.back()
+    else router.replace('/(customer)/profile')
+  }
 
   function toggleFaq(i: number) {
     setOpenIndex(openIndex === i ? null : i)
+  }
+
+  async function openExternal(url: string) {
+    const supported = await Linking.canOpenURL(url)
+    if (!supported) {
+      alertOpenFailed(url)
+      return
+    }
+
+    try {
+      await Linking.openURL(url)
+    } catch {
+      alertOpenFailed(url)
+    }
   }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Get help</Text>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.xl, paddingBottom: 64, gap: Spacing.xl }}>
+        <View style={styles.heroCard}>
+          <View style={styles.heroBadge}>
+            <Text style={styles.heroBadgeText}>Customer support</Text>
+          </View>
+          <Text style={styles.heroTitle}>Help with quotes, orders, delivery, and account questions.</Text>
+          <Text style={styles.heroSub}>
+            If something feels unclear, start here. We’ll help you understand the flow, contact the right team, and resolve issues without guesswork.
+          </Text>
+        </View>
+
+        <View style={styles.supportGuideCard}>
+          <View style={styles.supportGuideBadge}>
+            <Text style={styles.supportGuideBadgeText}>Best next step</Text>
+          </View>
+          <Text style={styles.supportGuideTitle}>Use the live order first when something is actively happening.</Text>
+          <Text style={styles.supportGuideBody}>
+            Quotes, delivery updates, collection handoff, and concerns are usually easiest to manage from the order itself. Come here when you need policy clarity or extra support.
+          </Text>
+        </View>
+
+        <View style={styles.contactGuideCard}>
+          <Text style={styles.contactGuideTitle}>Contact us when…</Text>
+          <Text style={styles.contactGuideBody}>
+            you need policy clarification, help resolving a concern, or support after the normal order flow no longer answers what happens next.
+          </Text>
+        </View>
 
         {/* ── Visit Help Centre ── */}
         <TouchableOpacity
           style={styles.helpCentreCard}
-          onPress={() => Linking.openURL('https://drapeon.co/help')}
+          onPress={() => { void openExternal('https://drapeon.co/help') }}
           activeOpacity={0.8}
         >
           <View style={styles.helpCentreIcon}>
@@ -100,14 +146,14 @@ export default function HelpScreen() {
               icon="mail"
               title="Email support"
               sub="support@drapeon.co · we reply within 24h"
-              onPress={() => Linking.openURL('mailto:support@drapeon.co?subject=Drape%20support%20request')}
+              onPress={() => { void openExternal('mailto:support@drapeon.co?subject=Drape%20support%20request') }}
             />
             <View style={styles.divider} />
             <ContactRow
               icon="message-circle"
               title="WhatsApp"
               sub="Chat with the team directly"
-              onPress={() => Linking.openURL('https://wa.me/message/drapeon')}
+              onPress={() => { void openExternal('https://wa.me/message/drapeon') }}
               last
             />
           </View>
@@ -138,14 +184,14 @@ export default function HelpScreen() {
               icon="file-text"
               title="Terms of service"
               sub="drapeon.co/terms"
-              onPress={() => Linking.openURL('https://drapeon.co/terms')}
+              onPress={() => { void openExternal('https://drapeon.co/terms') }}
             />
             <View style={styles.divider} />
             <ContactRow
               icon="shield"
               title="Privacy policy"
               sub="drapeon.co/privacy"
-              onPress={() => Linking.openURL('https://drapeon.co/privacy')}
+              onPress={() => { void openExternal('https://drapeon.co/privacy') }}
               last
             />
           </View>
@@ -154,6 +200,25 @@ export default function HelpScreen() {
       </ScrollView>
     </SafeAreaView>
   )
+}
+
+function alertOpenFailed(url: string) {
+  if (url.startsWith('mailto:')) {
+    Alert.alert('Unable to open link', 'Please email support@drapeon.co directly with the subject "Drape support request".')
+    return
+  }
+
+  if (url.startsWith('https://wa.me/')) {
+    Alert.alert('Unable to open link', 'Please open WhatsApp and message us directly, or email support@drapeon.co with the subject "Drape support request".')
+    return
+  }
+
+  if (url.startsWith('https://')) {
+    Alert.alert('Unable to open link', `Please visit ${url} manually.`)
+    return
+  }
+
+  Alert.alert('Unable to open link', 'Please try again in a moment or email support@drapeon.co directly with the subject "Drape support request".')
 }
 
 // ─── FaqItem ─────────────────────────────────────────────────────────────────
@@ -223,6 +288,77 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
+  heroCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+  },
+  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 30 },
+  heroSub: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 22 },
+  supportGuideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  supportGuideBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: Radius.full,
+    backgroundColor: Colors.bone,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+  },
+  supportGuideBadgeText: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    fontWeight: FontWeight.semibold,
+  },
+  supportGuideTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 26,
+  },
+  supportGuideBody: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 22,
+  },
+  contactGuideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  contactGuideTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  contactGuideBody: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+  },
 
   // Help centre CTA
   helpCentreCard: {

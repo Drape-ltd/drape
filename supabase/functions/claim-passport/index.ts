@@ -35,6 +35,7 @@ import { getAuthUser } from '../_shared/auth.ts'
 import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { z, parseBody, uuid } from '../_shared/validate.ts'
+import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({ passportId: uuid, action: z.literal('preview') }),
@@ -80,8 +81,8 @@ Deno.serve(async (req: Request) => {
   // ── Service-role client (bypasses RLS for passport lookups and claim write) ─
 
   const service = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+    getSupabaseUrl(),
+    getServiceRoleKey(),
     { auth: { persistSession: false } },
   )
 

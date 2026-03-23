@@ -3,10 +3,13 @@
 -- Run this in the Supabase SQL Editor after schema push + rls.sql.
 -- These grants let anon/authenticated reach the tables.
 -- RLS policies (rls.sql) then control which ROWS they can touch.
+-- Edge Functions in this codebase also rely on service_role reaching PostgREST
+-- and RPCs in the public schema.
 -- ============================================================
 
 -- ─── Schema access ────────────────────────────────────────────────────────────
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
+GRANT USAGE ON SCHEMA public TO service_role;
 
 -- ─── NOTE: public.users does not exist in this project ───────────────────────
 -- Profile data lives in customer_profiles / tailor_profiles referencing
@@ -14,6 +17,9 @@ GRANT USAGE ON SCHEMA public TO anon, authenticated;
 
 -- ─── Sequences (needed for any INSERT that uses a serial/uuid default) ────────
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO authenticated;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO service_role;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO service_role;
+GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO service_role;
 
 -- ─── customer_profiles ────────────────────────────────────────────────────────
 -- Customers read/write their own row (RLS enforces the user_id filter).

@@ -12,7 +12,7 @@ import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator,
   Dimensions, TouchableOpacity, RefreshControl,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
@@ -53,21 +53,30 @@ function getMonthBuckets(): MonthBucket[] {
 
 export default function EarningsScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const [data, setData] = useState<EarningsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [fetchError, setFetchError] = useState(false)
   const [currency, setCurrency] = useState<CurrencyCode>('GBP')
   const [rates, setRates] = useState<Rates>({})
 
   async function fetchEarnings() {
+    if (!user?.id) {
+      setData(null)
+      setFetchError(false)
+      setLoading(false)
+      return
+    }
+    setFetchError(false)
     const now = new Date()
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
     const weekStart = new Date(now)
     weekStart.setDate(now.getDate() - 7)
     const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1)
 
-    const [completedRes, pendingRes, profileRes, liveRates] = await Promise.all([
+    const [completedRes, pendingRes, profileRes, liveRatesRes] = await Promise.allSettled([
       // All completed orders (COMPLETE, DELIVERED, COLLECTED)
       supabase
         .from('orders')
@@ -76,25 +85,43 @@ export default function EarningsScreen() {
         .in('stage', ['COMPLETE', 'DELIVERED', 'COLLECTED'])
         .order('updated_at', { ascending: false }),
 
-      // Orders in escrow (CONFIRMED → SHIPPED)
+      // Orders in escrow (confirmed through ready-to-collect / shipped)
       supabase
         .from('orders')
         .select('quoted_amount, quoted_currency')
         .eq('tailor_id', user?.id)
-        .in('stage', ['CONFIRMED', 'CUTTING', 'SEWING', 'FINISHING', 'SHIPPED', 'READY_FOR_COLLECTION']),
+        .in('stage', ['CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'SHIPPED', 'READY_FOR_COLLECTION']),
 
       supabase
         .from('tailor_profiles')
         .select('avg_rating, currency')
         .eq('user_id', user?.id)
-        .single(),
+        .maybeSingle(),
 
       fetchRates(),
     ])
 
-    const completed = (completedRes.data ?? []) as any[]
-    const pending = (pendingRes.data ?? []) as any[]
-    const profile = profileRes.data as any
+    const completed =
+      completedRes.status === 'fulfilled' && !completedRes.value.error
+        ? ((completedRes.value.data ?? []) as any[])
+        : []
+    const pending =
+      pendingRes.status === 'fulfilled' && !pendingRes.value.error
+        ? ((pendingRes.value.data ?? []) as any[])
+        : []
+    const profile =
+      profileRes.status === 'fulfilled' && !profileRes.value.error
+        ? (profileRes.value.data as any)
+        : null
+    const liveRates = liveRatesRes.status === 'fulfilled' ? liveRatesRes.value : {}
+
+    if (
+      (completedRes.status === 'rejected' || (completedRes.status === 'fulfilled' && completedRes.value.error)) &&
+      (pendingRes.status === 'rejected' || (pendingRes.status === 'fulfilled' && pendingRes.value.error)) &&
+      (profileRes.status === 'rejected' || (profileRes.status === 'fulfilled' && profileRes.value.error))
+    ) {
+      setFetchError(true)
+    }
 
     // Use the tailor's stored currency, fall back to GBP
     const tailorCurrency = (profile?.currency ?? 'GBP') as CurrencyCode
@@ -145,8 +172,9 @@ export default function EarningsScreen() {
   }
 
   useEffect(() => {
-    fetchEarnings().finally(() => setLoading(false))
-  }, [])
+    setLoading(true)
+    void fetchEarnings().finally(() => setLoading(false))
+  }, [user?.id])
 
   async function onRefresh() {
     setRefreshing(true)
@@ -159,12 +187,57 @@ export default function EarningsScreen() {
   if (loading) {
     return (
       <SafeAreaView style={styles.safe}>
-        <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Earnings</Text>
+            <ActivityIndicator color={Colors.needleGreen} size="large" />
+            <Text style={styles.stateTitle}>Loading your earnings…</Text>
+            <Text style={styles.stateHint}>
+              We’re pulling together completed orders, escrow, and recent payout activity so you can see the business clearly.
+            </Text>
+          </View>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  if (fetchError && !data) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Earnings</Text>
+            <Text style={styles.stateTitle}>Couldn't load your earnings yet.</Text>
+            <Text style={styles.stateHint}>
+              This screen should give you a calm view of what has cleared, what is in escrow, and how recent work is stacking up.
+            </Text>
+            <TouchableOpacity
+              style={styles.retryBtn}
+              onPress={() => {
+                setLoading(true)
+                fetchEarnings().finally(() => setLoading(false))
+              }}
+            >
+              <Text style={styles.retryBtnText}>Try again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.secondaryBtn}
+              onPress={() => router.replace('/(tailor)/profile')}
+            >
+              <Text style={styles.secondaryBtnText}>Open profile</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </SafeAreaView>
     )
   }
 
   const maxBucket = Math.max(...(data?.monthBuckets.map((b) => b.amount) ?? [1]), 1)
+
+  function goBack() {
+    if (navigation.canGoBack()) router.back()
+    else router.replace('/(tailor)/profile')
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -174,9 +247,20 @@ export default function EarningsScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />}
       >
+        <View style={styles.introCard}>
+          <View style={styles.introBadge}>
+            <Text style={styles.introBadgeText}>Business visibility</Text>
+          </View>
+          <Text style={styles.introTitle}>See what your tailoring work is earning and what is still waiting to clear.</Text>
+          <Text style={styles.introSub}>
+            Earnings helps you track momentum across completed orders, escrow, and recent payout
+            history so you can understand how the business is moving.
+          </Text>
+        </View>
+
         {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()}>
+          <TouchableOpacity onPress={goBack}>
             <Text style={styles.back}>← Back</Text>
           </TouchableOpacity>
           <Text style={styles.title}>Earnings</Text>
@@ -192,6 +276,13 @@ export default function EarningsScreen() {
             <View style={styles.heroDivider} />
             <HeroSub label="This week" value={fmt(data?.thisWeek ?? 0)} />
           </View>
+        </View>
+
+        <View style={styles.guideCard}>
+          <Text style={styles.guideTitle}>Best earnings habit</Text>
+          <Text style={styles.guideText}>
+            Use this screen to separate what has already cleared from what is still in escrow, then connect it back to the orders driving those numbers.
+          </Text>
         </View>
 
         {/* Escrow */}
@@ -242,8 +333,15 @@ export default function EarningsScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Completed orders</Text>
           {(data?.history ?? []).length === 0 ? (
-            <View style={styles.empty}>
-              <Text style={styles.emptyText}>No completed orders yet.</Text>
+            <View style={styles.stateCard}>
+              <Text style={styles.stateEyebrow}>Completed orders</Text>
+              <Text style={styles.stateTitle}>No completed orders yet.</Text>
+              <Text style={styles.stateHint}>
+                Your finished customer jobs will appear here once they move through collection or delivery and are fully closed out.
+              </Text>
+              <TouchableOpacity style={styles.retryBtn} onPress={() => router.navigate('/(tailor)/orders')}>
+                <Text style={styles.retryBtnText}>View active orders</Text>
+              </TouchableOpacity>
             </View>
           ) : (
             <View style={styles.historyList}>
@@ -301,8 +399,62 @@ function AnalyticCard({ label, value, highlight }: { label: string; value: strin
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  stateCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    alignItems: 'center',
+    ...Shadow.lg,
+  },
+  stateEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
   scroll: { flex: 1 },
   content: { paddingBottom: Spacing.xxxl },
+  introCard: {
+    margin: Spacing.xl,
+    marginBottom: 0,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  introBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  introBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  introTitle: {
+    fontSize: FontSize.xxl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 38,
+  },
+  introSub: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 24,
+  },
 
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
@@ -322,6 +474,18 @@ const styles = StyleSheet.create({
   heroSubLabel: { fontSize: FontSize.xs, color: 'rgba(255,255,255,0.6)' },
   heroSubValue: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.white },
   heroDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.2)' },
+  guideCard: {
+    marginHorizontal: Spacing.xl,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   escrowCard: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
@@ -373,6 +537,23 @@ const styles = StyleSheet.create({
   payoutInfoText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
   payoutInfoNote: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium },
 
-  empty: { paddingVertical: Spacing.xl, alignItems: 'center' },
+  empty: { paddingVertical: Spacing.xl, alignItems: 'center', justifyContent: 'center', flex: 1, gap: Spacing.md, paddingHorizontal: Spacing.xl },
   emptyText: { fontSize: FontSize.md, color: Colors.inkLight },
+  emptySubtext: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
+  retryBtn: {
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.sm,
+  },
+  retryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  secondaryBtn: {
+    backgroundColor: Colors.white,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.sm,
+  },
+  secondaryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
 })

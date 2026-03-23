@@ -19,7 +19,7 @@ CREATE POLICY "parties: send messages on own orders"
   TO authenticated
   WITH CHECK (
     -- sender_id must be the calling user
-    auth.uid()::text = sender_id
+    auth.uid()::text = sender_id::text
     -- caller must be a party on this order
     AND EXISTS (
       SELECT 1 FROM orders o

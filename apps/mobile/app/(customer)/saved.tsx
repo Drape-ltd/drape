@@ -30,43 +30,61 @@ type SavedTailor = {
   portfolioPhoto: string | null
 }
 
+function asStringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+  if (typeof value === 'string' && value.length > 0) return [value]
+  return []
+}
+
 export default function SavedScreen() {
   const router = useRouter()
   const { user } = useAuth()
   const [saved, setSaved] = useState<SavedTailor[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [fetchError, setFetchError] = useState(false)
+  const [failedImages, setFailedImages] = useState<string[]>([])
 
   async function fetchSaved() {
-    const { data } = await supabase
-      .from('saved_tailors')
-      .select(`
-        id,
-        tailor_profiles!tailor_profile_id(
-          id, display_name, location, tier, avg_rating, total_reviews, availability, portfolio_photo_urls
-        )
-      `)
-      .eq('user_id', user?.id)
-      .order('created_at', { ascending: false })
+    setFetchError(false)
+    setFailedImages([])
+    try {
+      const { data, error } = await supabase
+        .from('saved_tailors')
+        .select(`
+          id,
+          tailor_profiles!tailor_profile_id(
+            id, display_name, location, tier, avg_rating, total_reviews, availability, portfolio_photo_urls
+          )
+        `)
+        .eq('user_id', user?.id)
+        .order('created_at', { ascending: false })
 
-    if (!data) return
+      if (error) throw error
 
-    setSaved(
-      data.map((row: any) => {
-        const t = row.tailor_profiles
-        return {
-          savedId: row.id,
-          id: t.id,
-          displayName: t.display_name,
-          location: t.location,
-          tier: t.tier,
-          avgRating: t.avg_rating,
-          totalReviews: t.total_reviews,
-          availability: t.availability,
-          portfolioPhoto: (t.portfolio_photo_urls ?? [])[0] ?? null,
-        }
-      })
-    )
+      setSaved(
+        ((data ?? []) as any[])
+          .filter((row) => row.tailor_profiles)
+          .map((row: any) => {
+            const t = row.tailor_profiles
+            const portfolioPhotos = asStringList(t.portfolio_photo_urls)
+            return {
+              savedId: row.id,
+              id: t.id,
+              displayName: t.display_name,
+              location: t.location,
+              tier: t.tier,
+              avgRating: t.avg_rating,
+              totalReviews: t.total_reviews,
+              availability: t.availability,
+              portfolioPhoto: portfolioPhotos[0] ?? null,
+            }
+          })
+      )
+    } catch {
+      setFetchError(true)
+      setSaved([])
+    }
   }
 
   useFocusEffect(useCallback(() => {
@@ -90,7 +108,11 @@ export default function SavedScreen() {
           text: 'Remove',
           style: 'destructive',
           onPress: async () => {
-            await supabase.from('saved_tailors').delete().eq('id', savedId)
+            const { error } = await supabase.from('saved_tailors').delete().eq('id', savedId)
+            if (error) {
+              Alert.alert('Error', 'Could not remove this tailor right now. Please try again.')
+              return
+            }
             setSaved((prev) => prev.filter((s) => s.savedId !== savedId))
           },
         },
@@ -108,7 +130,38 @@ export default function SavedScreen() {
       </View>
 
       {loading ? (
-        <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Wishlist</Text>
+            <ActivityIndicator color={Colors.needleGreen} size="large" />
+            <Text style={styles.stateTitle}>Loading your saved tailors…</Text>
+            <Text style={styles.stateHint}>
+              We’re gathering the makers you bookmarked so they stay easy to revisit when you are ready to order.
+            </Text>
+          </View>
+        </View>
+      ) : fetchError ? (
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Wishlist</Text>
+            <Text style={styles.stateTitle}>Couldn't load your saved tailors.</Text>
+            <Text style={styles.stateHint}>
+              Your shortlist should stay ready whenever you want to compare styles, pricing, and availability again.
+            </Text>
+            <View style={styles.stateGuideCard}>
+              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
+              <Text style={styles.stateGuideText}>
+                Refresh this screen first. If it still fails, head back to discovery and reopen the profiles you trust most so your shortlist stays easy to rebuild.
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.retryBtn} onPress={() => { setLoading(true); fetchSaved().finally(() => setLoading(false)) }}>
+              <Text style={styles.retryBtnText}>Try again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.navigate('/(customer)')}>
+              <Text style={styles.secondaryBtnText}>Explore tailors</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       ) : (
         <FlatList
           data={saved}
@@ -118,6 +171,26 @@ export default function SavedScreen() {
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />}
+          ListHeaderComponent={(
+            <>
+              <View style={styles.heroCard}>
+                <View style={styles.heroBadge}>
+                  <Text style={styles.heroBadgeText}>Saved tailors</Text>
+                </View>
+                <Text style={styles.heroTitle}>Keep the makers you trust close for the next order.</Text>
+                <Text style={styles.heroSub}>
+                  Your wishlist is where promising tailors stay easy to revisit when you are ready
+                  to compare styles, prices, and availability again.
+                </Text>
+              </View>
+              <View style={styles.guideCard}>
+                <Text style={styles.guideTitle}>Best use of your wishlist</Text>
+                <Text style={styles.guideText}>
+                  Save a short, high-confidence shortlist here, then open each profile when you are ready to compare trust signals and place a brief.
+                </Text>
+              </View>
+            </>
+          )}
           ListEmptyComponent={<EmptyWishlistView onExplore={() => router.navigate('/(customer)')} />}
           renderItem={({ item }) => (
             <TouchableOpacity
@@ -127,8 +200,15 @@ export default function SavedScreen() {
             >
               {/* Image */}
               <View style={styles.imageWrap}>
-                {item.portfolioPhoto ? (
-                  <Image source={{ uri: item.portfolioPhoto }} style={styles.image} resizeMode="cover" />
+                {item.portfolioPhoto && !failedImages.includes(item.id) ? (
+                  <Image
+                    source={{ uri: item.portfolioPhoto }}
+                    style={styles.image}
+                    resizeMode="cover"
+                    onError={() => {
+                      setFailedImages((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]))
+                    }}
+                  />
                 ) : (
                   <View style={[styles.image, styles.imagePlaceholder]}>
                     <Text style={{ fontSize: 32 }}>🧵</Text>
@@ -137,7 +217,10 @@ export default function SavedScreen() {
                 {/* Heart button */}
                 <TouchableOpacity
                   style={styles.heartBtn}
-                  onPress={() => unsave(item.savedId, item.displayName)}
+                  onPress={(event) => {
+                    event.stopPropagation()
+                    void unsave(item.savedId, item.displayName)
+                  }}
                 >
                   <Text style={styles.heartIcon}>❤️</Text>
                 </TouchableOpacity>
@@ -199,9 +282,13 @@ function EmptyWishlistView({ onExplore }: { onExplore: () => void }) {
 
       {/* Heading + copy */}
       <View style={emptyStyles.textBlock}>
+        <View style={emptyStyles.eyebrowPill}>
+          <Text style={emptyStyles.eyebrowText}>Wishlist</Text>
+        </View>
         <Text style={emptyStyles.heading}>Save the tailors you love</Text>
         <Text style={emptyStyles.sub}>
-          Tap the ♡ on any tailor's profile to save{'\n'}them here for whenever you're ready.
+          Tap the heart on any tailor profile to keep promising makers close, compare them later,
+          and come back when you’re ready to place the right order.
         </Text>
       </View>
 
@@ -264,6 +351,19 @@ const emptyStyles = StyleSheet.create({
   },
 
   textBlock: { alignItems: 'center', gap: Spacing.sm },
+  eyebrowPill: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  eyebrowText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
   heading: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
   sub: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 22 },
 
@@ -278,12 +378,98 @@ const emptyStyles = StyleSheet.create({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  stateCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    alignItems: 'center',
+    ...Shadow.lg,
+  },
+  stateEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
+  stateGuideCard: {
+    alignSelf: 'stretch',
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: 4,
+  },
+  stateGuideTitle: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    textAlign: 'center',
+  },
+  stateGuideText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
   header: {
     paddingHorizontal: Spacing.xl,
     paddingTop: Spacing.lg,
     paddingBottom: Spacing.md,
   },
   title: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
+  heroCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    marginBottom: Spacing.md,
+    ...Shadow.sm,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  heroTitle: {
+    fontSize: FontSize.xxl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 38,
+  },
+  heroSub: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 24,
+  },
+  guideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    marginBottom: Spacing.lg,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   list: { padding: Spacing.xl, gap: Spacing.md, paddingBottom: 100 },
   row: { gap: Spacing.md, justifyContent: 'space-between' },
@@ -316,5 +502,21 @@ const styles = StyleSheet.create({
   nameRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 4 },
   name: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, flex: 1 },
   location: { fontSize: FontSize.xs, color: Colors.midGrey },
+  retryBtn: {
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xxxl,
+  },
+  retryBtnText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  secondaryBtn: {
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xl,
+  },
+  secondaryBtnText: { color: Colors.ink, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
 
 })

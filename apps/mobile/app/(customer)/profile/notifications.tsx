@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useState } from 'react'
-import { useFocusEffect, useRouter } from 'expo-router'
+import { useFocusEffect, useNavigation, useRouter } from 'expo-router'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator,
 } from 'react-native'
@@ -35,6 +35,8 @@ type NotifItem = {
 function stageIcon(stage: OrderStage): React.ComponentProps<typeof Feather>['name'] {
   if (stage === 'QUOTE_SENT') return 'tag'
   if (stage === 'CONFIRMED') return 'check-circle'
+  if (stage === 'DESIGNING') return 'edit-3'
+  if (stage === 'SOURCING') return 'shopping-bag'
   if (stage === 'CUTTING' || stage === 'SEWING' || stage === 'FINISHING') return 'scissors'
   if (stage === 'SHIPPED') return 'truck'
   if (stage === 'READY_FOR_COLLECTION') return 'package'
@@ -68,79 +70,181 @@ function timeAgo(iso: string): string {
 
 export default function NotificationsScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const [items, setItems] = useState<NotifItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState(false)
+  const [retryTrigger, setRetryTrigger] = useState(0)
 
   useFocusEffect(
     useCallback(() => {
       async function load() {
+        setFetchError(false)
+        setLoading(true)
         const lastCheck: string | null = user?.user_metadata?.last_notif_check ?? null
 
         // Fetch order stage updates for this customer's orders (last 30 days)
         const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-        const { data } = await supabase
-          .from('order_stage_updates')
-          .select(`
-            id, stage, note, created_at, order_id,
-            orders!inner(
-              id, reference, garment_type, customer_id,
-              tailor_profiles!tailor_profile_id(display_name)
-            )
-          `)
-          .eq('orders.customer_id', user?.id)
-          .gte('created_at', since)
-          .order('created_at', { ascending: false })
-          .limit(60)
+        try {
+          const { data, error } = await supabase
+            .from('order_stage_updates')
+            .select(`
+              id, stage, note, created_at, order_id,
+              orders!inner(
+                id, reference, garment_type, customer_id,
+                tailor_profiles!tailor_profile_id(display_name)
+              )
+            `)
+            .eq('orders.customer_id', user?.id)
+            .gte('created_at', since)
+            .order('created_at', { ascending: false })
+            .limit(60)
 
-        setItems(
-          ((data ?? []) as any[]).map((row) => ({
-            id: row.id,
-            orderId: row.orders?.id ?? row.order_id,
-            orderRef: row.orders?.reference ?? '',
-            garmentType: row.orders?.garment_type ?? '',
-            tailorName: row.orders?.tailor_profiles?.display_name ?? 'Tailor',
-            stage: row.stage as OrderStage,
-            note: row.note ?? null,
-            createdAt: row.created_at,
-            isNew: lastCheck ? new Date(row.created_at) > new Date(lastCheck) : true,
-          }))
-        )
+          if (error) throw error
 
-        setLoading(false)
+          setItems(
+            ((data ?? []) as any[]).map((row) => ({
+              id: row.id,
+              orderId: row.orders?.id ?? row.order_id,
+              orderRef: row.orders?.reference ?? '',
+              garmentType: row.orders?.garment_type ?? '',
+              tailorName: row.orders?.tailor_profiles?.display_name ?? 'Tailor',
+              stage: row.stage as OrderStage,
+              note: row.note ?? null,
+              createdAt: row.created_at,
+              isNew: lastCheck ? new Date(row.created_at) > new Date(lastCheck) : true,
+            }))
+          )
 
-        // Mark all as read — stamp now in user_metadata
-        await supabase.auth.updateUser({
-          data: { last_notif_check: new Date().toISOString() },
-        })
+          try {
+            await supabase.auth.updateUser({
+              data: { last_notif_check: new Date().toISOString() },
+            })
+          } catch {
+            // Non-fatal — the feed itself loaded successfully.
+          }
+        } catch {
+          setFetchError(true)
+          setItems([])
+        } finally {
+          setLoading(false)
+        }
       }
-      load()
-    }, [user?.id])
+      void load()
+    }, [user?.id, retryTrigger])
   )
+
+  function goBack() {
+    if (navigation.canGoBack()) router.back()
+    else router.replace('/(customer)/profile')
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Notifications</Text>
       </View>
 
       {loading ? (
-        <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} />
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Notifications</Text>
+            <ActivityIndicator color={Colors.needleGreen} />
+            <Text style={styles.stateTitle}>Loading your notifications…</Text>
+            <Text style={styles.stateHint}>
+              We’re gathering the latest quote, production, delivery, and completion updates across your orders.
+            </Text>
+          </View>
+        </View>
+      ) : fetchError ? (
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Notifications</Text>
+            <Feather name="alert-circle" size={40} color={Colors.lightGrey} />
+            <Text style={styles.stateTitle}>Couldn't load notifications</Text>
+            <Text style={styles.stateHint}>
+              This feed should keep every order update easy to spot without checking each order manually.
+            </Text>
+            <View style={styles.stateGuideCard}>
+              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
+              <Text style={styles.stateGuideText}>
+                Refresh here first. If updates still do not appear, open your active orders first, then profile if needed, so you can keep moving while the feed catches up.
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.retryBtn}
+              onPress={() => {
+                setFetchError(false)
+                setRetryTrigger((n) => n + 1)
+              }}
+            >
+              <Text style={styles.retryBtnText}>Try again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.secondaryBtn}
+              onPress={() => router.replace('/(customer)/orders')}
+            >
+              <Text style={styles.secondaryBtnText}>Open orders</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.secondaryBtn}
+              onPress={() => router.replace('/(customer)/profile')}
+            >
+              <Text style={styles.secondaryBtnText}>Open profile</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       ) : items.length === 0 ? (
         <View style={styles.empty}>
           <Feather name="bell-off" size={40} color={Colors.lightGrey} />
           <Text style={styles.emptyTitle}>All caught up</Text>
-          <Text style={styles.emptySub}>Order updates will appear here as your tailor progresses your work.</Text>
+          <Text style={styles.emptySub}>
+            Order updates will appear here as your tailor progresses your work.
+          </Text>
+          <TouchableOpacity
+            style={styles.retryBtn}
+            onPress={() => router.replace('/(customer)/orders')}
+          >
+            <Text style={styles.retryBtnText}>Open orders</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.secondaryBtn}
+            onPress={() => router.replace('/(customer)')}
+          >
+            <Text style={styles.secondaryBtnText}>Explore tailors</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <FlatList
           data={items}
           keyExtractor={(i) => i.id}
           showsVerticalScrollIndicator={false}
+          ListHeaderComponent={(
+            <View>
+              <View style={styles.heroCard}>
+                <View style={styles.heroBadge}>
+                  <Text style={styles.heroBadgeText}>Order activity</Text>
+                </View>
+                <Text style={styles.heroTitle}>Keep up with every step without guessing what changed.</Text>
+                <Text style={styles.heroSub}>
+                  Quotes, production updates, shipping milestones, and collection alerts all land
+                  here so you can jump back into the right order fast.
+                </Text>
+              </View>
+              <View style={styles.guideCard}>
+                <Text style={styles.guideEyebrow}>Best use</Text>
+                <Text style={styles.guideTitle}>Treat this as your fast catch-up feed, then jump into the order that needs you.</Text>
+                <Text style={styles.guideCopy}>
+                  New items tell you what changed. The order screen is still where you review details, accept quotes, raise concerns, and finish the handoff.
+                </Text>
+              </View>
+            </View>
+          )}
           contentContainerStyle={{ paddingVertical: Spacing.md, paddingHorizontal: Spacing.xl, gap: Spacing.sm }}
           renderItem={({ item }) => (
             <TouchableOpacity
@@ -185,6 +289,47 @@ export default function NotificationsScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  stateCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    alignItems: 'center',
+    ...Shadow.lg,
+  },
+  stateEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
+  stateGuideCard: {
+    alignSelf: 'stretch',
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: 4,
+  },
+  stateGuideTitle: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    textAlign: 'center',
+  },
+  stateGuideText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
 
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
@@ -198,6 +343,66 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
+  heroCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    marginBottom: Spacing.md,
+    ...Shadow.sm,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  heroTitle: {
+    fontSize: FontSize.xxl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 38,
+  },
+  heroSub: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 24,
+  },
+  guideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: 4,
+    marginBottom: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  guideEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.midGrey,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  guideTitle: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    lineHeight: 22,
+  },
+  guideCopy: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 21,
+  },
 
   empty: {
     flex: 1, alignItems: 'center', justifyContent: 'center',
@@ -205,6 +410,23 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.inkLight },
   emptySub: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 22 },
+  retryBtn: {
+    marginTop: Spacing.md,
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.sm,
+  },
+  retryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  secondaryBtn: {
+    backgroundColor: Colors.white,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.sm,
+  },
+  secondaryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
 
   card: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
