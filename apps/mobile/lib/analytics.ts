@@ -27,11 +27,11 @@ export function initAnalytics() {
 }
 
 export function identify(userId: string, traits?: Record<string, unknown>) {
-  client?.identify(userId, traits)
+  client?.identify(userId, traits as any)
 }
 
 export function capture(event: string, properties?: Record<string, unknown>) {
-  client?.capture(event, properties)
+  client?.capture(event, properties as any)
 }
 
 export function reset() {

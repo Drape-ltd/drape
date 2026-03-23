@@ -19,6 +19,7 @@ import { getAuthUser } from '../_shared/auth.ts'
 import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { z, parseBody, uuid } from '../_shared/validate.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
+import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 
 const BodySchema = z.object({
   orderId:  uuid,
@@ -44,8 +45,8 @@ Deno.serve(async (req) => {
     const audioOnly = callType === 'audio'
 
     const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+      getSupabaseUrl(),
+      getServiceRoleKey(),
     )
 
     // Rate limit: 10 room creations per hour per user

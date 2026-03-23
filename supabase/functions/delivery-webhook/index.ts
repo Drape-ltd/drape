@@ -18,6 +18,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getCorsHeaders } from '../_shared/cors.ts'
+import { sendPushToUser } from '../_shared/notify.ts'
 
 /**
  * Timing-safe HMAC-SHA256 verification using the Web Crypto API.
@@ -198,7 +199,7 @@ Deno.serve(async (req) => {
   // Find the matching order
   const { data: order } = await supabase
     .from('orders')
-    .select('id, stage, reference')
+    .select('id, stage, reference, customer_id, tailor_id')
     .eq('tracking_number', trackingNumber)
     .single()
 
@@ -234,6 +235,26 @@ Deno.serve(async (req) => {
     stage: 'DELIVERED',
     note: `Automatically confirmed as delivered by ${carrier ?? provider} tracking (${trackingNumber}).`,
   })
+
+  if (order.customer_id) {
+    EdgeRuntime.waitUntil(
+      sendPushToUser(supabase, order.customer_id.toString(), {
+        title: 'Delivered ✅',
+        body: 'Your carrier marked this order as delivered.',
+        data: { orderId: order.id },
+      })
+    )
+  }
+
+  if (order.tailor_id) {
+    EdgeRuntime.waitUntil(
+      sendPushToUser(supabase, order.tailor_id.toString(), {
+        title: 'Order delivered 📦',
+        body: 'Tracking confirmed that the customer received this order.',
+        data: { orderId: order.id },
+      })
+    )
+  }
 
   console.log(`[delivery-webhook] Order ${order.reference} advanced to DELIVERED via ${trackingNumber}`)
 

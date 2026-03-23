@@ -7,7 +7,7 @@ import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, ActivityIndicator, Alert, Image,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
@@ -17,7 +17,7 @@ import { useAuth } from '@/lib/auth'
 import { useTailorProfile } from '@/lib/tailorProfile'
 import { TagSelector } from '@/components/ui'
 import type { TagGroup } from '@/components/ui'
-import { filterContactInfo } from '@drape/shared/contact-filter'
+import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { Availability } from '@/lib/shared-types'
 
@@ -35,6 +35,12 @@ const SPECIALTY_GROUPS: TagGroup[] = [
 
 type VerificationStatus = 'NOT_SUBMITTED' | 'PENDING' | 'VERIFIED' | 'REJECTED'
 type Currency = 'GBP' | 'USD' | 'EUR' | 'NGN' | 'GHS' | 'KES'
+
+function asStringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+  if (typeof value === 'string' && value.length > 0) return [value]
+  return []
+}
 
 const CURRENCY_OPTIONS: { value: Currency; label: string }[] = [
   { value: 'GBP', label: '£ GBP' },
@@ -68,8 +74,14 @@ const VERIFY_COLOR: Record<VerificationStatus, string> = {
 
 export default function EditProfileScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const { avatarUrl, setAvatarUrl } = useTailorProfile()
+
+  function goBack() {
+    if (navigation.canGoBack()) router.back()
+    else router.replace('/(tailor)/profile')
+  }
 
   // ── Form state ──────────────────────────────────────────────────────────────
   const [displayName, setDisplayName]     = useState('')
@@ -90,6 +102,7 @@ export default function EditProfileScreen() {
   const [bioError, setBioError]           = useState('')
 
   const [loading, setLoading]             = useState(true)
+  const [fetchError, setFetchError]       = useState(false)
   const [saving, setSaving]               = useState(false)
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const [errors, setErrors]               = useState<{ name?: string; location?: string; specialties?: string }>({})
@@ -119,39 +132,68 @@ export default function EditProfileScreen() {
 
   async function load() {
     if (!user?.id) return
-    const { data } = await supabase
-      .from('tailor_profiles')
-      .select('id, display_name, location, bio, specialty_tags, availability, currency, id_verification_status')
-      .eq('user_id', user.id)
-      .maybeSingle()
+    setFetchError(false)
+    try {
+      const { data, error } = await supabase
+        .from('tailor_profiles')
+        .select('id, display_name, location, bio, specialty_tags, availability, currency, id_verification_status')
+        .eq('user_id', user.id)
+        .maybeSingle()
 
-    if (data) {
-      const d = data as any
-      const snap = {
-        displayName:  d.display_name    ?? '',
-        location:     d.location        ?? '',
-        bio:          d.bio             ?? '',
-        specialties:  d.specialty_tags  ?? [],
-        availability: (d.availability   ?? 'OPEN') as Availability,
-        currency:     (d.currency       ?? 'GBP') as Currency,
+      if (error) throw error
+
+      if (data) {
+        const d = data as any
+        const snap = {
+          displayName:  d.display_name    ?? '',
+          location:     d.location        ?? '',
+          bio:          d.bio             ?? '',
+          specialties:  asStringList(d.specialty_tags),
+          availability: (d.availability   ?? 'OPEN') as Availability,
+          currency:     (d.currency       ?? 'GBP') as Currency,
+        }
+        setBase(snap)
+        setDisplayName(snap.displayName)
+        setLocation(snap.location)
+        setBio(snap.bio)
+        setSpecialties(snap.specialties)
+        setAvailability(snap.availability)
+        setCurrency(snap.currency)
+        setVerifyStatus((d.id_verification_status ?? 'NOT_SUBMITTED') as VerificationStatus)
+
+        const { count, error: countError } = await supabase
+          .from('portfolio_items')
+          .select('*', { count: 'exact', head: true })
+          .eq('tailor_profile_id', d.id)
+        if (countError) {
+          setPortfolioCount(0)
+        } else {
+          setPortfolioCount(count ?? 0)
+        }
+      } else {
+        const snap = {
+          displayName: '',
+          location: '',
+          bio: '',
+          specialties: [] as string[],
+          availability: 'OPEN' as Availability,
+          currency: 'GBP' as Currency,
+        }
+        setBase(snap)
+        setDisplayName(snap.displayName)
+        setLocation(snap.location)
+        setBio(snap.bio)
+        setSpecialties(snap.specialties)
+        setAvailability(snap.availability)
+        setCurrency(snap.currency)
+        setVerifyStatus('NOT_SUBMITTED')
+        setPortfolioCount(0)
       }
-      setBase(snap)
-      setDisplayName(snap.displayName)
-      setLocation(snap.location)
-      setBio(snap.bio)
-      setSpecialties(snap.specialties)
-      setAvailability(snap.availability)
-      setCurrency(snap.currency)
-      setVerifyStatus((d.id_verification_status ?? 'NOT_SUBMITTED') as VerificationStatus)
-
-      // Portfolio count
-      const { count } = await supabase
-        .from('portfolio_items')
-        .select('*', { count: 'exact', head: true })
-        .eq('tailor_profile_id', d.id)
-      setPortfolioCount(count ?? 0)
+    } catch {
+      setFetchError(true)
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   // ── Avatar ───────────────────────────────────────────────────────────────────
@@ -182,7 +224,8 @@ export default function EditProfileScreen() {
       if (uploadError) throw uploadError
       const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(fileName)
       const bustUrl = `${publicUrl}?t=${Date.now()}`
-      await supabase.from('tailor_profiles').update({ avatar_url: bustUrl }).eq('user_id', user!.id)
+      const { error: profileError } = await supabase.from('tailor_profiles').update({ avatar_url: bustUrl }).eq('user_id', user!.id)
+      if (profileError) throw profileError
       setAvatarUrl(bustUrl)
     } catch {
       Alert.alert('Upload failed', 'Could not update your photo. Please try again.')
@@ -223,7 +266,8 @@ export default function EditProfileScreen() {
 
   function validate(): boolean {
     const errs: typeof errors = {}
-    if (!displayName.trim()) errs.name      = 'Display name is required.'
+    const displayNameError = validateDisplayName(displayName)
+    if (displayNameError) errs.name = displayNameError
     if (!location.trim())    errs.location  = 'Location is required.'
     if (specialties.length === 0) errs.specialties = 'Select at least one specialty.'
     setErrors(errs)
@@ -260,7 +304,7 @@ export default function EditProfileScreen() {
       return
     }
     setBase({ displayName: displayName.trim(), location: location.trim(), bio: bio.trim(), specialties, availability, currency })
-    router.back()
+    goBack()
   }
 
   // ── Render ───────────────────────────────────────────────────────────────────
@@ -268,7 +312,47 @@ export default function EditProfileScreen() {
   if (loading) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Profile edit</Text>
+            <ActivityIndicator color={Colors.needleGreen} size="large" />
+            <Text style={styles.stateTitle}>Loading your storefront…</Text>
+            <Text style={styles.stateHint}>
+              We’re pulling in your public profile details so you can update how customers discover and trust your work.
+            </Text>
+          </View>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  if (fetchError) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Profile edit</Text>
+            <Text style={styles.stateTitle}>Couldn't load your profile.</Text>
+            <Text style={styles.stateHint}>
+              This screen should help you refine the storefront customers see before they decide to trust you with an order.
+            </Text>
+            <TouchableOpacity
+              style={styles.errorRetry}
+              onPress={() => {
+                setLoading(true)
+                load()
+              }}
+            >
+              <Text style={styles.errorRetryText}>Try again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.errorSecondary}
+              onPress={() => router.replace('/(tailor)/profile')}
+            >
+              <Text style={styles.errorSecondaryText}>Open profile</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </SafeAreaView>
     )
   }
@@ -277,7 +361,7 @@ export default function EditProfileScreen() {
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={8}>
+        <TouchableOpacity onPress={goBack} hitSlop={8}>
           <Feather name="arrow-left" size={22} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Edit profile</Text>
@@ -298,6 +382,17 @@ export default function EditProfileScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
+        <View style={styles.heroCard}>
+          <View style={styles.heroBadge}>
+            <Text style={styles.heroBadgeText}>Public tailor profile</Text>
+          </View>
+          <Text style={styles.heroTitle}>Shape the first impression customers book from.</Text>
+          <Text style={styles.heroSub}>
+            Your name, location, specialties, and availability all help customers decide whether
+            they trust you with their next custom order.
+          </Text>
+        </View>
+
         {/* ── Avatar ───────────────────────────────────────────────────── */}
         <View style={styles.avatarSection}>
           <TouchableOpacity
@@ -514,6 +609,38 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.bone,
   },
   headerTitle: { flex: 1, fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  heroCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  heroTitle: {
+    fontSize: FontSize.xxl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 38,
+  },
+  heroSub: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 24,
+  },
   saveBtn: {
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
     paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
@@ -521,6 +648,26 @@ const styles = StyleSheet.create({
   },
   saveBtnDisabled: { opacity: 0.35 },
   saveBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  stateCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    alignItems: 'center',
+    ...Shadow.lg,
+  },
+  stateEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
 
   scroll: { padding: Spacing.xl, gap: Spacing.xl, paddingBottom: 60 },
 
@@ -615,6 +762,22 @@ const styles = StyleSheet.create({
   verifyText: { flex: 1, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
   verifyLink: { alignSelf: 'flex-start', paddingTop: Spacing.sm },
   verifyLinkText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  errorRetry: {
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xxxl,
+  },
+  errorRetryText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  errorSecondary: {
+    backgroundColor: Colors.white,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xxxl,
+  },
+  errorSecondaryText: { color: Colors.ink, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
 })
 
 const sectionStyles = StyleSheet.create({

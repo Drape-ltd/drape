@@ -1,11 +1,11 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { getServiceRoleKey, getSupabaseUrl } from './env.ts'
 
 /**
  * Validates the caller's JWT from the Authorization header and returns
  * the authenticated user. Returns null if the token is absent or invalid.
  *
- * Uses the Supabase anon key so the JWT is validated server-side against
- * the project's JWT secret — not just decoded locally.
+ * Makes a direct fetch to /auth/v1/user — bypasses supabase-js gotrue client
+ * to avoid any ES256 JWT handling quirks in the bundled client version.
  */
 export async function getAuthUser(
   req: Request,
@@ -13,13 +13,22 @@ export async function getAuthUser(
   const authHeader = req.headers.get('Authorization')
   if (!authHeader?.startsWith('Bearer ')) return null
 
-  const client = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_ANON_KEY')!,
-    { global: { headers: { Authorization: authHeader } } },
-  )
+  const supabaseUrl    = getSupabaseUrl()
+  const serviceRoleKey = getServiceRoleKey()
 
-  const { data: { user }, error } = await client.auth.getUser()
-  if (error || !user) return null
+  const res = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: {
+      'Authorization': authHeader,
+      'apikey':        serviceRoleKey,
+    },
+  })
+
+  if (!res.ok) {
+    console.error('[getAuthUser] auth API error:', res.status, await res.text())
+    return null
+  }
+
+  const user = await res.json()
+  if (!user?.id) return null
   return { id: user.id, email: user.email }
 }

@@ -9,7 +9,7 @@
     "./constants": "./src/constants.ts"
   },
   "scripts": {
-    "test": "jest"
+    "test": "jest --watchman=false"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",

@@ -1,0 +1,32 @@
+<svg width="1200" height="560" viewBox="0 0 1200 560" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="560" rx="40" fill="#F5EEE2"/>
+  <circle cx="985" cy="109" r="78" fill="#E2EFE7"/>
+  <circle cx="1047" cy="168" r="46" fill="#D7E6DA"/>
+  <rect x="70" y="72" width="1060" height="416" rx="30" fill="#FFFDFC" stroke="#E7DED0" stroke-width="2"/>
+  <rect x="112" y="120" width="210" height="104" rx="24" fill="#F8F2E8"/>
+  <rect x="352" y="120" width="210" height="104" rx="24" fill="#F8F2E8"/>
+  <rect x="592" y="120" width="210" height="104" rx="24" fill="#F8F2E8"/>
+  <rect x="832" y="120" width="210" height="104" rx="24" fill="#F8F2E8"/>
+  <rect x="132" y="144" width="93" height="16" rx="8" fill="#2D6A4F" fill-opacity="0.18"/>
+  <rect x="132" y="173" width="132" height="12" rx="6" fill="#1A1A1A" fill-opacity="0.18"/>
+  <rect x="372" y="144" width="74" height="16" rx="8" fill="#2D6A4F" fill-opacity="0.18"/>
+  <rect x="372" y="173" width="144" height="12" rx="6" fill="#1A1A1A" fill-opacity="0.18"/>
+  <rect x="612" y="144" width="91" height="16" rx="8" fill="#2D6A4F" fill-opacity="0.18"/>
+  <rect x="612" y="173" width="125" height="12" rx="6" fill="#1A1A1A" fill-opacity="0.18"/>
+  <rect x="852" y="144" width="84" height="16" rx="8" fill="#2D6A4F" fill-opacity="0.18"/>
+  <rect x="852" y="173" width="138" height="12" rx="6" fill="#1A1A1A" fill-opacity="0.18"/>
+  <path d="M322 171H352" stroke="#2D6A4F" stroke-width="8" stroke-linecap="round"/>
+  <path d="M562 171H592" stroke="#2D6A4F" stroke-width="8" stroke-linecap="round"/>
+  <path d="M802 171H832" stroke="#2D6A4F" stroke-width="8" stroke-linecap="round"/>
+  <rect x="112" y="272" width="448" height="156" rx="24" fill="#FBF7F0"/>
+  <rect x="592" y="272" width="450" height="156" rx="24" fill="#FFFDFC"/>
+  <rect x="136" y="300" width="122" height="18" rx="9" fill="#2D6A4F" fill-opacity="0.18"/>
+  <rect x="136" y="334" width="382" height="12" rx="6" fill="#1A1A1A" fill-opacity="0.14"/>
+  <rect x="136" y="360" width="346" height="12" rx="6" fill="#1A1A1A" fill-opacity="0.10"/>
+  <rect x="136" y="387" width="298" height="12" rx="6" fill="#1A1A1A" fill-opacity="0.10"/>
+  <rect x="616" y="300" width="134" height="18" rx="9" fill="#2D6A4F" fill-opacity="0.18"/>
+  <rect x="616" y="334" width="116" height="64" rx="18" fill="#2D6A4F"/>
+  <rect x="746" y="334" width="116" height="64" rx="18" fill="#D85A30" fill-opacity="0.16"/>
+  <rect x="876" y="334" width="116" height="64" rx="18" fill="#1A1A1A" fill-opacity="0.08"/>
+  <text x="136" y="104" fill="#2D6A4F" font-family="Arial, sans-serif" font-size="18" font-weight="700" letter-spacing="0.18em">TAILOR PIPELINE</text>
+</svg>

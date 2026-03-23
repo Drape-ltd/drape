@@ -10,7 +10,7 @@
       "ios": { "simulator": true },
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://pqptfuqogvrajozfsqzi.supabase.co",
-        "EXPO_PUBLIC_SUPABASE_ANON_KEY": ""
+        "EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_zJF6Mqw_5oKbVIDJlb6kbA_CtniN-i4"
       }
     },
     "preview": {

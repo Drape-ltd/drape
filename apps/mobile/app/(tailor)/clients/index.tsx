@@ -65,13 +65,16 @@ export default function TailorClientsScreen() {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [fetchError, setFetchError] = useState(false)
   const [tailorProfile, setTailorProfile] = useState<{ id: string; displayName: string; isLive: boolean } | null>(null)
 
   // Diary
   const [diary, setDiary] = useState<DiaryRow[]>([])
   const [diarySearch, setDiarySearch] = useState('')
   const [diaryLoading, setDiaryLoading] = useState(false)
+  const [diaryFetchError, setDiaryFetchError] = useState(false)
   const [showDiaryBanner, setShowDiaryBanner] = useState(false)
+  const [sharingDiaryId, setSharingDiaryId] = useState<string | null>(null)
 
   useEffect(() => {
     AsyncStorage.getItem(DIARY_BANNER_KEY).then((val) => {
@@ -85,40 +88,57 @@ export default function TailorClientsScreen() {
   }
 
   async function fetchClients() {
-    const { data } = await supabase
-      .from('orders')
-      .select(`
-        customer_id, garment_type, created_at,
-        customer_profiles!customer_id(display_name)
-      `)
-      .eq('tailor_id', user?.id)
-      .order('created_at', { ascending: false })
-
-    if (!data) return
-
-    // Aggregate per customer
-    const map = new Map<string, ClientRow>()
-    for (const row of data as any[]) {
-      if (!row.customer_id) continue
-      const existing = map.get(row.customer_id)
-      if (existing) {
-        existing.totalOrders += 1
-      } else {
-        map.set(row.customer_id, {
-          customerId: row.customer_id,
-          displayName: row.customer_profiles?.display_name ?? 'Customer',
-          totalOrders: 1,
-          lastOrderDate: row.created_at,
-          lastGarmentType: row.garment_type,
-        })
-      }
+    if (!user?.id) {
+      setClients([])
+      setFiltered([])
+      return
     }
+    setFetchError(false)
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select(`
+          customer_id, garment_type, created_at,
+          customer_profiles!customer_id(display_name)
+        `)
+        .eq('tailor_id', user?.id)
+        .order('created_at', { ascending: false })
 
-    const list = Array.from(map.values()).sort((a, b) =>
-      new Date(b.lastOrderDate).getTime() - new Date(a.lastOrderDate).getTime()
-    )
-    setClients(list)
-    applySearch(list, search)
+      if (error) throw error
+      if (!data) {
+        setClients([])
+        setFiltered([])
+        return
+      }
+
+      // Aggregate per customer
+      const map = new Map<string, ClientRow>()
+      for (const row of data as any[]) {
+        if (!row.customer_id) continue
+        const existing = map.get(row.customer_id)
+        if (existing) {
+          existing.totalOrders += 1
+        } else {
+          map.set(row.customer_id, {
+            customerId: row.customer_id,
+            displayName: row.customer_profiles?.display_name ?? 'Customer',
+            totalOrders: 1,
+            lastOrderDate: row.created_at,
+            lastGarmentType: row.garment_type,
+          })
+        }
+      }
+
+      const list = Array.from(map.values()).sort((a, b) =>
+        new Date(b.lastOrderDate).getTime() - new Date(a.lastOrderDate).getTime()
+      )
+      setClients(list)
+      applySearch(list, search)
+    } catch {
+      setFetchError(true)
+      setClients([])
+      setFiltered([])
+    }
   }
 
   function applySearch(list: ClientRow[], q: string) {
@@ -132,26 +152,57 @@ export default function TailorClientsScreen() {
 
   async function fetchDiary() {
     if (!user?.id) return
-    const { data } = await supabase
-      .from('diary_entries')
-      .select('id, passport_id, full_name, measured_at, invite_status, chest, shoulder, sleeve, waist, hip, neck, event_type, measurement_unit')
-      .eq('tailor_id', user.id)
-      .order('created_at', { ascending: false })
-    setDiary(((data ?? []) as any[]).map((r) => ({
-      id: r.id,
-      passportId: r.passport_id,
-      fullName: r.full_name,
-      measuredAt: r.measured_at,
-      inviteStatus: r.invite_status,
-      chest: r.chest,
-      shoulder: r.shoulder,
-      sleeve: r.sleeve,
-      waist: r.waist,
-      hip: r.hip,
-      neck: r.neck,
-      eventType: r.event_type,
-      unit: r.measurement_unit,
-    })))
+    setDiaryFetchError(false)
+    try {
+      const { data, error } = await supabase
+        .from('diary_entries')
+        .select('id, passport_id, full_name, measured_at, invite_status, chest, shoulder, sleeve, waist, hip, neck, event_type, measurement_unit')
+        .eq('tailor_id', user.id)
+        .order('created_at', { ascending: false })
+      if (error) throw error
+      setDiary(((data ?? []) as any[]).map((r) => ({
+        id: r.id,
+        passportId: r.passport_id,
+        fullName: r.full_name,
+        measuredAt: r.measured_at,
+        inviteStatus: r.invite_status,
+        chest: r.chest,
+        shoulder: r.shoulder,
+        sleeve: r.sleeve,
+        waist: r.waist,
+        hip: r.hip,
+        neck: r.neck,
+        eventType: r.event_type,
+        unit: r.measurement_unit,
+      })))
+    } catch {
+      setDiaryFetchError(true)
+      setDiary([])
+    }
+  }
+
+  async function loadTailorProfile() {
+    if (!user?.id) {
+      setTailorProfile(null)
+      return
+    }
+
+    const { data, error } = await supabase
+      .from('tailor_profiles')
+      .select('id, display_name, is_live')
+      .eq('user_id', user.id)
+      .maybeSingle()
+
+    if (error || !data) {
+      setTailorProfile(null)
+      return
+    }
+
+    setTailorProfile({
+      id: (data as any).id,
+      displayName: (data as any).display_name,
+      isLive: (data as any).is_live,
+    })
   }
 
   useFocusEffect(useCallback(() => {
@@ -159,16 +210,7 @@ export default function TailorClientsScreen() {
     fetchClients().finally(() => setLoading(false))
     setDiaryLoading(true)
     fetchDiary().finally(() => setDiaryLoading(false))
-    if (user?.id) {
-      supabase
-        .from('tailor_profiles')
-        .select('id, display_name, is_live')
-        .eq('user_id', user.id)
-        .maybeSingle()
-        .then(({ data }) => {
-          if (data) setTailorProfile({ id: (data as any).id, displayName: (data as any).display_name, isLive: (data as any).is_live })
-        })
-    }
+    void loadTailorProfile()
   }, [user?.id]))
 
   const onSearch = useCallback((text: string) => {
@@ -178,66 +220,114 @@ export default function TailorClientsScreen() {
 
   async function onRefresh() {
     setRefreshing(true)
-    await Promise.all([fetchClients(), fetchDiary()])
+    await Promise.allSettled([fetchClients(), fetchDiary()])
     setRefreshing(false)
   }
 
   async function markInviteSent(entryId: string) {
     const expiresAt = new Date()
     expiresAt.setDate(expiresAt.getDate() + 30)
-    await supabase
+    const { error } = await supabase
       .from('diary_entries')
       .update({ invite_status: 'INVITE_SENT', invite_expires_at: expiresAt.toISOString() })
       .eq('id', entryId)
+
+    if (error) {
+      throw error
+    }
+
     // Optimistically update local state so the pill reflects INVITE_SENT immediately
     setDiary((prev) =>
       prev.map((d) => d.id === entryId ? { ...d, inviteStatus: 'INVITE_SENT' } : d)
     )
   }
 
+  async function markInviteSentWithFeedback(entryId: string) {
+    try {
+      await markInviteSent(entryId)
+    } catch {
+      Alert.alert('Invite not updated', 'The share opened, but we could not save the invite status. Please try again.')
+    }
+  }
+
+  function wasShareCompleted(result: { action: string }) {
+    return result.action !== Share.dismissedAction
+  }
+
+  async function shareInviteLink(link: string, entryId: string) {
+    try {
+      const result = await Share.share({ message: link })
+      if (wasShareCompleted(result)) {
+        await markInviteSentWithFeedback(entryId)
+      }
+    } catch {
+      Alert.alert('Unable to share invite', 'Please try again in a moment.')
+    }
+  }
+
+  async function sharePassportInviteWithFeedback(item: DiaryRow, tailorName: string) {
+    try {
+      await sharePassportInvite(item.passportId, item.fullName, tailorName)
+      await markInviteSentWithFeedback(item.id)
+    } catch {
+      Alert.alert('Unable to share invite', 'Please try again in a moment.')
+    }
+  }
+
   async function handleShareCard(item: DiaryRow) {
+    if (sharingDiaryId) return
     if (!isEntryShareReady(item)) {
       Alert.alert('', 'Complete customer details to generate an invite.', [{ text: 'OK' }])
       return
     }
     const link = `https://drape.app/passport/claim/${item.passportId}`
     const tailorName = tailorProfile?.displayName ?? ''
+    setSharingDiaryId(item.id)
 
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        { options: ['Cancel', 'Copy invite link', 'Share…'], cancelButtonIndex: 0 },
-        async (idx) => {
-          if (idx === 1) {
-            await Share.share({ message: link })
-            await markInviteSent(item.id)
-          } else if (idx === 2) {
-            await sharePassportInvite(item.passportId, item.fullName, tailorName)
-            await markInviteSent(item.id)
+    try {
+      if (Platform.OS === 'ios') {
+        ActionSheetIOS.showActionSheetWithOptions(
+          { options: ['Cancel', 'Share invite link', 'Share…'], cancelButtonIndex: 0 },
+          async (idx) => {
+            if (idx === 1) {
+              await shareInviteLink(link, item.id)
+            } else if (idx === 2) {
+              await sharePassportInviteWithFeedback(item, tailorName)
+            }
+            setSharingDiaryId(null)
           }
-        }
-      )
-    } else {
+        )
+        return
+      }
+
       Alert.alert(
         'Share invite',
         undefined,
         [
           {
-            text: 'Copy invite link',
+            text: 'Share invite link',
             onPress: async () => {
-              await Share.share({ message: link })
-              await markInviteSent(item.id)
+              await shareInviteLink(link, item.id)
+              setSharingDiaryId(null)
             },
           },
           {
             text: 'Share…',
             onPress: async () => {
-              await sharePassportInvite(item.passportId, item.fullName, tailorName)
-              await markInviteSent(item.id)
+              await sharePassportInviteWithFeedback(item, tailorName)
+              setSharingDiaryId(null)
             },
           },
-          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Cancel',
+            style: 'cancel',
+            onPress: () => setSharingDiaryId(null),
+          },
         ]
       )
+    } catch {
+      setSharingDiaryId(null)
+      Alert.alert('Unable to share invite', 'Please try again in a moment.')
     }
   }
 
@@ -251,7 +341,16 @@ export default function TailorClientsScreen() {
   if (loading) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Clients</Text>
+            <ActivityIndicator color={Colors.needleGreen} size="large" />
+            <Text style={styles.stateTitle}>Loading your clients…</Text>
+            <Text style={styles.stateHint}>
+              We’re gathering your active customers and offline diary entries so your relationship context stays in one place.
+            </Text>
+          </View>
+        </View>
       </SafeAreaView>
     )
   }
@@ -280,6 +379,13 @@ export default function TailorClientsScreen() {
         </TouchableOpacity>
       </View>
 
+      <View style={styles.guideCard}>
+        <Text style={styles.guideTitle}>Best CRM rhythm</Text>
+        <Text style={styles.guideText}>
+          Use Customers for live Drape relationships and Diary for offline fitting memory, then move between them as clients return or join the app.
+        </Text>
+      </View>
+
       {/* Search */}
       <View style={styles.searchWrap}>
         <TextInput
@@ -304,24 +410,66 @@ export default function TailorClientsScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />
           }
           ListEmptyComponent={
-            <View style={styles.empty}>
-              <Feather name="book" size={36} color={Colors.lightGrey} style={{ marginBottom: Spacing.md }} />
-              <Text style={styles.emptyTitle}>{diarySearch ? 'No results' : 'Diary is empty'}</Text>
-              <Text style={styles.emptyHint}>
-                {diarySearch
-                  ? 'Try a different name.'
-                  : 'Add offline clients you\'ve measured. Their data becomes a portable Client Passport they can claim.'}
-              </Text>
-              {!diarySearch && (
-                <TouchableOpacity
-                  style={styles.addDiaryBtn}
-                  onPress={() => router.push('/(tailor)/clients/diary/new')}
-                >
-                  <Feather name="plus" size={16} color={Colors.white} />
-                  <Text style={styles.addDiaryBtnText}>Add client</Text>
-                </TouchableOpacity>
-              )}
-            </View>
+            diaryFetchError ? (
+              <View style={styles.stateWrap}>
+                <View style={styles.stateCard}>
+                  <Text style={styles.stateEyebrow}>Client diary</Text>
+                  <Text style={styles.stateTitle}>Couldn't load your diary.</Text>
+                  <Text style={styles.stateHint}>
+                    This tab should help you carry offline clients and measurements into Drape without losing context.
+                  </Text>
+                  <View style={styles.stateGuideCard}>
+                    <Text style={styles.stateGuideTitle}>Best recovery move</Text>
+                    <Text style={styles.stateGuideText}>
+                      Refresh here first. If diary entries still do not appear, switch to customers first, then open your dashboard if needed, so client work can keep moving while this tab catches up.
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.addDiaryBtn}
+                    onPress={() => {
+                      setDiaryLoading(true)
+                      fetchDiary().finally(() => setDiaryLoading(false))
+                    }}
+                  >
+                    <Text style={styles.addDiaryBtnText}>Try again</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.emptySecondaryBtn}
+                    onPress={() => setTab('customers')}
+                  >
+                    <Text style={styles.emptySecondaryBtnText}>View customers</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.emptySecondaryBtn}
+                    onPress={() => router.replace('/(tailor)')}
+                  >
+                    <Text style={styles.emptySecondaryBtnText}>Open dashboard</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.empty}>
+                <View style={styles.emptyPill}>
+                  <Text style={styles.emptyPillText}>Client diary</Text>
+                </View>
+                <Feather name="book" size={36} color={Colors.lightGrey} style={{ marginBottom: Spacing.md }} />
+                <Text style={styles.emptyTitle}>{diarySearch ? 'No results' : 'Diary is empty'}</Text>
+                <Text style={styles.emptyHint}>
+                  {diarySearch
+                    ? 'Try a different name.'
+                    : 'Add offline clients you\'ve measured. Their data becomes a portable Client Passport they can claim.'}
+                </Text>
+                {!diarySearch && (
+                  <TouchableOpacity
+                    style={styles.addDiaryBtn}
+                    onPress={() => router.push('/(tailor)/clients/diary/new')}
+                  >
+                    <Feather name="plus" size={16} color={Colors.white} />
+                    <Text style={styles.addDiaryBtnText}>Add client</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )
           }
           ListHeaderComponent={
             showDiaryBanner ? (
@@ -377,12 +525,22 @@ export default function TailorClientsScreen() {
                 <InviteStatusPill status={item.inviteStatus} />
                 {isEntryShareReady(item) && (
                   <TouchableOpacity
-                    onPress={() => handleShareCard(item)}
+                    onPress={(event) => {
+                      event.stopPropagation()
+                      void handleShareCard(item)
+                    }}
                     style={styles.shareCardBtn}
+                    disabled={sharingDiaryId === item.id}
                     activeOpacity={0.7}
                   >
-                    <Feather name="send" size={13} color={Colors.needleGreen} />
-                    <Text style={styles.shareCardBtnText}>Invite</Text>
+                    {sharingDiaryId === item.id ? (
+                      <ActivityIndicator size="small" color={Colors.needleGreen} />
+                    ) : (
+                      <>
+                        <Feather name="send" size={13} color={Colors.needleGreen} />
+                        <Text style={styles.shareCardBtnText}>Invite</Text>
+                      </>
+                    )}
                   </TouchableOpacity>
                 )}
                 <Text style={styles.chevron}>›</Text>
@@ -411,16 +569,57 @@ export default function TailorClientsScreen() {
         ListEmptyComponent={
           search ? (
             <View style={styles.empty}>
+              <View style={styles.emptyPill}>
+                <Text style={styles.emptyPillText}>Clients</Text>
+              </View>
               <Text style={styles.emptyTitle}>No results</Text>
               <Text style={styles.emptyHint}>Try a different name.</Text>
             </View>
+          ) : fetchError ? (
+            <View style={styles.stateWrap}>
+              <View style={styles.stateCard}>
+                <Text style={styles.stateEyebrow}>Clients</Text>
+                <Text style={styles.stateTitle}>Couldn't load your clients.</Text>
+                <Text style={styles.stateHint}>
+                  This tab should help you revisit repeat customers, notes, and order history without guesswork.
+                </Text>
+                <View style={styles.stateGuideCard}>
+                  <Text style={styles.stateGuideTitle}>Best recovery move</Text>
+                  <Text style={styles.stateGuideText}>
+                    Refresh here first. If this still fails, open Diary first, then Dashboard if needed, so you can keep working while your CRM list catches up.
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.addDiaryBtn}
+                  onPress={() => {
+                    setLoading(true)
+                    fetchClients().finally(() => setLoading(false))
+                  }}
+                >
+                  <Text style={styles.addDiaryBtnText}>Try again</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.emptySecondaryBtn}
+                  onPress={() => setTab('diary')}
+                >
+                  <Text style={styles.emptySecondaryBtnText}>Open diary instead</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.emptySecondaryBtn}
+                  onPress={() => router.replace('/(tailor)')}
+                >
+                  <Text style={styles.emptySecondaryBtnText}>Open dashboard</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           ) : (
-            <ClientsEmptyState
-              isLive={tailorProfile?.isLive ?? false}
-              profileId={tailorProfile?.id ?? null}
-              displayName={tailorProfile?.displayName ?? ''}
-            />
-          )
+              <ClientsEmptyState
+                isLive={tailorProfile?.isLive ?? false}
+                profileId={tailorProfile?.id ?? null}
+                displayName={tailorProfile?.displayName ?? ''}
+                onSetupPress={() => router.push('/(tailor)/profile/setup')}
+              />
+            )
         }
         renderItem={({ item }) => (
           <TouchableOpacity
@@ -491,11 +690,12 @@ function GhostClientCard({ opacity }: { opacity: number }) {
 }
 
 function ClientsEmptyState({
-  isLive, profileId, displayName,
+  isLive, profileId, displayName, onSetupPress,
 }: {
   isLive: boolean
   profileId: string | null
   displayName: string
+  onSetupPress: () => void
 }) {
   return (
     <View style={clientEmptyStyles.wrap}>
@@ -504,10 +704,13 @@ function ClientsEmptyState({
         <GhostClientCard opacity={0.32} />
         <GhostClientCard opacity={0.15} />
       </View>
+      <View style={clientEmptyStyles.badge}>
+        <Text style={clientEmptyStyles.badgeText}>Clients</Text>
+      </View>
       <Text style={clientEmptyStyles.heading}>No clients yet</Text>
       <Text style={clientEmptyStyles.sub}>
-        Clients appear here once a customer places their first order with you.
-        {isLive ? ' Share your profile to attract bookings.' : ' Complete your profile to start receiving orders.'}
+        Client relationships start here once someone places their first order with you.
+        {isLive ? ' Share your live profile or invite a first client to get things moving.' : ' Complete your profile to start receiving orders.'}
       </Text>
       <View style={clientEmptyStyles.ctaRow}>
         {isLive && profileId ? (
@@ -525,10 +728,21 @@ function ClientsEmptyState({
             onPress={() => inviteCustomerFromTailor(profileId, displayName)}
           >
             <Feather name="user-plus" size={16} color={Colors.needleGreen} />
-            <Text style={[clientEmptyStyles.ctaText, { color: Colors.needleGreen }]}>Invite a customer</Text>
+            <Text style={[clientEmptyStyles.ctaText, { color: Colors.needleGreen }]}>Invite a first client</Text>
           </TouchableOpacity>
-        ) : null}
+        ) : (
+          <TouchableOpacity
+            style={clientEmptyStyles.cta}
+            onPress={onSetupPress}
+          >
+            <Feather name="user-check" size={16} color={Colors.white} />
+            <Text style={clientEmptyStyles.ctaText}>Complete profile</Text>
+          </TouchableOpacity>
+        )}
       </View>
+      <Text style={clientEmptyStyles.ctaHint}>
+        The fastest way to make this screen useful is to share your live profile or invite your first customer into Drape.
+      </Text>
     </View>
   )
 }
@@ -547,12 +761,34 @@ const clientEmptyStyles = StyleSheet.create({
     paddingTop: Spacing.xl, paddingHorizontal: Spacing.xl, paddingBottom: Spacing.xxxl,
     alignItems: 'center',
   },
+  badge: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    marginBottom: Spacing.sm,
+  },
+  badgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
   heading: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
   sub: {
     fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center',
     lineHeight: 20, marginTop: 6, maxWidth: 300,
   },
   ctaRow: { flexDirection: 'row', gap: Spacing.md, marginTop: Spacing.xl, flexWrap: 'wrap', justifyContent: 'center' },
+  ctaHint: {
+    marginTop: Spacing.md,
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    textAlign: 'center',
+    lineHeight: 18,
+    maxWidth: 300,
+  },
   cta: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
@@ -567,6 +803,47 @@ const clientEmptyStyles = StyleSheet.create({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  stateCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    alignItems: 'center',
+    ...Shadow.lg,
+  },
+  stateEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
+  stateGuideCard: {
+    alignSelf: 'stretch',
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: 4,
+  },
+  stateGuideTitle: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    textAlign: 'center',
+  },
+  stateGuideText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
 
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
@@ -578,6 +855,19 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
     paddingHorizontal: Spacing.sm, paddingVertical: 2, overflow: 'hidden',
   },
+  guideCard: {
+    marginHorizontal: Spacing.xl,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   searchWrap: { paddingHorizontal: Spacing.xl, paddingBottom: Spacing.md },
   search: {
@@ -607,6 +897,19 @@ const styles = StyleSheet.create({
   chevron: { fontSize: 20, color: Colors.midGrey, lineHeight: 22 },
 
   empty: { paddingTop: Spacing.xxxl, alignItems: 'center', gap: Spacing.sm },
+  emptyPill: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  emptyPillText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
   emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
   emptyHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', maxWidth: 280, lineHeight: 20 },
 
@@ -631,6 +934,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md, marginTop: Spacing.xl,
   },
   addDiaryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  emptySecondaryBtn: {
+    marginTop: Spacing.md,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+  },
+  emptySecondaryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink },
 
   // Diary info banner
   diaryBanner: {

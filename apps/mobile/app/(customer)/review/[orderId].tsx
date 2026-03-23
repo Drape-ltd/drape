@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert,
   KeyboardAvoidingView, Platform,
 } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { supabase } from '@/lib/supabase'
+import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
 import { Sentry } from '@/lib/sentry'
@@ -26,6 +26,15 @@ export default function ReviewScreen() {
   const { orderId } = useLocalSearchParams<{ orderId: string }>()
   const router = useRouter()
   const { user } = useAuth()
+  const [orderSummary, setOrderSummary] = useState<{
+    stage: string
+    garmentType: string
+    tailorId: string
+    tailorProfileId: string | null
+    tailorName: string
+  } | null>(null)
+  const [loadingOrder, setLoadingOrder] = useState(true)
+  const [orderError, setOrderError] = useState(false)
 
   const [rating, setRating] = useState(0)
   const [hovered, setHovered] = useState(0)
@@ -33,6 +42,59 @@ export default function ReviewScreen() {
   const [bodyError, setBodyError] = useState('')
   const [tags, setTags] = useState<string[]>([])
   const [submitting, setSubmitting] = useState(false)
+  const [skipping, setSkipping] = useState(false)
+  const [submitError, setSubmitError] = useState('')
+
+  function goToCompletedOrders() {
+    router.replace({ pathname: '/(customer)/orders', params: { tab: 'completed' } })
+  }
+
+  async function loadOrderSummary() {
+    setLoadingOrder(true)
+    setOrderError(false)
+    setOrderSummary(null)
+
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select('stage, garment_type, tailor_id, tailor_profile_id, tailor_profiles!tailor_profile_id(display_name)')
+        .eq('id', orderId)
+        .eq('customer_id', user?.id)
+        .maybeSingle()
+
+      if (error) throw error
+      if (!data) {
+        setOrderError(true)
+        setLoadingOrder(false)
+        return
+      }
+
+      const order = data as any
+      if (!['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(order.stage)) {
+        setOrderSummary(null)
+        setLoadingOrder(false)
+        Alert.alert('Review unavailable', 'This order is not ready for review yet.')
+        router.replace(`/(customer)/orders/${orderId}`)
+        return
+      }
+
+      setOrderSummary({
+        stage: order.stage,
+        garmentType: order.garment_type,
+        tailorId: order.tailor_id,
+        tailorProfileId: order.tailor_profile_id ?? null,
+        tailorName: order.tailor_profiles?.display_name ?? 'your tailor',
+      })
+    } catch {
+      setOrderError(true)
+    } finally {
+      setLoadingOrder(false)
+    }
+  }
+
+  useEffect(() => {
+    void loadOrderSummary()
+  }, [orderId, user?.id])
 
   function validateBody(text: string) {
     const res = filterContactInfo(text)
@@ -45,24 +107,13 @@ export default function ReviewScreen() {
   }
 
   async function submit() {
+    if (submitting || skipping) return
+    if (!orderSummary) return
     if (rating === 0) { Alert.alert('Rating required', 'Please select a star rating.'); return }
     if (body.trim() && !validateBody(body)) return
 
+    setSubmitError('')
     setSubmitting(true)
-
-    // Get tailor_id + tailor_profile_id + tailor name from order
-    const { data: order } = await supabase
-      .from('orders')
-      .select('tailor_id, tailor_profile_id, tailor_profiles!tailor_profile_id(display_name)')
-      .eq('id', orderId)
-      .eq('customer_id', user?.id)
-      .single()
-
-    if (!order) {
-      setSubmitting(false)
-      Alert.alert('Error', 'Order not found.')
-      return
-    }
 
     const displayName: string = user?.user_metadata?.display_name ?? ''
     // Show first name + last initial for privacy: "Ade O."
@@ -73,8 +124,8 @@ export default function ReviewScreen() {
 
     const { error } = await supabase.from('reviews').insert({
       order_id: orderId,
-      tailor_id: (order as any).tailor_id,
-      tailor_profile_id: (order as any).tailor_profile_id ?? null,
+      tailor_id: orderSummary.tailorId,
+      tailor_profile_id: orderSummary.tailorProfileId,
       reviewer_name: reviewerName,
       rating,
       body: body.trim() || null,
@@ -84,17 +135,25 @@ export default function ReviewScreen() {
     if (error) {
       Sentry.captureException(error, { extra: { context: 'review_submit', orderId } })
       setSubmitting(false)
+      setSubmitError('We could not submit your review. Please try again.')
       Alert.alert('Error', 'Could not submit review. Please try again.')
       return
     }
 
     // Move order to COMPLETE via Edge Function (stage column is service-role only).
     // avg_rating, total_reviews, total_orders are updated automatically by DB triggers.
-    const { error: completeError } = await supabase.functions.invoke('customer-order-action', {
-      body: { orderId, action: 'complete-order' },
-    })
-    if (completeError) {
-      Sentry.captureException(completeError, { extra: { context: 'complete_order_after_review', orderId } })
+    if (orderSummary.stage !== 'COMPLETE') {
+      const { error: completeError } = await invokeFunction('customer-order-action', {
+        body: { orderId, action: 'complete-order' },
+      })
+      if (completeError) {
+        Sentry.captureException(completeError, { extra: { context: 'complete_order_after_review', orderId } })
+        setSubmitting(false)
+        setSubmitError('Your review was saved, but we could not finalize the order yet. Please reopen the order and try again.')
+        Alert.alert('Review saved', 'Your review was submitted, but we could not finalize the order yet. Please reopen the order and try again.')
+        router.replace(`/(customer)/orders/${orderId}`)
+        return
+      }
     }
 
     capture('review_submitted', {
@@ -107,8 +166,8 @@ export default function ReviewScreen() {
     setSubmitting(false)
 
     // After a 4 or 5 star review, prompt to refer the tailor to a friend
-    const tailorName = (order as any).tailor_profiles?.display_name ?? 'your tailor'
-    const tailorProfileId = (order as any).tailor_profile_id
+    const tailorName = orderSummary.tailorName
+    const tailorProfileId = orderSummary.tailorProfileId
     if (rating >= 4 && tailorProfileId) {
       Alert.alert(
         'Glad it went well!',
@@ -118,28 +177,85 @@ export default function ReviewScreen() {
             text: 'Share',
             onPress: () => {
               referToTailor(tailorProfileId, tailorName, user?.id ?? '')
-              router.replace('/(customer)/orders')
+              goToCompletedOrders()
             },
           },
-          { text: 'Maybe later', onPress: () => router.replace('/(customer)/orders') },
+          { text: 'Maybe later', onPress: goToCompletedOrders },
         ]
       )
     } else {
-      router.replace('/(customer)/orders')
+      goToCompletedOrders()
     }
   }
 
   async function skip() {
-    const { error: skipCompleteError } = await supabase.functions.invoke('customer-order-action', {
-      body: { orderId, action: 'complete-order' },
-    })
-    if (skipCompleteError) {
-      Sentry.captureException(skipCompleteError, { extra: { context: 'complete_order_skip', orderId } })
+    if (submitting || skipping) return
+    if (!orderSummary) return
+    setSubmitError('')
+    setSkipping(true)
+    try {
+      if (orderSummary.stage !== 'COMPLETE') {
+        const { error: skipCompleteError } = await invokeFunction('customer-order-action', {
+          body: { orderId, action: 'complete-order' },
+        })
+        if (skipCompleteError) {
+          Sentry.captureException(skipCompleteError, { extra: { context: 'complete_order_skip', orderId } })
+          setSkipping(false)
+          setSubmitError('We could not complete this order right now. Please try again.')
+          Alert.alert('Error', 'Could not complete the order right now. Please try again.')
+          return
+        }
+      }
+    } catch (error) {
+      Sentry.captureException(error, { extra: { context: 'load_order_before_skip_review', orderId } })
+      setSkipping(false)
+      setSubmitError('We could not complete this order right now. Please try again.')
+      Alert.alert('Error', 'Could not complete the order right now. Please try again.')
+      return
     }
-    router.replace('/(customer)/orders')
+    setSkipping(false)
+    goToCompletedOrders()
   }
 
   const displayRating = hovered || rating
+
+  if (loadingOrder) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Order review</Text>
+            <Text style={styles.stateTitle}>Preparing your review…</Text>
+            <Text style={styles.stateHint}>
+              We’re loading the finished order details first so you can review the right job with confidence.
+            </Text>
+          </View>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  if (orderError || !orderSummary) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Order review</Text>
+            <Text style={styles.stateTitle}>Couldn't open this review.</Text>
+            <Text style={styles.stateHint}>
+              This screen should help you close the loop on a finished order and leave useful feedback for future customers.
+            </Text>
+            <TouchableOpacity style={styles.retryBtn} onPress={() => void loadOrderSummary()}>
+              <Text style={styles.retryBtnText}>Try again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.secondaryBtn} onPress={goToCompletedOrders}>
+              <Text style={styles.secondaryBtnText}>Open completed orders</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </SafeAreaView>
+    )
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -149,7 +265,16 @@ export default function ReviewScreen() {
             {/* Header */}
             <View style={styles.header}>
               <Text style={styles.heading}>How was your order?</Text>
-              <Text style={styles.sub}>Your review helps other customers and rewards great tailors.</Text>
+              <Text style={styles.sub}>
+                {orderSummary.garmentType} with {orderSummary.tailorName}. Your review helps other customers and rewards great tailors.
+              </Text>
+            </View>
+
+            <View style={styles.guideCard}>
+              <Text style={styles.guideTitle}>Best review approach</Text>
+              <Text style={styles.guideText}>
+                Focus on fit, communication, finish quality, and timing. A short, honest review is enough to help the next customer book with confidence.
+              </Text>
             </View>
 
             {/* Star rating */}
@@ -209,7 +334,14 @@ export default function ReviewScreen() {
             {/* Reviewer note */}
             <View style={styles.noteCard}>
               <Text style={styles.noteText}>
-                Your review appears publicly as "{user?.user_metadata?.display_name?.split(' ')[0]} {user?.user_metadata?.display_name?.split(' ').slice(-1)[0]?.[0]}." — first name and last initial only.
+                {(() => {
+                  const displayName = (user?.user_metadata?.display_name ?? '').trim()
+                  const parts = displayName ? displayName.split(' ') : []
+                  const publicName = parts.length > 1
+                    ? `${parts[0]} ${parts[parts.length - 1].charAt(0)}.`
+                    : parts[0] || 'Customer'
+                  return `Your review appears publicly as "${publicName}" — first name and last initial only.`
+                })()}
               </Text>
             </View>
           </View>
@@ -217,14 +349,17 @@ export default function ReviewScreen() {
 
         {/* CTAs */}
         <View style={styles.cta}>
+          {submitError ? <Text style={styles.submitError}>{submitError}</Text> : null}
           <Button
             label="Submit review"
             onPress={submit}
             loading={submitting}
-            disabled={rating === 0}
+            disabled={rating === 0 || skipping}
           />
-          <TouchableOpacity style={styles.skipBtn} onPress={skip}>
-            <Text style={styles.skipText}>Skip — complete order without reviewing</Text>
+          <TouchableOpacity style={styles.skipBtn} onPress={skip} disabled={submitting || skipping}>
+            <Text style={[styles.skipText, (submitting || skipping) && styles.skipTextDisabled]}>
+              {skipping ? 'Completing order…' : 'Skip — complete order without reviewing'}
+            </Text>
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -244,6 +379,16 @@ const styles = StyleSheet.create({
   header: { gap: Spacing.sm },
   heading: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
   sub: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 22 },
+  guideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   starsSection: { alignItems: 'center', gap: Spacing.md },
   starsLabel: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, minHeight: 26 },
@@ -269,11 +414,49 @@ const styles = StyleSheet.create({
     borderLeftWidth: 3, borderLeftColor: Colors.needleGreen,
   },
   noteText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  stateCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    alignItems: 'center',
+    ...Shadow.lg,
+  },
+  stateEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  stateTitle: { fontSize: FontSize.lg, color: Colors.ink, fontWeight: FontWeight.semibold, textAlign: 'center' },
+  stateHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
+  retryBtn: {
+    backgroundColor: Colors.needleGreen,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
+    borderRadius: Radius.full,
+  },
+  retryBtnText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  secondaryBtn: {
+    backgroundColor: Colors.white,
+    borderColor: Colors.lightGrey,
+    borderWidth: 1,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
+    borderRadius: Radius.full,
+  },
+  secondaryBtnText: { color: Colors.ink, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
 
   cta: {
     padding: Spacing.xl, gap: Spacing.md, backgroundColor: Colors.white,
     borderTopWidth: 1, borderTopColor: Colors.lightGrey,
   },
+  submitError: { fontSize: FontSize.sm, color: Colors.error, textAlign: 'center' },
   skipBtn: { alignItems: 'center', paddingVertical: Spacing.sm },
   skipText: { fontSize: FontSize.sm, color: Colors.midGrey },
+  skipTextDisabled: { opacity: 0.6 },
 })

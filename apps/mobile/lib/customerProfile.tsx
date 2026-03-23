@@ -27,17 +27,31 @@ export function CustomerProfileProvider({ children }: { children: React.ReactNod
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!user?.id || user.user_metadata?.role !== 'CUSTOMER') return
+    if (!user?.id || user.user_metadata?.role !== 'CUSTOMER') {
+      setAvatarUrl(null)
+      return
+    }
+
+    let cancelled = false
 
     supabase
       .from('customer_profiles')
       .select('avatar_url')
       .eq('user_id', user.id)
       .maybeSingle()
-      .then(({ data }) => {
-        if (data?.avatar_url) setAvatarUrl(data.avatar_url)
+      .then(({ data, error }) => {
+        if (cancelled) return
+        if (error) {
+          setAvatarUrl(null)
+          return
+        }
+        setAvatarUrl(data?.avatar_url ?? null)
       })
-  }, [user?.id])
+
+    return () => {
+      cancelled = true
+    }
+  }, [user?.id, user?.user_metadata?.role])
 
   return (
     <CustomerProfileContext.Provider value={{ avatarUrl, setAvatarUrl }}>

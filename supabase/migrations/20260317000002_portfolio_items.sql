@@ -4,7 +4,7 @@
 
 CREATE TABLE IF NOT EXISTS portfolio_items (
   id                uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  tailor_profile_id text NOT NULL REFERENCES tailor_profiles(id) ON DELETE CASCADE,
+  tailor_profile_id uuid NOT NULL REFERENCES tailor_profiles(id) ON DELETE CASCADE,
   image_url         text NOT NULL,
   title             text NOT NULL,
   description       text,
@@ -29,8 +29,8 @@ DROP POLICY IF EXISTS "tailor: own portfolio" ON portfolio_items;
 CREATE POLICY "tailor: own portfolio"
   ON portfolio_items FOR ALL
   TO authenticated
-  USING (tailor_profile_id IN (SELECT id FROM tailor_profiles WHERE user_id = auth.uid()::text))
-  WITH CHECK (tailor_profile_id IN (SELECT id FROM tailor_profiles WHERE user_id = auth.uid()::text));
+  USING (tailor_profile_id IN (SELECT id FROM tailor_profiles WHERE user_id = auth.uid()))
+  WITH CHECK (tailor_profile_id IN (SELECT id FROM tailor_profiles WHERE user_id = auth.uid()));
 
 -- Public can view portfolio of live tailors
 DROP POLICY IF EXISTS "public: view live portfolio" ON portfolio_items;

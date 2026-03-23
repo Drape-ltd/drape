@@ -42,6 +42,12 @@ type ReviewRow = {
   response: string | null
 }
 
+function asStringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+  if (typeof value === 'string' && value.length > 0) return [value]
+  return []
+}
+
 const AVAIL_LABEL: Record<string, string> = { OPEN: 'Available', LIMITED: 'Limited', FULLY_BOOKED: 'Fully booked' }
 const AVAIL_COLOR: Record<string, string> = { OPEN: Colors.success, LIMITED: Colors.warning, FULLY_BOOKED: Colors.error }
 
@@ -87,6 +93,20 @@ export default function TailorProfileScreen() {
   const [replyWarning, setReplyWarning] = useState(false)
   const [replySubmitting, setReplySubmitting] = useState(false)
 
+  async function openExternalUrl(url: string, fallbackMessage: string) {
+    const supported = await Linking.canOpenURL(url)
+    if (!supported) {
+      Alert.alert('Unable to open link', fallbackMessage)
+      return
+    }
+
+    try {
+      await Linking.openURL(url)
+    } catch {
+      Alert.alert('Unable to open link', fallbackMessage)
+    }
+  }
+
   const displayName = user?.user_metadata?.display_name ?? ''
   const initials = displayName
     .split(' ')
@@ -98,10 +118,9 @@ export default function TailorProfileScreen() {
   useFocusEffect(useCallback(() => {
     async function load() {
       setFetchError(false)
+      setLoading(true)
       try {
-      // V1.1 TODO: replace Promise.all with independent fetches so a single query failure
-      // (e.g. reviews) doesn't block the entire profile from rendering.
-      const [profileRes, reviewsRes, pendingRes] = await Promise.all([
+      const [profileRes, reviewsRes, pendingRes] = await Promise.allSettled([
         supabase
           .from('tailor_profiles')
           .select('id, display_name, location, bio, tier, avg_rating, total_reviews, total_orders, availability, specialty_tags, id_verification_status, is_live, avatar_url, profile_completed')
@@ -120,8 +139,40 @@ export default function TailorProfileScreen() {
           .eq('stage', 'PENDING_QUOTE'),
       ])
 
-      if (profileRes.data) {
-        const d = profileRes.data as any
+      const profileFailed =
+        profileRes.status === 'rejected' ||
+        (profileRes.status === 'fulfilled' && !!profileRes.value.error)
+      const reviewsFailed =
+        reviewsRes.status === 'rejected' ||
+        (reviewsRes.status === 'fulfilled' && !!reviewsRes.value.error)
+      const pendingFailed =
+        pendingRes.status === 'rejected' ||
+        (pendingRes.status === 'fulfilled' && !!pendingRes.value.error)
+
+      if (profileFailed && reviewsFailed && pendingFailed) {
+        setFetchError(true)
+        setProfile(null)
+        setReviews([])
+        setPendingQuoteCount(0)
+        setLoading(false)
+        return
+      }
+
+      const profileData =
+        profileRes.status === 'fulfilled' && !profileRes.value.error
+          ? (profileRes.value.data as any)
+          : null
+      const reviewsData =
+        reviewsRes.status === 'fulfilled' && !reviewsRes.value.error
+          ? ((reviewsRes.value.data ?? []) as any[])
+          : []
+      const pendingCount =
+        pendingRes.status === 'fulfilled' && !pendingRes.value.error
+          ? (pendingRes.value.count ?? 0)
+          : 0
+
+      if (profileData) {
+        const d = profileData
         setProfile({
           id: d.id,
           displayName: d.display_name,
@@ -132,19 +183,21 @@ export default function TailorProfileScreen() {
           totalOrders: d.total_orders,
           totalReviews: d.total_reviews ?? 0,
           availability: d.availability,
-          specialtyTags: d.specialty_tags ?? [],
+          specialtyTags: asStringList(d.specialty_tags),
           idVerificationStatus: d.id_verification_status ?? 'NOT_SUBMITTED',
           isLive: d.is_live,
           profileCompleted: d.profile_completed ?? false,
         })
         if (d.avatar_url) setAvatarUrl(d.avatar_url)
+      } else {
+        setProfile(null)
       }
 
       setReviews(
-        ((reviewsRes.data ?? []) as any[]).map((r) => ({
+        reviewsData.map((r) => ({
           id: r.id,
           rating: r.rating,
-          tags: r.tags ?? [],
+          tags: asStringList(r.tags),
           body: r.body,
           reviewerName: r.reviewer_name ?? 'Customer',
           createdAt: r.created_at,
@@ -152,7 +205,7 @@ export default function TailorProfileScreen() {
         }))
       )
 
-      setPendingQuoteCount(pendingRes.count ?? 0)
+      setPendingQuoteCount(pendingCount)
       setLoading(false)
       } catch {
         setFetchError(true)
@@ -209,10 +262,11 @@ export default function TailorProfileScreen() {
 
       const bustUrl = `${publicUrl}?t=${Date.now()}`
 
-      await supabase
+      const { error: profileError } = await supabase
         .from('tailor_profiles')
         .update({ avatar_url: bustUrl })
         .eq('user_id', user!.id)
+      if (profileError) throw profileError
 
       setAvatarUrl(bustUrl)
     } catch (err) {
@@ -230,9 +284,9 @@ export default function TailorProfileScreen() {
   }
 
   function onReplyChange(text: string) {
-    const filtered = filterContactInfo(text)
-    setReplyWarning(filtered !== text)
-    setReplyText(filtered)
+    const result = filterContactInfo(text)
+    setReplyWarning(result.blocked)
+    setReplyText(text)
   }
 
   async function submitReply(reviewId: string) {
@@ -259,7 +313,15 @@ export default function TailorProfileScreen() {
   function handleSignOut() {
     Alert.alert('Log out', 'Are you sure you want to log out?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Log out', style: 'destructive', onPress: signOut },
+      {
+        text: 'Log out',
+        style: 'destructive',
+        onPress: () => {
+          void signOut().catch(() => {
+            Alert.alert('Unable to log out', 'Please try again in a moment.')
+          })
+        },
+      },
     ])
   }
 
@@ -272,14 +334,26 @@ export default function TailorProfileScreen() {
   if (fetchError) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', gap: Spacing.lg, padding: Spacing.xl }}>
-          <Text style={{ fontSize: FontSize.md, color: Colors.inkLight }}>Couldn't load your profile.</Text>
-          <TouchableOpacity
-            style={{ backgroundColor: Colors.needleGreen, borderRadius: Radius.full, paddingVertical: Spacing.md, paddingHorizontal: Spacing.xxxl }}
-            onPress={() => { setFetchError(false); setLoading(true); setRetryTrigger((n) => n + 1) }}
-          >
-            <Text style={{ color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm }}>Try again</Text>
-          </TouchableOpacity>
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Tailor profile</Text>
+            <Text style={styles.stateTitle}>Couldn't load your profile.</Text>
+            <Text style={styles.stateHint}>
+              Your profile is where customers judge trust, portfolio, and reviews. Please try again in a moment.
+            </Text>
+            <TouchableOpacity
+              style={styles.statePrimaryBtn}
+              onPress={() => { setFetchError(false); setLoading(true); setRetryTrigger((n) => n + 1) }}
+            >
+              <Text style={styles.statePrimaryBtnText}>Try again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.stateSecondaryBtn}
+              onPress={() => router.replace('/(tailor)')}
+            >
+              <Text style={styles.stateSecondaryBtnText}>Open dashboard</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </SafeAreaView>
     )
@@ -291,7 +365,16 @@ export default function TailorProfileScreen() {
         <View style={styles.profileHeader}>
           <Text style={styles.profileHeaderTitle}>Profile</Text>
         </View>
-        <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Tailor profile</Text>
+            <ActivityIndicator color={Colors.needleGreen} size="large" />
+            <Text style={styles.stateTitle}>Loading your profile…</Text>
+            <Text style={styles.stateHint}>
+              We’re pulling together your live profile, reviews, and profile status.
+            </Text>
+          </View>
+        </View>
       </SafeAreaView>
     )
   }
@@ -385,9 +468,22 @@ export default function TailorProfileScreen() {
         </View>
 
         <View style={styles.body}>
+          <View style={styles.workspaceCard}>
+            <Text style={styles.workspaceEyebrow}>Your storefront</Text>
+            <Text style={styles.workspaceText}>
+              This is the trust surface customers use to decide whether to book you, follow your work, and return again.
+            </Text>
+          </View>
+
+          <View style={styles.guideCard}>
+            <Text style={styles.guideTitle}>Best profile habit</Text>
+            <Text style={styles.guideText}>
+              Keep your availability, portfolio, and replies current here so the profile customers discover still matches how you are working right now.
+            </Text>
+          </View>
 
           {/* ── No profile CTA ── */}
-          {(!profile || !profile.profileCompleted) && (
+          {!loading && (!profile || !profile.profileCompleted) && (
             <TouchableOpacity
               style={styles.setupCard}
               onPress={() => router.push('/(tailor)/profile/setup')}
@@ -450,96 +546,116 @@ export default function TailorProfileScreen() {
           )}
 
           {/* ── Reviews ── */}
-          {reviews.length > 0 && (
+          {profile && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>Reviews</Text>
-                {profile && profile.avgRating > 0 && (
+                {profile.avgRating > 0 && (
                   <Text style={styles.ratingSummary}>★ {profile.avgRating.toFixed(1)}</Text>
                 )}
               </View>
-              <View style={styles.reviewList}>
-                {reviews.map((review) => (
-                  <View key={review.id} style={styles.reviewCard}>
-                    <View style={styles.reviewHeader}>
-                      <View style={styles.reviewAvatar}>
-                        <Text style={styles.reviewInitial}>
-                          {review.reviewerName.split(' ').map((p) => p[0]).slice(0, 2).join('')}
+              {reviews.length > 0 ? (
+                <View style={styles.reviewList}>
+                  {reviews.map((review) => (
+                    <View key={review.id} style={styles.reviewCard}>
+                      <View style={styles.reviewHeader}>
+                        <View style={styles.reviewAvatar}>
+                          <Text style={styles.reviewInitial}>
+                            {review.reviewerName.split(' ').map((p) => p[0]).slice(0, 2).join('')}
+                          </Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.reviewerName}>{review.reviewerName}</Text>
+                          <Text style={styles.reviewDate}>
+                            {new Date(review.createdAt).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}
+                          </Text>
+                        </View>
+                        <Text style={styles.reviewStars}>
+                          {'★'.repeat(review.rating)}{'☆'.repeat(5 - review.rating)}
                         </Text>
                       </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.reviewerName}>{review.reviewerName}</Text>
-                        <Text style={styles.reviewDate}>
-                          {new Date(review.createdAt).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}
-                        </Text>
-                      </View>
-                      <Text style={styles.reviewStars}>
-                        {'★'.repeat(review.rating)}{'☆'.repeat(5 - review.rating)}
-                      </Text>
-                    </View>
 
-                    {review.tags.length > 0 && (
-                      <View style={styles.reviewTags}>
-                        {review.tags.map((tag) => (
-                          <View key={tag} style={styles.reviewTag}>
-                            <Text style={styles.reviewTagText}>{tag}</Text>
-                          </View>
-                        ))}
-                      </View>
-                    )}
+                      {review.tags.length > 0 && (
+                        <View style={styles.reviewTags}>
+                          {review.tags.map((tag) => (
+                            <View key={tag} style={styles.reviewTag}>
+                              <Text style={styles.reviewTagText}>{tag}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      )}
 
-                    {review.body ? <Text style={styles.reviewBody}>{review.body}</Text> : null}
+                      {review.body ? <Text style={styles.reviewBody}>{review.body}</Text> : null}
 
-                    {review.response && replyOpen !== review.id && (
-                      <View style={styles.responseWrap}>
-                        <Text style={styles.responseLabel}>Your response</Text>
-                        <Text style={styles.responseText}>{review.response}</Text>
-                        <TouchableOpacity onPress={() => openReply(review.id, review.response)}>
-                          <Text style={styles.editResponseLink}>Edit</Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
-
-                    {replyOpen === review.id ? (
-                      <View style={styles.replyForm}>
-                        {replyWarning && (
-                          <View style={styles.replyWarning}>
-                            <Text style={styles.replyWarningText}>Contact details removed — keep responses within Drape.</Text>
-                          </View>
-                        )}
-                        <TextInput
-                          style={styles.replyInput}
-                          value={replyText}
-                          onChangeText={onReplyChange}
-                          placeholder="Thank the customer or address their feedback…"
-                          placeholderTextColor={Colors.midGrey}
-                          multiline
-                          maxLength={300}
-                          textAlignVertical="top"
-                          autoFocus
-                        />
-                        <Text style={styles.replyCount}>{replyText.length}/300</Text>
-                        <View style={styles.replyActions}>
-                          <TouchableOpacity onPress={() => setReplyOpen(null)}>
-                            <Text style={styles.replyCancelText}>Cancel</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={[styles.replySubmit, (!replyText.trim() || replySubmitting) && { opacity: 0.5 }]}
-                            onPress={() => submitReply(review.id)}
-                            disabled={!replyText.trim() || replySubmitting}
-                          >
-                            <Text style={styles.replySubmitText}>{replySubmitting ? 'Saving…' : 'Save response'}</Text>
+                      {review.response && replyOpen !== review.id && (
+                        <View style={styles.responseWrap}>
+                          <Text style={styles.responseLabel}>Your response</Text>
+                          <Text style={styles.responseText}>{review.response}</Text>
+                          <TouchableOpacity onPress={() => openReply(review.id, review.response)}>
+                            <Text style={styles.editResponseLink}>Edit</Text>
                           </TouchableOpacity>
                         </View>
-                      </View>
-                    ) : !review.response ? (
-                      <TouchableOpacity onPress={() => openReply(review.id, null)}>
-                        <Text style={styles.replyLink}>Reply to this review</Text>
-                      </TouchableOpacity>
-                    ) : null}
+                      )}
+
+                      {replyOpen === review.id ? (
+                        <View style={styles.replyForm}>
+                          {replyWarning && (
+                            <View style={styles.replyWarning}>
+                              <Text style={styles.replyWarningText}>Contact details removed — keep responses within Drape.</Text>
+                            </View>
+                          )}
+                          <TextInput
+                            style={styles.replyInput}
+                            value={replyText}
+                            onChangeText={onReplyChange}
+                            placeholder="Thank the customer or address their feedback…"
+                            placeholderTextColor={Colors.midGrey}
+                            multiline
+                            maxLength={300}
+                            textAlignVertical="top"
+                            autoFocus
+                          />
+                          <Text style={styles.replyCount}>{replyText.length}/300</Text>
+                          <View style={styles.replyActions}>
+                            <TouchableOpacity onPress={() => setReplyOpen(null)}>
+                              <Text style={styles.replyCancelText}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={[styles.replySubmit, (!replyText.trim() || replySubmitting) && { opacity: 0.5 }]}
+                              onPress={() => submitReply(review.id)}
+                              disabled={!replyText.trim() || replySubmitting}
+                            >
+                              <Text style={styles.replySubmitText}>{replySubmitting ? 'Saving…' : 'Save response'}</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      ) : !review.response ? (
+                        <TouchableOpacity onPress={() => openReply(review.id, null)}>
+                          <Text style={styles.replyLink}>Reply to this review</Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <View style={styles.emptySectionCard}>
+                  <View style={styles.emptySectionBadge}>
+                    <Text style={styles.emptySectionBadgeText}>Reviews</Text>
                   </View>
-                ))}
-              </View>
+                  <Text style={styles.emptySectionTitle}>No reviews yet</Text>
+                  <Text style={styles.emptySectionHint}>
+                    Reviews from completed customer orders will appear here once people start booking with you and closing the loop in Drape.
+                  </Text>
+                  {profile.isLive && (
+                    <TouchableOpacity
+                      style={styles.emptySectionCta}
+                      onPress={() => shareTailorProfile(profile.id, profile.displayName)}
+                    >
+                      <Text style={styles.emptySectionCtaText}>Share my profile</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
             </View>
           )}
 
@@ -553,13 +669,13 @@ export default function TailorProfileScreen() {
             {profile?.isLive && (
               <FlatRow
                 icon="share-2"
-                label="Share my profile"
+                label="Share my live profile"
                 onPress={() => shareTailorProfile(profile.id, profile.displayName)}
               />
             )}
             <FlatRow
               icon="user-plus"
-              label="Invite a customer"
+              label="Invite a client"
               onPress={() => inviteCustomerFromTailor(profile?.id ?? '', profile?.displayName ?? displayName)}
             />
             <FlatRow
@@ -585,15 +701,15 @@ export default function TailorProfileScreen() {
             {profile?.isLive && (
               <FlatRow
                 icon="eye"
-                label="View public profile"
-                onPress={() => router.push(`/(tailor)/profile/public` as any)}
+                label="Share public profile"
+                onPress={() => shareTailorProfile(profile.id, profile.displayName)}
               />
             )}
             <FlatRow
               icon="file-text"
               label="Legal"
               last
-              onPress={() => Linking.openURL('https://drapeon.co/legal')}
+              onPress={() => { void openExternalUrl('https://drapeon.co/legal', 'Please visit https://drapeon.co/legal manually.') }}
             />
           </View>
 
@@ -652,6 +768,52 @@ function FlatRow({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   scroll: { flex: 1 },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  stateCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    alignItems: 'center',
+    ...Shadow.lg,
+  },
+  stateEyebrow: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  stateTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    textAlign: 'center',
+  },
+  stateHint: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    textAlign: 'center',
+    lineHeight: 21,
+  },
+  statePrimaryBtn: {
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xxxl,
+  },
+  statePrimaryBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
+  stateSecondaryBtn: {
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xl,
+  },
+  stateSecondaryBtnText: { color: Colors.ink, fontWeight: FontWeight.medium, fontSize: FontSize.sm },
 
   // Profile header strip
   profileHeader: {
@@ -742,6 +904,44 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.xl,
     gap: Spacing.xl,
   },
+  workspaceCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    ...Shadow.sm,
+  },
+  workspaceEyebrow: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  workspaceText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 21,
+  },
+  guideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  guideTitle: {
+    fontSize: FontSize.sm,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+  },
+  guideText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+  },
 
   // Setup CTA
   setupCard: {
@@ -784,6 +984,38 @@ const styles = StyleSheet.create({
 
   // Reviews
   reviewList: { gap: Spacing.md },
+  emptySectionCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
+  emptySectionBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  emptySectionBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  emptySectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  emptySectionHint: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20 },
+  emptySectionCta: {
+    marginTop: Spacing.sm,
+    alignSelf: 'flex-start',
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+  },
+  emptySectionCtaText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
   reviewCard: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
     padding: Spacing.lg, gap: Spacing.sm, ...Shadow.sm,

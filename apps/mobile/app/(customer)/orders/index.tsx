@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, RefreshControl,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useAuth } from '@/lib/auth'
@@ -26,8 +26,8 @@ const STAGE_COLOR: Partial<Record<OrderStage, string>> = {
   READY_FOR_COLLECTION: Colors.needleGreen,
   IN_DISPUTE: Colors.kanteRust,
   COMPLETE: Colors.midGrey,
-  DELIVERED: Colors.midGrey,
-  COLLECTED: Colors.midGrey,
+  DELIVERED: Colors.needleGreen,
+  COLLECTED: Colors.needleGreen,
   DECLINED: Colors.midGrey,
   EXPIRED: Colors.midGrey,
   CANCELLED: Colors.midGrey,
@@ -36,12 +36,86 @@ const STAGE_COLOR: Partial<Record<OrderStage, string>> = {
 
 type Tab = 'active' | 'completed'
 
+function orderPriority(stage: OrderStage): number {
+  switch (stage) {
+    case 'QUOTE_SENT':
+      return 0
+    case 'READY_FOR_COLLECTION':
+      return 1
+    case 'DELIVERED':
+    case 'COLLECTED':
+      return 2
+    case 'IN_DISPUTE':
+      return 3
+    case 'SHIPPED':
+      return 4
+    case 'PENDING_QUOTE':
+    case 'CONSULTATION':
+    case 'PAYMENT_PENDING':
+      return 5
+    default:
+      return 6
+  }
+}
+
+function orderHint(stage: OrderStage): string | null {
+  switch (stage) {
+    case 'QUOTE_SENT':
+      return 'Review quote and confirm to start production'
+    case 'CONSULTATION':
+      return 'Consultation requested. Open the order or messages for the latest call details.'
+    case 'PENDING_QUOTE':
+      return 'Your tailor is reviewing your brief and preparing the next step.'
+    case 'PAYMENT_PENDING':
+      return 'Payment is being confirmed before production starts.'
+    case 'CONFIRMED':
+      return 'Your order is confirmed. Your tailor is preparing to begin production.'
+    case 'DESIGNING':
+      return 'Design details and pattern work are underway.'
+    case 'SOURCING':
+      return 'Fabric and materials are being sourced for your order.'
+    case 'CUTTING':
+      return 'Fabric is being cut to your measurements.'
+    case 'SEWING':
+      return 'Your garment is being sewn together.'
+    case 'FINISHING':
+      return 'Final touches and quality checks are underway.'
+    case 'READY_FOR_COLLECTION':
+      return 'Your order is ready. Bring your collection code.'
+    case 'SHIPPED':
+      return 'Your tailor has shipped this order. Open it to track delivery and confirm receipt.'
+    case 'DELIVERED':
+      return 'Delivery confirmed. Check everything carefully, then finish your order.'
+    case 'COLLECTED':
+      return 'Collection confirmed. Check everything carefully, then finish your order.'
+    case 'IN_DISPUTE':
+      return 'Concern under review. Open the order for the latest status.'
+    default:
+      return null
+  }
+}
+
 export default function OrdersListScreen() {
   const router = useRouter()
+  const params = useLocalSearchParams<{ tab?: string }>()
   const { user } = useAuth()
   const [tab, setTab] = useState<Tab>('active')
 
+  useEffect(() => {
+    if (params.tab === 'completed' || params.tab === 'active') {
+      setTab(params.tab)
+    }
+  }, [params.tab])
+
   const { data: orders = [], isLoading: loading, isFetching, isError, refetch } = useCustomerOrders(user?.id, tab)
+
+  const sortedOrders = tab === 'active'
+    ? [...orders].sort((a, b) => {
+        const priorityDiff = orderPriority(a.stage) - orderPriority(b.stage)
+        if (priorityDiff !== 0) return priorityDiff
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      })
+    : orders
 
   // Refetch whenever this screen comes back into focus (e.g. returning from order detail)
   useRefreshOnFocus(refetch)
@@ -66,18 +140,57 @@ export default function OrdersListScreen() {
         </View>
       </View>
 
+      <View style={styles.heroCard}>
+        <View style={styles.heroBadge}>
+          <Text style={styles.heroBadgeText}>Order journey</Text>
+        </View>
+        <Text style={styles.heroTitle}>Follow every custom order from quote to final handoff.</Text>
+        <Text style={styles.heroSub}>
+          Active orders show what needs your attention now, while completed orders preserve the
+          history of garments you have already finished with a tailor.
+        </Text>
+      </View>
+
+      <View style={styles.guideCard}>
+        <Text style={styles.guideTitle}>Best order habit</Text>
+        <Text style={styles.guideText}>
+          Check this list first for anything waiting on your decision, then open the order itself when you need the full status, timeline, or next action.
+        </Text>
+      </View>
+
       {loading ? (
-        <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Orders</Text>
+            <ActivityIndicator color={Colors.needleGreen} size="large" />
+            <Text style={styles.stateTitle}>Loading your orders…</Text>
+            <Text style={styles.stateHint}>
+              We’re gathering your live quotes, production updates, and completed order history.
+            </Text>
+          </View>
+        </View>
       ) : isError ? (
-        <View style={styles.errorState}>
-          <Text style={styles.errorText}>Couldn't load your orders.</Text>
-          <TouchableOpacity style={styles.retryBtn} onPress={() => refetch()}>
-            <Text style={styles.retryBtnText}>Try again</Text>
-          </TouchableOpacity>
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Orders</Text>
+            <Text style={styles.stateTitle}>Couldn't load your orders.</Text>
+            <Text style={styles.stateHint}>
+              This is where your quote decisions, active progress, and finished garments should stay organised.
+            </Text>
+            <TouchableOpacity style={styles.retryBtn} onPress={() => refetch()}>
+              <Text style={styles.retryBtnText}>Try again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.secondaryBtn}
+              onPress={() => router.navigate('/(customer)')}
+            >
+              <Text style={styles.secondaryBtnText}>Explore tailors</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       ) : (
         <FlatList
-          data={orders}
+          data={sortedOrders}
           keyExtractor={(o) => o.id}
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
@@ -93,7 +206,10 @@ export default function OrdersListScreen() {
             <TouchableOpacity
               style={styles.card}
               testID={`order-card-${item.stage}`}
-              onPress={() => router.push(`/(customer)/orders/${item.id}`)}
+              onPress={() => router.push({
+                pathname: '/(customer)/orders/[id]',
+                params: { id: item.id, tab },
+              })}
             >
               <View style={styles.cardTop}>
                 <View style={{ flex: 1 }}>
@@ -120,9 +236,16 @@ export default function OrdersListScreen() {
                   </Text>
                 )}
               </View>
-              {['COMPLETE', 'DELIVERED', 'COLLECTED'].includes(item.stage) && !item.hasReview && (
+              {['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(item.stage) && !item.hasReview && (
                 <View style={styles.reviewNudge}>
-                  <Text style={styles.reviewNudgeText}>★  Leave a review</Text>
+                  <Text style={styles.reviewNudgeText}>
+                    {item.stage === 'COMPLETE' ? '★  Leave a review' : '★  Finish and review'}
+                  </Text>
+                </View>
+              )}
+              {orderHint(item.stage) && (
+                <View style={styles.reviewNudge}>
+                  <Text style={styles.reviewNudgeText}>{orderHint(item.stage)}</Text>
                 </View>
               )}
             </TouchableOpacity>
@@ -144,10 +267,22 @@ function EmptyOrdersView({
 }) {
   if (tab === 'completed') {
     return (
-      <View style={emptyStyles.container}>
-        <View style={emptyStyles.textBlock}>
-          <Text style={emptyStyles.heading}>No completed orders yet</Text>
-          <Text style={emptyStyles.sub}>Orders you finish with a tailor will appear here.</Text>
+      <View style={styles.stateWrap}>
+        <View style={styles.stateCard}>
+          <Text style={styles.stateEyebrow}>Completed orders</Text>
+          <Text style={styles.stateTitle}>No completed orders yet.</Text>
+          <Text style={styles.stateHint}>
+            Orders you finish with a tailor will appear here once the full journey is closed out in the app.
+          </Text>
+          <View style={styles.stateGuideCard}>
+            <Text style={styles.stateGuideTitle}>Best way to use this tab</Text>
+            <Text style={styles.stateGuideText}>
+              Come back here for finished garments, past references, and the orders you may want to review or revisit later.
+            </Text>
+          </View>
+          <TouchableOpacity style={styles.retryBtn} onPress={onExplore}>
+            <Text style={styles.retryBtnText}>Explore tailors</Text>
+          </TouchableOpacity>
         </View>
       </View>
     )
@@ -242,6 +377,13 @@ const emptyStyles = StyleSheet.create({
     paddingHorizontal: Spacing.xxxl,
   },
   ctaBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.md },
+  primaryCta: {
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xxxl,
+  },
+  primaryCtaText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.md },
 
   secondaryCard: {
     flexDirection: 'row',
@@ -260,8 +402,105 @@ const emptyStyles = StyleSheet.create({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  stateCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    alignItems: 'center',
+    ...Shadow.lg,
+  },
+  stateEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  stateTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    textAlign: 'center',
+  },
+  stateHint: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    textAlign: 'center',
+    lineHeight: 21,
+  },
+  stateGuideCard: {
+    alignSelf: 'stretch',
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: 4,
+  },
+  stateGuideTitle: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  stateGuideText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
   header: { padding: Spacing.xl, gap: Spacing.md },
   title: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
+  heroCard: {
+    marginHorizontal: Spacing.xl,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  guideCard: {
+    marginHorizontal: Spacing.xl,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  heroTitle: {
+    fontSize: FontSize.xxl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 38,
+  },
+  heroSub: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 24,
+  },
   tabs: {
     flexDirection: 'row', backgroundColor: Colors.boneDeep,
     borderRadius: Radius.full, padding: 3,
@@ -272,10 +511,17 @@ const styles = StyleSheet.create({
   tabLabelActive: { color: Colors.ink, fontWeight: FontWeight.semibold },
 
   list: { padding: Spacing.xl, gap: Spacing.md, paddingBottom: Spacing.xxxl },
-  errorState: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: Spacing.lg },
-  errorText: { fontSize: FontSize.md, color: Colors.inkLight },
   retryBtn: { backgroundColor: Colors.needleGreen, borderRadius: Radius.full, paddingVertical: Spacing.md, paddingHorizontal: Spacing.xxxl },
   retryBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
+  secondaryBtn: {
+    backgroundColor: Colors.white,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xxxl,
+  },
+  secondaryBtnText: { color: Colors.ink, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
   card: { backgroundColor: Colors.white, borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.md, ...Shadow.sm },
   cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md },
   garment: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },

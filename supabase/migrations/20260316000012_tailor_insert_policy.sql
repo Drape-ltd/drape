@@ -20,4 +20,4 @@ DROP POLICY IF EXISTS "tailors: insert own profile" ON tailor_profiles;
 CREATE POLICY "tailors: insert own profile"
   ON tailor_profiles FOR INSERT
   TO authenticated
-  WITH CHECK (user_id = auth.uid()::text);
+  WITH CHECK (user_id = auth.uid());

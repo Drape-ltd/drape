@@ -24,17 +24,31 @@ export function TailorProfileProvider({ children }: { children: React.ReactNode 
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!user?.id || user.user_metadata?.role !== 'TAILOR') return
+    if (!user?.id || user.user_metadata?.role !== 'TAILOR') {
+      setAvatarUrl(null)
+      return
+    }
+
+    let cancelled = false
 
     supabase
       .from('tailor_profiles')
       .select('avatar_url')
       .eq('user_id', user.id)
       .maybeSingle()
-      .then(({ data }) => {
-        if ((data as any)?.avatar_url) setAvatarUrl((data as any).avatar_url)
+      .then(({ data, error }) => {
+        if (cancelled) return
+        if (error) {
+          setAvatarUrl(null)
+          return
+        }
+        setAvatarUrl((data as any)?.avatar_url ?? null)
       })
-  }, [user?.id])
+
+    return () => {
+      cancelled = true
+    }
+  }, [user?.id, user?.user_metadata?.role])
 
   return (
     <TailorProfileContext.Provider value={{ avatarUrl, setAvatarUrl }}>

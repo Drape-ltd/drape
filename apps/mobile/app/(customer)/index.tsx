@@ -69,51 +69,85 @@ type LastSearch = {
   thumbnail: string | null
 }
 
+function orderPriority(stage: OrderStage): number {
+  switch (stage) {
+    case 'QUOTE_SENT':
+      return 0
+    case 'READY_FOR_COLLECTION':
+      return 1
+    case 'DELIVERED':
+    case 'COLLECTED':
+      return 2
+    case 'IN_DISPUTE':
+      return 3
+    case 'SHIPPED':
+      return 4
+    default:
+      return 5
+  }
+}
+
+function asStringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+  if (typeof value === 'string' && value.length > 0) return [value]
+  return []
+}
+
+function availabilityHint(tailor: TailorCard): string | null {
+  if (tailor.availability === 'LIMITED') return 'Taking a limited number of orders'
+  if (tailor.avgResponseHours != null) return `Usually replies in about ${Math.round(tailor.avgResponseHours)}h`
+  return null
+}
+
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 
-async function saveRecentlyViewed(tailor: TailorCard) {
+function storageKey(base: string, userId: string | undefined) {
+  return `${base}:${userId ?? 'guest'}`
+}
+
+async function saveRecentlyViewed(userId: string | undefined, tailor: TailorCard) {
   try {
-    const raw = await AsyncStorage.getItem(RECENTLY_VIEWED_KEY)
+    const raw = await AsyncStorage.getItem(storageKey(RECENTLY_VIEWED_KEY, userId))
     const existing: TailorCard[] = raw ? JSON.parse(raw) : []
     const updated = [tailor, ...existing.filter((t) => t.id !== tailor.id)].slice(0, MAX_RECENTLY_VIEWED)
-    await AsyncStorage.setItem(RECENTLY_VIEWED_KEY, JSON.stringify(updated))
+    await AsyncStorage.setItem(storageKey(RECENTLY_VIEWED_KEY, userId), JSON.stringify(updated))
   } catch {}
 }
 
-async function loadRecentlyViewed(): Promise<TailorCard[]> {
+async function loadRecentlyViewed(userId: string | undefined): Promise<TailorCard[]> {
   try {
-    const raw = await AsyncStorage.getItem(RECENTLY_VIEWED_KEY)
+    const raw = await AsyncStorage.getItem(storageKey(RECENTLY_VIEWED_KEY, userId))
     return raw ? JSON.parse(raw) : []
   } catch { return [] }
 }
 
-async function saveRecentSearch(q: string) {
+async function saveRecentSearch(userId: string | undefined, q: string) {
   try {
-    const raw = await AsyncStorage.getItem(RECENT_SEARCHES_KEY)
+    const raw = await AsyncStorage.getItem(storageKey(RECENT_SEARCHES_KEY, userId))
     const existing: string[] = raw ? JSON.parse(raw) : []
     const updated = [q, ...existing.filter((s) => s.toLowerCase() !== q.toLowerCase())].slice(0, MAX_RECENT_SEARCHES)
-    await AsyncStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated))
+    await AsyncStorage.setItem(storageKey(RECENT_SEARCHES_KEY, userId), JSON.stringify(updated))
   } catch {}
 }
 
-async function loadRecentSearches(): Promise<string[]> {
+async function loadRecentSearches(userId: string | undefined): Promise<string[]> {
   try {
-    const raw = await AsyncStorage.getItem(RECENT_SEARCHES_KEY)
+    const raw = await AsyncStorage.getItem(storageKey(RECENT_SEARCHES_KEY, userId))
     return raw ? JSON.parse(raw) : []
   } catch { return [] }
 }
 
-async function clearRecentSearches() {
-  try { await AsyncStorage.removeItem(RECENT_SEARCHES_KEY) } catch {}
+async function clearRecentSearches(userId: string | undefined) {
+  try { await AsyncStorage.removeItem(storageKey(RECENT_SEARCHES_KEY, userId)) } catch {}
 }
 
-async function saveLastSearch(ls: LastSearch) {
-  try { await AsyncStorage.setItem(LAST_SEARCH_KEY, JSON.stringify(ls)) } catch {}
+async function saveLastSearch(userId: string | undefined, ls: LastSearch) {
+  try { await AsyncStorage.setItem(storageKey(LAST_SEARCH_KEY, userId), JSON.stringify(ls)) } catch {}
 }
 
-async function loadLastSearch(): Promise<LastSearch | null> {
+async function loadLastSearch(userId: string | undefined): Promise<LastSearch | null> {
   try {
-    const raw = await AsyncStorage.getItem(LAST_SEARCH_KEY)
+    const raw = await AsyncStorage.getItem(storageKey(LAST_SEARCH_KEY, userId))
     return raw ? JSON.parse(raw) : null
   } catch { return null }
 }
@@ -121,17 +155,19 @@ async function loadLastSearch(): Promise<LastSearch | null> {
 // ─── Query helpers ─────────────────────────────────────────────────────────────
 
 function mapTailor(t: any): TailorCard {
+  const portfolioPhotos = asStringList(t.portfolio_photo_urls)
+
   return {
     id: t.id,
     displayName: t.display_name,
     location: t.location,
-    specialtyTags: t.specialty_tags ?? [],
+    specialtyTags: asStringList(t.specialty_tags),
     avgRating: t.avg_rating,
     totalReviews: t.total_reviews,
     tier: t.tier,
     priceRangeMin: t.price_range_min ?? null,
     priceRangeMax: t.price_range_max ?? null,
-    portfolioPhoto: (t.portfolio_photo_urls ?? [])[0] ?? null,
+    portfolioPhoto: portfolioPhotos[0] ?? null,
     availability: t.availability,
     avgResponseHours: t.avg_response_hours ?? null,
     rankingScore: t.ranking_score ?? 0,
@@ -188,6 +224,7 @@ export default function CustomerHomeScreen() {
   const [searchResults, setSearchResults]   = useState<TailorCard[]>([])
   const [searching, setSearching]           = useState(false)
   const [loadingMore, setLoadingMore]       = useState(false)
+  const [searchFetchError, setSearchFetchError] = useState(false)
   const [hasMore, setHasMore]               = useState(false)
   const [resultOffset, setResultOffset]     = useState(0)
   const [availFilter, setAvailFilter]       = useState<AvailFilter>('ALL')
@@ -211,15 +248,15 @@ export default function CustomerHomeScreen() {
 
   useFocusEffect(useCallback(() => {
     Promise.all([
-      loadRecentlyViewed(),
-      loadRecentSearches(),
-      loadLastSearch(),
+      loadRecentlyViewed(user?.id),
+      loadRecentSearches(user?.id),
+      loadLastSearch(user?.id),
     ]).then(([rv, rs, ls]) => {
       setRecentlyViewed(rv)
       setRecentSearches(rs)
       setLastSearch(ls)
     })
-  }, []))
+  }, [user?.id]))
 
   useFocusEffect(useCallback(() => {
     if (!user?.id) return
@@ -231,6 +268,7 @@ export default function CustomerHomeScreen() {
   useEffect(() => {
     if (!isSearchActive) {
       setSearchResults([])
+      setSearchFetchError(false)
       setHasMore(false)
       setResultOffset(0)
       return
@@ -247,39 +285,63 @@ export default function CustomerHomeScreen() {
   async function fetchData() {
     setFetchError(false)
     try {
-    const [ordersRes, tailorsRes] = await Promise.all([
-      supabase
-        .from('orders')
-        .select(`
-          id, reference, garment_type, stage,
-          tailor_profiles!tailor_profile_id(display_name),
-          quoted_completion_date
-        `)
-        .eq('customer_id', user?.id)
-        .not('stage', 'in', '("COMPLETE","DELIVERED","COLLECTED","DECLINED","EXPIRED","REFUNDED","CANCELLED")')
-        .order('created_at', { ascending: false })
-        .limit(3),
-      supabase
-        .from('tailor_profiles')
-        .select('id, display_name, location, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, portfolio_photo_urls, availability, ranking_score')
-        .eq('is_live', true)
-        .order('ranking_score', { ascending: false })
-        .limit(30),
-    ])
+      const [ordersRes, tailorsRes] = await Promise.allSettled([
+        supabase
+          .from('orders')
+          .select(`
+            id, reference, garment_type, stage,
+            tailor_profiles!tailor_profile_id(display_name),
+            quoted_completion_date
+          `)
+          .eq('customer_id', user?.id)
+          .not('stage', 'in', '("COMPLETE","DECLINED","EXPIRED","REFUNDED","CANCELLED")')
+          .order('created_at', { ascending: false })
+          .limit(3),
+        supabase
+          .from('tailor_profiles')
+          .select('id, display_name, location, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, portfolio_photo_urls, availability, ranking_score')
+          .eq('is_live', true)
+          .order('ranking_score', { ascending: false })
+          .limit(30),
+      ])
 
-    if (ordersRes.data) {
-      setActiveOrders(ordersRes.data.map((o: any) => ({
-        id: o.id,
-        reference: o.reference,
-        garmentType: o.garment_type,
-        stage: o.stage,
-        tailorName: o.tailor_profiles?.display_name ?? '',
-        estimatedDate: o.quoted_completion_date,
-      })))
-    }
-    if (tailorsRes.data) {
-      setAllTailors(tailorsRes.data.map(mapTailor))
-    }
+      const ordersFailed =
+        ordersRes.status === 'rejected' ||
+        (ordersRes.status === 'fulfilled' && !!ordersRes.value.error)
+      const tailorsFailed =
+        tailorsRes.status === 'rejected' ||
+        (tailorsRes.status === 'fulfilled' && !!tailorsRes.value.error)
+
+      if (ordersFailed && tailorsFailed) {
+        setFetchError(true)
+        setActiveOrders([])
+        setAllTailors([])
+        return
+      }
+
+      const orderRows =
+        ordersRes.status === 'fulfilled' && !ordersRes.value.error
+          ? ((ordersRes.value.data ?? []) as any[])
+          : []
+      const tailorRows =
+        tailorsRes.status === 'fulfilled' && !tailorsRes.value.error
+          ? ((tailorsRes.value.data ?? []) as any[])
+          : []
+
+      setActiveOrders(
+        orderRows
+          .map((o: any) => ({
+            id: o.id,
+            reference: o.reference,
+            garmentType: o.garment_type,
+            stage: o.stage,
+            tailorName: o.tailor_profiles?.display_name ?? '',
+            estimatedDate: o.quoted_completion_date,
+          }))
+          .sort((a, b) => orderPriority(a.stage) - orderPriority(b.stage))
+      )
+
+      setAllTailors(tailorRows.map(mapTailor))
     } catch {
       setFetchError(true)
     }
@@ -298,62 +360,76 @@ export default function CustomerHomeScreen() {
       const cached = resultCacheRef.current.get(q)
       if (cached) setSearchResults(cached)
       setSearching(true)
+      setSearchFetchError(false)
       setResultOffset(0)
     } else {
       setLoadingMore(true)
     }
+    try {
+      let sq = supabase
+        .from('tailor_profiles')
+        .select('id, display_name, location, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, portfolio_photo_urls, availability, avg_response_hours, ranking_score')
+        .eq('is_live', true)
 
-    let sq = supabase
-      .from('tailor_profiles')
-      .select('id, display_name, location, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, portfolio_photo_urls, availability, avg_response_hours, ranking_score')
-      .eq('is_live', true)
-
-    // Apply content filter — no hard location filter (location is a boost, not a gate)
-    if (specialty) {
-      sq = sq.or(`display_name.ilike.%${specialty}%,specialty_tags.cs.{${specialty}}`)
-    } else if (general) {
-      sq = sq.or(`display_name.ilike.%${general}%,location.ilike.%${general}%,specialty_tags.cs.{${general}}`)
-    }
-    // "Tailors in London" or location-only: fetch all, boost below
-
-    // Fetch wider pool when NLP detected a location so we have enough candidates to boost.
-    // V1.1 TODO: location-boosted pagination is unreliable on page 2+ — the DB offset is based on
-    // raw (un-boosted) ranking, so boosted results on page 2 may overlap or gap with page 1.
-    // Fix: server-side location scoring, or disable pagination for location queries.
-    const fetchSize = location ? PAGE_SIZE * 3 : PAGE_SIZE
-
-    const { data } = await sq
-      .order('ranking_score', { ascending: false })
-      .range(offset, offset + fetchSize - 1)
-
-    let page = (data ?? []).map(mapTailor)
-
-    if (location) {
-      page = applyLocationBoost(page, location).slice(0, PAGE_SIZE)
-    }
-
-    if (offset === 0) {
-      setSearchResults(page)
-      if (resultCacheRef.current.size >= 30) {
-        const firstKey = resultCacheRef.current.keys().next().value
-        resultCacheRef.current.delete(firstKey)
+      // Apply content filter — no hard location filter (location is a boost, not a gate)
+      if (specialty) {
+        sq = sq.or(`display_name.ilike.%${specialty}%,specialty_tags.cs.{${specialty}}`)
+      } else if (general) {
+        sq = sq.or(`display_name.ilike.%${general}%,location.ilike.%${general}%,specialty_tags.cs.{${general}}`)
       }
-      resultCacheRef.current.set(q, page)
-      setResultOffset(page.length)
+      // "Tailors in London" or location-only: fetch all, boost below
 
-      const ls: LastSearch = { query: q, count: page.length, thumbnail: page[0]?.portfolioPhoto ?? null }
-      saveRecentSearch(q)
-      saveLastSearch(ls)
-      setLastSearch(ls)
-      loadRecentSearches().then(setRecentSearches)
-      setSearching(false)
-    } else {
-      setSearchResults((prev) => [...prev, ...page])
-      setResultOffset((prev) => prev + page.length)
-      setLoadingMore(false)
+      // Fetch wider pool when NLP detected a location so we have enough candidates to boost.
+      // V1.1 TODO: location-boosted pagination is unreliable on page 2+ — the DB offset is based on
+      // raw (un-boosted) ranking, so boosted results on page 2 may overlap or gap with page 1.
+      // Fix: server-side location scoring, or disable pagination for location queries.
+      const fetchSize = location ? PAGE_SIZE * 3 : PAGE_SIZE
+
+      const { data, error } = await sq
+        .order('ranking_score', { ascending: false })
+        .range(offset, offset + fetchSize - 1)
+
+      if (error) throw error
+
+      let page = (data ?? []).map(mapTailor)
+
+      if (location) {
+        page = applyLocationBoost(page, location).slice(0, PAGE_SIZE)
+      }
+
+      if (offset === 0) {
+        setSearchResults(page)
+        if (resultCacheRef.current.size >= 30) {
+          const firstKey = resultCacheRef.current.keys().next().value
+          if (firstKey) resultCacheRef.current.delete(firstKey)
+        }
+        resultCacheRef.current.set(q, page)
+        setResultOffset(page.length)
+
+        const ls: LastSearch = { query: q, count: page.length, thumbnail: page[0]?.portfolioPhoto ?? null }
+        saveRecentSearch(user?.id, q)
+        saveLastSearch(user?.id, ls)
+        setLastSearch(ls)
+        loadRecentSearches(user?.id).then(setRecentSearches)
+      } else {
+        setSearchResults((prev) => [...prev, ...page])
+        setResultOffset((prev) => prev + page.length)
+      }
+
+      setHasMore(page.length === PAGE_SIZE)
+    } catch {
+      setSearchFetchError(true)
+      if (offset === 0) {
+        setSearchResults([])
+        setHasMore(false)
+      }
+    } finally {
+      if (offset === 0) {
+        setSearching(false)
+      } else {
+        setLoadingMore(false)
+      }
     }
-
-    setHasMore(page.length === PAGE_SIZE)
   }
 
   function loadMoreResults() {
@@ -364,7 +440,11 @@ export default function CustomerHomeScreen() {
   async function onRefresh() {
     setRefreshing(true)
     await fetchData()
-    const [rv, rs, ls] = await Promise.all([loadRecentlyViewed(), loadRecentSearches(), loadLastSearch()])
+    const [rv, rs, ls] = await Promise.all([
+      loadRecentlyViewed(user?.id),
+      loadRecentSearches(user?.id),
+      loadLastSearch(user?.id),
+    ])
     setRecentlyViewed(rv)
     setRecentSearches(rs)
     setLastSearch(ls)
@@ -372,7 +452,7 @@ export default function CustomerHomeScreen() {
   }
 
   function navigateToTailor(tailor: TailorCard) {
-    saveRecentlyViewed(tailor)
+    saveRecentlyViewed(user?.id, tailor)
     router.navigate(`/(customer)/tailor/${tailor.id}`)
   }
 
@@ -447,7 +527,7 @@ export default function CustomerHomeScreen() {
             <View style={styles.suggestSection}>
               <View style={styles.suggestHeader}>
                 <Text style={styles.suggestTitle}>Recent searches</Text>
-                <TouchableOpacity onPress={() => { clearRecentSearches(); setRecentSearches([]) }}>
+                <TouchableOpacity onPress={() => { clearRecentSearches(user?.id); setRecentSearches([]) }}>
                   <Text style={styles.suggestClear}>Clear</Text>
                 </TouchableOpacity>
               </View>
@@ -459,7 +539,7 @@ export default function CustomerHomeScreen() {
                     onPress={() => {
                       const updated = recentSearches.filter((_, j) => j !== i)
                       setRecentSearches(updated)
-                      AsyncStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated))
+                      AsyncStorage.setItem(storageKey(RECENT_SEARCHES_KEY, user?.id), JSON.stringify(updated))
                     }}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   >
@@ -532,9 +612,30 @@ export default function CustomerHomeScreen() {
           ListEmptyComponent={
             !searching ? (
               <View style={styles.emptyState}>
-                <Text style={styles.emptyStateEmoji}>🔎</Text>
-                <Text style={styles.emptyStateTitle}>No tailors found</Text>
-                <Text style={styles.emptyStateHint}>Try a different name, style, or location</Text>
+                <View style={styles.emptyStateBadge}>
+                  <Text style={styles.emptyStateBadgeText}>Search</Text>
+                </View>
+                <Text style={styles.emptyStateEmoji}>{searchFetchError ? '⚠️' : '🔎'}</Text>
+                <Text style={styles.emptyStateTitle}>{searchFetchError ? "Couldn't load search results" : 'No tailors found'}</Text>
+                <Text style={styles.emptyStateHint}>
+                  {searchFetchError ? 'Try again in a moment or adjust your search.' : 'Try a different name, style, or location'}
+                </Text>
+                {searchFetchError && (
+                  <>
+                    <TouchableOpacity style={styles.searchRetryBtn} onPress={() => runSearch(query, 0)}>
+                      <Text style={styles.searchRetryBtnText}>Try again</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.searchSecondaryBtn}
+                      onPress={() => {
+                        setSearchFocused(false)
+                        setQuery('')
+                      }}
+                    >
+                      <Text style={styles.searchSecondaryBtnText}>Back to browsing</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
               </View>
             ) : null
           }
@@ -558,9 +659,27 @@ export default function CustomerHomeScreen() {
           {/* Network error banner */}
           {fetchError && (
             <View style={styles.errorBanner}>
-              <Text style={styles.errorBannerText}>Couldn't load tailors. Pull down to retry.</Text>
+              <Text style={styles.errorBannerText}>Couldn't load tailors. Pull down to retry, or open Orders while discovery catches up.</Text>
             </View>
           )}
+
+          <View style={styles.heroCard}>
+            <View style={styles.heroBadge}>
+              <Text style={styles.heroBadgeText}>Discover tailors</Text>
+            </View>
+            <Text style={styles.heroTitle}>Find the tailor you trust before you place the brief.</Text>
+            <Text style={styles.heroSub}>
+              Explore by style, location, reviews, and responsiveness so the next order starts with
+              clarity instead of guesswork.
+            </Text>
+          </View>
+
+          <View style={styles.guideCard}>
+            <Text style={styles.guideTitle}>Best discovery rhythm</Text>
+            <Text style={styles.guideText}>
+              Start with a few promising profiles, compare trust signals, then move into one clear brief instead of messaging around first.
+            </Text>
+          </View>
 
           {/* Continue searching card */}
           {lastSearch && (
@@ -605,14 +724,14 @@ export default function CustomerHomeScreen() {
           )}
 
           {/* Active orders */}
-          {activeOrders.length > 0 && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>Your orders</Text>
-                <TouchableOpacity onPress={() => router.navigate('/(customer)/orders')}>
-                  <Text style={styles.sectionLink}>See all  →</Text>
-                </TouchableOpacity>
-              </View>
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Your orders</Text>
+              <TouchableOpacity onPress={() => router.navigate('/(customer)/orders')}>
+                <Text style={styles.sectionLink}>See all  →</Text>
+              </TouchableOpacity>
+            </View>
+            {activeOrders.length > 0 ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.ordersScroll}>
                 <View style={styles.ordersRow}>
                   {activeOrders.map((order) => {
@@ -640,8 +759,22 @@ export default function CustomerHomeScreen() {
                   })}
                 </View>
               </ScrollView>
-            </View>
-          )}
+            ) : (
+              <TouchableOpacity
+                style={styles.firstOrderCard}
+                onPress={() => inputRef.current?.focus()}
+                activeOpacity={0.85}
+              >
+                <View style={styles.firstOrderIcon}>
+                  <Text style={styles.firstOrderIconText}>✂️</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.firstOrderTitle}>Start your first order</Text>
+                  <Text style={styles.firstOrderHint}>Search by style, location, or tailor name to find someone to book.</Text>
+                </View>
+              </TouchableOpacity>
+            )}
+          </View>
 
           {/* Browse styles */}
           <View style={styles.section}>
@@ -662,13 +795,31 @@ export default function CustomerHomeScreen() {
           {/* Top tailors grid */}
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Top tailors</Text>
+              <Text style={styles.sectionTitle}>Trusted tailors to explore</Text>
             </View>
-            <View style={styles.cardsGrid}>
-              {allTailors.map((tailor) => (
-                <GridCard key={tailor.id} tailor={tailor} onPress={() => navigateToTailor(tailor)} />
-              ))}
-            </View>
+            {allTailors.length > 0 ? (
+              <View style={styles.cardsGrid}>
+                {allTailors.map((tailor) => (
+                  <GridCard key={tailor.id} tailor={tailor} onPress={() => navigateToTailor(tailor)} />
+                ))}
+              </View>
+            ) : (
+              <View style={styles.emptyBrowseCard}>
+                <View style={styles.emptyBrowseBadge}>
+                  <Text style={styles.emptyBrowseBadgeText}>Discovery</Text>
+                </View>
+                <Text style={styles.emptyBrowseTitle}>No live tailors to browse yet</Text>
+                <Text style={styles.emptyBrowseHint}>
+                  As soon as verified tailors go live, they will appear here for customers to explore.
+                </Text>
+                <TouchableOpacity
+                  style={styles.emptyBrowseCta}
+                  onPress={() => router.push('/(customer)/search')}
+                >
+                  <Text style={styles.emptyBrowseCtaText}>Search by specialty</Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         </ScrollView>
       )}
@@ -681,11 +832,17 @@ export default function CustomerHomeScreen() {
 function GridCard({ tailor, onPress }: { tailor: TailorCard; onPress: () => void }) {
   const { width: screenWidth } = useWindowDimensions()
   const CARD_WIDTH = (screenWidth - Spacing.xl * 2 - Spacing.md) / 2
+  const [imageFailed, setImageFailed] = useState(false)
   return (
     <TouchableOpacity style={[styles.gridCard, { width: CARD_WIDTH }]} onPress={onPress} activeOpacity={0.88}>
       <View style={styles.gridImageWrap}>
-        {tailor.portfolioPhoto ? (
-          <Image source={{ uri: tailor.portfolioPhoto }} style={styles.gridImage} resizeMode="cover" />
+        {tailor.portfolioPhoto && !imageFailed ? (
+          <Image
+            source={{ uri: tailor.portfolioPhoto }}
+            style={styles.gridImage}
+            resizeMode="cover"
+            onError={() => setImageFailed(true)}
+          />
         ) : (
           <View style={[styles.gridImage, styles.gridImagePlaceholder]}>
             <Text style={{ fontSize: 36 }}>🧵</Text>
@@ -715,6 +872,9 @@ function GridCard({ tailor, onPress }: { tailor: TailorCard; onPress: () => void
             {tailor.specialtyTags.slice(0, 2).join(' · ')}
           </Text>
         )}
+        {availabilityHint(tailor) && (
+          <Text style={styles.gridHint} numberOfLines={1}>{availabilityHint(tailor)}</Text>
+        )}
       </View>
     </TouchableOpacity>
   )
@@ -723,11 +883,17 @@ function GridCard({ tailor, onPress }: { tailor: TailorCard; onPress: () => void
 // ─── Search result card ───────────────────────────────────────────────────────
 
 function SearchResultCard({ tailor, onPress }: { tailor: TailorCard; onPress: () => void }) {
+  const [imageFailed, setImageFailed] = useState(false)
   return (
     <TouchableOpacity style={styles.resultCard} onPress={onPress} activeOpacity={0.88}>
       <View style={styles.resultThumb}>
-        {tailor.portfolioPhoto ? (
-          <Image source={{ uri: tailor.portfolioPhoto }} style={styles.resultThumbImg} resizeMode="cover" />
+        {tailor.portfolioPhoto && !imageFailed ? (
+          <Image
+            source={{ uri: tailor.portfolioPhoto }}
+            style={styles.resultThumbImg}
+            resizeMode="cover"
+            onError={() => setImageFailed(true)}
+          />
         ) : (
           <View style={[styles.resultThumbImg, styles.resultThumbPlaceholder]}>
             <Text style={{ fontSize: 24 }}>🧵</Text>
@@ -746,6 +912,9 @@ function SearchResultCard({ tailor, onPress }: { tailor: TailorCard; onPress: ()
             {tailor.specialtyTags.slice(0, 2).join(' · ')}
           </Text>
         )}
+        {availabilityHint(tailor) && (
+          <Text style={styles.resultHint} numberOfLines={1}>{availabilityHint(tailor)}</Text>
+        )}
         {tailor.availability === 'LIMITED' && (
           <View style={styles.limitedBadge}>
             <Text style={styles.limitedText}>Limited availability</Text>
@@ -759,11 +928,17 @@ function SearchResultCard({ tailor, onPress }: { tailor: TailorCard; onPress: ()
 // ─── Recently viewed card ─────────────────────────────────────────────────────
 
 function RecentCard({ tailor, onPress }: { tailor: TailorCard; onPress: () => void }) {
+  const [imageFailed, setImageFailed] = useState(false)
   return (
     <TouchableOpacity style={styles.recentCard} onPress={onPress} activeOpacity={0.88}>
       <View style={styles.recentImageWrap}>
-        {tailor.portfolioPhoto ? (
-          <Image source={{ uri: tailor.portfolioPhoto }} style={styles.recentImage} resizeMode="cover" />
+        {tailor.portfolioPhoto && !imageFailed ? (
+          <Image
+            source={{ uri: tailor.portfolioPhoto }}
+            style={styles.recentImage}
+            resizeMode="cover"
+            onError={() => setImageFailed(true)}
+          />
         ) : (
           <View style={[styles.recentImage, styles.recentImagePlaceholder]}>
             <Text style={{ fontSize: 20 }}>🧵</Text>
@@ -805,6 +980,54 @@ const styles = StyleSheet.create({
   // Scroll areas
   scroll: { flex: 1 },
   content: { paddingBottom: 100 },
+  heroCard: {
+    marginHorizontal: Spacing.xl,
+    marginTop: Spacing.lg,
+    marginBottom: Spacing.lg,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  heroTitle: {
+    fontSize: FontSize.xxl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 38,
+  },
+  heroSub: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 24,
+  },
+  guideCard: {
+    marginHorizontal: Spacing.xl,
+    marginBottom: Spacing.lg,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   errorBanner: {
     marginHorizontal: Spacing.xl, marginTop: Spacing.lg,
     backgroundColor: Colors.kanteRustLight, borderRadius: Radius.md,
@@ -862,6 +1085,7 @@ const styles = StyleSheet.create({
   resultName: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, flex: 1, marginRight: 4 },
   resultLocation: { fontSize: FontSize.xs, color: Colors.midGrey },
   resultTags: { fontSize: FontSize.xs, color: Colors.inkLight },
+  resultHint: { fontSize: FontSize.xs, color: Colors.needleGreen, marginTop: 4, fontWeight: FontWeight.medium },
   limitedBadge: {
     backgroundColor: '#FEF3C7', paddingHorizontal: Spacing.sm,
     paddingVertical: 2, borderRadius: Radius.full, alignSelf: 'flex-start', marginTop: 2,
@@ -914,6 +1138,27 @@ const styles = StyleSheet.create({
   orderGarment: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   orderTailor: { fontSize: FontSize.xs, color: Colors.midGrey },
   orderEta: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  firstOrderCard: {
+    marginHorizontal: Spacing.xl,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  firstOrderIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  firstOrderIconText: { fontSize: 22 },
+  firstOrderTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  firstOrderHint: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20, marginTop: 2 },
 
   // Browse styles
   trendingScroll: { marginLeft: Spacing.xl },
@@ -946,10 +1191,75 @@ const styles = StyleSheet.create({
   gridName: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, flex: 1, marginRight: 4 },
   gridLocation: { fontSize: FontSize.xs, color: Colors.midGrey },
   gridTags: { fontSize: FontSize.xs, color: Colors.inkLight, marginTop: 2 },
+  gridHint: { fontSize: FontSize.xs, color: Colors.needleGreen, marginTop: 4, fontWeight: FontWeight.medium },
 
   // Empty state
   emptyState: { alignItems: 'center', gap: Spacing.sm, paddingVertical: 60, paddingHorizontal: Spacing.xl },
+  emptyStateBadge: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  emptyStateBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
   emptyStateEmoji: { fontSize: 40 },
   emptyStateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
   emptyStateHint: { fontSize: FontSize.sm, color: Colors.midGrey },
+  searchRetryBtn: {
+    marginTop: Spacing.md,
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.sm,
+  },
+  searchRetryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  searchSecondaryBtn: {
+    marginTop: Spacing.sm,
+    backgroundColor: Colors.white,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.sm,
+  },
+  searchSecondaryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  emptyBrowseCard: {
+    marginHorizontal: Spacing.xl,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.xl,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
+  emptyBrowseBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  emptyBrowseBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  emptyBrowseTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  emptyBrowseHint: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20 },
+  emptyBrowseCta: {
+    alignSelf: 'flex-start',
+    marginTop: Spacing.sm,
+    backgroundColor: Colors.needleGreenLight,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+  },
+  emptyBrowseCtaText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
 })

@@ -40,7 +40,7 @@ const config: Config = {
         ink: '#1A1A1A',
       },
       fontFamily: {
-        sans: ['var(--font-inter)', 'system-ui', 'sans-serif'],
+        sans: ['var(--font-body)', 'system-ui', 'sans-serif'],
       },
     },
   },

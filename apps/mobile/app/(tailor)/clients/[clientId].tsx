@@ -9,13 +9,14 @@ import {
   TextInput, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
   RefreshControl,
 } from 'react-native'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
 import { stageColor } from '@/lib/stageColors'
+import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -26,7 +27,7 @@ type Measurements = {
   unit?: 'in' | 'cm'
   fitStyle?: string
   garmentContext?: string
-  bodyShape?: string
+  bodyShape?: string | string[]
   fitFlags?: string[]
   bodyNote?: string
 }
@@ -44,6 +45,13 @@ type OrderHistoryRow = {
   stage: OrderStage
   createdAt: string
   quotedAmount: number | null
+  quotedCurrency: CurrencyCode
+}
+
+function asStringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+  if (typeof value === 'string' && value.length > 0) return [value]
+  return []
 }
 
 
@@ -63,6 +71,7 @@ const MEAS_LABELS: Array<{ key: keyof Measurements; label: string }> = [
 export default function ClientDetailScreen() {
   const { clientId } = useLocalSearchParams<{ clientId: string }>()
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
 
   const [profile, setProfile] = useState<ClientProfile | null>(null)
@@ -73,57 +82,95 @@ export default function ClientDetailScreen() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [fetchError, setFetchError] = useState(false)
   const [contactWarning, setContactWarning] = useState(false)
 
   const notesRef = useRef<TextInput>(null)
 
   async function fetchData() {
-    const [profileRes, ordersRes, notesRes] = await Promise.all([
-      supabase
-        .from('customer_profiles')
-        .select('display_name, measurements')
-        .eq('user_id', clientId)
-        .single(),
-      supabase
-        .from('orders')
-        .select('id, reference, garment_type, stage, created_at, quoted_amount')
-        .eq('tailor_id', user?.id)
-        .eq('customer_id', clientId)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('tailor_client_notes')
-        .select('notes')
-        .eq('tailor_id', user?.id)
-        .eq('customer_id', clientId)
-        .maybeSingle(),
-    ])
+    setFetchError(false)
+    setProfile(null)
+    setOrders([])
+    setNotes('')
+    setNotesInput('')
+    setNotesDirty(false)
+    setContactWarning(false)
+    try {
+      const [profileRes, ordersRes, notesRes] = await Promise.allSettled([
+        supabase
+          .from('customer_profiles')
+          .select('display_name, measurements')
+          .eq('user_id', clientId)
+          .maybeSingle(),
+        supabase
+          .from('orders')
+          .select('id, reference, garment_type, stage, created_at, quoted_amount, quoted_currency')
+          .eq('tailor_id', user?.id)
+          .eq('customer_id', clientId)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('tailor_client_notes')
+          .select('notes')
+          .eq('tailor_id', user?.id)
+          .eq('customer_id', clientId)
+          .maybeSingle(),
+      ])
 
-    const p = profileRes.data as any
-    setProfile({
-      displayName: p?.display_name ?? 'Customer',
-      email: '',
-      measurements: p?.measurements ?? null,
-    })
+      const profileData =
+        profileRes.status === 'fulfilled' && !profileRes.value.error
+          ? (profileRes.value.data as any)
+          : null
+      const orderRows =
+        ordersRes.status === 'fulfilled' && !ordersRes.value.error
+          ? ((ordersRes.value.data ?? []) as any[])
+          : []
+      const notesData =
+        notesRes.status === 'fulfilled' && !notesRes.value.error
+          ? (notesRes.value.data as any)
+          : null
 
-    setOrders(
-      ((ordersRes.data ?? []) as any[]).map((o) => ({
-        id: o.id,
-        reference: o.reference,
-        garmentType: o.garment_type,
-        stage: o.stage,
-        createdAt: o.created_at,
-        quotedAmount: o.quoted_amount,
-      }))
-    )
+      if (
+        (profileRes.status === 'rejected' || (profileRes.status === 'fulfilled' && profileRes.value.error)) &&
+        (ordersRes.status === 'rejected' || (ordersRes.status === 'fulfilled' && ordersRes.value.error)) &&
+        (notesRes.status === 'rejected' || (notesRes.status === 'fulfilled' && notesRes.value.error))
+      ) {
+        throw new Error('Failed to load client detail')
+      }
 
-    const savedNotes = (notesRes.data as any)?.notes ?? ''
-    setNotes(savedNotes)
-    setNotesInput(savedNotes)
+      setProfile({
+        displayName: profileData?.display_name ?? 'Customer',
+        email: '',
+        measurements: profileData?.measurements ?? null,
+      })
+
+      setOrders(
+        orderRows.map((o) => ({
+          id: o.id,
+          reference: o.reference,
+          garmentType: o.garment_type,
+          stage: o.stage,
+          createdAt: o.created_at,
+          quotedAmount: o.quoted_amount,
+          quotedCurrency: (o.quoted_currency ?? 'USD') as CurrencyCode,
+        }))
+      )
+
+      const savedNotes = notesData?.notes ?? ''
+      setNotes(savedNotes)
+      setNotesInput(savedNotes)
+    } catch {
+      setFetchError(true)
+      setProfile(null)
+      setOrders([])
+      setNotes('')
+      setNotesInput('')
+    }
   }
 
   useEffect(() => {
-    fetchData().finally(() => setLoading(false))
-  }, [clientId])
+    setLoading(true)
+    void fetchData().finally(() => setLoading(false))
+  }, [clientId, user?.id])
 
   async function onRefresh() {
     setRefreshing(true)
@@ -132,10 +179,10 @@ export default function ClientDetailScreen() {
   }
 
   function onNotesChange(text: string) {
-    const filtered = filterContactInfo(text)
-    setContactWarning(filtered !== text)
-    setNotesInput(filtered)
-    setNotesDirty(filtered !== notes)
+    const result = filterContactInfo(text)
+    setContactWarning(result.blocked)
+    setNotesInput(text)
+    setNotesDirty(text !== notes)
   }
 
   async function saveNotes() {
@@ -167,7 +214,50 @@ export default function ClientDetailScreen() {
   if (loading) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Client detail</Text>
+            <ActivityIndicator color={Colors.needleGreen} size="large" />
+            <Text style={styles.stateTitle}>Loading this client…</Text>
+            <Text style={styles.stateHint}>
+              We’re pulling together their measurements, notes, and order history so you can pick up the relationship cleanly.
+            </Text>
+          </View>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  if (fetchError) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Client detail</Text>
+            <Text style={styles.stateTitle}>Couldn't load this client.</Text>
+            <Text style={styles.stateHint}>
+              This page should help you remember fit details, private notes, and order history without losing context.
+            </Text>
+            <TouchableOpacity
+              style={styles.errorRetry}
+              onPress={() => {
+                setLoading(true)
+                fetchData().finally(() => setLoading(false))
+              }}
+            >
+              <Text style={styles.errorRetryText}>Try again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.errorSecondary}
+              onPress={() => router.replace('/(tailor)/clients')}
+            >
+              <Text style={styles.errorSecondaryText}>Open clients</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={goBack}>
+              <Text style={styles.errorLink}>Go back</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </SafeAreaView>
     )
   }
@@ -175,6 +265,13 @@ export default function ClientDetailScreen() {
   const m = profile?.measurements
   const unit = m?.unit ?? 'cm'
   const hasMeasurements = MEAS_LABELS.some(({ key }) => m && (m[key] as number | undefined))
+  const bodyShapeLabels = asStringList(m?.bodyShape)
+  const fitFlags = asStringList(m?.fitFlags)
+
+  function goBack() {
+    if (navigation.canGoBack()) router.back()
+    else router.replace('/(tailor)/clients')
+  }
 
   return (
     <KeyboardAvoidingView
@@ -192,9 +289,27 @@ export default function ClientDetailScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />
           }
         >
+          <View style={styles.heroCard}>
+            <View style={styles.heroBadge}>
+              <Text style={styles.heroBadgeText}>Client relationship</Text>
+            </View>
+            <Text style={styles.heroTitle}>Keep fit memory, order history, and notes in one dependable place.</Text>
+            <Text style={styles.heroSub}>
+              This client view is where repeat business becomes easier, because measurements,
+              preferences, and past work stay connected.
+            </Text>
+          </View>
+
+          <View style={styles.guideCard}>
+            <Text style={styles.guideTitle}>Best CRM habit</Text>
+            <Text style={styles.guideText}>
+              Use this page to capture the fit details and reminders you will want before the next order, not just what matters today.
+            </Text>
+          </View>
+
           {/* Header */}
           <View style={styles.header}>
-            <TouchableOpacity onPress={() => router.back()}>
+            <TouchableOpacity onPress={goBack}>
               <Text style={styles.back}>← Clients</Text>
             </TouchableOpacity>
           </View>
@@ -231,18 +346,18 @@ export default function ClientDetailScreen() {
             ) : (
               <View style={styles.measCard}>
                 {/* Context chips */}
-                {(m.garmentContext || m.bodyShape) && (
+                {(m.garmentContext || bodyShapeLabels.length > 0) && (
                   <View style={styles.chipRow}>
                     {m.garmentContext && (
                       <View style={styles.chip}>
                         <Text style={styles.chipText}>{m.garmentContext}</Text>
                       </View>
                     )}
-                    {m.bodyShape && (
-                      <View style={styles.chip}>
-                        <Text style={styles.chipText}>{m.bodyShape.replace(/_/g, ' ')}</Text>
+                    {bodyShapeLabels.map((shape) => (
+                      <View key={shape} style={styles.chip}>
+                        <Text style={styles.chipText}>{shape.replace(/_/g, ' ')}</Text>
                       </View>
-                    )}
+                    ))}
                     {m.fitStyle && (
                       <View style={styles.chip}>
                         <Text style={styles.chipText}>{m.fitStyle} fit</Text>
@@ -265,11 +380,11 @@ export default function ClientDetailScreen() {
                 </View>
 
                 {/* Fit flags */}
-                {m.fitFlags && m.fitFlags.length > 0 && (
+                {fitFlags.length > 0 && (
                   <View style={styles.fitFlagWrap}>
                     <Text style={styles.fitFlagsHeader}>Fit flags</Text>
                     <View style={styles.chipRow}>
-                      {m.fitFlags.map((flag) => (
+                      {fitFlags.map((flag) => (
                         <View key={flag} style={styles.fitFlagChip}>
                           <Text style={styles.fitFlagText}>{flag.replace(/_/g, ' ')}</Text>
                         </View>
@@ -336,7 +451,14 @@ export default function ClientDetailScreen() {
             <Text style={styles.sectionTitle}>Order history</Text>
             {orders.length === 0 ? (
               <View style={styles.emptyCard}>
+                <Text style={styles.emptyCardEyebrow}>Order history</Text>
                 <Text style={styles.emptyCardText}>No orders yet.</Text>
+                <Text style={styles.emptyCardHint}>
+                  Orders with this client will appear here once they book through Drape.
+                </Text>
+                <Text style={styles.emptyCardHint}>
+                  Until then, private notes and diary entries help you keep the relationship warm without losing fit context.
+                </Text>
               </View>
             ) : (
               <View style={styles.orderList}>
@@ -370,7 +492,7 @@ export default function ClientDetailScreen() {
                       </View>
                       {order.quotedAmount ? (
                         <Text style={styles.orderAmount}>
-                          £{(order.quotedAmount / 100).toFixed(0)}
+                          {formatAmount(order.quotedAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)}
                         </Text>
                       ) : null}
                     </View>
@@ -391,9 +513,76 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   scroll: { flex: 1 },
   content: { paddingBottom: Spacing.xxxl },
+  heroCard: {
+    marginHorizontal: Spacing.xl,
+    marginBottom: Spacing.lg,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  heroTitle: {
+    fontSize: FontSize.xxl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 38,
+  },
+  heroSub: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 24,
+  },
+  guideCard: {
+    marginHorizontal: Spacing.xl,
+    marginBottom: Spacing.lg,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   header: { paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md },
   back: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  stateCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    alignItems: 'center',
+    ...Shadow.lg,
+  },
+  stateEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
 
   identityCard: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
@@ -423,8 +612,15 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, borderRadius: Radius.md,
     padding: Spacing.xl, alignItems: 'center', gap: Spacing.xs, ...Shadow.sm,
   },
+  emptyCardEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
   emptyCardText: { fontSize: FontSize.md, color: Colors.inkLight },
-  emptyCardHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center' },
+  emptyCardHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
 
   // Measurements
   measCard: {
@@ -501,4 +697,21 @@ const styles = StyleSheet.create({
   stagePill: { paddingHorizontal: Spacing.sm, paddingVertical: 3, borderRadius: Radius.full },
   stageText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   orderAmount: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+  errorRetry: {
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xxxl,
+  },
+  errorRetryText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  errorSecondary: {
+    backgroundColor: Colors.white,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xxxl,
+  },
+  errorSecondaryText: { color: Colors.ink, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  errorLink: { color: Colors.needleGreen, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
 })

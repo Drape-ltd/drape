@@ -7,9 +7,9 @@
 import { useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Switch, ActivityIndicator,
+  Switch, ActivityIndicator, Alert,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
@@ -31,13 +31,14 @@ const DEFAULT_PREFS: NotifPrefs = {
 }
 
 function PrefRow({
-  icon, title, description, value, onChange,
+  icon, title, description, value, onChange, disabled,
 }: {
   icon: React.ComponentProps<typeof Feather>['name']
   title: string
   description: string
   value: boolean
   onChange: (v: boolean) => void
+  disabled?: boolean
 }) {
   return (
     <View style={styles.prefRow}>
@@ -49,6 +50,7 @@ function PrefRow({
       <Switch
         value={value}
         onValueChange={onChange}
+        disabled={disabled}
         trackColor={{ false: Colors.lightGrey, true: Colors.needleGreen }}
         thumbColor={Colors.white}
       />
@@ -58,6 +60,7 @@ function PrefRow({
 
 export default function TailorNotificationSettingsScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const [prefs, setPrefs] = useState<NotifPrefs>(DEFAULT_PREFS)
   const [saving, setSaving] = useState(false)
@@ -68,17 +71,27 @@ export default function TailorNotificationSettingsScreen() {
   }, [user?.user_metadata?.notif_prefs])
 
   async function toggle(key: keyof NotifPrefs, value: boolean) {
+    const previous = prefs
     const updated = { ...prefs, [key]: value }
     setPrefs(updated)
     setSaving(true)
-    await supabase.auth.updateUser({ data: { notif_prefs: updated } })
+    const { error } = await supabase.auth.updateUser({ data: { notif_prefs: updated } })
     setSaving(false)
+    if (error) {
+      setPrefs(previous)
+      Alert.alert('Error', 'Could not save your notification settings. Please try again.')
+    }
+  }
+
+  function goBack() {
+    if (navigation.canGoBack()) router.back()
+    else router.replace('/(tailor)/profile/account-settings')
   }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Notifications</Text>
@@ -86,6 +99,24 @@ export default function TailorNotificationSettingsScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
+        <View style={styles.heroCard}>
+          <View style={styles.heroBadge}>
+            <Text style={styles.heroBadgeText}>Notification control</Text>
+          </View>
+          <Text style={styles.heroTitle}>Keep client communication and order movement close at hand.</Text>
+          <Text style={styles.heroSub}>
+            Choose which alerts deserve your attention so requests, replies, and reviews support
+            your workflow instead of distracting from it.
+          </Text>
+        </View>
+
+        <View style={styles.guideCard}>
+          <Text style={styles.guideEyebrow}>Recommended</Text>
+          <Text style={styles.guideTitle}>Keep new orders, messages, and reviews turned on.</Text>
+          <Text style={styles.guideCopy}>
+            Those alerts protect response time, help you keep clients informed, and make sure completed work feeds back into your reputation.
+          </Text>
+        </View>
 
         <Text style={styles.intro}>
           Choose which push notifications you receive from Drape.
@@ -100,6 +131,7 @@ export default function TailorNotificationSettingsScreen() {
               description="Alert when a customer requests an order from you."
               value={prefs.newOrders}
               onChange={(v) => toggle('newOrders', v)}
+              disabled={saving}
             />
           </View>
         </View>
@@ -113,6 +145,7 @@ export default function TailorNotificationSettingsScreen() {
               description="Push alerts for new messages from customers."
               value={prefs.messages}
               onChange={(v) => toggle('messages', v)}
+              disabled={saving}
             />
             <View style={styles.divider} />
             <PrefRow
@@ -121,6 +154,7 @@ export default function TailorNotificationSettingsScreen() {
               description="Alert when a customer leaves a review on a completed order."
               value={prefs.reviews}
               onChange={(v) => toggle('reviews', v)}
+              disabled={saving}
             />
           </View>
         </View>
@@ -134,6 +168,7 @@ export default function TailorNotificationSettingsScreen() {
               description="Platform updates, tailoring tips, and Drape announcements."
               value={prefs.promotions}
               onChange={(v) => toggle('promotions', v)}
+              disabled={saving}
             />
           </View>
           <Text style={styles.hint}>
@@ -159,6 +194,64 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
   body: { padding: Spacing.xl, paddingBottom: 64, gap: Spacing.xl },
+  heroCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  heroTitle: {
+    fontSize: FontSize.xxl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 38,
+  },
+  heroSub: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 24,
+  },
+  guideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  guideEyebrow: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  guideTitle: {
+    fontSize: FontSize.md,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+    lineHeight: 22,
+  },
+  guideCopy: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 21,
+  },
   intro: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 22 },
   section: { gap: Spacing.sm },
   sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },

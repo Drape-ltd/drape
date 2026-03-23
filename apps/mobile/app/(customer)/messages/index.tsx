@@ -2,14 +2,14 @@ import { useCallback, useState } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  ActivityIndicator, RefreshControl, Linking, ScrollView,
+  ActivityIndicator, RefreshControl, Linking, ScrollView, Alert,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { Colors, FontSize, FontWeight, Spacing, Radius } from '@/constants/theme'
+import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
 
 type ConversationItem = {
@@ -18,6 +18,7 @@ type ConversationItem = {
   tailorInitials: string
   garmentType: string
   stage: OrderStage
+  createdAt: string
   lastMessage: string | null
   lastMessageAt: string | null
   unreadCount: number
@@ -25,65 +26,105 @@ type ConversationItem = {
 
 type FilterTab = 'all' | 'support'
 
+function orderPreview(stage: OrderStage, garmentType: string): string {
+  switch (stage) {
+    case 'PENDING_QUOTE':
+      return `${garmentType} · Waiting for your tailor's quote`
+    case 'CONSULTATION':
+      return `${garmentType} · Consultation requested`
+    case 'QUOTE_SENT':
+      return `${garmentType} · Quote ready for review`
+    case 'CONFIRMED':
+    case 'DESIGNING':
+    case 'SOURCING':
+    case 'CUTTING':
+    case 'SEWING':
+    case 'FINISHING':
+      return `${garmentType} · In progress`
+    case 'SHIPPED':
+      return `${garmentType} · Shipped and awaiting receipt`
+    case 'READY_FOR_COLLECTION':
+      return `${garmentType} · Ready for collection`
+    case 'DELIVERED':
+      return `${garmentType} · Delivered, ready to finish`
+    case 'COLLECTED':
+      return `${garmentType} · Collected, ready to finish`
+    case 'COMPLETE':
+      return `${garmentType} · Order complete`
+    case 'IN_DISPUTE':
+      return `${garmentType} · Concern under review`
+    default:
+      return `${garmentType} · ${STAGE_LABELS[stage] ?? stage}`
+  }
+}
+
 export default function MessagesInboxScreen() {
   const router = useRouter()
   const { user } = useAuth()
   const [conversations, setConversations] = useState<ConversationItem[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [fetchError, setFetchError] = useState(false)
   const [filter, setFilter] = useState<FilterTab>('all')
 
   async function fetchConversations() {
-    const { data } = await supabase
-      .from('orders')
-      .select(`
-        id, garment_type, stage,
-        tailor_profiles!tailor_profile_id(display_name),
-        messages(body, created_at, sender_role)
-      `)
-      .eq('customer_id', user?.id)
-      .order('created_at', { ascending: false })
-      .limit(50)
+    setFetchError(false)
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select(`
+          id, garment_type, stage, created_at,
+          tailor_profiles!tailor_profile_id(display_name),
+          messages(body, created_at, sender_role, read_at)
+        `)
+        .eq('customer_id', user?.id)
+        .order('created_at', { ascending: false })
+        .limit(50)
 
-    if (!data) return
+      if (error) throw error
 
-    const items: ConversationItem[] = data.map((o: any) => {
-      const msgs: any[] = o.messages ?? []
-      const sorted = [...msgs].sort((a, b) =>
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      )
-      const last = sorted[0] ?? null
-      const unread = sorted.filter(
-        (m) => m.sender_role === 'TAILOR' && m.read_at == null
-      ).length
+      const items: ConversationItem[] = ((data ?? []) as any[]).map((o: any) => {
+        const msgs: any[] = o.messages ?? []
+        const sorted = [...msgs].sort((a, b) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        )
+        const last = sorted[0] ?? null
+        const unread = sorted.filter(
+          (m) => m.sender_role === 'TAILOR' && m.read_at == null
+        ).length
 
-      const name: string = o.tailor_profiles?.display_name ?? 'Tailor'
-      const parts = name.trim().split(' ')
-      const initials = parts.length > 1
-        ? `${parts[0][0]}${parts[parts.length - 1][0]}`
-        : name.slice(0, 2)
+        const name: string = o.tailor_profiles?.display_name ?? 'Tailor'
+        const parts = name.trim().split(' ')
+        const initials = parts.length > 1
+          ? `${parts[0][0]}${parts[parts.length - 1][0]}`
+          : name.slice(0, 2)
 
-      return {
-        orderId: o.id,
-        tailorName: name,
-        tailorInitials: initials.toUpperCase(),
-        garmentType: o.garment_type,
-        stage: o.stage,
-        lastMessage: last?.body ?? null,
-        lastMessageAt: last?.created_at ?? null,
-        unreadCount: unread,
-      }
-    })
+        return {
+          orderId: o.id,
+          tailorName: name,
+          tailorInitials: initials.toUpperCase(),
+          garmentType: o.garment_type,
+          stage: o.stage,
+          createdAt: o.created_at,
+          lastMessage: last?.body ?? null,
+          lastMessageAt: last?.created_at ?? null,
+          unreadCount: unread,
+        }
+      })
 
-    items.sort((a, b) => {
-      if (a.unreadCount > 0 && b.unreadCount === 0) return -1
-      if (b.unreadCount > 0 && a.unreadCount === 0) return 1
-      const aTime = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : 0
-      const bTime = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0
-      return bTime - aTime
-    })
+      items.sort((a, b) => {
+        if (a.unreadCount > 0 && b.unreadCount === 0) return -1
+        if (b.unreadCount > 0 && a.unreadCount === 0) return 1
+        const aTime = new Date(a.lastMessageAt ?? a.createdAt).getTime()
+        const bTime = new Date(b.lastMessageAt ?? b.createdAt).getTime()
+        return bTime - aTime
+      })
 
-    setConversations(items)
+      setConversations(items)
+    } catch {
+      setFetchError(true)
+      setConversations([])
+    }
   }
 
   useFocusEffect(useCallback(() => {
@@ -142,20 +183,105 @@ export default function MessagesInboxScreen() {
       {filter === 'support' ? (
         <SupportView />
       ) : loading ? (
-        <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Messages</Text>
+            <ActivityIndicator color={Colors.needleGreen} size="large" />
+            <Text style={styles.stateTitle}>Loading your conversations…</Text>
+            <Text style={styles.stateHint}>
+              We’re gathering every order thread so quotes, clarifications, and progress updates stay in one place.
+            </Text>
+          </View>
+        </View>
+      ) : fetchError ? (
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Messages</Text>
+            <Feather name="alert-circle" size={48} color={Colors.lightGrey} />
+            <Text style={styles.stateTitle}>Couldn't load messages</Text>
+            <Text style={styles.stateHint}>
+              This inbox should keep every working conversation tied to its order instead of scattered across the app.
+            </Text>
+            <View style={styles.stateGuideCard}>
+              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
+              <Text style={styles.stateGuideText}>
+                Refresh here first. If it still fails, open your orders first, then continue discovery if needed, so the next working thread can keep moving.
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.retryBtn}
+              onPress={() => {
+                setLoading(true)
+                fetchConversations().finally(() => setLoading(false))
+              }}
+            >
+              <Text style={styles.retryBtnText}>Try again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.secondaryBtn}
+              onPress={() => router.navigate('/(customer)')}
+            >
+              <Text style={styles.secondaryBtnText}>Explore tailors</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.secondaryBtn}
+              onPress={() => router.navigate('/(customer)/orders')}
+            >
+              <Text style={styles.secondaryBtnText}>Open orders</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       ) : (
         <FlatList
           data={conversations}
           keyExtractor={(c) => c.orderId}
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />}
+          ListHeaderComponent={(
+            <View>
+              <View style={styles.heroCard}>
+                <View style={styles.heroBadge}>
+                  <Text style={styles.heroBadgeText}>Conversations</Text>
+                </View>
+                <Text style={styles.heroTitle}>Keep every quote, clarification, and progress update in one thread.</Text>
+                <Text style={styles.heroSub}>
+                  Once you place a brief, Drape keeps the whole working conversation here so the
+                  order stays clear from first message to final handoff.
+                </Text>
+              </View>
+              <View style={styles.guideCard}>
+                <Text style={styles.guideEyebrow}>Best use</Text>
+                <Text style={styles.guideTitle}>Use this thread for decisions and clarifications, then use the order screen for state changes.</Text>
+                <Text style={styles.guideCopy}>
+                  Messages are where you align with your tailor. The order screen is where you review the quote, track production, raise concerns, and finish the handoff.
+                </Text>
+              </View>
+            </View>
+          )}
           contentContainerStyle={conversations.length === 0 ? styles.emptyContainer : undefined}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
           ListEmptyComponent={
             <View style={styles.empty}>
+              <View style={styles.emptyBadge}>
+                <Text style={styles.emptyBadgeText}>Inbox</Text>
+              </View>
               <Feather name="message-circle" size={48} color={Colors.lightGrey} />
               <Text style={styles.emptyTitle}>No messages yet</Text>
-              <Text style={styles.emptyHint}>Your conversations with tailors will appear here once you place an order.</Text>
+              <Text style={styles.emptyHint}>
+                Your conversations with tailors will appear here once you place an order and start working through the brief together.
+              </Text>
+              <View style={styles.emptyGuideCard}>
+                <Text style={styles.emptyGuideTitle}>Best way to use this screen</Text>
+                <Text style={styles.emptyGuideText}>
+                  Think of this as the working thread for each order. Once you send a brief, quotes, clarifications, consultation details, and progress updates all stay here.
+                </Text>
+              </View>
+              <TouchableOpacity style={styles.retryBtn} onPress={() => router.navigate('/(customer)')}>
+                <Text style={styles.retryBtnText}>Explore tailors</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.navigate('/(customer)/orders')}>
+                <Text style={styles.secondaryBtnText}>Open orders</Text>
+              </TouchableOpacity>
             </View>
           }
           renderItem={({ item }) => (
@@ -175,7 +301,7 @@ export default function MessagesInboxScreen() {
                     {item.tailorName}
                   </Text>
                   <Text style={[styles.time, item.unreadCount > 0 && styles.timeActive]}>
-                    {formatTime(item.lastMessageAt)}
+                    {formatTime(item.lastMessageAt ?? item.createdAt)}
                   </Text>
                 </View>
                 <View style={styles.contentBottom}>
@@ -183,7 +309,7 @@ export default function MessagesInboxScreen() {
                     style={[styles.preview, item.unreadCount > 0 && styles.previewBold]}
                     numberOfLines={1}
                   >
-                    {item.lastMessage ?? `${item.garmentType} · ${STAGE_LABELS[item.stage] ?? item.stage}`}
+                    {item.lastMessage ?? orderPreview(item.stage, item.garmentType)}
                   </Text>
                   {item.unreadCount > 0 && (
                     <View style={styles.badge}>
@@ -203,6 +329,7 @@ export default function MessagesInboxScreen() {
 }
 
 function SupportView() {
+  const SUPPORT_EMAIL = 'support@drapeon.co'
   const HELP_OPTIONS = [
     { icon: 'package' as const, label: 'Order issue' },
     { icon: 'credit-card' as const, label: 'Payment' },
@@ -210,12 +337,39 @@ function SupportView() {
     { icon: 'help-circle' as const, label: 'FAQs' },
   ]
 
+  async function openSupportEmail(subject?: string) {
+    const fallbackSubject = subject ?? 'Drape support request'
+    const url = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(fallbackSubject)}`
+
+    const supported = await Linking.canOpenURL(url)
+    if (!supported) {
+      Alert.alert('Unable to open email', `Please email ${SUPPORT_EMAIL} directly with the subject "${fallbackSubject}".`)
+      return
+    }
+
+    try {
+      await Linking.openURL(url)
+    } catch {
+      Alert.alert('Unable to open email', `Please email ${SUPPORT_EMAIL} directly with the subject "${fallbackSubject}".`)
+    }
+  }
+
   return (
     <ScrollView style={styles.supportScroll} contentContainerStyle={styles.supportContent} showsVerticalScrollIndicator={false}>
+      <View style={styles.supportHeroCard}>
+        <View style={styles.supportHeroBadge}>
+          <Text style={styles.supportHeroBadgeText}>Support</Text>
+        </View>
+        <Text style={styles.supportHeroTitle}>Get help without losing the context of your order.</Text>
+        <Text style={styles.supportHeroSub}>
+          Use this space when you need help with an order, a payment, or something that doesn’t feel right. We’ll point you to the right path quickly.
+        </Text>
+      </View>
+
       {/* Support conversation row */}
       <TouchableOpacity
         style={styles.row}
-        onPress={() => Linking.openURL('mailto:support@drape.app')}
+        onPress={() => { void openSupportEmail() }}
         activeOpacity={0.7}
       >
         <View style={styles.supportAvatar}>
@@ -241,7 +395,7 @@ function SupportView() {
           <TouchableOpacity
             key={label}
             style={styles.helpCard}
-            onPress={() => Linking.openURL(`mailto:support@drape.app?subject=${encodeURIComponent(label)}`)}
+            onPress={() => { void openSupportEmail(label) }}
             activeOpacity={0.75}
           >
             <View style={styles.helpIcon}>
@@ -253,7 +407,7 @@ function SupportView() {
       </View>
 
       <Text style={styles.supportFootnote}>
-        Average response time: under 4 hours{'\n'}support@drape.app
+        Average response time: under 4 hours{'\n'}support@drapeon.co
       </Text>
     </ScrollView>
   )
@@ -261,6 +415,43 @@ function SupportView() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.white },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  stateCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    alignItems: 'center',
+    ...Shadow.lg,
+  },
+  stateEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
+  stateGuideCard: {
+    width: '100%',
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+  },
+  stateGuideTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  stateGuideText: {
+    fontSize: FontSize.sm,
+    color: Colors.midGrey,
+    lineHeight: 20,
+  },
 
   header: {
     paddingHorizontal: Spacing.xl,
@@ -271,6 +462,68 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
   },
   title: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
+  heroCard: {
+    marginHorizontal: Spacing.xl,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  heroTitle: {
+    fontSize: FontSize.xxl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 38,
+  },
+  heroSub: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 24,
+  },
+  guideCard: {
+    marginHorizontal: Spacing.xl,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  guideEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.midGrey,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  guideTitle: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    lineHeight: 22,
+  },
+  guideCopy: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 21,
+  },
 
   filterRow: { flexDirection: 'row', gap: Spacing.sm },
   filterChip: {
@@ -328,12 +581,97 @@ const styles = StyleSheet.create({
 
   emptyContainer: { flex: 1, justifyContent: 'center' },
   empty: { alignItems: 'center', gap: Spacing.md, padding: Spacing.xl },
+  emptyBadge: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  emptyBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
   emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
   emptyHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 22, maxWidth: 280 },
+  emptyGuideCard: {
+    alignSelf: 'stretch',
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: 4,
+  },
+  emptyGuideTitle: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    textAlign: 'center',
+  },
+  emptyGuideText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  retryBtn: {
+    marginTop: Spacing.sm,
+    backgroundColor: Colors.needleGreen,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
+    borderRadius: Radius.full,
+  },
+  retryBtnText: { fontSize: FontSize.sm, color: Colors.white, fontWeight: FontWeight.semibold },
+  secondaryBtn: {
+    backgroundColor: Colors.white,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
+  },
+  secondaryBtnText: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
 
   // Support tab
   supportScroll: { flex: 1 },
-  supportContent: { paddingBottom: Spacing.xxxl },
+  supportContent: { paddingBottom: Spacing.xxxl, gap: Spacing.sm },
+  supportHeroCard: {
+    marginHorizontal: Spacing.xl,
+    marginTop: Spacing.xl,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  supportHeroBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  supportHeroBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  supportHeroTitle: {
+    fontSize: FontSize.xl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 34,
+  },
+  supportHeroSub: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 22,
+  },
   supportAvatar: {
     width: 52, height: 52, borderRadius: 26,
     backgroundColor: Colors.needleGreenLight, alignItems: 'center', justifyContent: 'center',

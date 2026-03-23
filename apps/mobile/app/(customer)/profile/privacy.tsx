@@ -14,7 +14,7 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Switch, Alert, ActivityIndicator, Linking,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
@@ -35,6 +35,7 @@ const DEFAULT_PREFS: PrivacyPrefs = {
 
 export default function PrivacyScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const [prefs, setPrefs] = useState<PrivacyPrefs>(DEFAULT_PREFS)
   const [saving, setSaving] = useState(false)
@@ -45,15 +46,39 @@ export default function PrivacyScreen() {
   }, [user?.user_metadata?.privacy_prefs])
 
   async function toggle(key: keyof PrivacyPrefs, value: boolean) {
+    const previous = prefs
     const updated = { ...prefs, [key]: value }
     setPrefs(updated)
     setSaving(true)
-    await supabase.auth.updateUser({ data: { privacy_prefs: updated } })
+    const { error } = await supabase.auth.updateUser({ data: { privacy_prefs: updated } })
     setSaving(false)
+    if (error) {
+      setPrefs(previous)
+      Alert.alert('Error', 'Could not save your privacy settings. Please try again.')
+    }
+  }
+
+  async function openExternalUrl(url: string, fallbackMessage: string) {
+    try {
+      const supported = await Linking.canOpenURL(url)
+      if (!supported) {
+        Alert.alert('Unable to open link', fallbackMessage)
+        return false
+      }
+
+      await Linking.openURL(url)
+      return true
+    } catch {
+      Alert.alert('Unable to open link', fallbackMessage)
+      return false
+    }
   }
 
   function handleRequestData() {
-    Linking.openURL('mailto:support@drapeon.co?subject=Data%20export%20request&body=Please%20send%20me%20a%20copy%20of%20all%20data%20Drape%20holds%20about%20me.')
+    void openExternalUrl(
+      'mailto:support@drapeon.co?subject=Data%20export%20request&body=Please%20send%20me%20a%20copy%20of%20all%20data%20Drape%20holds%20about%20me.',
+      'Please email support@drapeon.co with the subject "Data export request".',
+    )
   }
 
   function handleDeleteAccount() {
@@ -66,22 +91,32 @@ export default function PrivacyScreen() {
           text: 'Request deletion',
           style: 'destructive',
           onPress: () => {
-            Linking.openURL('mailto:support@drapeon.co?subject=Account%20deletion%20request&body=Please%20delete%20my%20Drape%20account%20and%20all%20associated%20data.')
-            Alert.alert(
-              'Request sent',
-              "We've opened a deletion request email. Send it from your registered address and our team will process it within 30 days.",
-            )
+            void openExternalUrl(
+              'mailto:support@drapeon.co?subject=Account%20deletion%20request&body=Please%20delete%20my%20Drape%20account%20and%20all%20associated%20data.',
+              'Please email support@drapeon.co with the subject "Account deletion request".',
+            ).then((opened) => {
+              if (!opened) return
+              Alert.alert(
+                'Request sent',
+                "We've opened a deletion request email. Send it from your registered address and our team will process it within 30 days.",
+              )
+            })
           },
         },
       ],
     )
   }
 
+  function goBack() {
+    if (navigation.canGoBack()) router.back()
+    else router.replace('/(customer)/profile')
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Privacy</Text>
@@ -89,6 +124,24 @@ export default function PrivacyScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.xl, paddingBottom: 64, gap: Spacing.xl }}>
+        <View style={styles.heroCard}>
+          <View style={styles.heroBadge}>
+            <Text style={styles.heroBadgeText}>Privacy control</Text>
+          </View>
+          <Text style={styles.heroTitle}>Your measurements stay private until you choose to begin an order.</Text>
+          <Text style={styles.heroSub}>
+            Review how Drape personalises your experience, communicates with you, and helps you
+            manage your account data.
+          </Text>
+        </View>
+
+        <View style={styles.guideCard}>
+          <Text style={styles.guideEyebrow}>Important to know</Text>
+          <Text style={styles.guideTitle}>Fit data stays protected by default and only shares when you start an order.</Text>
+          <Text style={styles.guideCopy}>
+            Most controls here affect personalisation, marketing, and analytics. Your core order flow and transactional updates still work even if you switch those preferences off.
+          </Text>
+        </View>
 
         {/* ── Intro ── */}
         <Text style={styles.intro}>
@@ -105,6 +158,7 @@ export default function PrivacyScreen() {
               description="Allow Drape to tailor search results and tailor suggestions based on your activity."
               value={prefs.personalisation}
               onChange={(v) => toggle('personalisation', v)}
+              disabled={saving}
             />
             <View style={styles.divider} />
             <ToggleRow
@@ -113,6 +167,7 @@ export default function PrivacyScreen() {
               description="Help us improve the app by sharing anonymous usage data such as which screens you visit."
               value={prefs.analyticsSharing}
               onChange={(v) => toggle('analyticsSharing', v)}
+              disabled={saving}
             />
           </View>
         </View>
@@ -127,6 +182,7 @@ export default function PrivacyScreen() {
               description="Receive updates about new tailors, seasonal collections, and exclusive offers from Drape."
               value={prefs.marketingEmails}
               onChange={(v) => toggle('marketingEmails', v)}
+              disabled={saving}
             />
           </View>
           <Text style={styles.hint}>
@@ -151,7 +207,13 @@ export default function PrivacyScreen() {
 
             <View style={styles.divider} />
 
-            <TouchableOpacity style={styles.linkRow} onPress={() => Linking.openURL('https://drapeon.co/privacy')} activeOpacity={0.6}>
+            <TouchableOpacity
+              style={styles.linkRow}
+              onPress={() => {
+                void openExternalUrl('https://drapeon.co/privacy', 'Please visit https://drapeon.co/privacy manually.')
+              }}
+              activeOpacity={0.6}
+            >
               <View style={styles.linkRowLeft}>
                 <Feather name="file-text" size={20} color={Colors.inkLight} />
                 <View style={{ flex: 1 }}>
@@ -189,13 +251,14 @@ export default function PrivacyScreen() {
 // ─── ToggleRow ────────────────────────────────────────────────────────────────
 
 function ToggleRow({
-  icon, title, description, value, onChange,
+  icon, title, description, value, onChange, disabled,
 }: {
   icon: React.ComponentProps<typeof Feather>['name']
   title: string
   description: string
   value: boolean
   onChange: (v: boolean) => void
+  disabled?: boolean
 }) {
   return (
     <View style={styles.toggleRow}>
@@ -207,6 +270,7 @@ function ToggleRow({
       <Switch
         value={value}
         onValueChange={onChange}
+        disabled={disabled}
         trackColor={{ false: Colors.lightGrey, true: Colors.needleGreen }}
         thumbColor={Colors.white}
       />
@@ -228,6 +292,64 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
+  heroCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  heroTitle: {
+    fontSize: FontSize.xxl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 38,
+  },
+  heroSub: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 24,
+  },
+  guideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  guideEyebrow: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  guideTitle: {
+    fontSize: FontSize.md,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+    lineHeight: 22,
+  },
+  guideCopy: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 21,
+  },
 
   intro: {
     fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 22,

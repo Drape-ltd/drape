@@ -107,7 +107,7 @@ alter table disputes add column if not exists customer_id uuid;
 -- ── 9. push_tokens — new table ───────────────────────────────────────────────
 
 create table if not exists push_tokens (
-  id         uuid primary key default uuid_generate_v4(),
+  id         uuid primary key default gen_random_uuid(),
   user_id    uuid unique not null references auth.users(id) on delete cascade,
   token      text not null,
   platform   text not null check (platform in ('ios', 'android')),
@@ -119,7 +119,16 @@ alter table push_tokens enable row level security;
 
 drop policy if exists "User manages their own push token" on push_tokens;
 create policy "User manages their own push token" on push_tokens
-  for all using (auth.uid()::uuid = user_id);
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
+
+create or replace function handle_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
 
 drop trigger if exists push_tokens_updated_at on push_tokens;
 create trigger push_tokens_updated_at
@@ -129,24 +138,21 @@ create trigger push_tokens_updated_at
 -- ── 10. tailor_client_notes — new table ──────────────────────────────────────
 
 create table if not exists tailor_client_notes (
-  id                uuid primary key default uuid_generate_v4(),
-  tailor_client_id  uuid not null,
-  notes             text,
-  created_at        timestamptz default now(),
-  updated_at        timestamptz default now()
+  id          uuid primary key default gen_random_uuid(),
+  tailor_id   uuid not null references auth.users(id) on delete cascade,
+  customer_id uuid not null references auth.users(id) on delete cascade,
+  notes       text,
+  created_at  timestamptz default now(),
+  updated_at  timestamptz default now(),
+  unique (tailor_id, customer_id)
 );
 
 alter table tailor_client_notes enable row level security;
 
 drop policy if exists "Tailor owns their client notes" on tailor_client_notes;
 create policy "Tailor owns their client notes" on tailor_client_notes
-  for all using (
-    exists (
-      select 1 from tailor_clients tc
-      join tailor_profiles tp on tp.id = tc.tailor_profile_id
-      where tc.id = tailor_client_id and tp.user_id = auth.uid()
-    )
-  );
+  for all using (tailor_id::text = auth.uid()::text)
+  with check (tailor_id::text = auth.uid()::text);
 
 drop trigger if exists tailor_client_notes_updated_at on tailor_client_notes;
 create trigger tailor_client_notes_updated_at

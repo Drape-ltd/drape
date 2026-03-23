@@ -125,13 +125,9 @@ export function rejectPlaceholder(text: string, fieldName = 'This field'): strin
 const ALLOWED_STYLE_DOMAINS = [
   'instagram.com', 'www.instagram.com',
   'pinterest.com', 'www.pinterest.com', 'pin.it',
-  'tiktok.com', 'www.tiktok.com',
-  'behance.net', 'www.behance.net',
-  'dribbble.com', 'www.dribbble.com',
-  'vogue.com', 'www.vogue.com', 'en.vogue.com',
-  'harpersbazaar.com', 'www.harpersbazaar.com',
-  'essence.com', 'www.essence.com',
-  'lookbook.nu',
+  'tiktok.com', 'www.tiktok.com', 'vm.tiktok.com',
+  'youtube.com', 'www.youtube.com', 'youtu.be',
+  'x.com', 'www.x.com', 'twitter.com', 'www.twitter.com',
 ]
 
 const TRACKING_PARAMS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'fbclid', 'igshid', 'ref']
@@ -147,14 +143,13 @@ export function filterStyleReference(input: string): StyleRefResult {
   const trimmed = input.trim()
 
   // Step 2: Reject empty
-  if (!trimmed) return { allowed: false, reason: 'Please enter a link or handle.' }
+  if (!trimmed) return { allowed: false, reason: 'Please enter a style reference link.' }
 
   // Step 3 & 4 — max / dedup checks are caller's responsibility
 
-  // Step 5: If it starts with @, it's a handle — allow (max 30 chars)
+  // Block arbitrary handles — only actual content links are allowed.
   if (trimmed.startsWith('@')) {
-    if (trimmed.length > 30) return { allowed: false, reason: 'Handle is too long.' }
-    return { allowed: true, cleaned: trimmed }
+    return { allowed: false, reason: 'Only post or video links are accepted here — not profile handles.' }
   }
 
   // Step 6: Validate URL
@@ -163,7 +158,7 @@ export function filterStyleReference(input: string): StyleRefResult {
     url = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`)
   } catch {
     // Not a URL and not a handle — reject
-    return { allowed: false, reason: 'Please paste a valid link (e.g. instagram.com/p/…) or an @handle.' }
+    return { allowed: false, reason: 'Please paste a valid post or video link (e.g. instagram.com/p/…).' }
   }
 
   const hostname = url.hostname.replace(/^www\./, '')
@@ -173,7 +168,7 @@ export function filterStyleReference(input: string): StyleRefResult {
   if (!isAllowed) {
     return {
       allowed: false,
-      reason: 'Only links from Instagram, Pinterest, TikTok, Behance, or Vogue are accepted as style references.',
+      reason: 'Only links from Instagram, TikTok, YouTube, Pinterest, and X are accepted as style references.',
     }
   }
 
@@ -181,6 +176,24 @@ export function filterStyleReference(input: string): StyleRefResult {
   const blockedPaths = ['/direct', '/messages', '/accounts/login', '/inbox']
   if (blockedPaths.some((p) => url.pathname.startsWith(p))) {
     return { allowed: false, reason: 'Direct messages or login links aren\'t accepted. Share a post or style page instead.' }
+  }
+
+  // Content-link only rules — profile pages and general landing pages are not allowed.
+  const path = url.pathname
+  const hostnameKey = hostname.toLowerCase()
+  const isInstagramContent = /^\/(p|reel)\/[^/]+\/?$/i.test(path)
+  const isPinterestContent = /^\/pin\/\d+\/?$/i.test(path) || hostnameKey === 'pin.it'
+  const isTikTokContent =
+    /^\/@[^/]+\/video\/\d+\/?$/i.test(path) ||
+    hostnameKey === 'vm.tiktok.com'
+  const isYouTubeContent =
+    (hostnameKey === 'youtu.be' && /^\/[^/]+\/?$/.test(path)) ||
+    ((hostnameKey === 'youtube.com' || hostnameKey === 'www.youtube.com') &&
+      (/^\/watch$/i.test(path) && !!url.searchParams.get('v') || /^\/shorts\/[^/]+\/?$/i.test(path)))
+  const isXContent = /^\/[^/]+\/status\/\d+\/?$/i.test(path)
+
+  if (!(isInstagramContent || isPinterestContent || isTikTokContent || isYouTubeContent || isXContent)) {
+    return { allowed: false, reason: 'Only post and video links are accepted here — not profile or landing pages.' }
   }
 
   // Step 7: Strip tracking params

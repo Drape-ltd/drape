@@ -15,22 +15,37 @@ maestro --version
 Set these before running flows (or export them in CI):
 
 ```bash
-export DRAPE_TEST_CUSTOMER_EMAIL=testcustomer@drape.test
-export DRAPE_TEST_TAILOR_EMAIL=testtailor@drape.test
+export DRAPE_TEST_CUSTOMER_EMAIL=e2e-customer@drape.test
+export DRAPE_TEST_TAILOR_EMAIL=e2e-tailor@drape.test
 export DRAPE_TEST_PASSWORD=Drape2025!
+export E2E_SUPABASE_URL=https://your-project-ref.supabase.co
+export E2E_SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 ```
 
 ## Test accounts
 
-Create the two test accounts in Supabase before running flows 03–07:
-1. Sign up manually as customer (`DRAPE_TEST_CUSTOMER_EMAIL`) in the app
-2. Sign up manually as tailor (`DRAPE_TEST_TAILOR_EMAIL`), complete profile setup
-3. In Supabase Dashboard → Table Editor → `tailor_profiles`, set `is_live = true` for the test tailor
+Seed the two test accounts and fixture orders before running the stateful flows:
+
+```bash
+pnpm --filter @drape/db seed:e2e
+```
+
+That script:
+1. creates the customer and tailor auth users
+2. creates a live tailor profile
+3. seeds measurements for the customer
+4. creates fixture orders for the later flows
 
 ## Running
 
 ```bash
 # Run all flows (against iOS Simulator)
+source .maestro/env.sh && maestro test .maestro/flows/
+
+# Run a seeded flow directly
+source .maestro/env.sh && maestro test .maestro/flows/04-brief-to-quote.yaml
+
+# Run a sign-up flow directly
 maestro test .maestro/flows/
 
 # Run a single flow
@@ -54,6 +69,6 @@ maestro test --device <UDID> .maestro/flows/
 
 ## Notes
 
-- Flows `03–07` require pre-seeded test accounts (see above).
+- Flows `03–07` require the seeded test accounts and fixture orders (see above).
 - Flows run sequentially in the order listed; `04` must complete before `05` or `06` have the right order state.
 - For CI: use `maestro cloud` with your Maestro Cloud API key, or run on a hosted iOS simulator.

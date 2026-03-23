@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, KeyboardAvoidingView, Platform,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
@@ -78,9 +78,11 @@ const STEP_SUBTITLES = [
 
 export default function MeasurementsScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
+  const [fetchError, setFetchError] = useState(false)
 
   // Layer 1
   const [unit, setUnit] = useState<Unit>('in')
@@ -106,45 +108,73 @@ export default function MeasurementsScreen() {
   const [bodyNote, setBodyNote] = useState('')
   const [bodyNoteError, setBodyNoteError] = useState('')
 
+  function applyMeasurements(m: Record<string, unknown> | null) {
+    setUnit('in')
+    setChest('')
+    setWaist('')
+    setHips('')
+    setShoulderWidth('')
+    setInseam('')
+    setSleeveLength('')
+    setNeckCircumference('')
+    setHeight('')
+    setFitStyle(null)
+    setGarmentContext(null)
+    setBodyShapes([])
+    setFitFlags([])
+    setBodyNote('')
+    setBodyNoteError('')
+    setCustomMeasurements([])
+    if (!m) return
+    if (m.unit === 'cm' || m.unit === 'in') setUnit(m.unit)
+    if (typeof m.chest === 'number') setChest(String(m.chest))
+    if (typeof m.waist === 'number') setWaist(String(m.waist))
+    if (typeof m.hips === 'number') setHips(String(m.hips))
+    if (typeof m.shoulderWidth === 'number') setShoulderWidth(String(m.shoulderWidth))
+    if (typeof m.inseam === 'number') setInseam(String(m.inseam))
+    if (typeof m.sleeveLength === 'number') setSleeveLength(String(m.sleeveLength))
+    if (typeof m.neckCircumference === 'number') setNeckCircumference(String(m.neckCircumference))
+    if (typeof m.height === 'number') setHeight(String(m.height))
+    if (m.fitStyle === 'Slim' || m.fitStyle === 'Regular' || m.fitStyle === 'Relaxed') setFitStyle(m.fitStyle)
+    if (m.garmentContext) setGarmentContext(m.garmentContext as GarmentContext)
+    if (Array.isArray(m.bodyShape)) setBodyShapes(m.bodyShape as BodyShape[])
+    else if (typeof m.bodyShape === 'string') setBodyShapes([m.bodyShape as BodyShape])
+    if (Array.isArray(m.fitFlags)) setFitFlags(m.fitFlags as FitFlag[])
+    if (typeof m.bodyNote === 'string') setBodyNote(m.bodyNote)
+    const standardKeys = new Set(['chest','waist','hips','shoulderWidth','inseam','sleeveLength','neckCircumference','height','unit','fitStyle','garmentContext','bodyShape','fitFlags','bodyNote'])
+    const extras = Object.entries(m).filter(([k]) => !standardKeys.has(k))
+    setCustomMeasurements(
+      extras.map(([name, value]) => ({
+        id: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`,
+        name,
+        value: value != null ? String(value) : '',
+      }))
+    )
+  }
+
+async function loadMeasurements() {
+  if (!user?.id) {
+    setFetchError(false)
+    return
+  }
+  setFetchError(false)
+  const { data, error } = await supabase
+    .from('customer_profiles')
+    .select('measurements')
+    .eq('user_id', user.id)
+    .maybeSingle()
+
+  if (error) {
+    setFetchError(true)
+    return
+  }
+
+  applyMeasurements((data?.measurements as Record<string, unknown> | null) ?? null)
+}
+
   useEffect(() => {
     if (!user?.id) return
-    supabase
-      .from('customer_profiles')
-      .select('measurements')
-      .eq('user_id', user.id)
-      .single()
-      .then(({ data, error }) => {
-        if (error && error.code !== 'PGRST116') {
-          Alert.alert('Error', 'Could not load your measurements. Please try again.')
-          return
-        }
-        const m = data?.measurements as Record<string, unknown> | null
-        if (!m) return
-        if (m.unit === 'cm' || m.unit === 'in') setUnit(m.unit)
-        if (typeof m.chest === 'number') setChest(String(m.chest))
-        if (typeof m.waist === 'number') setWaist(String(m.waist))
-        if (typeof m.hips === 'number') setHips(String(m.hips))
-        if (typeof m.shoulderWidth === 'number') setShoulderWidth(String(m.shoulderWidth))
-        if (typeof m.inseam === 'number') setInseam(String(m.inseam))
-        if (typeof m.sleeveLength === 'number') setSleeveLength(String(m.sleeveLength))
-        if (typeof m.neckCircumference === 'number') setNeckCircumference(String(m.neckCircumference))
-        if (typeof m.height === 'number') setHeight(String(m.height))
-        if (m.fitStyle === 'Slim' || m.fitStyle === 'Regular' || m.fitStyle === 'Relaxed') setFitStyle(m.fitStyle)
-        if (m.garmentContext) setGarmentContext(m.garmentContext as GarmentContext)
-        if (Array.isArray(m.bodyShape)) setBodyShapes(m.bodyShape as BodyShape[])
-        else if (typeof m.bodyShape === 'string') setBodyShapes([m.bodyShape as BodyShape])
-        if (Array.isArray(m.fitFlags)) setFitFlags(m.fitFlags as FitFlag[])
-        if (typeof m.bodyNote === 'string') setBodyNote(m.bodyNote)
-        const standardKeys = new Set(['chest','waist','hips','shoulderWidth','inseam','sleeveLength','neckCircumference','height','unit','fitStyle','garmentContext','bodyShape','fitFlags','bodyNote'])
-        const extras = Object.entries(m).filter(([k]) => !standardKeys.has(k))
-        if (extras.length > 0) {
-          setCustomMeasurements(extras.map(([name, value]) => ({
-            id: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`,
-            name,
-            value: value != null ? String(value) : '',
-          })))
-        }
-      })
+    void loadMeasurements()
   }, [user?.id])
 
   function canProceedStep(): boolean {
@@ -216,6 +246,7 @@ export default function MeasurementsScreen() {
   }
 
   async function save() {
+    if (saving) return
     if (!validateBodyNote(bodyNote)) return
 
     setSaving(true)
@@ -259,11 +290,13 @@ export default function MeasurementsScreen() {
       Alert.alert('Error', 'Could not save your measurements. Please try again.')
     } else {
       capture('measurements_saved', { unit })
-      router.back()
+      if (navigation.canGoBack()) router.back()
+      else router.replace('/(customer)/profile')
     }
   }
 
   function next() {
+    if (saving) return
     if (!canProceedStep()) {
       Alert.alert('Required', stepBlockedMessage())
       return
@@ -274,7 +307,42 @@ export default function MeasurementsScreen() {
 
   function back() {
     if (step > 0) setStep(step - 1)
-    else router.back()
+    else if (navigation.canGoBack()) router.back()
+    else router.replace('/(customer)/profile')
+  }
+
+  if (fetchError) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <View style={styles.stateWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEyebrow}>Measurements</Text>
+            <Text style={styles.stateTitle}>Couldn't load your measurements.</Text>
+            <Text style={styles.stateHint}>
+              This screen should help you keep your fit profile accurate so booking a tailor feels faster and more reliable.
+            </Text>
+            <View style={styles.stateGuideCard}>
+              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
+              <Text style={styles.stateGuideText}>
+                Refresh here first. If it still fails, open your profile first, then return to the previous step if needed, so your fit details do not block the next booking.
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.errorRetry} onPress={() => { void loadMeasurements() }}>
+              <Text style={styles.errorRetryText}>Try again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.errorSecondary}
+              onPress={() => router.replace('/(customer)/profile')}
+            >
+              <Text style={styles.errorSecondaryText}>Open profile</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={back}>
+              <Text style={styles.errorLink}>Go back</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </SafeAreaView>
+    )
   }
 
   return (
@@ -298,6 +366,25 @@ export default function MeasurementsScreen() {
 
         <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
           <View style={styles.content}>
+            <View style={styles.heroCard}>
+              <View style={styles.heroBadge}>
+                <Text style={styles.heroBadgeText}>Fit foundation</Text>
+              </View>
+              <Text style={styles.heroTitle}>Give your tailor a better starting point before they quote or cut.</Text>
+              <Text style={styles.heroSub}>
+                The more accurate your measurements and fit context are here, the smoother each
+                custom order becomes from pricing to final fit.
+              </Text>
+            </View>
+
+            <View style={styles.guideCard}>
+              <Text style={styles.guideEyebrow}>Best approach</Text>
+              <Text style={styles.guideTitle}>Start with the basics, then add more detail over time.</Text>
+              <Text style={styles.guideCopy}>
+                Chest, waist, fit style, garment context, and shape already improve quoting. You can keep refining this profile as you place more orders.
+              </Text>
+            </View>
+
             <View style={styles.stepHeading}>
               <Text style={styles.stepTitle}>{STEP_TITLES[step]}</Text>
               <Text style={styles.stepSub}>{STEP_SUBTITLES[step]}</Text>
@@ -495,6 +582,7 @@ export default function MeasurementsScreen() {
             label={step < 3 ? 'Continue' : 'Save measurements'}
             onPress={next}
             loading={saving}
+            disabled={saving}
           />
         </View>
       </KeyboardAvoidingView>
@@ -506,6 +594,43 @@ export default function MeasurementsScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  stateCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    alignItems: 'center',
+    ...Shadow.lg,
+  },
+  stateEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
+  stateGuideCard: {
+    width: '100%',
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+  },
+  stateGuideTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  stateGuideText: {
+    fontSize: FontSize.sm,
+    color: Colors.midGrey,
+    lineHeight: 20,
+  },
 
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
@@ -518,9 +643,89 @@ const styles = StyleSheet.create({
   progressRow: { flexDirection: 'row', gap: 4, paddingHorizontal: Spacing.xl, marginBottom: Spacing.sm },
   progressSegment: { flex: 1, height: 3, borderRadius: 2, backgroundColor: Colors.lightGrey },
   progressSegmentDone: { backgroundColor: Colors.needleGreen },
+  errorRetry: {
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xxxl,
+  },
+  errorRetryText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  errorSecondary: {
+    backgroundColor: Colors.white,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xxxl,
+  },
+  errorSecondaryText: { color: Colors.ink, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  errorLink: {
+    marginTop: Spacing.sm,
+    color: Colors.needleGreen,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.medium,
+  },
 
   scroll: { flex: 1 },
   content: { padding: Spacing.xl, gap: Spacing.xl },
+  heroCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  heroTitle: {
+    fontSize: FontSize.xxl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 38,
+  },
+  heroSub: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 24,
+  },
+  guideCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  guideEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.midGrey,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  guideTitle: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    lineHeight: 22,
+  },
+  guideCopy: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 21,
+  },
 
   stepHeading: { gap: Spacing.sm },
   stepTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },

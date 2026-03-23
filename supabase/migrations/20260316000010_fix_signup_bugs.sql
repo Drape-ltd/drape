@@ -3,6 +3,8 @@
 -- Safe to run multiple times (idempotent).
 -- ─────────────────────────────────────────────────────────────────────────────
 
+create extension if not exists "pgcrypto";
+
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- FIX 1: saved_tailors — tailor_profile_id was TEXT with no FK.
@@ -15,15 +17,16 @@
 DROP TABLE IF EXISTS saved_tailors CASCADE;
 
 CREATE TABLE saved_tailors (
-  id                uuid        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id                uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id           uuid        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  tailor_profile_id text        NOT NULL REFERENCES tailor_profiles(id) ON DELETE CASCADE,
+  tailor_profile_id uuid        NOT NULL REFERENCES tailor_profiles(id) ON DELETE CASCADE,
   created_at        timestamptz DEFAULT now(),
   UNIQUE (user_id, tailor_profile_id)
 );
 
 ALTER TABLE saved_tailors ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "customers: manage own saved tailors" ON saved_tailors;
 CREATE POLICY "customers: manage own saved tailors"
   ON saved_tailors FOR ALL
   TO authenticated
@@ -32,6 +35,8 @@ CREATE POLICY "customers: manage own saved tailors"
 
 GRANT SELECT, INSERT, DELETE ON TABLE saved_tailors TO authenticated;
 
+DROP INDEX IF EXISTS saved_tailors_user_id_idx;
+DROP INDEX IF EXISTS saved_tailors_tailor_id_idx;
 CREATE INDEX saved_tailors_user_id_idx    ON saved_tailors (user_id);
 CREATE INDEX saved_tailors_tailor_id_idx  ON saved_tailors (tailor_profile_id);
 

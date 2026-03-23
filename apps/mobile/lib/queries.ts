@@ -153,15 +153,21 @@ export type SavedTailor = {
   portfolioPhoto: string | null
 }
 
+function asStringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+  if (typeof value === 'string' && value.length > 0) return [value]
+  return []
+}
+
 // ─── Fetchers ────────────────────────────────────────────────────────────────
 
 const ACTIVE_STAGES: OrderStage[] = [
   'PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING',
   'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING',
-  'SHIPPED', 'READY_FOR_COLLECTION', 'IN_DISPUTE',
+  'SHIPPED', 'READY_FOR_COLLECTION', 'DELIVERED', 'COLLECTED', 'IN_DISPUTE',
 ]
 const TERMINAL_STAGES: OrderStage[] = [
-  'COMPLETE', 'DELIVERED', 'COLLECTED', 'DECLINED', 'EXPIRED', 'REFUNDED', 'CANCELLED',
+  'COMPLETE', 'DECLINED', 'EXPIRED', 'REFUNDED', 'CANCELLED',
 ]
 
 async function fetchCustomerOrders(
@@ -169,7 +175,7 @@ async function fetchCustomerOrders(
   tab: 'active' | 'completed',
 ): Promise<CustomerOrderRow[]> {
   const stages = tab === 'active' ? ACTIVE_STAGES : TERMINAL_STAGES
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('orders')
     .select(`
       id, reference, garment_type, stage, quoted_completion_date, created_at, quoted_amount, quoted_currency,
@@ -180,6 +186,8 @@ async function fetchCustomerOrders(
     .in('stage', stages)
     .order('created_at', { ascending: false })
     .limit(50)
+
+  if (error) throw error
 
   return (data ?? []).map((o: any) => ({
     id: o.id,
@@ -201,7 +209,7 @@ async function fetchTailorOrders(
   tab: 'active' | 'completed',
 ): Promise<TailorOrderRow[]> {
   const stages = tab === 'active' ? ACTIVE_STAGES : TERMINAL_STAGES
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('orders')
     .select(`
       id, reference, garment_type, stage, quoted_completion_date, quoted_amount, quoted_currency, video_call_url, created_at,
@@ -211,6 +219,8 @@ async function fetchTailorOrders(
     .in('stage', stages)
     .order('created_at', { ascending: false })
     .limit(50)
+
+  if (error) throw error
 
   return (data ?? []).map((o: any) => ({
     id: o.id,
@@ -230,7 +240,7 @@ async function fetchCustomerOrderDetail(
   orderId: string,
   userId: string,
 ): Promise<CustomerOrderDetail | null> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('orders')
     .select(`
       id, reference, garment_type, garment_description, stage,
@@ -243,8 +253,9 @@ async function fetchCustomerOrderDetail(
     .eq('id', orderId)
     .eq('customer_id', userId)
     .order('created_at', { ascending: true, referencedTable: 'order_stage_updates' })
-    .single()
+    .maybeSingle()
 
+  if (error) throw error
   if (!data) return null
   const d = data as any
   return {
@@ -275,7 +286,7 @@ async function fetchCustomerOrderDetail(
 }
 
 async function fetchCustomerProfile(userId: string): Promise<CustomerProfileData> {
-  const [profileRes, ordersRes] = await Promise.all([
+  const [profileRes, ordersRes] = await Promise.allSettled([
     supabase
       .from('customer_profiles')
       .select('measurements, created_at, avatar_url')
@@ -289,11 +300,31 @@ async function fetchCustomerProfile(userId: string): Promise<CustomerProfileData
       .limit(3),
   ])
 
+  const profileFailed =
+    profileRes.status === 'rejected' ||
+    (profileRes.status === 'fulfilled' && !!profileRes.value.error)
+  const ordersFailed =
+    ordersRes.status === 'rejected' ||
+    (ordersRes.status === 'fulfilled' && !!ordersRes.value.error)
+
+  if (profileFailed && ordersFailed) {
+    throw new Error('Unable to load customer profile')
+  }
+
+  const profile =
+    profileRes.status === 'fulfilled' && !profileRes.value.error
+      ? profileRes.value.data
+      : null
+  const orders =
+    ordersRes.status === 'fulfilled' && !ordersRes.value.error
+      ? ((ordersRes.value.data ?? []) as any[])
+      : []
+
   return {
-    measurements: (profileRes.data?.measurements as CustomerProfileData['measurements']) ?? null,
-    avatarUrl: profileRes.data?.avatar_url ?? null,
-    createdAt: profileRes.data?.created_at ?? null,
-    recentOrders: ((ordersRes.data ?? []) as any[]).map((o) => ({
+    measurements: (profile?.measurements as CustomerProfileData['measurements']) ?? null,
+    avatarUrl: profile?.avatar_url ?? null,
+    createdAt: profile?.created_at ?? null,
+    recentOrders: orders.map((o) => ({
       id: o.id,
       reference: o.reference,
       garmentType: o.garment_type,
@@ -305,7 +336,7 @@ async function fetchCustomerProfile(userId: string): Promise<CustomerProfileData
 }
 
 async function fetchSavedTailors(userId: string): Promise<SavedTailor[]> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('saved_tailors')
     .select(`
       id,
@@ -316,8 +347,13 @@ async function fetchSavedTailors(userId: string): Promise<SavedTailor[]> {
     .eq('user_id', userId)
     .order('created_at', { ascending: false })
 
-  return (data ?? []).map((row: any) => {
+  if (error) throw error
+
+  return (data ?? [])
+    .filter((row: any) => row?.tailor_profiles)
+    .map((row: any) => {
     const t = row.tailor_profiles
+    const portfolioPhotos = asStringList(t.portfolio_photo_urls)
     return {
       savedId: row.id,
       id: t.id,
@@ -327,7 +363,7 @@ async function fetchSavedTailors(userId: string): Promise<SavedTailor[]> {
       avgRating: t.avg_rating,
       totalReviews: t.total_reviews,
       availability: t.availability,
-      portfolioPhoto: (t.portfolio_photo_urls ?? [])[0] ?? null,
+      portfolioPhoto: portfolioPhotos[0] ?? null,
     }
   })
 }

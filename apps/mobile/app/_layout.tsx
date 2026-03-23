@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AppState, AppStateStatus, Modal, View, ActivityIndicator, StyleSheet } from 'react-native'
+import { AppState, AppStateStatus, Modal, View, ActivityIndicator, StyleSheet, Alert } from 'react-native'
 import { Stack, useRouter, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import * as SplashScreen from 'expo-splash-screen'
@@ -52,12 +52,16 @@ function BiometricGate() {
   useEffect(() => {
     if (!locked || prompting.current) return
     prompting.current = true
-    authenticate('Verify your identity to continue using Drape').then((ok) => {
+    authenticate('Verify your identity to continue using Drape').then(async (ok) => {
       prompting.current = false
       if (ok) {
         setLocked(false)
       } else {
-        signOut()
+        try {
+          await signOut()
+        } catch {
+          Alert.alert('Unable to sign out', 'Please close and reopen the app, then try again.')
+        }
         setLocked(false)
       }
     })
@@ -105,7 +109,7 @@ function RouteGuard() {
     setTailorProfileChecked(false)
     setTailorHasProfile(false)
     setTailorProfileCompleted(false)
-  }, [user?.id])
+  }, [user?.id, role])
 
   // Identify user in analytics when session starts; reset on sign-out
   useEffect(() => {
@@ -129,9 +133,8 @@ function RouteGuard() {
     setCustomerProfileChecked(false)
     supabase
       .from('customer_profiles')
-      .select('id, display_name')
+      .select('id, display_name, phone, unit_preference, garment_context, measurements')
       .eq('user_id', user.id)
-      .not('display_name', 'is', null)
       .maybeSingle()
       .then(({ data, error }) => {
         customerCheckInProgress.current = false
@@ -141,7 +144,19 @@ function RouteGuard() {
           setCustomerProfileChecked(true)
           return
         }
-        setCustomerProfileComplete(!!data)
+        const measurements = (data as any)?.measurements ?? {}
+        const hasDisplayName = typeof (data as any)?.display_name === 'string' && (data as any).display_name.trim().length > 0
+        const hasPhone =
+          (typeof (data as any)?.phone === 'string' && (data as any).phone.trim().length >= 7) ||
+          (typeof user?.user_metadata?.phone === 'string' && user.user_metadata.phone.trim().length >= 7)
+        const hasUnit =
+          typeof (data as any)?.unit_preference === 'string' ||
+          typeof measurements?.unit === 'string'
+        const hasGarmentContext =
+          typeof (data as any)?.garment_context === 'string' ||
+          typeof measurements?.garmentContext === 'string'
+
+        setCustomerProfileComplete(hasDisplayName && hasPhone && hasUnit && hasGarmentContext)
         setCustomerProfileChecked(true)
       })
   }, [role, user?.id, segments[0]])
@@ -179,6 +194,7 @@ function RouteGuard() {
     const inAuth = segments[0] === '(auth)'
     const inCustomer = segments[0] === '(customer)'
     const inTailor = segments[0] === '(tailor)'
+    const onResetPassword = inAuth && segments[1] === 'reset-password'
     // Passport claim links are public deep links — allow unauthenticated access
     // so customers who aren't signed in can still see the preview before logging in.
     const inPassport = segments[0] === 'passport'
@@ -192,6 +208,10 @@ function RouteGuard() {
     if (!role) {
       const onRoleSelect = segments[0] === '(auth)' && segments[1] === 'role-select'
       if (!onRoleSelect) router.replace('/(auth)/role-select')
+      return
+    }
+
+    if (onResetPassword) {
       return
     }
 

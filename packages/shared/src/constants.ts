@@ -7,6 +7,24 @@ export const COLORS = {
   midGrey: '#9CA3AF',
 } as const
 
+// ─── Contact directory ───────────────────────────────────────────────────────
+export const CONTACTS = {
+  founders: 'founders@drapeon.co',
+  hello: 'hello@drapeon.co',
+  support: 'support@drapeon.co',
+  tailors: 'tailors@drapeon.co',
+  verify: 'verify@drapeon.co',
+  payouts: 'payouts@drapeon.co',
+  partnerships: 'partnerships@drapeon.co',
+  press: 'press@drapeon.co',
+  privacy: 'privacy@drapeon.co',
+  security: 'security@drapeon.co',
+  legal: 'legal@drapeon.co',
+  careers: 'careers@drapeon.co',
+  noreply: 'noreply@drapeon.co',
+  ops: 'ops@drapeon.co',
+} as const
+
 // ─── Tier thresholds ─────────────────────────────────────────────────────────
 export const TIER_THRESHOLDS = {
   RISING: { minOrders: 10, minRating: 4.6 },

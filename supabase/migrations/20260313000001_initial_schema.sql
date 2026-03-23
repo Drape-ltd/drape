@@ -1,7 +1,7 @@
 -- Drape V1 — Initial Schema
 -- Structure: enums → tables → RLS enable → policies → triggers
 
-create extension if not exists "uuid-ossp";
+create extension if not exists "pgcrypto";
 
 -- ─────────────────────────────────────────────
 -- ENUMS
@@ -51,7 +51,7 @@ create table users (
 );
 
 create table customer_profiles (
-  id                    uuid primary key default uuid_generate_v4(),
+  id                    uuid primary key default gen_random_uuid(),
   user_id               uuid unique not null references users(id) on delete cascade,
   chest_cm              numeric,
   waist_cm              numeric,
@@ -73,7 +73,7 @@ create table customer_profiles (
 );
 
 create table tailor_profiles (
-  id                    uuid primary key default uuid_generate_v4(),
+  id                    uuid primary key default gen_random_uuid(),
   user_id               uuid unique not null references users(id) on delete cascade,
   display_name          text not null,
   business_name         text,
@@ -104,7 +104,7 @@ create table tailor_profiles (
 );
 
 create table portfolio_photos (
-  id                uuid primary key default uuid_generate_v4(),
+  id                uuid primary key default gen_random_uuid(),
   tailor_profile_id uuid not null references tailor_profiles(id) on delete cascade,
   storage_path      text not null,
   public_url        text not null,
@@ -116,7 +116,7 @@ create table portfolio_photos (
 );
 
 create table tailor_clients (
-  id                    uuid primary key default uuid_generate_v4(),
+  id                    uuid primary key default gen_random_uuid(),
   tailor_profile_id     uuid not null references tailor_profiles(id) on delete cascade,
   client_type           client_type default 'PRIVATE',
   linked_user_id        uuid references users(id),
@@ -140,7 +140,7 @@ create table tailor_clients (
 );
 
 create table offline_orders (
-  id               uuid primary key default uuid_generate_v4(),
+  id               uuid primary key default gen_random_uuid(),
   tailor_client_id uuid not null references tailor_clients(id) on delete cascade,
   garment_type     text not null,
   description      text,
@@ -153,7 +153,7 @@ create table offline_orders (
 );
 
 create table orders (
-  id                     uuid primary key default uuid_generate_v4(),
+  id                     uuid primary key default gen_random_uuid(),
   reference              text unique not null default gen_random_uuid()::text,
   customer_id            uuid not null references users(id),
   tailor_profile_id      uuid not null references tailor_profiles(id),
@@ -186,7 +186,7 @@ create table orders (
 );
 
 create table order_stage_updates (
-  id        uuid primary key default uuid_generate_v4(),
+  id        uuid primary key default gen_random_uuid(),
   order_id  uuid not null references orders(id) on delete cascade,
   stage     order_stage not null,
   note      text,
@@ -195,7 +195,7 @@ create table order_stage_updates (
 );
 
 create table order_photos (
-  id           uuid primary key default uuid_generate_v4(),
+  id           uuid primary key default gen_random_uuid(),
   order_id     uuid not null references orders(id) on delete cascade,
   storage_path text not null,
   public_url   text not null,
@@ -203,7 +203,7 @@ create table order_photos (
 );
 
 create table messages (
-  id         uuid primary key default uuid_generate_v4(),
+  id         uuid primary key default gen_random_uuid(),
   order_id   uuid not null references orders(id) on delete cascade,
   sender_id  uuid not null references users(id),
   type       message_type default 'TEXT',
@@ -216,7 +216,7 @@ create table messages (
 );
 
 create table reviews (
-  id                  uuid primary key default uuid_generate_v4(),
+  id                  uuid primary key default gen_random_uuid(),
   order_id            uuid unique not null references orders(id),
   tailor_profile_id   uuid not null references tailor_profiles(id),
   rating              integer not null check (rating between 1 and 5),
@@ -230,7 +230,7 @@ create table reviews (
 );
 
 create table disputes (
-  id            uuid primary key default uuid_generate_v4(),
+  id            uuid primary key default gen_random_uuid(),
   order_id      uuid unique not null references orders(id),
   reason        text not null,
   description   text not null,
@@ -244,7 +244,7 @@ create table disputes (
 );
 
 create table payouts (
-  id                 uuid primary key default uuid_generate_v4(),
+  id                 uuid primary key default gen_random_uuid(),
   tailor_profile_id  uuid not null references tailor_profiles(id),
   amount             integer not null,
   currency           currency not null,
@@ -255,7 +255,7 @@ create table payouts (
 );
 
 create table contact_bypass_logs (
-  id          uuid primary key default uuid_generate_v4(),
+  id          uuid primary key default gen_random_uuid(),
   user_id     uuid not null references users(id),
   surface     text not null,
   content     text not null,

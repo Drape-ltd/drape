@@ -161,7 +161,6 @@ env:
 - inputText: "450"
 - tapOn:
     id: "quote-completion-date-input"
-- inputText: "2025-09-01"
 - tapOn: "Send quote"
 
 # Wait for modal to close and order to refresh showing updated stage
