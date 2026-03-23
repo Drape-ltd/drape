@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import * as React from 'react'
 import './globals.css'
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://drapeon.co'
@@ -43,7 +44,7 @@ export const metadata: Metadata = {
   },
 }
 
-export default function RootLayout({ children }: { children: any }): JSX.Element {
+export default function RootLayout({ children }: { children: React.ReactNode }): React.JSX.Element {
   const organizationJsonLd = {
     '@context': 'https://schema.org',
     '@type': 'Organization',
