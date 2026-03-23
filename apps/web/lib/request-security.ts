@@ -7,28 +7,56 @@ export async function readJsonBody(
   maxBytes = MAX_JSON_BODY_BYTES,
 ): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string; status: number }> {
   const contentType = request.headers.get('content-type') ?? ''
-  if (!contentType.toLowerCase().includes('application/json')) {
-    return { ok: false, error: 'Invalid content type.', status: 415 }
-  }
+  const loweredContentType = contentType.toLowerCase()
 
-  const raw = await request.text().catch(() => '')
-  if (!raw) {
-    return { ok: false, error: 'Invalid request body.', status: 400 }
-  }
-
-  if (raw.length > maxBytes) {
-    return { ok: false, error: 'Request body is too large.', status: 413 }
-  }
-
-  try {
-    const data = JSON.parse(raw) as Record<string, unknown>
-    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+  if (loweredContentType.includes('application/json')) {
+    const raw = await request.text().catch(() => '')
+    if (!raw) {
       return { ok: false, error: 'Invalid request body.', status: 400 }
     }
-    return { ok: true, data }
-  } catch {
-    return { ok: false, error: 'Invalid request body.', status: 400 }
+
+    if (raw.length > maxBytes) {
+      return { ok: false, error: 'Request body is too large.', status: 413 }
+    }
+
+    try {
+      const data = JSON.parse(raw) as Record<string, unknown>
+      if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        return { ok: false, error: 'Invalid request body.', status: 400 }
+      }
+      return { ok: true, data }
+    } catch {
+      return { ok: false, error: 'Invalid request body.', status: 400 }
+    }
   }
+
+  if (
+    loweredContentType.includes('application/x-www-form-urlencoded') ||
+    loweredContentType.includes('multipart/form-data')
+  ) {
+    const formData = await request.formData().catch(() => null)
+    if (!formData) {
+      return { ok: false, error: 'Invalid request body.', status: 400 }
+    }
+
+    const data: Record<string, unknown> = {}
+    let approxBytes = 0
+
+    for (const [key, value] of formData.entries()) {
+      if (typeof value === 'string') {
+        data[key] = value
+        approxBytes += key.length + value.length
+      }
+    }
+
+    if (approxBytes > maxBytes) {
+      return { ok: false, error: 'Request body is too large.', status: 413 }
+    }
+
+    return { ok: true, data }
+  }
+
+  return { ok: false, error: 'Invalid content type.', status: 415 }
 }
 
 export function getClientIp(request: Request): string {
