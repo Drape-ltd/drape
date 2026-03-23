@@ -30,9 +30,6 @@ export default function CustomersPage(): JSX.Element {
           title="Less scattered messaging. More confidence."
           description="Everything important stays in one place."
         />
-        <div className="mt-8 overflow-hidden rounded-[1.75rem] border border-white/75 bg-white/78 shadow-sm">
-          <img src="/customer-brief.svg" alt="Customer brief view" className="h-56 w-full object-cover" />
-        </div>
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           <MarketingCard
             title="Discovery"

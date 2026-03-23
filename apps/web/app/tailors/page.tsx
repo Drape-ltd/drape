@@ -38,9 +38,6 @@ export default function TailorsPage(): JSX.Element {
           title="Less admin friction. Better operational visibility."
           description="Cleaner intake, pricing, and handoff."
         />
-        <div className="mt-8 overflow-hidden rounded-[1.75rem] border border-white/75 bg-white/78 shadow-sm">
-          <img src="/tailor-pipeline.svg" alt="Tailor production pipeline" className="h-56 w-full object-cover" />
-        </div>
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           <MarketingCard
             title="Serious briefs"

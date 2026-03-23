@@ -28,6 +28,12 @@ export function MarketingShell({
     { href: '/customers', label: 'Customers' },
     { href: '/tailors', label: 'Tailors' },
   ]
+  const mobileNavItems: Array<{ href: Route; label: string; primary?: boolean }> = [
+    { href: '/join', label: 'Join', primary: true },
+    { href: '/how-it-works', label: 'How it works' },
+    { href: '/customers', label: 'Customers' },
+    { href: '/tailors', label: 'Tailors' },
+  ]
 
   const isActive = (href: string) => pathname === href || pathname?.startsWith(`${href}/`)
 
@@ -59,16 +65,16 @@ export function MarketingShell({
             </nav>
           </div>
 
-          <nav className="mt-4 flex gap-2 overflow-x-auto pb-1 text-sm font-medium text-ink/72 md:hidden">
-            {navItems.map((item) => {
+          <nav className="mt-4 flex gap-2 overflow-x-auto pb-1 text-sm font-medium text-ink/72 md:hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {mobileNavItems.map((item) => {
               const active = isActive(item.href)
               const className = item.primary
                 ? active
-                  ? 'whitespace-nowrap rounded-full bg-needle px-4 py-2 text-white shadow-sm'
-                  : 'whitespace-nowrap rounded-full border border-ink/8 bg-white/90 px-4 py-2 text-ink transition hover:text-ink'
+                  ? 'whitespace-nowrap rounded-full bg-needle px-3.5 py-2 text-white shadow-sm'
+                  : 'whitespace-nowrap rounded-full border border-ink/8 bg-white/90 px-3.5 py-2 text-ink transition hover:text-ink'
                 : active
-                  ? 'whitespace-nowrap rounded-full bg-bone px-4 py-2 text-ink'
-                  : 'whitespace-nowrap rounded-full border border-ink/8 bg-white/90 px-4 py-2 transition hover:text-ink'
+                  ? 'whitespace-nowrap rounded-full bg-bone px-3.5 py-2 text-ink'
+                  : 'whitespace-nowrap rounded-full border border-ink/8 bg-white/90 px-3.5 py-2 transition hover:text-ink'
 
               return (
                 <Link key={item.href} href={item.href} className={className}>
