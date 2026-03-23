@@ -29,12 +29,6 @@ export default function HowItWorksPage(): JSX.Element {
           >
             Tailor journey
           </Link>
-          <Link
-            href="/trust"
-            className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink"
-          >
-            Trust layer
-          </Link>
         </div>
       }
     >
@@ -61,22 +55,6 @@ export default function HowItWorksPage(): JSX.Element {
             title="Complete"
             body="Delivery confirmation, completion, and review close the loop without loose ends."
           />
-        </div>
-      </section>
-
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="Trust layer"
-          title="Trust makes the flow stronger."
-          description="Verification, fit, and handoff stay visible too."
-        />
-        <div className="mt-10">
-          <Link
-            href="/trust"
-            className="inline-flex items-center justify-center rounded-full bg-needle px-6 py-4 text-sm font-semibold text-white"
-          >
-            Explore trust and verification
-          </Link>
         </div>
       </section>
     </MarketingShell>

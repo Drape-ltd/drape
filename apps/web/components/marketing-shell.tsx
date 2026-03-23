@@ -50,11 +50,11 @@ export function MarketingShell({
                 const active = isActive(item.href)
                 const className = item.primary
                   ? active
-                    ? 'rounded-full bg-needle px-4 py-2 text-white shadow-sm'
+                    ? 'rounded-full border border-transparent bg-needle px-4 py-2 text-white shadow-sm'
                     : 'rounded-full border border-ink/8 bg-white/88 px-4 py-2 text-ink transition hover:bg-bone hover:text-ink'
                   : active
-                    ? 'rounded-full bg-bone px-3 py-2 text-ink'
-                    : 'rounded-full px-3 py-2 transition hover:bg-bone hover:text-ink'
+                    ? 'rounded-full border border-transparent bg-bone px-3 py-2 text-ink'
+                    : 'rounded-full border border-transparent px-3 py-2 transition hover:bg-bone hover:text-ink'
 
                 return (
                   <Link key={item.href} href={item.href} className={className}>
@@ -70,10 +70,10 @@ export function MarketingShell({
               const active = isActive(item.href)
               const className = item.primary
                 ? active
-                  ? 'whitespace-nowrap rounded-full bg-needle px-3.5 py-2 text-white shadow-sm'
+                  ? 'whitespace-nowrap rounded-full border border-transparent bg-needle px-3.5 py-2 text-white shadow-sm'
                   : 'whitespace-nowrap rounded-full border border-ink/8 bg-white/90 px-3.5 py-2 text-ink transition hover:text-ink'
                 : active
-                  ? 'whitespace-nowrap rounded-full bg-bone px-3.5 py-2 text-ink'
+                  ? 'whitespace-nowrap rounded-full border border-transparent bg-bone px-3.5 py-2 text-ink'
                   : 'whitespace-nowrap rounded-full border border-ink/8 bg-white/90 px-3.5 py-2 transition hover:text-ink'
 
               return (
