@@ -125,7 +125,6 @@ export default function CustomerProfileScreen() {
   const lastNotifCheck = user?.user_metadata?.last_notif_check ?? new Date(0).toISOString()
   const {
     data: overview,
-    isLoading,
     isError,
     refetch,
   } = useCustomerProfileOverview(user?.id, lastNotifCheck)

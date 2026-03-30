@@ -104,10 +104,6 @@ function availabilityHint(tailor: TailorCard): string | null {
   return null
 }
 
-function matchesLocation(tailor: TailorCard, location: string) {
-  return tailor.location.toLowerCase().includes(location.toLowerCase())
-}
-
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 
 function storageKey(base: string, userId: string | undefined) {
