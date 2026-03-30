@@ -84,8 +84,7 @@ export default function TailorNotificationSettingsScreen() {
   }
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(tailor)/profile/account-settings')
+    router.replace('/(tailor)/profile/account-settings')
   }
 
   return (
@@ -103,24 +102,10 @@ export default function TailorNotificationSettingsScreen() {
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Notification control</Text>
           </View>
-          <Text style={styles.heroTitle}>Keep client communication and order movement close at hand.</Text>
-          <Text style={styles.heroSub}>
-            Choose which alerts deserve your attention so requests, replies, and reviews support
-            your workflow instead of distracting from it.
-          </Text>
+          <Text style={styles.heroTitle}>Choose what reaches you.</Text>
         </View>
 
-        <View style={styles.guideCard}>
-          <Text style={styles.guideEyebrow}>Recommended</Text>
-          <Text style={styles.guideTitle}>Keep new orders, messages, and reviews turned on.</Text>
-          <Text style={styles.guideCopy}>
-            Those alerts protect response time, help you keep clients informed, and make sure completed work feeds back into your reputation.
-          </Text>
-        </View>
-
-        <Text style={styles.intro}>
-          Choose which push notifications you receive from Drape.
-        </Text>
+        <Text style={styles.intro}>You can change these any time.</Text>
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Orders</Text>

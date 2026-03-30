@@ -11,7 +11,7 @@ import {
 } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
 import { Audio } from 'expo-av'
-import { supabase } from '@/lib/supabase'
+import { supabase, invokeFunction } from '@/lib/supabase'
 import { stripExif } from '@/lib/stripExif'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -165,18 +165,21 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
     if (!text.trim() || !validateText(text)) return
     if (!checkRateLimit()) return
     setSending(true)
-    const { error } = await supabase.from('messages').insert({
-      order_id: orderId,
-      sender_id: currentUserId,
-      sender_role: currentUserRole,
-      sender_name: currentUserRole === 'CUSTOMER' ? customerName : tailorName,
-      type: 'TEXT',
-      body: text.trim(),
+    const { error } = await invokeFunction('message-action', {
+      body: {
+        action: 'send-message',
+        orderId,
+        senderRole: currentUserRole,
+        senderName: currentUserRole === 'CUSTOMER' ? customerName : tailorName,
+        type: 'TEXT',
+        body: text.trim(),
+      },
     })
-    if (error) console.error('[MessageThread] insert error:', JSON.stringify(error))
-    if (!error) {
+    if (error) {
+      console.error('[MessageThread] insert error:', JSON.stringify(error))
+      Alert.alert('Error', 'Could not send message. Please try again.')
+    } else {
       setText('')
-      // Refetch as fallback in case realtime delivery is delayed
       await fetchMessages()
     }
     setSending(false)
@@ -205,17 +208,22 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
         Alert.alert('File too large', 'Photos must be under 10 MB.')
         return
       }
-      await supabase.storage.from('message-media').upload(filename, blob, { contentType: `image/${ext}` })
+      const { error: uploadError } = await supabase.storage.from('message-media').upload(filename, blob, { contentType: `image/${ext}` })
+      if (uploadError) throw uploadError
       const { data: urlData } = supabase.storage.from('message-media').getPublicUrl(filename)
 
-      await supabase.from('messages').insert({
-        order_id: orderId,
-        sender_id: currentUserId,
-        sender_role: currentUserRole,
-        sender_name: currentUserRole === 'CUSTOMER' ? customerName : tailorName,
-        type: 'PHOTO',
-        photo_url: urlData.publicUrl,
+      const { error: insertError } = await invokeFunction('message-action', {
+        body: {
+          action: 'send-message',
+          orderId,
+          senderRole: currentUserRole,
+          senderName: currentUserRole === 'CUSTOMER' ? customerName : tailorName,
+          type: 'PHOTO',
+          photoUrl: urlData.publicUrl,
+        },
       })
+      if (insertError) throw insertError
+      await fetchMessages()
     } catch {
       Alert.alert('Error', 'Could not send photo. Please try again.')
     }
@@ -254,17 +262,22 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
         Alert.alert('Recording too large', 'Voice notes must be under 25 MB.')
         return
       }
-      await supabase.storage.from('message-media').upload(filename, blob, { contentType: 'audio/m4a' })
+      const { error: uploadError } = await supabase.storage.from('message-media').upload(filename, blob, { contentType: 'audio/m4a' })
+      if (uploadError) throw uploadError
       const { data: urlData } = supabase.storage.from('message-media').getPublicUrl(filename)
 
-      await supabase.from('messages').insert({
-        order_id: orderId,
-        sender_id: currentUserId,
-        sender_role: currentUserRole,
-        sender_name: currentUserRole === 'CUSTOMER' ? customerName : tailorName,
-        type: 'VOICE',
-        voice_url: urlData.publicUrl,
+      const { error: insertError } = await invokeFunction('message-action', {
+        body: {
+          action: 'send-message',
+          orderId,
+          senderRole: currentUserRole,
+          senderName: currentUserRole === 'CUSTOMER' ? customerName : tailorName,
+          type: 'VOICE',
+          voiceUrl: urlData.publicUrl,
+        },
       })
+      if (insertError) throw insertError
+      await fetchMessages()
     } catch {
       Alert.alert('Error', 'Could not send voice note.')
     }
@@ -296,12 +309,10 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
         }
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Text style={styles.emptyText}>Start the conversation with {otherName}.</Text>
-            <View style={styles.preMessageCard}>
-              <Text style={styles.preMessageTitle}>Keep all communication on Drape</Text>
-              <Text style={styles.preMessageBody}>
-                Sharing phone numbers, email addresses, or social handles isn't allowed and may result in account suspension. This protects both parties.
-              </Text>
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyEyebrow}>Conversation</Text>
+              <Text style={styles.emptyTitle}>No messages yet</Text>
+              <Text style={styles.emptyText}>Start the conversation with {otherName}. Keep updates and decisions here.</Text>
             </View>
           </View>
         }
@@ -460,17 +471,27 @@ const styles = StyleSheet.create({
   },
   loadEarlierText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
 
-  empty: { paddingTop: 60, alignItems: 'center', gap: Spacing.lg, paddingHorizontal: Spacing.xl },
-  emptyText: { fontSize: FontSize.md, color: Colors.inkLight },
-
-  preMessageCard: {
-    backgroundColor: Colors.boneDeep, borderRadius: Radius.md,
-    padding: Spacing.lg, gap: Spacing.sm,
-    borderLeftWidth: 3, borderLeftColor: Colors.needleGreen,
+  empty: { paddingTop: 56, gap: Spacing.md, paddingHorizontal: Spacing.xl },
+  emptyCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
     alignSelf: 'stretch',
+    ...Shadow.sm,
   },
-  preMessageTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  preMessageBody: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  emptyEyebrow: {
+    alignSelf: 'flex-start',
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  emptyText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 21 },
 
   lockedBar: {
     backgroundColor: Colors.lightGrey, paddingHorizontal: Spacing.xl,

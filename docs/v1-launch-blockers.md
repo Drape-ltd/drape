@@ -143,6 +143,19 @@ Everything here should be treated as launch-critical unless explicitly moved out
   - broken consultations
   - shipping issues
 
+### 11. Low-Connectivity Resilience
+
+- Critical flows must stay usable on weak mobile networks
+- Heavy list screens should reduce payload size aggressively
+- Image uploads should stay compressed before transport
+- Non-destructive user actions should be retry-safe
+- Messaging and order refresh paths should degrade gracefully on slow networks
+- Add a queue/retry plan for:
+  - message send
+  - stage actions
+  - review submit
+- Prefer delta refresh and lazy loading over pulling full histories everywhere
+
 ## Infrastructure Recommendations
 
 ### Payments

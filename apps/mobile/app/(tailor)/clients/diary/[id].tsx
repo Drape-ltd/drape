@@ -14,7 +14,7 @@ import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker'
-import { supabase } from '@/lib/supabase'
+import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { sharePassportInvite } from '@/lib/invite'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -94,8 +94,7 @@ export default function DiaryEntryScreen() {
   const [fetchError, setFetchError] = useState(false)
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(tailor)/clients')
+    router.replace('/(tailor)/clients')
   }
 
   async function loadEntry() {
@@ -250,11 +249,15 @@ export default function DiaryEntryScreen() {
 
     let error: any
     if (isNew) {
-      const res = await supabase.from('diary_entries').insert(payload).select('passport_id').single()
+      const res = await invokeFunction<{ ok: boolean; passportId?: string }>('diary-entry-action', {
+        body: { action: 'create', entry: payload },
+      })
       error = res.error
-      if (!error && res.data) setPassportId((res.data as any).passport_id)
+      if (!error && res.data?.passportId) setPassportId(res.data.passportId)
     } else {
-      const res = await supabase.from('diary_entries').update(payload).eq('id', id)
+      const res = await invokeFunction('diary-entry-action', {
+        body: { action: 'update', entryId: id, entry: payload },
+      })
       error = res.error
     }
 
@@ -275,10 +278,9 @@ export default function DiaryEntryScreen() {
     setInviting(true)
     try {
       await sharePassportInvite(passportId, form.fullName.trim() || 'your client', tailorDisplayName)
-      const { error } = await supabase
-        .from('diary_entries')
-        .update({ invite_status: 'INVITE_SENT', updated_at: new Date().toISOString() })
-        .eq('id', id)
+      const { error } = await invokeFunction('diary-entry-action', {
+        body: { action: 'mark-invite-sent', entryId: id },
+      })
       if (!error) setInviteStatus('INVITE_SENT')
       else Alert.alert('Invite not marked', error.message)
     } finally {
@@ -298,7 +300,9 @@ export default function DiaryEntryScreen() {
           onPress: async () => {
             if (deleting) return
             setDeleting(true)
-            const { error } = await supabase.from('diary_entries').delete().eq('id', id)
+            const { error } = await invokeFunction('diary-entry-action', {
+              body: { action: 'delete', entryId: id },
+            })
             if (error) {
               setDeleting(false)
               Alert.alert('Delete failed', error.message)

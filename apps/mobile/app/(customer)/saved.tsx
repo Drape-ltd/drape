@@ -4,8 +4,7 @@
  *   user_id uuid references auth.users not null, tailor_profile_id uuid references tailor_profiles not null,
  *   created_at timestamptz default now(), unique(user_id, tailor_profile_id));
  */
-import { useCallback, useState } from 'react'
-import { useFocusEffect } from 'expo-router'
+import { useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   Image, ActivityIndicator, RefreshControl, Alert,
@@ -13,90 +12,43 @@ import {
 import { useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { supabase } from '@/lib/supabase'
+import AsyncStorage from '@react-native-async-storage/async-storage'
+import { invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { useRefreshOnFocus, useSavedTailors } from '@/lib/queries'
 import { TierBadgeChip, StarRating } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
-type SavedTailor = {
-  savedId: string
-  id: string
-  displayName: string
-  location: string
-  tier: string
-  avgRating: number
-  totalReviews: number
-  availability: string
-  portfolioPhoto: string | null
-}
-
-function asStringList(value: unknown): string[] {
-  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
-  if (typeof value === 'string' && value.length > 0) return [value]
-  return []
-}
+const SAVED_GUIDE_KEY = 'drape_saved_best_use_dismissed'
 
 export default function SavedScreen() {
   const router = useRouter()
   const { user } = useAuth()
-  const [saved, setSaved] = useState<SavedTailor[]>([])
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
-  const [fetchError, setFetchError] = useState(false)
   const [failedImages, setFailedImages] = useState<string[]>([])
+  const [showGuide, setShowGuide] = useState(true)
 
-  async function fetchSaved() {
-    setFetchError(false)
-    setFailedImages([])
+  useEffect(() => {
+    AsyncStorage.getItem(`${SAVED_GUIDE_KEY}:${user?.id ?? 'guest'}`)
+      .then((value) => setShowGuide(value !== '1'))
+      .catch(() => {})
+  }, [user?.id])
+
+  async function dismissGuide() {
+    setShowGuide(false)
     try {
-      const { data, error } = await supabase
-        .from('saved_tailors')
-        .select(`
-          id,
-          tailor_profiles!tailor_profile_id(
-            id, display_name, location, tier, avg_rating, total_reviews, availability, portfolio_photo_urls
-          )
-        `)
-        .eq('user_id', user?.id)
-        .order('created_at', { ascending: false })
-
-      if (error) throw error
-
-      setSaved(
-        ((data ?? []) as any[])
-          .filter((row) => row.tailor_profiles)
-          .map((row: any) => {
-            const t = row.tailor_profiles
-            const portfolioPhotos = asStringList(t.portfolio_photo_urls)
-            return {
-              savedId: row.id,
-              id: t.id,
-              displayName: t.display_name,
-              location: t.location,
-              tier: t.tier,
-              avgRating: t.avg_rating,
-              totalReviews: t.total_reviews,
-              availability: t.availability,
-              portfolioPhoto: portfolioPhotos[0] ?? null,
-            }
-          })
-      )
-    } catch {
-      setFetchError(true)
-      setSaved([])
-    }
+      await AsyncStorage.setItem(`${SAVED_GUIDE_KEY}:${user?.id ?? 'guest'}`, '1')
+    } catch {}
   }
 
-  useFocusEffect(useCallback(() => {
-    setLoading(true)
-    fetchSaved().finally(() => setLoading(false))
-  }, [user?.id]))
+  const {
+    data: saved = [],
+    isLoading: loading,
+    isFetching,
+    isError: fetchError,
+    refetch,
+  } = useSavedTailors(user?.id)
 
-  async function onRefresh() {
-    setRefreshing(true)
-    await fetchSaved()
-    setRefreshing(false)
-  }
+  useRefreshOnFocus(refetch)
 
   async function unsave(savedId: string, name: string) {
     Alert.alert(
@@ -108,20 +60,19 @@ export default function SavedScreen() {
           text: 'Remove',
           style: 'destructive',
           onPress: async () => {
-            const { error } = await supabase.from('saved_tailors').delete().eq('id', savedId)
+            const { error } = await invokeFunction('saved-tailor-action', {
+              body: { action: 'unsave-by-id', savedId },
+            })
             if (error) {
               Alert.alert('Error', 'Could not remove this tailor right now. Please try again.')
               return
             }
-            setSaved((prev) => prev.filter((s) => s.savedId !== savedId))
+            void refetch()
           },
         },
       ]
     )
   }
-
-  const CARD_GAP = Spacing.md
-  const CARD_WIDTH = '48%'
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -134,7 +85,7 @@ export default function SavedScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Wishlist</Text>
             <ActivityIndicator color={Colors.needleGreen} size="large" />
-            <Text style={styles.stateTitle}>Loading your saved tailors…</Text>
+            <Text style={styles.stateTitle}>Loading your saved sellers…</Text>
             <Text style={styles.stateHint}>
               We’re gathering the makers you bookmarked so they stay easy to revisit when you are ready to order.
             </Text>
@@ -144,7 +95,7 @@ export default function SavedScreen() {
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Wishlist</Text>
-            <Text style={styles.stateTitle}>Couldn't load your saved tailors.</Text>
+            <Text style={styles.stateTitle}>Couldn't load your saved sellers.</Text>
             <Text style={styles.stateHint}>
               Your shortlist should stay ready whenever you want to compare styles, pricing, and availability again.
             </Text>
@@ -154,11 +105,11 @@ export default function SavedScreen() {
                 Refresh this screen first. If it still fails, head back to discovery and reopen the profiles you trust most so your shortlist stays easy to rebuild.
               </Text>
             </View>
-            <TouchableOpacity style={styles.retryBtn} onPress={() => { setLoading(true); fetchSaved().finally(() => setLoading(false)) }}>
+            <TouchableOpacity style={styles.retryBtn} onPress={() => { void refetch() }}>
               <Text style={styles.retryBtnText}>Try again</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.navigate('/(customer)')}>
-              <Text style={styles.secondaryBtnText}>Explore tailors</Text>
+              <Text style={styles.secondaryBtnText}>Explore sellers</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -170,25 +121,22 @@ export default function SavedScreen() {
           columnWrapperStyle={styles.row}
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />}
+          refreshControl={<RefreshControl refreshing={isFetching && !loading} onRefresh={refetch} tintColor={Colors.needleGreen} />}
           ListHeaderComponent={(
             <>
-              <View style={styles.heroCard}>
-                <View style={styles.heroBadge}>
-                  <Text style={styles.heroBadgeText}>Saved tailors</Text>
+              {showGuide && (
+                <View style={styles.guideCard}>
+                  <View style={styles.guideHeader}>
+                    <View style={styles.heroBadge}>
+                      <Text style={styles.heroBadgeText}>Best use</Text>
+                    </View>
+                    <TouchableOpacity onPress={() => void dismissGuide()} style={styles.guideClose}>
+                      <Feather name="x" size={16} color={Colors.midGrey} />
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.guideTitle}>Keep a tight shortlist here, then open profiles when you are ready to place a brief.</Text>
                 </View>
-                <Text style={styles.heroTitle}>Keep the makers you trust close for the next order.</Text>
-                <Text style={styles.heroSub}>
-                  Your wishlist is where promising tailors stay easy to revisit when you are ready
-                  to compare styles, prices, and availability again.
-                </Text>
-              </View>
-              <View style={styles.guideCard}>
-                <Text style={styles.guideTitle}>Best use of your wishlist</Text>
-                <Text style={styles.guideText}>
-                  Save a short, high-confidence shortlist here, then open each profile when you are ready to compare trust signals and place a brief.
-                </Text>
-              </View>
+              )}
             </>
           )}
           ListEmptyComponent={<EmptyWishlistView onExplore={() => router.navigate('/(customer)')} />}
@@ -425,14 +373,6 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.md,
   },
   title: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
-  heroCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
-    marginBottom: Spacing.md,
-    ...Shadow.sm,
-  },
   heroBadge: {
     alignSelf: 'flex-start',
     paddingHorizontal: Spacing.md,
@@ -447,17 +387,6 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  heroTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    lineHeight: 38,
-  },
-  heroSub: {
-    fontSize: FontSize.md,
-    color: Colors.inkLight,
-    lineHeight: 24,
-  },
   guideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
@@ -468,8 +397,15 @@ const styles = StyleSheet.create({
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
+  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  guideClose: {
+    width: 28,
+    height: 28,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   list: { padding: Spacing.xl, gap: Spacing.md, paddingBottom: 100 },
   row: { gap: Spacing.md, justifyContent: 'space-between' },

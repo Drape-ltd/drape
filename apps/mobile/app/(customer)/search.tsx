@@ -1,20 +1,23 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import {
   View, Text, StyleSheet, TouchableOpacity, Pressable, FlatList, ScrollView, ActivityIndicator,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { Input, TierBadgeChip, StarRating, Tag } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
-const GARMENT_FILTERS = ['All', 'Agbada', 'Suits', 'Ankara', 'Bridal', 'Lehenga', 'Kaftans', 'Bespoke']
+const GARMENT_FILTERS = ['All', 'Agbada', 'Suits', 'Ankara', 'Bridal', 'Crochet', 'Knitwear', 'Ready-made']
 const TIER_FILTERS = ['All', 'MASTER', 'RISING', 'VERIFIED']
+const SEARCH_GUIDE_KEY = 'drape_search_best_use_dismissed'
 
 type TailorResult = {
   id: string
   displayName: string
   location: string
+  sellerType: 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP'
   specialtyTags: string[]
   avgRating: number
   totalReviews: number
@@ -22,6 +25,8 @@ type TailorResult = {
   availability: string
   avgResponseHours: number | null
   priceRangeMin: number | null
+  supportsCustomOrders: boolean
+  supportsReadyMade: boolean
 }
 
 function asStringList(value: unknown): string[] {
@@ -36,6 +41,40 @@ function availabilityHint(tailor: TailorResult): string | null {
   return null
 }
 
+function parseSearchQuery(input: string): { specialty: string; location: string; general: string } {
+  const trimmed = input.trim()
+  const lower = trimmed.toLowerCase()
+
+  const sellersInMatch = lower.match(/^sellers?\s+in\s+(.+)$/)
+  if (sellersInMatch) {
+    return { specialty: '', location: sellersInMatch[1].trim(), general: '' }
+  }
+
+  const tailorsInMatch = lower.match(/^tailors?\s+in\s+(.+)$/)
+  if (tailorsInMatch) {
+    return { specialty: '', location: tailorsInMatch[1].trim(), general: '' }
+  }
+
+  const inMatch = trimmed.match(/^(.+?)\s+in\s+(.+)$/i)
+  if (inMatch) {
+    return { specialty: inMatch[1].trim(), location: inMatch[2].trim(), general: '' }
+  }
+
+  return { specialty: '', location: '', general: trimmed }
+}
+
+function applyLocationBoost(results: TailorResult[], location: string): TailorResult[] {
+  if (!location) return results
+  const loc = location.toLowerCase()
+  return results
+    .map((item) => ({
+      item,
+      score: (item.avgRating ?? 0) + (item.location.toLowerCase().includes(loc) ? 100 : 0),
+    }))
+    .sort((a, b) => b.score - a.score)
+    .map(({ item }) => item)
+}
+
 export default function SearchScreen() {
   const router = useRouter()
   const [query, setQuery] = useState('')
@@ -45,6 +84,15 @@ export default function SearchScreen() {
   const [loading, setLoading] = useState(false)
   const [searched, setSearched] = useState(false)
   const [fetchError, setFetchError] = useState(false)
+  const [showGuide, setShowGuide] = useState(true)
+
+  useEffect(() => {
+    AsyncStorage.getItem(SEARCH_GUIDE_KEY)
+      .then((value) => {
+        if (value === '1') setShowGuide(false)
+      })
+      .catch(() => {})
+  }, [])
 
   const search = useCallback(async (q: string, g: string, t: string) => {
     setLoading(true)
@@ -52,14 +100,20 @@ export default function SearchScreen() {
     setFetchError(false)
 
     try {
-      let query = supabase
+      const { specialty, location, general } = parseSearchQuery(q)
+
+      const baseQuery = supabase
         .from('tailor_profiles')
-        .select('id, display_name, location, specialty_tags, avg_rating, total_reviews, tier, availability, avg_response_hours, price_range_min')
+        .select('id, display_name, location, seller_type, specialty_tags, avg_rating, total_reviews, tier, availability, avg_response_hours, price_range_min, supports_custom_orders, supports_ready_made')
         .eq('is_live', true)
         .neq('availability', 'FULLY_BOOKED')
 
-      if (q.trim()) {
-        query = query.or(`display_name.ilike.%${q}%,location.ilike.%${q}%,specialty_tags.cs.{${q}}`)
+      let query = baseQuery
+
+      if (specialty) {
+        query = query.or(`display_name.ilike.%${specialty}%,specialty_tags.cs.{${specialty}}`)
+      } else if (general) {
+        query = query.or(`display_name.ilike.%${general}%,location.ilike.%${general}%,specialty_tags.cs.{${general}}`)
       }
       if (g !== 'All') {
         query = query.contains('specialty_tags', [g])
@@ -68,14 +122,27 @@ export default function SearchScreen() {
         query = query.eq('tier', t)
       }
 
-      const { data, error } = await query.order('ranking_score', { ascending: false }).limit(30)
-      if (error) throw error
+      let strictResults: TailorResult[] = []
 
-      setResults(
-        (data ?? []).map((d: any) => ({
+      if (location) {
+        let strictQuery = baseQuery.ilike('location', `%${location}%`)
+        if (specialty) {
+          strictQuery = strictQuery.or(`display_name.ilike.%${specialty}%,specialty_tags.cs.{${specialty}}`)
+        }
+        if (g !== 'All') {
+          strictQuery = strictQuery.contains('specialty_tags', [g])
+        }
+        if (t !== 'All') {
+          strictQuery = strictQuery.eq('tier', t)
+        }
+
+        const { data: strictData, error: strictError } = await strictQuery.order('ranking_score', { ascending: false }).limit(30)
+        if (strictError) throw strictError
+        strictResults = (strictData ?? []).map((d: any) => ({
           id: d.id,
           displayName: d.display_name,
           location: d.location,
+          sellerType: d.seller_type ?? 'TAILOR',
           specialtyTags: asStringList(d.specialty_tags),
           avgRating: d.avg_rating,
           totalReviews: d.total_reviews,
@@ -83,8 +150,38 @@ export default function SearchScreen() {
           availability: d.availability,
           avgResponseHours: d.avg_response_hours,
           priceRangeMin: d.price_range_min,
+          supportsCustomOrders: d.supports_custom_orders ?? true,
+          supportsReadyMade: d.supports_ready_made ?? false,
         }))
-      )
+      }
+
+      let mappedResults = strictResults
+
+      if (mappedResults.length === 0) {
+        const { data, error } = await query.order('ranking_score', { ascending: false }).limit(30)
+        if (error) throw error
+
+        mappedResults = (data ?? []).map((d: any) => ({
+          id: d.id,
+          displayName: d.display_name,
+          location: d.location,
+          sellerType: d.seller_type ?? 'TAILOR',
+          specialtyTags: asStringList(d.specialty_tags),
+          avgRating: d.avg_rating,
+          totalReviews: d.total_reviews,
+          tier: d.tier,
+          availability: d.availability,
+          avgResponseHours: d.avg_response_hours,
+          priceRangeMin: d.price_range_min,
+          supportsCustomOrders: d.supports_custom_orders ?? true,
+          supportsReadyMade: d.supports_ready_made ?? false,
+        }))
+        if (location) {
+          mappedResults = applyLocationBoost(mappedResults, location)
+        }
+      }
+
+      setResults(mappedResults)
     } catch {
       setFetchError(true)
       setResults([])
@@ -100,27 +197,30 @@ export default function SearchScreen() {
     search(query, g, tier)
   }
 
+  async function dismissGuide() {
+    setShowGuide(false)
+    try {
+      await AsyncStorage.setItem(SEARCH_GUIDE_KEY, '1')
+    } catch {}
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
-        <Text style={styles.title}>Find a tailor</Text>
-        <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Search with intent</Text>
+        <Text style={styles.title}>Find a seller</Text>
+        {showGuide ? (
+          <View style={styles.guideCard}>
+            <View style={styles.guideHeader}>
+              <Text style={styles.guideEyebrow}>Best use</Text>
+              <TouchableOpacity onPress={() => { void dismissGuide() }} hitSlop={8}>
+                <Text style={styles.guideClose}>×</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.guideTitle}>Search by name, city, style, or craft, then narrow only if needed.</Text>
           </View>
-          <Text style={styles.heroTitle}>Search by style, city, or specialty and narrow the field fast.</Text>
-          <Text style={styles.heroSub}>
-            Use this screen when you already know the kind of maker or location you want to start from.
-          </Text>
-        </View>
-        <View style={styles.guideCard}>
-          <Text style={styles.guideTitle}>Best search habit</Text>
-          <Text style={styles.guideText}>
-            Start broad, then tighten by specialty or tier only after you have a few promising matches worth comparing.
-          </Text>
-        </View>
+        ) : null}
         <Input
-          placeholder="Name, location, or specialty..."
+          placeholder="Name, city, style, or craft..."
           value={query}
           onChangeText={setQuery}
           onSubmitEditing={handleSearch}
@@ -178,20 +278,16 @@ export default function SearchScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Search</Text>
             <ActivityIndicator color={Colors.needleGreen} size="large" />
-            <Text style={styles.stateTitle}>Searching tailors…</Text>
-            <Text style={styles.stateHint}>
-              We’re narrowing the field by name, city, and specialty so you can choose from live options quickly.
-            </Text>
+            <Text style={styles.stateTitle}>Searching sellers…</Text>
+            <Text style={styles.stateHint}>Checking live matches now.</Text>
           </View>
         </View>
       ) : !searched ? (
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Search</Text>
-            <Text style={styles.stateTitle}>Search for a tailor when you already know the direction.</Text>
-            <Text style={styles.stateHint}>
-              Try a city, a specialty, or the name of a tailor you trust. We’ll narrow the list so you can move into a brief with more confidence.
-            </Text>
+            <Text style={styles.stateTitle}>Search when you already know the direction.</Text>
+            <Text style={styles.stateHint}>Try a city, style, craft, or seller name.</Text>
             <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.replace('/(customer)')}>
               <Text style={styles.secondaryBtnText}>Browse home instead</Text>
             </TouchableOpacity>
@@ -202,9 +298,7 @@ export default function SearchScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Search</Text>
             <Text style={styles.stateTitle}>Couldn't load search results.</Text>
-            <Text style={styles.stateHint}>
-              Search should help you narrow down live tailors by specialty or location without guesswork.
-            </Text>
+            <Text style={styles.stateHint}>Refresh and try again.</Text>
             <TouchableOpacity style={styles.retryBtn} onPress={handleSearch}>
               <Text style={styles.retryBtnText}>Try again</Text>
             </TouchableOpacity>
@@ -217,21 +311,13 @@ export default function SearchScreen() {
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Search</Text>
-            <Text style={styles.stateTitle}>No tailors matched that search yet.</Text>
-            <Text style={styles.stateHint}>
-              Try widening the specialty, switching the city, or browsing live tailors from home to find a better starting point.
-            </Text>
-            <View style={styles.stateGuideCard}>
-              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
-              <Text style={styles.stateGuideText}>
-                Remove one filter at a time. Usually the fastest way forward is to keep the style you want, then loosen location or tier until you find a promising shortlist.
-              </Text>
-            </View>
+            <Text style={styles.stateTitle}>No sellers matched that search yet.</Text>
+            <Text style={styles.stateHint}>Try fewer filters or a broader search.</Text>
             <TouchableOpacity style={styles.retryBtn} onPress={() => search(query, 'All', 'All')}>
               <Text style={styles.retryBtnText}>Clear filters</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.replace('/(customer)')}>
-              <Text style={styles.secondaryBtnText}>Browse top tailors</Text>
+              <Text style={styles.secondaryBtnText}>Browse top sellers</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -264,7 +350,9 @@ export default function SearchScreen() {
                 </View>
               </View>
               <View style={styles.tags}>
-                {(item.specialtyTags ?? []).slice(0, 4).map((t) => <Tag key={t} label={t} />)}
+                {(item.specialtyTags ?? []).slice(0, 3).map((t) => <Tag key={t} label={t} />)}
+                {item.supportsCustomOrders ? <Tag label="Custom" /> : null}
+                {item.supportsReadyMade ? <Tag label="Shop now" /> : null}
               </View>
               {availabilityHint(item) && (
                 <Text style={styles.availabilityHint} numberOfLines={1}>
@@ -368,6 +456,15 @@ const styles = StyleSheet.create({
     gap: Spacing.xs,
     ...Shadow.sm,
   },
+  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  guideEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  guideClose: { fontSize: 20, lineHeight: 20, color: Colors.midGrey, paddingHorizontal: 4 },
   guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   searchInput: { marginBottom: -Spacing.sm },

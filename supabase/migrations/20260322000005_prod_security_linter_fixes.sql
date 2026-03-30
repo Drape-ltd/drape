@@ -59,13 +59,46 @@ CREATE POLICY "service_role_only_tailor_applications"
 -- resolution from being influenced by a caller-controlled search_path.
 -- ═══════════════════════════════════════════════════════════════════════════
 
-ALTER FUNCTION public.auth_uid() SET search_path = public, auth, pg_temp;
-ALTER FUNCTION public.handle_updated_at() SET search_path = public, pg_temp;
-ALTER FUNCTION public.handle_new_user() SET search_path = public, auth, pg_temp;
-ALTER FUNCTION public.check_rate_limit(text, integer, integer) SET search_path = public, pg_temp;
-ALTER FUNCTION public.sync_order_tailor_id() SET search_path = public, pg_temp;
-ALTER FUNCTION public.update_tailor_rating_stats() SET search_path = public, pg_temp;
-ALTER FUNCTION public.increment_tailor_total_orders() SET search_path = public, pg_temp;
-ALTER FUNCTION public.compute_tailor_profile_completed() SET search_path = public, pg_temp;
-ALTER FUNCTION public.compute_tailor_ranking_score() SET search_path = public, pg_temp;
-ALTER FUNCTION public.set_review_published_at() SET search_path = public, pg_temp;
+DO $$
+BEGIN
+  IF to_regprocedure('public.auth_uid()') IS NOT NULL THEN
+    EXECUTE 'ALTER FUNCTION public.auth_uid() SET search_path = public, auth, pg_temp';
+  END IF;
+
+  IF to_regprocedure('public.handle_updated_at()') IS NOT NULL THEN
+    EXECUTE 'ALTER FUNCTION public.handle_updated_at() SET search_path = public, pg_temp';
+  END IF;
+
+  IF to_regprocedure('public.handle_new_user()') IS NOT NULL THEN
+    EXECUTE 'ALTER FUNCTION public.handle_new_user() SET search_path = public, auth, pg_temp';
+  END IF;
+
+  IF to_regprocedure('public.check_rate_limit(text, integer, integer)') IS NOT NULL THEN
+    EXECUTE 'ALTER FUNCTION public.check_rate_limit(text, integer, integer) SET search_path = public, pg_temp';
+  END IF;
+
+  IF to_regprocedure('public.sync_order_tailor_id()') IS NOT NULL THEN
+    EXECUTE 'ALTER FUNCTION public.sync_order_tailor_id() SET search_path = public, pg_temp';
+  END IF;
+
+  IF to_regprocedure('public.update_tailor_rating_stats()') IS NOT NULL THEN
+    EXECUTE 'ALTER FUNCTION public.update_tailor_rating_stats() SET search_path = public, pg_temp';
+  END IF;
+
+  IF to_regprocedure('public.increment_tailor_total_orders()') IS NOT NULL THEN
+    EXECUTE 'ALTER FUNCTION public.increment_tailor_total_orders() SET search_path = public, pg_temp';
+  END IF;
+
+  IF to_regprocedure('public.compute_tailor_profile_completed()') IS NOT NULL THEN
+    EXECUTE 'ALTER FUNCTION public.compute_tailor_profile_completed() SET search_path = public, pg_temp';
+  END IF;
+
+  IF to_regprocedure('public.compute_tailor_ranking_score()') IS NOT NULL THEN
+    EXECUTE 'ALTER FUNCTION public.compute_tailor_ranking_score() SET search_path = public, pg_temp';
+  END IF;
+
+  IF to_regprocedure('public.set_review_published_at()') IS NOT NULL THEN
+    EXECUTE 'ALTER FUNCTION public.set_review_published_at() SET search_path = public, pg_temp';
+  END IF;
+END
+$$;

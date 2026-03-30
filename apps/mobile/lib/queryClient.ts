@@ -10,10 +10,10 @@ AppState.addEventListener('change', (status: AppStateStatus) => {
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime:  60_000,        // 1 min — data stays fresh for 1 min before background refetch
-      gcTime:     5 * 60_000,    // 5 min — keep unused cache entries for 5 min
+      staleTime:  2 * 60_000,    // 2 min — keep recently visited screens warm by default
+      gcTime:     30 * 60_000,   // 30 min — hold onto cache longer for weak or expensive networks
       retry:      1,
-      refetchOnWindowFocus: true, // controlled by the AppState listener above
+      refetchOnWindowFocus: false, // screen-level focus refresh is handled explicitly where needed
       refetchOnReconnect:   true,
     },
   },

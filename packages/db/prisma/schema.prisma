@@ -61,6 +61,14 @@ enum AvailabilityStatus {
   @@map("availability_status")
 }
 
+enum SellerType {
+  TAILOR
+  BOUTIQUE
+  TAILOR_SHOP
+
+  @@map("seller_type")
+}
+
 enum FabricSource {
   CUSTOMER_SUPPLIES
   TAILOR_SOURCES
@@ -73,6 +81,13 @@ enum DeliveryMethod {
   LOCAL_COLLECTION
 
   @@map("delivery_method")
+}
+
+enum OrderKind {
+  CUSTOM
+  READY_MADE
+
+  @@map("order_kind")
 }
 
 enum OrderStage {
@@ -174,6 +189,7 @@ model TailorProfile {
 
   displayName          String             @map("display_name")
   businessName         String?            @map("business_name")
+  sellerType           SellerType         @default(TAILOR) @map("seller_type")
   bio                  String?
   location             String             @default("")
   languages            String[]
@@ -189,6 +205,11 @@ model TailorProfile {
   totalReviews         Int                @default(0) @map("total_reviews")
   totalOrders          Int                @default(0) @map("total_orders")
   avgResponseHours     Float?             @map("avg_response_hours")
+  supportsCustomOrders Boolean            @default(true) @map("supports_custom_orders")
+  supportsReadyMade    Boolean            @default(false) @map("supports_ready_made")
+  pickupAvailable      Boolean            @default(false) @map("pickup_available")
+  deliveryAvailable    Boolean            @default(false) @map("delivery_available")
+  shippingAvailable    Boolean            @default(false) @map("shipping_available")
   shipsInternationally Boolean            @default(false) @map("ships_internationally")
   stripeAccountId      String?            @map("stripe_account_id")
   paystackAccountId    String?            @map("paystack_account_id")
@@ -204,6 +225,7 @@ model TailorProfile {
   updatedAt            DateTime           @updatedAt @map("updated_at")
 
   portfolioPhotos PortfolioPhoto[]
+  sellerItems     SellerItem[]
   orders          Order[]
   clients         TailorClient[]
   reviews         Review[]
@@ -230,6 +252,30 @@ model PortfolioPhoto {
   createdAt     DateTime  @default(now()) @map("created_at")
 
   @@map("portfolio_photos")
+}
+
+model SellerItem {
+  id              String        @id @default(uuid())
+  tailorProfileId String        @map("tailor_profile_id")
+  tailorProfile   TailorProfile @relation(fields: [tailorProfileId], references: [id], onDelete: Cascade)
+
+  title             String
+  description       String?
+  category          String?
+  sizes             String[]
+  priceAmount       Int      @map("price_amount")
+  currency          Currency @default(GBP)
+  photoUrls         String[] @default([]) @map("photo_urls")
+  isReadyMade       Boolean  @default(true) @map("is_ready_made")
+  isLive            Boolean  @default(false) @map("is_live")
+  stockStatus       String   @default("IN_STOCK") @map("stock_status")
+  pickupAvailable   Boolean  @default(false) @map("pickup_available")
+  deliveryAvailable Boolean  @default(false) @map("delivery_available")
+  shippingAvailable Boolean  @default(false) @map("shipping_available")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@map("seller_items")
 }
 
 // ─────────────────────────────────────────────
@@ -316,9 +362,17 @@ model Order {
   // Optional FK to tailor_profiles for joins (populated on order creation)
   tailorProfileId String?        @map("tailor_profile_id")
   tailorProfile   TailorProfile? @relation(fields: [tailorProfileId], references: [id])
+  orderKind       OrderKind      @default(CUSTOM) @map("order_kind")
+  sellerItemId    String?        @map("seller_item_id")
+  fulfillmentOption String?      @map("fulfillment_option")
 
   garmentType                  String          @map("garment_type")
   garmentDescription           String?         @map("garment_description")
+  itemTitle                    String?         @map("item_title")
+  itemSize                     String?         @map("item_size")
+  itemQuantity                 Int             @default(1) @map("item_quantity")
+  itemUnitPrice                Int?            @map("item_unit_price")
+  itemSubtotal                 Int?            @map("item_subtotal")
   occasion                     String?
   deadline                     DateTime?
   fabricSource                 FabricSource?   @map("fabric_source")

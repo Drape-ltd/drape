@@ -18,7 +18,7 @@ import { useFocusEffect, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
-import { useAuth } from '@/lib/auth'
+import { signInWithPasswordResilient, useAuth } from '@/lib/auth'
 import { requestAccountDeletion } from '@/lib/account-deletion'
 import {
   isBiometricAvailable, getBiometricLabel,
@@ -94,10 +94,7 @@ export default function LoginSecurityScreen() {
       return
     }
     setReauthLoading(true)
-    const { error } = await supabase.auth.signInWithPassword({
-      email: user?.email ?? '',
-      password: reauthPassword,
-    })
+    const { error } = await signInWithPasswordResilient(user?.email ?? '', reauthPassword)
     setReauthLoading(false)
     if (error) {
       Alert.alert('Incorrect password', 'The password you entered is wrong.')
@@ -202,24 +199,6 @@ export default function LoginSecurityScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
-        <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Security</Text>
-          </View>
-          <Text style={styles.heroTitle}>Protect the account your clients and orders depend on.</Text>
-          <Text style={styles.heroSub}>
-            Manage your password and device lock settings so your business stays secure without
-            slowing down your day-to-day workflow.
-          </Text>
-        </View>
-
-        <View style={styles.guideCard}>
-          <Text style={styles.guideEyebrow}>How this works</Text>
-          <Text style={styles.guideTitle}>You verify first, then change your password or device lock settings.</Text>
-          <Text style={styles.guideCopy}>
-            That extra step protects your business workspace if someone gets temporary access to an unlocked device.
-          </Text>
-        </View>
 
         {/* ── Biometric toggle (always visible) ── */}
         {biometricAvailable && (
@@ -408,38 +387,6 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
   body: { padding: Spacing.xl, paddingBottom: 64, gap: Spacing.xl },
-  heroCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
-    ...Shadow.sm,
-  },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  heroBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  heroTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    lineHeight: 38,
-  },
-  heroSub: {
-    fontSize: FontSize.md,
-    color: Colors.inkLight,
-    lineHeight: 24,
-  },
   guideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,

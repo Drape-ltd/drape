@@ -26,10 +26,8 @@ export default function WelcomeScreen() {
       <View style={styles.hero}>
         <View style={styles.brandCard}>
           <Text style={styles.wordmark}>drape</Text>
-          <Text style={styles.tagline}>Custom clothing, handled beautifully from both sides.</Text>
-          <Text style={styles.sub}>
-            Customers discover trusted tailors, place one clear order, and track every step. Tailors receive serious briefs, send quotes, and manage production in one calm workspace.
-          </Text>
+          <Text style={styles.tagline}>Custom and ready-made fashion, handled clearly.</Text>
+          <Text style={styles.sub}>Find a trusted tailor, boutique, or maker, place an order, and track it in one place.</Text>
         </View>
       </View>
 

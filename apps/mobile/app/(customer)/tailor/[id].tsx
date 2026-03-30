@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Image, FlatList, ActivityIndicator, Alert, Dimensions, NativeSyntheticEvent, NativeScrollEvent,
+  Image, FlatList, ActivityIndicator, Alert, Dimensions, NativeSyntheticEvent, NativeScrollEvent, Modal,
 } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { supabase } from '@/lib/supabase'
+import { useRefreshOnFocus, useTailorPublic } from '@/lib/queries'
+import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { useCurrency, formatAmount } from '@/lib/currency'
 import { TierBadgeChip, StarRating, Tag, Button } from '@/components/ui'
@@ -21,6 +22,7 @@ type TailorProfile = {
   displayName: string
   location: string
   tier: string
+  sellerType: 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP'
   avgRating: number
   totalReviews: number
   totalOrders: number
@@ -32,6 +34,11 @@ type TailorProfile = {
   priceRangeMin: number | null
   priceRangeMax: number | null
   portfolioPhotos: string[]
+  supportsCustomOrders: boolean
+  supportsReadyMade: boolean
+  pickupAvailable: boolean
+  deliveryAvailable: boolean
+  shippingAvailable: boolean
 }
 
 type Review = {
@@ -40,13 +47,14 @@ type Review = {
   body: string | null
   tags: string[]
   reviewerName: string
+  reviewerAvatarUrl: string | null
+  response: string | null
   createdAt: string
 }
 
-function asStringList(value: unknown): string[] {
-  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
-  if (typeof value === 'string' && value.length > 0) return [value]
-  return []
+type ReviewSummary = {
+  average: number
+  count: number
 }
 
 const AVAILABILITY_LABEL: Record<string, string> = {
@@ -65,128 +73,53 @@ export default function TailorProfileScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
   const { user } = useAuth()
-  const [profile, setProfile] = useState<TailorProfile | null>(null)
-  const [reviews, setReviews] = useState<Review[]>([])
-  const [loading, setLoading] = useState(true)
-  const [fetchError, setFetchError] = useState(false)
-  const [isSaved, setIsSaved] = useState(false)
+  const scrollRef = useRef<ScrollView | null>(null)
+  const [savedOverride, setSavedOverride] = useState<boolean | null>(null)
   const [savingHeart, setSavingHeart] = useState(false)
   const [carouselIndex, setCarouselIndex] = useState(0)
   const [failedHeroImages, setFailedHeroImages] = useState<string[]>([])
+  const [portfolioPreviewUrl, setPortfolioPreviewUrl] = useState<string | null>(null)
+  const [showPortfolioModal, setShowPortfolioModal] = useState(false)
+  const [showReviewsModal, setShowReviewsModal] = useState(false)
+  const [showStylesModal, setShowStylesModal] = useState(false)
   const { currency, rates } = useCurrency()
+  const {
+    data,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useTailorPublic(id, user?.id)
+  const profile = (data?.profile ?? null) as TailorProfile | null
+  const reviews = (data?.reviews ?? []) as Review[]
+  const isSaved = savedOverride ?? data?.isSaved ?? false
 
-  async function load() {
-    setFetchError(false)
-    setLoading(true)
-    setProfile(null)
-    setReviews([])
-    setIsSaved(false)
-    setFailedHeroImages([])
-    try {
-      const [profileRes, reviewsRes, savedRes] = await Promise.allSettled([
-        supabase
-          .from('tailor_profiles')
-          .select('id, display_name, location, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, bio, specialty_tags, languages, price_range_min, price_range_max, portfolio_photo_urls')
-          .eq('id', id)
-          .maybeSingle(),
-        supabase
-          .from('reviews')
-          .select('id, rating, body, tags, created_at, reviewer_name')
-          .eq('tailor_id', id)
-          .order('created_at', { ascending: false })
-          .limit(10),
-        supabase
-          .from('saved_tailors')
-          .select('id')
-          .eq('user_id', user?.id)
-          .eq('tailor_profile_id', id)
-          .maybeSingle(),
-      ])
-
-      const profileData =
-        profileRes.status === 'fulfilled' && !profileRes.value.error
-          ? (profileRes.value.data as any)
-          : null
-      const profileError =
-        profileRes.status === 'fulfilled'
-          ? profileRes.value.error
-          : profileRes.reason
-      const reviewsData =
-        reviewsRes.status === 'fulfilled' && !reviewsRes.value.error
-          ? ((reviewsRes.value.data ?? []) as any[])
-          : []
-      const savedData =
-        savedRes.status === 'fulfilled' && !savedRes.value.error
-          ? savedRes.value.data
-          : null
-
-      if (profileError) {
-        setProfile(null)
-        setFetchError(true)
-      } else if (profileData) {
-        const d = profileData
-        setProfile({
-          id: d.id,
-          displayName: d.display_name,
-          location: d.location,
-          tier: d.tier,
-          avgRating: d.avg_rating,
-          totalReviews: d.total_reviews,
-          totalOrders: d.total_orders,
-          avgResponseHours: d.avg_response_hours,
-          availability: d.availability,
-          bio: d.bio,
-          specialtyTags: asStringList(d.specialty_tags),
-          languages: asStringList(d.languages),
-          priceRangeMin: d.price_range_min,
-          priceRangeMax: d.price_range_max,
-          portfolioPhotos: asStringList(d.portfolio_photo_urls),
-        })
-      } else {
-        setProfile(null)
-      }
-
-      setReviews(
-        reviewsData.map((r: any) => ({
-          id: r.id,
-          rating: r.rating,
-          body: r.body,
-          tags: asStringList(r.tags),
-          reviewerName: r.reviewer_name ?? 'Customer',
-          createdAt: r.created_at,
-        }))
-      )
-
-      setIsSaved(!!savedData)
-      setLoading(false)
-    } catch {
-      setFetchError(true)
-      setLoading(false)
-    }
-  }
+  useRefreshOnFocus(() => { void refetch() }, 60_000)
 
   useEffect(() => {
-    void load()
-  }, [id, user?.id])
+    setFailedHeroImages([])
+  }, [id])
+
+  useEffect(() => {
+    setSavedOverride(null)
+  }, [id, data?.isSaved])
 
   async function toggleSave() {
     if (!user?.id || savingHeart) return
     setSavingHeart(true)
     try {
       if (isSaved) {
-        const { error } = await supabase
-          .from('saved_tailors')
-          .delete()
-          .eq('user_id', user.id)
-          .eq('tailor_profile_id', id)
+        const { error } = await invokeFunction('saved-tailor-action', {
+          body: { action: 'unsave-by-profile', tailorProfileId: id },
+        })
         if (error) throw error
-        setIsSaved(false)
+        setSavedOverride(false)
       } else {
-        const { error } = await supabase
-          .from('saved_tailors')
-          .insert({ user_id: user.id, tailor_profile_id: id })
+        const { error } = await invokeFunction('saved-tailor-action', {
+          body: { action: 'save', tailorProfileId: id },
+        })
         if (error) throw error
-        setIsSaved(true)
+        setSavedOverride(true)
       }
     } catch {
       Alert.alert('Error', 'Could not update your saved tailors. Please try again.')
@@ -208,16 +141,20 @@ export default function TailorProfileScreen() {
     router.replace('/(customer)')
   }
 
-  if (loading) {
+  function openPortfolio() {
+    setShowPortfolioModal(true)
+  }
+
+  if (isLoading && !data) {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Tailor profile</Text>
+            <Text style={styles.stateEyebrow}>Seller profile</Text>
             <ActivityIndicator color={Colors.needleGreen} size="large" />
-            <Text style={styles.stateTitle}>Loading this tailor…</Text>
+            <Text style={styles.stateTitle}>Loading this profile…</Text>
             <Text style={styles.stateHint}>
-              We’re pulling together the profile, portfolio, and trust signals so you can decide with confidence.
+              We’re pulling together the profile, portfolio, and trust signals so you can decide clearly.
             </Text>
           </View>
         </View>
@@ -225,24 +162,24 @@ export default function TailorProfileScreen() {
     )
   }
 
-  if (fetchError) {
+  if (isError && !data) {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Tailor profile</Text>
+            <Text style={styles.stateEyebrow}>Seller profile</Text>
             <Text style={styles.stateTitle}>Couldn't load this profile.</Text>
             <Text style={styles.stateHint}>
-              This page should help you judge whether this tailor feels right before you start an order.
+              This page should help you judge whether this seller feels right before you place an order.
             </Text>
             <View style={styles.stateGuideCard}>
               <Text style={styles.stateGuideTitle}>Best recovery move</Text>
               <Text style={styles.stateGuideText}>
-                Refresh here first. If it still fails, go back to discovery and compare a few other live profiles so you do not lose momentum.
+                Refresh here first. If it still fails, go back to discovery and compare a few other live profiles.
               </Text>
             </View>
-            <Button label="Try again" onPress={load} variant="secondary" />
-            <Button label="Explore tailors" onPress={() => router.replace('/(customer)')} variant="secondary" />
+            <Button label="Try again" onPress={() => { void refetch() }} variant="secondary" />
+            <Button label="Explore sellers" onPress={() => router.replace('/(customer)')} variant="secondary" />
             <Button label="Go back" onPress={goBack} variant="ghost" />
           </View>
         </View>
@@ -255,18 +192,18 @@ export default function TailorProfileScreen() {
       <SafeAreaView style={styles.safe}>
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Tailor profile</Text>
-            <Text style={styles.stateTitle}>Tailor not found.</Text>
+            <Text style={styles.stateEyebrow}>Seller profile</Text>
+            <Text style={styles.stateTitle}>Profile not found.</Text>
             <Text style={styles.stateHint}>
               This profile may have moved, or it may no longer be available to browse right now.
             </Text>
             <View style={styles.stateGuideCard}>
               <Text style={styles.stateGuideTitle}>Best recovery move</Text>
               <Text style={styles.stateGuideText}>
-                Head back to discovery and reopen a live tailor from there. If this was an older saved link, your wishlist or search results should point you to the current profile.
+                Head back to discovery and reopen a live seller from there. If this was an older saved link, your wishlist or search results should point you to the current profile.
               </Text>
             </View>
-            <Button label="Explore tailors" onPress={() => router.replace('/(customer)')} variant="secondary" />
+            <Button label="Explore sellers" onPress={() => router.replace('/(customer)')} variant="secondary" />
             <Button label="Go back" onPress={goBack} variant="secondary" />
           </View>
         </View>
@@ -279,10 +216,16 @@ export default function TailorProfileScreen() {
     ? `${formatAmount(profile.priceRangeMin, 'USD', currency, rates)} – ${formatAmount(profile.priceRangeMax, 'USD', currency, rates)}`
     : null
   const isFullyBooked = profile.availability === 'FULLY_BOOKED'
+  const portfolioCount = heroImages.length
+  const reviewSummary: ReviewSummary = {
+    average: reviews.length > 0 ? reviews.reduce((sum, row) => sum + row.rating, 0) / reviews.length : profile.avgRating,
+    count: reviews.length > 0 ? reviews.length : profile.totalReviews,
+  }
 
   return (
-    <SafeAreaView style={styles.safe} edges={[]}>
-      <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
+      <SafeAreaView style={styles.safe} edges={[]}>
+      <ScrollView ref={scrollRef} style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
+        {isFetching ? <Text style={styles.refreshingText}>Refreshing profile…</Text> : null}
 
         {/* Swipeable Hero Carousel */}
         <View style={styles.heroContainer}>
@@ -349,138 +292,303 @@ export default function TailorProfileScreen() {
 
         {/* Profile body */}
         <View style={styles.body}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Tailor profile</Text>
-          </View>
-
           {/* Identity */}
           <View style={styles.identityRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.name}>{profile.displayName}</Text>
               <Text style={styles.location}>{profile.location}</Text>
+              <View style={styles.identityMetaRow}>
+                <View style={styles.availabilityPill}>
+                  <View style={[styles.availDot, { backgroundColor: AVAILABILITY_COLOR[profile.availability] ?? Colors.midGrey }]} />
+                  <Text style={styles.availabilityPillText}>{AVAILABILITY_LABEL[profile.availability] ?? profile.availability}</Text>
+                </View>
+              </View>
             </View>
             <TierBadgeChip tier={profile.tier as any} size="lg" />
           </View>
 
-          {/* Availability */}
-          <View style={styles.availRow}>
-            <View style={[styles.availDot, { backgroundColor: AVAILABILITY_COLOR[profile.availability] ?? Colors.midGrey }]} />
-            <Text style={styles.availText}>{AVAILABILITY_LABEL[profile.availability] ?? profile.availability}</Text>
-          </View>
-
-          {/* Stats row */}
-          <View style={styles.statsRow}>
-            <StatPill label="Rating" value={`${profile.avgRating.toFixed(1)} ★`} />
-            <StatPill label="Reviews" value={String(profile.totalReviews)} />
-            <StatPill label="Orders" value={`${profile.totalOrders}+`} />
-            {profile.avgResponseHours != null && (
-              <StatPill label="Response" value={`~${Math.round(profile.avgResponseHours)}h`} />
-            )}
-          </View>
-
-          {/* Specialties */}
-          {profile.specialtyTags.length > 0 && (
-            <View style={styles.section}>
-              <View style={styles.tagWrap}>
-                {profile.specialtyTags.map((t) => <Tag key={t} label={t} />)}
-              </View>
-            </View>
-          )}
-
-          {/* Price & languages */}
-          <View style={styles.metaRow}>
-            {priceLabel && <Text style={styles.metaText}>Typical price: {priceLabel}</Text>}
-            {profile.languages.length > 0 && (
-              <Text style={styles.metaText}>Languages: {profile.languages.join(', ')}</Text>
-            )}
-          </View>
-
-          {/* About */}
           {profile.bio && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>About</Text>
+            <View style={styles.aboutCard}>
+              <Text style={styles.aboutLabel}>About</Text>
               <Text style={styles.bio}>{profile.bio}</Text>
             </View>
           )}
 
-          {/* Reviews */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>
-              Reviews  {reviews.length > 0 ? <Text style={styles.ratingHeading}>★ {profile.avgRating.toFixed(1)}</Text> : null}
-            </Text>
-            {reviews.length > 0 ? (
-              reviews.map((r) => (
-                <ReviewCard key={r.id} review={r} />
-              ))
-            ) : (
-              <View style={styles.emptyReviewCard}>
-                <View style={styles.emptyReviewBadge}>
-                  <Text style={styles.emptyReviewBadgeText}>Reviews</Text>
-                </View>
-                <Text style={styles.emptyReviewTitle}>No reviews yet</Text>
-                <Text style={styles.emptyReviewHint}>
-                  {profile.totalOrders > 0
-                    ? 'This tailor is still waiting on their first Drape review.'
-                    : 'Be among the first customers to book this tailor on Drape.'}
-                </Text>
-              </View>
-            )}
+          {/* Stats row */}
+          <View style={styles.statsRow}>
+            <StatPill
+              label={reviewSummary.count > 0 ? `${reviewSummary.count} review${reviewSummary.count === 1 ? '' : 's'}` : 'No reviews yet'}
+              value={reviewSummary.count > 0 ? reviewSummary.average.toFixed(1) : '—'}
+              subvalue={reviewSummary.count > 0 ? '★'.repeat(Math.round(reviewSummary.average)).padEnd(5, '☆') : '☆☆☆☆☆'}
+              onPress={() => setShowReviewsModal(true)}
+            />
+            <StatPill
+              label="Orders"
+              value={`${profile.totalOrders}+`}
+              subvalue={isFullyBooked ? 'Fully booked' : (AVAILABILITY_LABEL[profile.availability] ?? profile.availability)}
+            />
+            <StatPill
+              label="Portfolio"
+              value={String(portfolioCount)}
+              subvalue={portfolioCount > 0 ? 'View work' : 'No uploads yet'}
+              onPress={openPortfolio}
+            />
+            <StatPill
+              label="Styles"
+              value={String(profile.specialtyTags.length)}
+              subvalue={profile.specialtyTags.length > 0 ? 'What they make' : 'No styles listed'}
+              onPress={profile.specialtyTags.length > 0 ? () => setShowStylesModal(true) : undefined}
+            />
           </View>
 
-          <View style={styles.decisionGuideCard}>
-            <Text style={styles.decisionGuideTitle}>Best way to decide</Text>
-            <Text style={styles.decisionGuideText}>
-              Check the specialties, portfolio, and reviews together. If the work feels close to what you want, send a clear brief and use the order flow to compare the quote properly.
-            </Text>
+          {(priceLabel || profile.languages.length > 0) && (
+            <View style={styles.detailGrid}>
+              {priceLabel ? (
+                <View style={styles.detailCard}>
+                  <Text style={styles.detailLabel}>Typical price</Text>
+                  <Text style={styles.detailValue}>{priceLabel}</Text>
+                </View>
+              ) : null}
+              {profile.languages.length > 0 ? (
+                <View style={styles.detailCard}>
+                  <Text style={styles.detailLabel}>Languages</Text>
+                  <View style={styles.languageWrap}>
+                    {profile.languages.slice(0, 4).map((language) => (
+                      <View key={language} style={styles.languageChip}>
+                        <Text style={styles.languageChipText}>{language}</Text>
+                      </View>
+                    ))}
+                    {profile.languages.length > 4 ? (
+                      <View style={styles.languageChip}>
+                        <Text style={styles.languageChipText}>+{profile.languages.length - 4}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+              ) : null}
+            </View>
+          )}
+
+          <View style={styles.detailCard}>
+            <Text style={styles.detailLabel}>Ways to order</Text>
+            <View style={styles.languageWrap}>
+              <View style={styles.languageChip}>
+                <Text style={styles.languageChipText}>{profile.sellerType === 'BOUTIQUE' ? 'Boutique' : profile.sellerType === 'TAILOR_SHOP' ? 'Tailor shop' : 'Tailor'}</Text>
+              </View>
+              {profile.supportsCustomOrders ? (
+                <View style={styles.languageChip}>
+                  <Text style={styles.languageChipText}>Custom order</Text>
+                </View>
+              ) : null}
+              {profile.supportsReadyMade ? (
+                <View style={styles.languageChip}>
+                  <Text style={styles.languageChipText}>Shop now</Text>
+                </View>
+              ) : null}
+              {profile.pickupAvailable ? (
+                <View style={styles.languageChip}>
+                  <Text style={styles.languageChipText}>Pickup</Text>
+                </View>
+              ) : null}
+              {profile.deliveryAvailable ? (
+                <View style={styles.languageChip}>
+                  <Text style={styles.languageChipText}>Delivery</Text>
+                </View>
+              ) : null}
+              {profile.shippingAvailable ? (
+                <View style={styles.languageChip}>
+                  <Text style={styles.languageChipText}>Shipping</Text>
+                </View>
+              ) : null}
+            </View>
           </View>
+
         </View>
       </ScrollView>
 
       {/* Sticky CTA */}
       <View style={styles.cta}>
-        <Button
-          label={isFullyBooked ? 'Currently unavailable' : (profile.avgResponseHours ? `Message · ~${Math.round(profile.avgResponseHours)}h reply` : 'Message')}
-          variant="secondary"
-          onPress={() => {
-            if (isFullyBooked) {
-              Alert.alert(
-                'Currently unavailable',
-                `${profile.displayName} is fully booked right now. Please check back later or explore other tailors.`
-              )
-              return
+        {profile.supportsReadyMade ? (
+          <Button
+            label="Shop now"
+            variant="secondary"
+            onPress={() =>
+              router.push({
+                pathname: '/(customer)/tailor/shop/[id]',
+                params: { id: profile.id, returnTo: `/(customer)/tailor/${profile.id}` },
+              })
             }
+            style={{ flex: 1 }}
+          />
+        ) : (
+          <Button
+            label={isFullyBooked ? 'Currently unavailable' : 'Message'}
+            variant="secondary"
+            onPress={() => {
+              if (isFullyBooked) {
+                Alert.alert(
+                  'Currently unavailable',
+                  `${profile.displayName} is fully booked right now. Please check back later or explore other sellers.`
+                )
+                return
+              }
 
-            Alert.alert(
-              'Place an order first',
-              `Messages with ${profile.displayName} start once you submit a brief. Your order will create the conversation automatically, and you'll be able to chat about quotes, consultations, and progress there.`,
-              [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Book this tailor', onPress: () => router.push(`/(customer)/brief/${profile.id}`) },
-              ]
-            )
-          }}
-          style={{ flex: 1 }}
-          disabled={isFullyBooked}
-        />
-        <Button
-          label={isFullyBooked ? 'Fully booked' : 'Book this tailor'}
-          onPress={() => router.push(`/(customer)/brief/${profile.id}`)}
-          style={{ flex: 1.6 }}
-          disabled={isFullyBooked}
-          testID="book-tailor-btn"
-        />
+              Alert.alert(
+                'Place an order first',
+                `Messages with ${profile.displayName} start once you place a custom order. Your order creates the conversation automatically.`,
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Custom order',
+                    onPress: () => router.push({
+                      pathname: `/(customer)/brief/${profile.id}` as any,
+                      params: { returnTo: `/(customer)/tailor/${profile.id}` },
+                    }),
+                  },
+                ]
+              )
+            }}
+            style={{ flex: 1 }}
+            disabled={isFullyBooked}
+          />
+        )}
+        {profile.supportsCustomOrders ? (
+          <Button
+            label={isFullyBooked ? 'Fully booked' : 'Custom order'}
+            onPress={() => router.push({
+              pathname: `/(customer)/brief/${profile.id}` as any,
+              params: { returnTo: `/(customer)/tailor/${profile.id}` },
+            })}
+            style={{ flex: profile.supportsReadyMade ? 1.35 : 1.6 }}
+            disabled={isFullyBooked}
+            testID="book-tailor-btn"
+          />
+        ) : null}
       </View>
+
+      <Modal visible={!!portfolioPreviewUrl} transparent animationType="fade" onRequestClose={() => setPortfolioPreviewUrl(null)}>
+        <View style={styles.previewBackdrop}>
+          <TouchableOpacity style={styles.previewClose} onPress={() => setPortfolioPreviewUrl(null)}>
+            <Text style={styles.previewCloseText}>Close</Text>
+          </TouchableOpacity>
+          {portfolioPreviewUrl ? (
+            <Image source={{ uri: portfolioPreviewUrl }} style={styles.previewImage} resizeMode="contain" />
+          ) : null}
+        </View>
+      </Modal>
+
+      <Modal visible={showPortfolioModal} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowPortfolioModal(false)}>
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={() => setShowPortfolioModal(false)}>
+              <Text style={styles.modalClose}>Close</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Portfolio</Text>
+            <View style={{ width: 48 }} />
+          </View>
+          <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
+            {heroImages.length > 0 ? (
+              <View style={styles.portfolioGrid}>
+                {heroImages.map((url) => (
+                  <TouchableOpacity
+                    key={url}
+                    style={styles.portfolioTile}
+                    activeOpacity={0.9}
+                    onPress={() => {
+                      setShowPortfolioModal(false)
+                      setTimeout(() => setPortfolioPreviewUrl(url), 150)
+                    }}
+                  >
+                    <Image source={{ uri: url }} style={styles.portfolioTileImage} resizeMode="cover" />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : (
+              <View style={styles.emptyReviewCard}>
+                <Text style={styles.emptyReviewTitle}>No portfolio yet</Text>
+                <Text style={styles.emptyReviewHint}>
+                  This seller has not uploaded work samples yet. Check styles, reviews, and ways to order before deciding.
+                </Text>
+              </View>
+            )}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+
+      <Modal visible={showStylesModal} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowStylesModal(false)}>
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={() => setShowStylesModal(false)}>
+              <Text style={styles.modalClose}>Close</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Styles</Text>
+            <View style={{ width: 48 }} />
+          </View>
+          <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
+            <View style={styles.styleGrid}>
+              {profile.specialtyTags.map((tag) => <Tag key={tag} label={tag} />)}
+            </View>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+
+      <Modal visible={showReviewsModal} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowReviewsModal(false)}>
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={() => setShowReviewsModal(false)}>
+              <Text style={styles.modalClose}>Close</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Reviews</Text>
+            <View style={{ width: 48 }} />
+          </View>
+          <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
+            {reviews.length > 0 ? (
+              reviews.map((r) => <ReviewCard key={r.id} review={r} />)
+            ) : (
+              <View style={styles.emptyReviewCard}>
+                <Text style={styles.emptyReviewTitle}>No reviews yet</Text>
+                <Text style={styles.emptyReviewHint}>
+                  {profile.totalOrders > 0
+                    ? 'This seller is still waiting on their first Drape review.'
+                    : 'Be among the first customers to order from this seller on Drape.'}
+                </Text>
+              </View>
+            )}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   )
 }
 
-function StatPill({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.statPill}>
+function StatPill({ label, value, subvalue, onPress }: { label: string; value: string; subvalue?: string; onPress?: () => void }) {
+  const content = (
+    <View style={styles.statContent}>
+      {onPress ? (
+        <View style={styles.statTapHintWrap}>
+          <Text style={styles.statTapHint}>Open</Text>
+        </View>
+      ) : null}
       <Text style={styles.statValue}>{value}</Text>
+      {subvalue ? <Text style={styles.statSubvalue}>{subvalue}</Text> : null}
       <Text style={styles.statLabel}>{label}</Text>
     </View>
   )
+
+  if (onPress) {
+    return (
+      <TouchableOpacity
+        style={[styles.statPill, styles.statPillInteractive]}
+        onPress={onPress}
+        activeOpacity={0.82}
+        hitSlop={8}
+      >
+        {content}
+      </TouchableOpacity>
+    )
+  }
+
+  return <View style={styles.statPill}>{content}</View>
 }
 
 function ReviewCard({ review }: { review: Review }) {
@@ -491,9 +599,13 @@ function ReviewCard({ review }: { review: Review }) {
   return (
     <View style={styles.reviewCard}>
       <View style={styles.reviewHeader}>
-        <View style={styles.reviewAvatar}>
-          <Text style={styles.reviewInitial}>{initial}</Text>
-        </View>
+        {review.reviewerAvatarUrl ? (
+          <Image source={{ uri: review.reviewerAvatarUrl }} style={styles.reviewAvatarImage} />
+        ) : (
+          <View style={styles.reviewAvatar}>
+            <Text style={styles.reviewInitial}>{initial}</Text>
+          </View>
+        )}
         <View style={{ flex: 1 }}>
           <Text style={styles.reviewerName}>{name}</Text>
           <Text style={styles.reviewDate}>{date}</Text>
@@ -506,6 +618,12 @@ function ReviewCard({ review }: { review: Review }) {
           {review.tags.map((t) => <Tag key={t} label={t} />)}
         </View>
       )}
+      {review.response ? (
+        <View style={styles.responseWrap}>
+          <Text style={styles.responseLabel}>Tailor response</Text>
+          <Text style={styles.responseText}>{review.response}</Text>
+        </View>
+      ) : null}
     </View>
   )
 }
@@ -554,6 +672,30 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   scroll: { flex: 1 },
+  modalSafe: { flex: 1, backgroundColor: Colors.bone },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.lg,
+    backgroundColor: Colors.white,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.lightGrey,
+  },
+  modalClose: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+  modalTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  modalScroll: { flex: 1 },
+  modalContent: { padding: Spacing.xl, gap: Spacing.md, paddingBottom: Spacing.xxxl },
+  portfolioGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  portfolioTile: {
+    width: PORTFOLIO_SIZE,
+    height: PORTFOLIO_SIZE,
+    borderRadius: Radius.md,
+    overflow: 'hidden',
+    backgroundColor: Colors.lightGrey,
+  },
+  portfolioTileImage: { width: '100%', height: '100%' },
   decisionGuideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
@@ -611,47 +753,131 @@ const styles = StyleSheet.create({
   },
   photoCountText: { fontSize: FontSize.xs, color: Colors.white, fontWeight: FontWeight.semibold },
 
-  body: { padding: Spacing.xl, gap: Spacing.xl },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
+  body: { padding: Spacing.xl, gap: Spacing.xl, marginTop: -Spacing.xl },
+  identityRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    ...Shadow.md,
+  },
+  name: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
+  location: { fontSize: FontSize.sm, color: Colors.midGrey, marginTop: 2 },
+  identityMetaRow: { marginTop: Spacing.md, flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  availRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginTop: -Spacing.md, marginBottom: -Spacing.sm },
+  availDot: { width: 8, height: 8, borderRadius: 4 },
+  availText: { fontSize: FontSize.sm, color: Colors.inkLight },
+  availabilityPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.bone,
     borderRadius: Radius.full,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+  },
+  availabilityPillText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
+
+  statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  statPill: {
+    width: '48%',
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.md,
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  statContent: {
+    width: '100%',
+    minHeight: 84,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  statPillInteractive: {
+    borderColor: Colors.needleGreen,
+  },
+  statPillPressed: {
+    transform: [{ scale: 0.98 }],
     backgroundColor: Colors.needleGreenLight,
   },
-  heroBadgeText: {
+  statTapHintWrap: {
+    position: 'absolute',
+    top: Spacing.sm,
+    right: Spacing.sm,
+    backgroundColor: Colors.needleGreenLight,
+    borderRadius: Radius.full,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  statTapHint: {
+    fontSize: 10,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  statValue: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  statSubvalue: { fontSize: FontSize.sm, color: Colors.warning, fontWeight: FontWeight.semibold, textAlign: 'center' },
+  statLabel: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'center' },
+
+  section: { gap: Spacing.md },
+  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  styleGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.lg,
+    ...Shadow.sm,
+  },
+  detailGrid: { gap: Spacing.md },
+  detailCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
+  detailLabel: {
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
     color: Colors.needleGreen,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-
-  identityRow: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md },
-  name: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
-  location: { fontSize: FontSize.sm, color: Colors.midGrey, marginTop: 2 },
-
-  availRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginTop: -Spacing.md },
-  availDot: { width: 8, height: 8, borderRadius: 4 },
-  availText: { fontSize: FontSize.sm, color: Colors.inkLight },
-
-  statsRow: { flexDirection: 'row', gap: Spacing.sm },
-  statPill: {
-    flex: 1, backgroundColor: Colors.white, borderRadius: Radius.md,
-    paddingVertical: Spacing.md, alignItems: 'center', gap: 2, ...Shadow.sm,
+  detailValue: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.semibold },
+  languageWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
+  languageChip: {
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
   },
-  statValue: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink },
-  statLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
-
-  section: { gap: Spacing.md },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
-  ratingHeading: { color: Colors.needleGreen },
-
-  tagWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  metaRow: { gap: Spacing.xs, marginTop: -Spacing.md },
-  metaText: { fontSize: FontSize.sm, color: Colors.inkLight },
+  languageChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
 
   bio: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 24 },
+  aboutCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
+  aboutLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
 
   reviewCard: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
@@ -662,11 +888,22 @@ const styles = StyleSheet.create({
     width: 40, height: 40, borderRadius: Radius.full,
     backgroundColor: Colors.needleGreenLight, alignItems: 'center', justifyContent: 'center',
   },
+  reviewAvatarImage: { width: 40, height: 40, borderRadius: Radius.full, backgroundColor: Colors.lightGrey },
   reviewInitial: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.needleGreen },
   reviewerName: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   reviewDate: { fontSize: FontSize.xs, color: Colors.midGrey },
   reviewBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   reviewTags: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
+  responseWrap: {
+    backgroundColor: Colors.needleGreenLight,
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.needleGreen,
+    gap: 4,
+  },
+  responseLabel: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
+  responseText: { fontSize: FontSize.sm, color: Colors.ink, lineHeight: 20 },
   emptyReviewCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
@@ -696,6 +933,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row', gap: Spacing.md,
     backgroundColor: Colors.white, padding: Spacing.xl,
     borderTopWidth: 1, borderTopColor: Colors.lightGrey,
-    paddingBottom: Spacing.xxxl,
+    paddingBottom: Spacing.lg,
   },
+  previewBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: Spacing.xl,
+  },
+  previewImage: { width: '100%', height: '82%' },
+  refreshingText: { fontSize: FontSize.xs, color: Colors.midGrey, paddingHorizontal: Spacing.xl, marginBottom: Spacing.sm },
+  previewClose: {
+    position: 'absolute',
+    top: 56,
+    right: Spacing.xl,
+    zIndex: 2,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+  },
+  previewCloseText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
 })

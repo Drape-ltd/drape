@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, Linking } from 'react-native'
-import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
@@ -9,7 +9,7 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constan
 import { TERMINAL_STAGES, type OrderStage } from '@drape/shared/order-machine'
 
 export default function TailorMessagesScreen() {
-  const { orderId } = useLocalSearchParams<{ orderId: string }>()
+  const { orderId, returnTo } = useLocalSearchParams<{ orderId: string; returnTo?: string }>()
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
@@ -26,7 +26,8 @@ export default function TailorMessagesScreen() {
   const [startingCall, setStartingCall] = useState(false)
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
+    if (returnTo) router.replace(returnTo as any)
+    else if (navigation.canGoBack()) router.back()
     else router.replace('/(tailor)/orders')
   }
 
@@ -44,7 +45,7 @@ export default function TailorMessagesScreen() {
     }
   }
 
-  async function fetchOrder() {
+  const fetchOrder = useCallback(async () => {
     setFetchError(false)
     setLoading(true)
     setOrderInfo(null)
@@ -82,9 +83,15 @@ export default function TailorMessagesScreen() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [orderId, user?.id, user?.user_metadata?.display_name])
 
-  useEffect(() => { void fetchOrder() }, [orderId, user?.id, user?.user_metadata?.display_name])
+  useEffect(() => { void fetchOrder() }, [fetchOrder])
+
+  useFocusEffect(
+    useCallback(() => {
+      void fetchOrder()
+    }, [fetchOrder])
+  )
 
   async function startCall(callType: 'audio' | 'video') {
     if (startingCall) return
@@ -143,9 +150,7 @@ export default function TailorMessagesScreen() {
             <Text style={styles.stateEyebrow}>Client conversation</Text>
             <ActivityIndicator color={Colors.needleGreen} size="large" />
             <Text style={styles.stateTitle}>Loading this conversation…</Text>
-            <Text style={styles.stateHint}>
-              We’re pulling together the working thread for this order so quotes, consultation, and production updates stay visible in one place.
-            </Text>
+            <Text style={styles.stateHint}>Loading the latest thread.</Text>
           </View>
         </View>
       </SafeAreaView>
@@ -169,18 +174,16 @@ export default function TailorMessagesScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Client conversation</Text>
             <Text style={styles.stateTitle}>Couldn't load this conversation.</Text>
-            <Text style={styles.stateHint}>
-              This thread should keep the quote, consultation, and production history tied to the order instead of scattered around.
-            </Text>
+            <Text style={styles.stateHint}>Try again or open orders.</Text>
             <TouchableOpacity style={styles.retryBtn} onPress={() => void fetchOrder()}>
               <Text style={styles.retryBtnText}>Try again</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.secondaryBtn}
-              onPress={() => router.replace('/(tailor)/orders')}
-            >
-              <Text style={styles.secondaryBtnText}>Open orders</Text>
-            </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.secondaryBtn}
+            onPress={goBack}
+          >
+            <Text style={styles.secondaryBtnText}>Open orders</Text>
+          </TouchableOpacity>
             <TouchableOpacity
               style={styles.ghostBtn}
               onPress={() => router.replace('/(tailor)/clients')}
@@ -210,15 +213,13 @@ export default function TailorMessagesScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Client conversation</Text>
             <Text style={styles.stateTitle}>No active order with this customer.</Text>
-            <Text style={styles.stateHint}>
-              Drape conversations are anchored to live orders, so open your pipeline to pick up the right client thread.
-            </Text>
-            <TouchableOpacity
-              style={styles.secondaryBtn}
-              onPress={() => router.replace('/(tailor)/orders')}
-            >
-              <Text style={styles.secondaryBtnText}>Open orders</Text>
-            </TouchableOpacity>
+            <Text style={styles.stateHint}>Open orders to pick up the right thread.</Text>
+          <TouchableOpacity
+            style={styles.secondaryBtn}
+            onPress={goBack}
+          >
+            <Text style={styles.secondaryBtnText}>Open orders</Text>
+          </TouchableOpacity>
           </View>
         </View>
       </SafeAreaView>
@@ -243,27 +244,14 @@ export default function TailorMessagesScreen() {
           )}
           <TouchableOpacity
             style={styles.orderBtn}
-            onPress={() => router.push(`/(tailor)/orders/${orderId}`)}
+            onPress={() => router.push({
+              pathname: '/(tailor)/orders/[id]',
+              params: { id: orderId, returnTo: `/(tailor)/messages/${orderId}` },
+            })}
           >
             <Text style={styles.orderBtnText}>View order</Text>
           </TouchableOpacity>
         </View>
-      </View>
-
-      <View style={styles.contextBanner}>
-        <Text style={styles.contextBannerEyebrow}>Client thread</Text>
-        <Text style={styles.contextBannerTitle}>Keep the live job conversation here.</Text>
-        <Text style={styles.contextBannerText}>
-          Use this thread for fit questions, consultation details, quote follow-ups, and production
-          updates so every decision stays attached to the order.
-        </Text>
-      </View>
-
-      <View style={styles.guideCard}>
-        <Text style={styles.guideTitle}>Best messaging habit</Text>
-        <Text style={styles.guideText}>
-          Keep decisions and clarifications in this thread, then use the order screen for the formal quote, stage, and delivery actions.
-        </Text>
       </View>
 
       <MessageThread

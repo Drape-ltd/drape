@@ -7,6 +7,7 @@ import {
 import { useRouter, useFocusEffect } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { Feather } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
 import { TierBadgeChip, StarRating } from '@/components/ui'
@@ -16,6 +17,7 @@ import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
 const RECENTLY_VIEWED_KEY  = 'drape_recently_viewed_tailors'
 const RECENT_SEARCHES_KEY  = 'drape_recent_searches'
 const LAST_SEARCH_KEY      = 'drape_last_search'
+const DISCOVER_GUIDE_KEY   = 'drape_customer_discover_best_use_dismissed'
 const MAX_RECENTLY_VIEWED  = 10
 const MAX_RECENT_SEARCHES  = 5
 const PAGE_SIZE            = 20
@@ -51,6 +53,7 @@ type TailorCard = {
   id: string
   displayName: string
   location: string
+  sellerType: 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP'
   specialtyTags: string[]
   avgRating: number
   totalReviews: number
@@ -59,6 +62,8 @@ type TailorCard = {
   priceRangeMax: number | null
   portfolioPhoto: string | null
   availability: string
+  supportsCustomOrders: boolean
+  supportsReadyMade: boolean
   avgResponseHours?: number | null
   rankingScore: number
 }
@@ -97,6 +102,10 @@ function availabilityHint(tailor: TailorCard): string | null {
   if (tailor.availability === 'LIMITED') return 'Taking a limited number of orders'
   if (tailor.avgResponseHours != null) return `Usually replies in about ${Math.round(tailor.avgResponseHours)}h`
   return null
+}
+
+function matchesLocation(tailor: TailorCard, location: string) {
+  return tailor.location.toLowerCase().includes(location.toLowerCase())
 }
 
 // ─── Storage helpers ──────────────────────────────────────────────────────────
@@ -161,6 +170,7 @@ function mapTailor(t: any): TailorCard {
     id: t.id,
     displayName: t.display_name,
     location: t.location,
+    sellerType: t.seller_type ?? 'TAILOR',
     specialtyTags: asStringList(t.specialty_tags),
     avgRating: t.avg_rating,
     totalReviews: t.total_reviews,
@@ -169,6 +179,8 @@ function mapTailor(t: any): TailorCard {
     priceRangeMax: t.price_range_max ?? null,
     portfolioPhoto: portfolioPhotos[0] ?? null,
     availability: t.availability,
+    supportsCustomOrders: t.supports_custom_orders ?? true,
+    supportsReadyMade: t.supports_ready_made ?? false,
     avgResponseHours: t.avg_response_hours ?? null,
     rankingScore: t.ranking_score ?? 0,
   }
@@ -177,13 +189,17 @@ function mapTailor(t: any): TailorCard {
 /**
  * Natural language query parser.
  * "Suits in Lagos"    → { specialty: "Suits",  location: "Lagos" }
- * "Tailors in London" → { specialty: "",        location: "London" }
+ * "Sellers in London" → { specialty: "",        location: "London" }
  * "Bridal"            → { specialty: "Bridal",  location: "" }
  */
 function parseQuery(input: string): { specialty: string; location: string; general: string } {
   const trimmed = input.trim()
   const lower = trimmed.toLowerCase()
 
+  const sellersInMatch = lower.match(/^sellers?\s+in\s+(.+)$/)
+  if (sellersInMatch) {
+    return { specialty: '', location: sellersInMatch[1].trim(), general: '' }
+  }
   const tailorsInMatch = lower.match(/^tailors?\s+in\s+(.+)$/)
   if (tailorsInMatch) {
     return { specialty: '', location: tailorsInMatch[1].trim(), general: '' }
@@ -213,6 +229,7 @@ export default function CustomerHomeScreen() {
 
   // Browse data
   const [activeOrders, setActiveOrders]     = useState<ActiveOrder[]>([])
+  const [hasOrderHistory, setHasOrderHistory] = useState(false)
   const [allTailors, setAllTailors]         = useState<TailorCard[]>([])
   const [recentlyViewed, setRecentlyViewed] = useState<TailorCard[]>([])
   const [refreshing, setRefreshing]         = useState(false)
@@ -223,6 +240,7 @@ export default function CustomerHomeScreen() {
   const [searchFocused, setSearchFocused]   = useState(false)
   const [searchResults, setSearchResults]   = useState<TailorCard[]>([])
   const [searching, setSearching]           = useState(false)
+  const [searchPending, setSearchPending]   = useState(false)
   const [loadingMore, setLoadingMore]       = useState(false)
   const [searchFetchError, setSearchFetchError] = useState(false)
   const [hasMore, setHasMore]               = useState(false)
@@ -230,6 +248,7 @@ export default function CustomerHomeScreen() {
   const [availFilter, setAvailFilter]       = useState<AvailFilter>('ALL')
   const [recentSearches, setRecentSearches] = useState<string[]>([])
   const [lastSearch, setLastSearch]         = useState<LastSearch | null>(null)
+  const [showGuide, setShowGuide]           = useState(true)
 
   // In-memory result cache: query key → first-page results
   const resultCacheRef = useRef<Map<string, TailorCard[]>>(new Map())
@@ -251,12 +270,21 @@ export default function CustomerHomeScreen() {
       loadRecentlyViewed(user?.id),
       loadRecentSearches(user?.id),
       loadLastSearch(user?.id),
-    ]).then(([rv, rs, ls]) => {
+      AsyncStorage.getItem(storageKey(DISCOVER_GUIDE_KEY, user?.id)).catch(() => null),
+    ]).then(([rv, rs, ls, guideValue]) => {
       setRecentlyViewed(rv)
       setRecentSearches(rs)
       setLastSearch(ls)
+      setShowGuide(guideValue !== '1')
     })
   }, [user?.id]))
+
+  async function dismissGuide() {
+    setShowGuide(false)
+    try {
+      await AsyncStorage.setItem(storageKey(DISCOVER_GUIDE_KEY, user?.id), '1')
+    } catch {}
+  }
 
   useFocusEffect(useCallback(() => {
     if (!user?.id) return
@@ -271,8 +299,10 @@ export default function CustomerHomeScreen() {
       setSearchFetchError(false)
       setHasMore(false)
       setResultOffset(0)
+      setSearchPending(false)
       return
     }
+    setSearchPending(true)
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
       runSearch(query, 0)
@@ -285,7 +315,7 @@ export default function CustomerHomeScreen() {
   async function fetchData() {
     setFetchError(false)
     try {
-      const [ordersRes, tailorsRes] = await Promise.allSettled([
+      const [ordersRes, historyRes, tailorsRes] = await Promise.allSettled([
         supabase
           .from('orders')
           .select(`
@@ -298,8 +328,12 @@ export default function CustomerHomeScreen() {
           .order('created_at', { ascending: false })
           .limit(3),
         supabase
+          .from('orders')
+          .select('id', { count: 'exact', head: true })
+          .eq('customer_id', user?.id),
+        supabase
           .from('tailor_profiles')
-          .select('id, display_name, location, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, portfolio_photo_urls, availability, ranking_score')
+          .select('id, display_name, location, seller_type, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, portfolio_photo_urls, availability, avg_response_hours, supports_custom_orders, supports_ready_made, ranking_score')
           .eq('is_live', true)
           .order('ranking_score', { ascending: false })
           .limit(30),
@@ -315,6 +349,7 @@ export default function CustomerHomeScreen() {
       if (ordersFailed && tailorsFailed) {
         setFetchError(true)
         setActiveOrders([])
+        setHasOrderHistory(false)
         setAllTailors([])
         return
       }
@@ -323,6 +358,10 @@ export default function CustomerHomeScreen() {
         ordersRes.status === 'fulfilled' && !ordersRes.value.error
           ? ((ordersRes.value.data ?? []) as any[])
           : []
+      const historyCount =
+        historyRes.status === 'fulfilled' && !historyRes.value.error
+          ? (historyRes.value.count ?? 0)
+          : 0
       const tailorRows =
         tailorsRes.status === 'fulfilled' && !tailorsRes.value.error
           ? ((tailorsRes.value.data ?? []) as any[])
@@ -340,6 +379,7 @@ export default function CustomerHomeScreen() {
           }))
           .sort((a, b) => orderPriority(a.stage) - orderPriority(b.stage))
       )
+      setHasOrderHistory(historyCount > 0)
 
       setAllTailors(tailorRows.map(mapTailor))
     } catch {
@@ -360,16 +400,19 @@ export default function CustomerHomeScreen() {
       const cached = resultCacheRef.current.get(q)
       if (cached) setSearchResults(cached)
       setSearching(true)
+      setSearchPending(false)
       setSearchFetchError(false)
       setResultOffset(0)
     } else {
       setLoadingMore(true)
     }
     try {
-      let sq = supabase
+      const baseQuery = supabase
         .from('tailor_profiles')
-        .select('id, display_name, location, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, portfolio_photo_urls, availability, avg_response_hours, ranking_score')
+        .select('id, display_name, location, seller_type, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, portfolio_photo_urls, availability, avg_response_hours, supports_custom_orders, supports_ready_made, ranking_score')
         .eq('is_live', true)
+
+      let sq = baseQuery
 
       // Apply content filter — no hard location filter (location is a boost, not a gate)
       if (specialty) {
@@ -377,24 +420,39 @@ export default function CustomerHomeScreen() {
       } else if (general) {
         sq = sq.or(`display_name.ilike.%${general}%,location.ilike.%${general}%,specialty_tags.cs.{${general}}`)
       }
-      // "Tailors in London" or location-only: fetch all, boost below
+      // "Sellers in London" or location-only: try strict location matches first.
 
-      // Fetch wider pool when NLP detected a location so we have enough candidates to boost.
-      // V1.1 TODO: location-boosted pagination is unreliable on page 2+ — the DB offset is based on
-      // raw (un-boosted) ranking, so boosted results on page 2 may overlap or gap with page 1.
-      // Fix: server-side location scoring, or disable pagination for location queries.
       const fetchSize = location ? PAGE_SIZE * 3 : PAGE_SIZE
 
-      const { data, error } = await sq
-        .order('ranking_score', { ascending: false })
-        .range(offset, offset + fetchSize - 1)
-
-      if (error) throw error
-
-      let page = (data ?? []).map(mapTailor)
-
+      let strictPage: TailorCard[] = []
       if (location) {
-        page = applyLocationBoost(page, location).slice(0, PAGE_SIZE)
+        let strictQuery = baseQuery.ilike('location', `%${location}%`)
+        if (specialty) {
+          strictQuery = strictQuery.or(`display_name.ilike.%${specialty}%,specialty_tags.cs.{${specialty}}`)
+        }
+
+        const { data: strictData, error: strictError } = await strictQuery
+          .order('ranking_score', { ascending: false })
+          .range(offset, offset + PAGE_SIZE - 1)
+
+        if (strictError) throw strictError
+        strictPage = (strictData ?? []).map(mapTailor)
+      }
+
+      let page = strictPage
+
+      if (page.length === 0) {
+        const { data, error } = await sq
+          .order('ranking_score', { ascending: false })
+          .range(offset, offset + fetchSize - 1)
+
+        if (error) throw error
+
+        page = (data ?? []).map(mapTailor)
+
+        if (location) {
+          page = applyLocationBoost(page, location).slice(0, PAGE_SIZE)
+        }
       }
 
       if (offset === 0) {
@@ -426,6 +484,7 @@ export default function CustomerHomeScreen() {
     } finally {
       if (offset === 0) {
         setSearching(false)
+        setSearchPending(false)
       } else {
         setLoadingMore(false)
       }
@@ -487,7 +546,7 @@ export default function CustomerHomeScreen() {
             <TextInput
               ref={inputRef}
               style={styles.searchInput}
-              placeholder="Search tailors, styles, or locations"
+              placeholder="Search sellers, styles, or locations"
               placeholderTextColor={Colors.midGrey}
               value={query}
               onChangeText={setQuery}
@@ -554,7 +613,7 @@ export default function CustomerHomeScreen() {
             <View style={styles.suggestChips}>
               {[
                 'Suits in Lagos',
-                'Tailors in London',
+                'Sellers in London',
                 'Bridal',
                 'Casual wear',
                 'Traditional',
@@ -580,12 +639,12 @@ export default function CustomerHomeScreen() {
           onEndReachedThreshold={0.3}
           ListHeaderComponent={
             <View style={styles.resultsHeader}>
-              {searching ? (
+              {searching || searchPending ? (
                 <ActivityIndicator color={Colors.needleGreen} style={{ marginVertical: Spacing.lg }} />
               ) : (
                 <>
                   <Text style={styles.resultsCount}>
-                    {filteredResults.length} {filteredResults.length === 1 ? 'tailor' : 'tailors'} found
+                    {filteredResults.length} {filteredResults.length === 1 ? 'seller' : 'sellers'} found
                   </Text>
                   {/* Availability filter chips */}
                   <View style={styles.availRow}>
@@ -610,13 +669,13 @@ export default function CustomerHomeScreen() {
             </View>
           }
           ListEmptyComponent={
-            !searching ? (
+            !(searching || searchPending) ? (
               <View style={styles.emptyState}>
                 <View style={styles.emptyStateBadge}>
                   <Text style={styles.emptyStateBadgeText}>Search</Text>
                 </View>
                 <Text style={styles.emptyStateEmoji}>{searchFetchError ? '⚠️' : '🔎'}</Text>
-                <Text style={styles.emptyStateTitle}>{searchFetchError ? "Couldn't load search results" : 'No tailors found'}</Text>
+                <Text style={styles.emptyStateTitle}>{searchFetchError ? "Couldn't load search results" : 'No sellers found'}</Text>
                 <Text style={styles.emptyStateHint}>
                   {searchFetchError ? 'Try again in a moment or adjust your search.' : 'Try a different name, style, or location'}
                 </Text>
@@ -659,27 +718,23 @@ export default function CustomerHomeScreen() {
           {/* Network error banner */}
           {fetchError && (
             <View style={styles.errorBanner}>
-              <Text style={styles.errorBannerText}>Couldn't load tailors. Pull down to retry, or open Orders while discovery catches up.</Text>
+              <Text style={styles.errorBannerText}>Couldn't load sellers. Pull down to retry, or open Orders while discovery catches up.</Text>
             </View>
           )}
 
-          <View style={styles.heroCard}>
-            <View style={styles.heroBadge}>
-              <Text style={styles.heroBadgeText}>Discover tailors</Text>
+          {showGuide && (
+            <View style={styles.guideCard}>
+              <View style={styles.guideHeader}>
+                <View style={styles.heroBadge}>
+                  <Text style={styles.heroBadgeText}>Best use</Text>
+                </View>
+                <TouchableOpacity onPress={() => void dismissGuide()} style={styles.guideClose}>
+                  <Feather name="x" size={16} color={Colors.midGrey} />
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.guideTitle}>Start with a short shortlist, then place one clear brief.</Text>
             </View>
-            <Text style={styles.heroTitle}>Find the tailor you trust before you place the brief.</Text>
-            <Text style={styles.heroSub}>
-              Explore by style, location, reviews, and responsiveness so the next order starts with
-              clarity instead of guesswork.
-            </Text>
-          </View>
-
-          <View style={styles.guideCard}>
-            <Text style={styles.guideTitle}>Best discovery rhythm</Text>
-            <Text style={styles.guideText}>
-              Start with a few promising profiles, compare trust signals, then move into one clear brief instead of messaging around first.
-            </Text>
-          </View>
+          )}
 
           {/* Continue searching card */}
           {lastSearch && (
@@ -693,7 +748,7 @@ export default function CustomerHomeScreen() {
                   <Text style={styles.continueLabel}>Continue searching</Text>
                   <Text style={styles.continueQuery} numberOfLines={1}>"{lastSearch.query}"</Text>
                   <Text style={styles.continueMeta}>
-                    {lastSearch.count} {lastSearch.count === 1 ? 'tailor' : 'tailors'} found  ›
+                    {lastSearch.count} {lastSearch.count === 1 ? 'seller' : 'sellers'} found  ›
                   </Text>
                 </View>
                 {lastSearch.thumbnail ? (
@@ -769,8 +824,12 @@ export default function CustomerHomeScreen() {
                   <Text style={styles.firstOrderIconText}>✂️</Text>
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.firstOrderTitle}>Start your first order</Text>
-                  <Text style={styles.firstOrderHint}>Search by style, location, or tailor name to find someone to book.</Text>
+                  <Text style={styles.firstOrderTitle}>{hasOrderHistory ? 'No active orders right now' : 'Start your first order'}</Text>
+                  <Text style={styles.firstOrderHint}>
+                    {hasOrderHistory
+                      ? 'Search again when you are ready to place another order.'
+                      : 'Search by style, location, or seller name to find someone you trust.'}
+                  </Text>
                 </View>
               </TouchableOpacity>
             )}
@@ -795,7 +854,7 @@ export default function CustomerHomeScreen() {
           {/* Top tailors grid */}
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Trusted tailors to explore</Text>
+              <Text style={styles.sectionTitle}>Trusted sellers to explore</Text>
             </View>
             {allTailors.length > 0 ? (
               <View style={styles.cardsGrid}>
@@ -808,9 +867,9 @@ export default function CustomerHomeScreen() {
                 <View style={styles.emptyBrowseBadge}>
                   <Text style={styles.emptyBrowseBadgeText}>Discovery</Text>
                 </View>
-                <Text style={styles.emptyBrowseTitle}>No live tailors to browse yet</Text>
+                <Text style={styles.emptyBrowseTitle}>No live sellers to browse yet</Text>
                 <Text style={styles.emptyBrowseHint}>
-                  As soon as verified tailors go live, they will appear here for customers to explore.
+                  As soon as live sellers are available, they will appear here for customers to explore.
                 </Text>
                 <TouchableOpacity
                   style={styles.emptyBrowseCta}
@@ -872,6 +931,18 @@ function GridCard({ tailor, onPress }: { tailor: TailorCard; onPress: () => void
             {tailor.specialtyTags.slice(0, 2).join(' · ')}
           </Text>
         )}
+        <View style={styles.capabilityRow}>
+          {tailor.supportsCustomOrders ? (
+            <View style={styles.capabilityChip}>
+              <Text style={styles.capabilityText}>Custom</Text>
+            </View>
+          ) : null}
+          {tailor.supportsReadyMade ? (
+            <View style={styles.capabilityChip}>
+              <Text style={styles.capabilityText}>Shop now</Text>
+            </View>
+          ) : null}
+        </View>
         {availabilityHint(tailor) && (
           <Text style={styles.gridHint} numberOfLines={1}>{availabilityHint(tailor)}</Text>
         )}
@@ -912,6 +983,18 @@ function SearchResultCard({ tailor, onPress }: { tailor: TailorCard; onPress: ()
             {tailor.specialtyTags.slice(0, 2).join(' · ')}
           </Text>
         )}
+        <View style={styles.capabilityRow}>
+          {tailor.supportsCustomOrders ? (
+            <View style={styles.capabilityChip}>
+              <Text style={styles.capabilityText}>Custom</Text>
+            </View>
+          ) : null}
+          {tailor.supportsReadyMade ? (
+            <View style={styles.capabilityChip}>
+              <Text style={styles.capabilityText}>Shop now</Text>
+            </View>
+          ) : null}
+        </View>
         {availabilityHint(tailor) && (
           <Text style={styles.resultHint} numberOfLines={1}>{availabilityHint(tailor)}</Text>
         )}
@@ -980,16 +1063,6 @@ const styles = StyleSheet.create({
   // Scroll areas
   scroll: { flex: 1 },
   content: { paddingBottom: 100 },
-  heroCard: {
-    marginHorizontal: Spacing.xl,
-    marginTop: Spacing.lg,
-    marginBottom: Spacing.lg,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
-    ...Shadow.sm,
-  },
   heroBadge: {
     alignSelf: 'flex-start',
     paddingHorizontal: Spacing.md,
@@ -1004,19 +1077,9 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  heroTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    lineHeight: 38,
-  },
-  heroSub: {
-    fontSize: FontSize.md,
-    color: Colors.inkLight,
-    lineHeight: 24,
-  },
   guideCard: {
     marginHorizontal: Spacing.xl,
+    marginTop: Spacing.lg,
     marginBottom: Spacing.lg,
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
@@ -1026,8 +1089,15 @@ const styles = StyleSheet.create({
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
+  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  guideClose: {
+    width: 28,
+    height: 28,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   errorBanner: {
     marginHorizontal: Spacing.xl, marginTop: Spacing.lg,
     backgroundColor: Colors.kanteRustLight, borderRadius: Radius.md,
@@ -1086,6 +1156,14 @@ const styles = StyleSheet.create({
   resultLocation: { fontSize: FontSize.xs, color: Colors.midGrey },
   resultTags: { fontSize: FontSize.xs, color: Colors.inkLight },
   resultHint: { fontSize: FontSize.xs, color: Colors.needleGreen, marginTop: 4, fontWeight: FontWeight.medium },
+  capabilityRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs, marginTop: 2 },
+  capabilityChip: {
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 4,
+  },
+  capabilityText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
   limitedBadge: {
     backgroundColor: '#FEF3C7', paddingHorizontal: Spacing.sm,
     paddingVertical: 2, borderRadius: Radius.full, alignSelf: 'flex-start', marginTop: 2,

@@ -33,16 +33,17 @@ import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 
 const BodySchema = z.object({
   orderId:     uuid,
-  action:      z.enum(['confirm-receipt', 'open-dispute', 'accept-quote', 'decline-quote', 'complete-order', 'collect-order']),
+  action:      z.enum(['confirm-receipt', 'open-dispute', 'accept-quote', 'decline-quote', 'complete-order', 'collect-order', 'save-fabric-tracking']),
   reason:      z.string().trim().min(1).max(200).optional(),
   description: z.string().trim().min(10).max(1000).optional(),
   // collect-order only — 4-digit numeric collection code
   code:        z.string().regex(/^\d{4}$/, 'Must be a 4-digit code').optional(),
+  fabricTracking: z.string().trim().min(1).max(120).optional(),
 })
 
 const FN = 'customer-order-action'
 
-type Action = 'confirm-receipt' | 'open-dispute' | 'accept-quote' | 'decline-quote' | 'complete-order' | 'collect-order'
+type Action = 'confirm-receipt' | 'open-dispute' | 'accept-quote' | 'decline-quote' | 'complete-order' | 'collect-order' | 'save-fabric-tracking'
 
 // Which stages each action is valid FROM
 const VALID_FROM: Record<Action, string[]> = {
@@ -52,6 +53,7 @@ const VALID_FROM: Record<Action, string[]> = {
   'decline-quote':   ['QUOTE_SENT'],
   'complete-order':  ['DELIVERED', 'COLLECTED'],
   'collect-order':   ['READY_FOR_COLLECTION'],
+  'save-fabric-tracking': ['PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'],
 }
 
 const MAX_CODE_ATTEMPTS = 5
@@ -81,6 +83,10 @@ const STAGE_NOTE: Partial<Record<Action, string>> = {
   'collect-order':   'Customer collected the order in person.',
 }
 
+function hasBlockedContact(text: string) {
+  return /(https?:\/\/|www\.|instagram|whatsapp|telegram|@\w+|\+?\d[\d\s().-]{6,}\d)/i.test(text)
+}
+
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
@@ -99,7 +105,7 @@ Deno.serve(async (req) => {
       return new Response(parsed.error, { status: 400, headers: cors })
     }
 
-    const { orderId, action, reason, description } = parsed.data
+    const { orderId, action, reason, description, fabricTracking } = parsed.data
 
     const supabase = createClient(
       getSupabaseUrl(),
@@ -261,6 +267,36 @@ Deno.serve(async (req) => {
       }
 
       return new Response(JSON.stringify({ ok: true }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (action === 'save-fabric-tracking') {
+      const value = fabricTracking?.trim() ?? ''
+      if (!value) return new Response('fabricTracking is required', { status: 400, headers: cors })
+      if (hasBlockedContact(value)) {
+        return new Response("Contact details can't be included in tracking numbers.", { status: 400, headers: cors })
+      }
+
+      const { error } = await supabase
+        .from('orders')
+        .update({ fabric_tracking: value })
+        .eq('id', orderId)
+
+      if (error) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
+        return new Response('Database error', { status: 500, headers: cors })
+      }
+
+      await audit(supabase, {
+        event: 'order.fabric_tracking_saved',
+        actor_id: caller.id,
+        actor_role: 'CUSTOMER',
+        order_id: orderId,
+        payload: { length: value.length },
+      })
+
+      return new Response(JSON.stringify({ ok: true, fabricTracking: value }), {
         headers: { ...cors, 'Content-Type': 'application/json' },
       })
     }

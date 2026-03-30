@@ -5,6 +5,8 @@ import {
 } from 'react-native'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import AsyncStorage from '@react-native-async-storage/async-storage'
+import { Feather } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
 import { useTailorOrders, useRefreshOnFocus } from '@/lib/queries'
@@ -15,6 +17,8 @@ import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/cu
 import { stageColor } from '@/lib/stageColors'
 
 type Tab = 'active' | 'completed'
+
+const TAILOR_ORDERS_GUIDE_KEY = 'drape_tailor_orders_best_use_dismissed'
 
 function orderPriority(stage: OrderStage): number {
   switch (stage) {
@@ -39,36 +43,41 @@ function orderPriority(stage: OrderStage): number {
 function orderHint(stage: OrderStage): string | null {
   switch (stage) {
     case 'PENDING_QUOTE':
-      return 'Tap to review and send your quote.'
+      return 'Quote needed'
     case 'CONSULTATION':
-      return 'Consultation in progress. Rejoin the call or send a quote when ready.'
+      return 'Consultation in progress'
     case 'QUOTE_SENT':
-      return 'Quote sent. Waiting for the customer to accept before production starts.'
+      return 'Waiting for customer'
     case 'CONFIRMED':
-      return 'Order confirmed. Move it into the first production stage when you begin.'
+      return 'Ready to start'
     case 'DESIGNING':
-      return 'Design work is underway. Advance when you are ready to source or cut.'
+      return 'Designing'
     case 'SOURCING':
-      return 'Material sourcing is underway. Advance when you are ready to cut.'
+      return 'Sourcing'
     case 'CUTTING':
-      return 'Cutting is in progress. Advance when you are ready to sew.'
+      return 'Cutting'
     case 'SEWING':
-      return 'Sewing is in progress. Advance when you are ready for finishing.'
+      return 'Sewing'
     case 'FINISHING':
-      return 'Final touches are underway. Mark shipped or ready for collection when done.'
+      return 'Finishing'
     case 'DELIVERED':
-      return 'Delivered to customer. Waiting for them to finish the order in the app.'
+      return 'Waiting for customer finish'
     case 'COLLECTED':
-      return 'Collected by customer. Waiting for them to finish the order in the app.'
+      return 'Waiting for customer finish'
     case 'READY_FOR_COLLECTION':
-      return 'Ready for collection. Confirm the customer\'s collection code when they arrive.'
+      return 'Ready for collection'
     case 'SHIPPED':
-      return 'Shipped to customer. Waiting for delivery confirmation.'
+      return 'In transit'
     case 'IN_DISPUTE':
-      return 'Concern raised. This order is paused while support reviews it.'
+      return 'Concern under review'
     default:
       return null
   }
+}
+
+function orderHintForItem(item: { stage: OrderStage; orderKind?: 'CUSTOM' | 'READY_MADE' }): string | null {
+  if (item.stage === 'PENDING_QUOTE' && item.orderKind === 'READY_MADE') return 'Customer inquiry'
+  return orderHint(item.stage)
 }
 
 export default function TailorOrdersScreen() {
@@ -78,6 +87,7 @@ export default function TailorOrdersScreen() {
   const [completedSearch, setCompletedSearch] = useState('')
   const [openingCallOrderId, setOpeningCallOrderId] = useState<string | null>(null)
   const [tailorProfile, setTailorProfile] = useState<{ id: string; displayName: string; isLive: boolean; idVerificationStatus: string } | null>(null)
+  const [showGuide, setShowGuide] = useState(true)
 
   const { data: orders = [], isLoading: loading, isFetching, isError, refetch } = useTailorOrders(user?.id, tab)
 
@@ -109,6 +119,19 @@ export default function TailorOrdersScreen() {
   useFocusEffect(useCallback(() => {
     void loadTailorProfile()
   }, [user?.id]))
+
+  useFocusEffect(useCallback(() => {
+    AsyncStorage.getItem(`${TAILOR_ORDERS_GUIDE_KEY}:${user?.id ?? 'guest'}`)
+      .then((value) => setShowGuide(value !== '1'))
+      .catch(() => {})
+  }, [user?.id]))
+
+  async function dismissGuide() {
+    setShowGuide(false)
+    try {
+      await AsyncStorage.setItem(`${TAILOR_ORDERS_GUIDE_KEY}:${user?.id ?? 'guest'}`, '1')
+    } catch {}
+  }
 
   // Refetch whenever this screen comes back into focus (e.g. returning from order detail)
   useRefreshOnFocus(refetch)
@@ -179,23 +202,17 @@ export default function TailorOrdersScreen() {
         </View>
       </View>
 
-      <View style={styles.heroCard}>
-        <View style={styles.heroBadge}>
-          <Text style={styles.heroBadgeText}>Production pipeline</Text>
+      {showGuide && (
+        <View style={styles.guideCard}>
+          <View style={styles.guideHeader}>
+            <Text style={styles.guideEyebrow}>Best use</Text>
+            <TouchableOpacity onPress={() => void dismissGuide()} style={styles.guideClose}>
+              <Feather name="x" size={16} color={Colors.midGrey} />
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.guideText}>Use Active for quotes and production, then switch to Completed when you need finished work and past client history.</Text>
         </View>
-        <Text style={styles.heroTitle}>Track every client order from quote to completion without losing the thread.</Text>
-        <Text style={styles.heroSub}>
-          Use active orders to move work forward and completed orders to review what has already
-          been delivered, collected, or closed out.
-        </Text>
-      </View>
-
-      <View style={styles.guideCard}>
-        <Text style={styles.guideTitle}>Best working rhythm</Text>
-        <Text style={styles.guideText}>
-          Clear quotes, timely stage updates, and fast replies make this pipeline feel calm for both you and your customer.
-        </Text>
-      </View>
+      )}
 
       {tab === 'completed' && (
         <View style={styles.searchWrap}>
@@ -230,12 +247,6 @@ export default function TailorOrdersScreen() {
             <Text style={styles.stateHint}>
               This is where your quote queue, production work, and completed jobs should stay visible.
             </Text>
-            <View style={styles.stateGuideCard}>
-              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
-              <Text style={styles.stateGuideText}>
-                Refresh here first. If orders still do not appear, open your dashboard first, then profile if needed, so the rest of your business can keep moving while the pipeline catches up.
-              </Text>
-            </View>
             <TouchableOpacity style={styles.retryBtn} onPress={() => refetch()}>
               <Text style={styles.retryBtnText}>Try again</Text>
             </TouchableOpacity>
@@ -271,12 +282,6 @@ export default function TailorOrdersScreen() {
                   <Text style={styles.stateHint}>
                     Finished customer jobs will appear here once they are fully closed out in the app.
                   </Text>
-                  <View style={styles.stateGuideCard}>
-                    <Text style={styles.stateGuideTitle}>Best way to use this tab</Text>
-                    <Text style={styles.stateGuideText}>
-                      Come back here for finished work, past clients, and the orders that now serve as proof of how you deliver through Drape.
-                    </Text>
-                  </View>
                   <TouchableOpacity style={styles.retryBtn} onPress={() => setTab('active')}>
                     <Text style={styles.retryBtnText}>View active orders</Text>
                   </TouchableOpacity>
@@ -317,9 +322,9 @@ export default function TailorOrdersScreen() {
                     </Text>
                   )}
                 </View>
-                {orderHint(item.stage) && (
+                {orderHintForItem(item) && (
                   <Text style={item.stage === 'IN_DISPUTE' ? styles.statusHintDispute : isPending ? styles.pendingCta : styles.statusHint}>
-                    {orderHint(item.stage)}
+                    {orderHintForItem(item)}
                   </Text>
                 )}
                 {isConsultation && (
@@ -483,62 +488,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 21,
   },
-  stateGuideCard: {
-    alignSelf: 'stretch',
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: 4,
-  },
-  stateGuideTitle: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  stateGuideText: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
   header: { padding: Spacing.xl, gap: Spacing.md },
   title: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
-  heroCard: {
-    marginHorizontal: Spacing.xl,
-    marginBottom: Spacing.md,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
-    ...Shadow.sm,
-  },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  heroBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  heroTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    lineHeight: 38,
-  },
-  heroSub: {
-    fontSize: FontSize.md,
-    color: Colors.inkLight,
-    lineHeight: 24,
-  },
   guideCard: {
     marginHorizontal: Spacing.xl,
     marginBottom: Spacing.md,
@@ -550,7 +501,15 @@ const styles = StyleSheet.create({
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
-  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  guideClose: { padding: 2 },
+  guideEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
   guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   tabs: {
     flexDirection: 'row', backgroundColor: Colors.boneDeep,

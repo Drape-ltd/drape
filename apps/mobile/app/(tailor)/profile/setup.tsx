@@ -1,5 +1,5 @@
 /**
- * Tailor profile setup wizard — 4 steps
+ * Seller profile setup wizard — 4 steps
  * Step 0: Identity (display name, location, bio, languages)
  * Step 1: Specialties + pricing
  * Step 2: Portfolio (min 4 photos)
@@ -23,14 +23,16 @@ import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-fi
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { Availability } from '@/lib/shared-types'
 
-const STEP_TITLES = ['Your identity', 'Specialties & pricing', 'Portfolio', 'Availability & verification']
+type SellerType = 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP'
+
+const STEP_TITLES = ['Your identity', 'What you make', 'Portfolio', 'Selling setup']
 const STEP_SUBS = [
-  'This is your public profile. No contact details — customers find you through Drape.',
-  'Tell customers what you make and what to expect on price.',
-  'Upload at least 4 photos of your work. This is what customers see first.',
-  'Set your availability and verify your identity to go live.',
+  'This is your public seller profile. No contact details here — buyers find you through Drape.',
+  'Tell people what you make and what to expect on price.',
+  'Upload at least 4 photos of your work. This is what buyers notice first.',
+  'Choose what you sell, how people receive orders, and verify your identity to go live.',
 ]
-const STEP_LABELS = ['Identity', 'Specialties', 'Portfolio', 'Availability']
+const STEP_LABELS = ['Identity', 'Specialties', 'Portfolio', 'Selling']
 
 // ─── Language options (grouped by region) ────────────────────────────────────
 
@@ -90,9 +92,23 @@ const SPECIALTY_GROUPS: TagGroup[] = [
   },
   {
     label: 'Craft & Textile',
-    items: ['Embroidery', 'Adire', 'Batik'],
+    items: ['Crochet', 'Knitwear', 'Embroidery', 'Beadwork', 'Adire', 'Batik'],
+  },
+  {
+    label: 'Lifestyle & Ready-made',
+    items: ['Two-piece Set', 'Loungewear', 'Beachwear', 'Ready-made'],
   },
 ]
+const BIO_TEMPLATES = [
+  'I make custom native wear and occasion outfits with clean finishing and reliable delivery.',
+  'I run a boutique and tailor studio, offering custom work and ready-made pieces.',
+  'I focus on crochet and handmade pieces made to order with careful finishing and fit.',
+] as const
+const PRICE_PRESETS: Array<{ label: string; currency: 'GBP' | 'USD' | 'EUR' | 'NGN' | 'GHS' | 'KES'; min: string; max: string }> = [
+  { label: 'Budget', currency: 'NGN', min: '50', max: '120' },
+  { label: 'Mid-range', currency: 'NGN', min: '120', max: '300' },
+  { label: 'Premium', currency: 'NGN', min: '300', max: '800' },
+] as const
 
 export default function TailorSetupScreen() {
   const router = useRouter()
@@ -171,6 +187,12 @@ export default function TailorSetupScreen() {
 
   // Step 3
   const [availability, setAvailability] = useState<Availability>('OPEN')
+  const [sellerType, setSellerType] = useState<SellerType>('TAILOR')
+  const [supportsCustomOrders, setSupportsCustomOrders] = useState(true)
+  const [supportsReadyMade, setSupportsReadyMade] = useState(false)
+  const [pickupAvailable, setPickupAvailable] = useState(true)
+  const [deliveryAvailable, setDeliveryAvailable] = useState(false)
+  const [shippingAvailable, setShippingAvailable] = useState(false)
   const [idPhotoUri, setIdPhotoUri] = useState<string | null>(null)
   const [uploadingId, setUploadingId] = useState(false)
 
@@ -182,7 +204,9 @@ export default function TailorSetupScreen() {
       .from('tailor_profiles')
       .select(`
         display_name, bio, location, languages, specialty_tags,
-        price_range_min, price_range_max, currency,
+        price_range_min, price_range_max, currency, seller_type,
+        supports_custom_orders, supports_ready_made,
+        pickup_available, delivery_available, shipping_available,
         portfolio_photo_urls, portfolio_video_urls, availability
       `)
       .eq('user_id', user.id)
@@ -234,6 +258,14 @@ export default function TailorSetupScreen() {
         if (typeof row.availability === 'string' && ['OPEN', 'LIMITED', 'FULLY_BOOKED'].includes(row.availability)) {
           setAvailability(row.availability as Availability)
         }
+        if (typeof row.seller_type === 'string' && ['TAILOR', 'BOUTIQUE', 'TAILOR_SHOP'].includes(row.seller_type)) {
+          setSellerType(row.seller_type as SellerType)
+        }
+        if (typeof row.supports_custom_orders === 'boolean') setSupportsCustomOrders(row.supports_custom_orders)
+        if (typeof row.supports_ready_made === 'boolean') setSupportsReadyMade(row.supports_ready_made)
+        if (typeof row.pickup_available === 'boolean') setPickupAvailable(row.pickup_available)
+        if (typeof row.delivery_available === 'boolean') setDeliveryAvailable(row.delivery_available)
+        if (typeof row.shipping_available === 'boolean') setShippingAvailable(row.shipping_available)
       })
     return () => {
       cancelled = true
@@ -309,7 +341,7 @@ export default function TailorSetupScreen() {
     const res = filterContactInfo(text)
     if (res.blocked) { setBioError("Contact details aren't allowed in your bio."); return false }
     if (text.trim().length < 80) { setBioError(`About you needs at least 80 characters (${text.trim().length}/80).`); return false }
-    if (isBioGibberish(text)) { setBioError('Please enter a meaningful description of your tailoring experience.'); return false }
+    if (isBioGibberish(text)) { setBioError('Please enter a meaningful description of your work and experience.'); return false }
     setBioError(''); return true
   }
 
@@ -367,9 +399,17 @@ export default function TailorSetupScreen() {
         const { data } = supabase.storage.from('portfolio-photos').getPublicUrl(filename)
         setPortfolioItems((prev) => [...prev, { type: 'photo', url: data.publicUrl }])
       }
-    } catch {
+    } catch (error: any) {
       pickedUris.current.delete(asset.uri)
-      Alert.alert('Error', 'Could not upload media. Please try again.')
+      const details = error?.message ?? 'Please try again.'
+      console.error('tailor setup media upload failed', {
+        message: error?.message,
+        details: error?.details,
+        hint: error?.hint,
+        statusCode: error?.statusCode,
+        name: error?.name,
+      })
+      Alert.alert('Error', `Could not upload media. ${details}`)
     }
     setUploadingMedia(false)
   }
@@ -393,7 +433,8 @@ export default function TailorSetupScreen() {
       const { data } = supabase.storage.from('id-documents').getPublicUrl(filename)
       setUploadingId(false)
       return data.publicUrl
-    } catch {
+    } catch (error) {
+      console.error('tailor setup id upload failed', error)
       setUploadingId(false)
       return null
     }
@@ -417,24 +458,31 @@ export default function TailorSetupScreen() {
       return
     }
 
-    const now = new Date().toISOString()
-    const { error } = await supabase.from('tailor_profiles').upsert({
-      user_id: user.id,
-      display_name: displayName.trim(),
-      bio: bio.trim() || null,
-      location: location.trim(),
-      languages,
-      specialty_tags: specialties,
-      price_range_min: priceMin ? Math.round(parseFloat(priceMin) * 100) : null,
-      price_range_max: priceMax ? Math.round(parseFloat(priceMax) * 100) : null,
-      currency,
-      portfolio_photo_urls: portfolioItems.filter((i) => i.type === 'photo').map((i) => i.url),
-      portfolio_video_urls: portfolioItems.filter((i) => i.type === 'video').map((i) => i.url),
-      availability,
-      id_document_url: idUrl,
-      id_verification_status: idUrl ? 'PENDING' : 'NOT_SUBMITTED',
-      updated_at: now,
-    }, { onConflict: 'user_id' })
+    const { error } = await invokeFunction('tailor-profile-action', {
+      body: {
+        action: 'upsert-setup',
+        profile: {
+          displayName: displayName.trim(),
+          bio: bio.trim() || null,
+          location: location.trim(),
+          languages,
+          specialties,
+          priceRangeMin: priceMin ? Math.round(parseFloat(priceMin) * 100) : null,
+          priceRangeMax: priceMax ? Math.round(parseFloat(priceMax) * 100) : null,
+          currency,
+          portfolioPhotoUrls: portfolioItems.filter((i) => i.type === 'photo').map((i) => i.url),
+          portfolioVideoUrls: portfolioItems.filter((i) => i.type === 'video').map((i) => i.url),
+          availability,
+          sellerType,
+          supportsCustomOrders,
+          supportsReadyMade,
+          pickupAvailable,
+          deliveryAvailable,
+          shippingAvailable,
+          idDocumentUrl: idUrl,
+        },
+      },
+    })
 
     setSaving(false)
 
@@ -494,7 +542,11 @@ export default function TailorSetupScreen() {
       )
     }
     if (step === 2) return portfolioItems.length >= 4
-    if (step === 3) return true
+    if (step === 3) {
+      const hasOrderMode = supportsCustomOrders || supportsReadyMade
+      const hasFulfillment = pickupAvailable || deliveryAvailable || shippingAvailable
+      return hasOrderMode && hasFulfillment
+    }
     return false
   }
 
@@ -511,8 +563,14 @@ export default function TailorSetupScreen() {
       setStep(step - 1)
       return
     }
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(tailor)/profile')
+    Alert.alert(
+      'Leave setup?',
+      'Your seller profile is not finished yet. You can stay here and continue, or sign out and come back later.',
+      [
+        { text: 'Stay', style: 'cancel' },
+        { text: 'Sign out', style: 'destructive', onPress: handleSignOut },
+      ]
+    )
   }
 
   return (
@@ -535,37 +593,12 @@ export default function TailorSetupScreen() {
           <View style={styles.content}>
             <View style={styles.heroCard}>
               <View style={styles.heroBadge}>
-                <Text style={styles.heroBadgeText}>Tailor profile setup</Text>
+                <Text style={styles.heroBadgeText}>Seller profile setup</Text>
               </View>
               <View>
                 <Text style={styles.stepTitle}>{STEP_TITLES[step]}</Text>
                 <Text style={styles.stepSub}>{STEP_SUBS[step]}</Text>
               </View>
-              <View style={styles.heroMeta}>
-                <View style={styles.heroMetaCard}>
-                  <Text style={styles.heroMetaLabel}>Step {step + 1}</Text>
-                  <Text style={styles.heroMetaValue}>{STEP_LABELS[step]}</Text>
-                </View>
-                <View style={styles.heroMetaCard}>
-                  <Text style={styles.heroMetaLabel}>Why it matters</Text>
-                  <Text style={styles.heroMetaValue}>
-                    {step === 0
-                      ? 'This becomes your public first impression.'
-                      : step === 1
-                        ? 'Customers use this to decide if you are the right fit.'
-                        : step === 2
-                          ? 'Your portfolio is what wins trust before a message is sent.'
-                          : 'Availability and verification control whether customers can confidently book you.'}
-                  </Text>
-                </View>
-              </View>
-            </View>
-
-            <View style={styles.guideCard}>
-              <Text style={styles.guideTitle}>What you are building</Text>
-              <Text style={styles.guideText}>
-                This setup becomes the storefront customers trust before they send a brief. Keep it clear, honest, and representative of how you actually work.
-              </Text>
             </View>
 
             {/* ── Step 0: Identity ── */}
@@ -615,7 +648,7 @@ export default function TailorSetupScreen() {
                 </View>
                 <Input
                   label="About you"
-                  placeholder="Tell customers who you are, what you specialise in, and your experience. Min 80 characters."
+                  placeholder="Tell people who you are, what you make, and your experience. Min 80 characters."
                   value={bio}
                   onChangeText={(v) => { setBio(v); validateBio(v) }}
                   onBlur={() => validateBio(bio)}
@@ -628,6 +661,20 @@ export default function TailorSetupScreen() {
                   hint={`Min 80 characters · ${bio.trim().length}/500. No social handles, phone numbers, or URLs.`}
                   testID="bio-input"
                 />
+                <View style={styles.templateRow}>
+                  {BIO_TEMPLATES.map((template) => (
+                    <TouchableOpacity
+                      key={template}
+                      style={styles.helperChip}
+                      onPress={() => {
+                        setBio(template)
+                        validateBio(template)
+                      }}
+                    >
+                      <Text style={styles.helperChipText}>Use template</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
 
                 <TagSelector
                   label="Languages you speak"
@@ -647,7 +694,7 @@ export default function TailorSetupScreen() {
                 <TagSelector
                   label="What do you make?"
                   required
-                  hint="Select all that apply — these appear as tags on your profile."
+                  hint="Select all that apply — these appear on your public profile."
                   options={SPECIALTY_GROUPS}
                   selected={specialties}
                   onChange={setSpecialties}
@@ -656,7 +703,22 @@ export default function TailorSetupScreen() {
 
                 <View>
                   <Text style={styles.fieldLabel}>Typical price range <Text style={styles.required}>*</Text></Text>
-                  <Text style={styles.fieldHint}>This shows as an indicator on your profile — not a fixed price. Customers use it to gauge fit before reaching out.</Text>
+                  <Text style={styles.fieldHint}>This shows on your profile as a guide, not a fixed price.</Text>
+                  <View style={styles.templateRow}>
+                    {PRICE_PRESETS.map((preset) => (
+                      <TouchableOpacity
+                        key={preset.label}
+                        style={styles.helperChip}
+                        onPress={() => {
+                          setCurrency(preset.currency)
+                          setPriceMin(preset.min)
+                          setPriceMax(preset.max)
+                        }}
+                      >
+                        <Text style={styles.helperChipText}>{preset.label}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
                   <View style={styles.currencyRow}>
                     {(['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES'] as const).map((c) => (
                       <TouchableOpacity
@@ -740,16 +802,11 @@ export default function TailorSetupScreen() {
                   )}
                 </View>
 
-                <View style={styles.infoBox}>
-                  <Text style={styles.infoText}>
-                    Photos and videos (max 30s, up to 2) are scanned before going live. EXIF location data is stripped from photos automatically.
-                  </Text>
-                </View>
               </View>
               </View>
             )}
 
-            {/* ── Step 3: Availability + ID verification ── */}
+            {/* ── Step 3: Selling setup + ID verification ── */}
             {step === 3 && (
               <View style={styles.formCard}>
                 <View style={styles.fields}>
@@ -775,6 +832,73 @@ export default function TailorSetupScreen() {
                 </View>
 
                 <View>
+                  <Text style={styles.fieldLabel}>Seller type</Text>
+                  <View style={styles.choiceGroup}>
+                    {([
+                      { value: 'TAILOR', label: 'Tailor', hint: 'Custom work first' },
+                      { value: 'BOUTIQUE', label: 'Boutique', hint: 'Shop with tailors behind it' },
+                      { value: 'TAILOR_SHOP', label: 'Tailor shop', hint: 'Custom and ready-made together' },
+                    ] as const).map((opt) => (
+                      <TouchableOpacity
+                        key={opt.value}
+                        style={[styles.choiceCard, sellerType === opt.value && styles.choiceCardActive]}
+                        onPress={() => setSellerType(opt.value)}
+                      >
+                        <Text style={[styles.choiceTitle, sellerType === opt.value && styles.choiceTitleActive]}>{opt.label}</Text>
+                        <Text style={styles.choiceHint}>{opt.hint}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+
+                <View>
+                  <Text style={styles.fieldLabel}>What customers can do</Text>
+                  <View style={styles.choiceGroup}>
+                    <TouchableOpacity
+                      style={[styles.choiceCard, supportsCustomOrders && styles.choiceCardActive]}
+                      onPress={() => setSupportsCustomOrders((value) => !value)}
+                    >
+                      <Text style={[styles.choiceTitle, supportsCustomOrders && styles.choiceTitleActive]}>Custom order</Text>
+                      <Text style={styles.choiceHint}>Customers send details and you quote the work.</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.choiceCard, supportsReadyMade && styles.choiceCardActive]}
+                      onPress={() => setSupportsReadyMade((value) => !value)}
+                    >
+                      <Text style={[styles.choiceTitle, supportsReadyMade && styles.choiceTitleActive]}>Shop now</Text>
+                      <Text style={styles.choiceHint}>Customers buy ready-made pieces you already have.</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <View>
+                  <Text style={styles.fieldLabel}>Fulfillment</Text>
+                  <View style={styles.choiceGroup}>
+                    <TouchableOpacity
+                      style={[styles.choiceCard, pickupAvailable && styles.choiceCardActive]}
+                      onPress={() => setPickupAvailable((value) => !value)}
+                    >
+                      <Text style={[styles.choiceTitle, pickupAvailable && styles.choiceTitleActive]}>Pickup</Text>
+                      <Text style={styles.choiceHint}>Customer collects from you or your shop.</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.choiceCard, deliveryAvailable && styles.choiceCardActive]}
+                      onPress={() => setDeliveryAvailable((value) => !value)}
+                    >
+                      <Text style={[styles.choiceTitle, deliveryAvailable && styles.choiceTitleActive]}>Delivery</Text>
+                      <Text style={styles.choiceHint}>You or your team deliver nearby orders.</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.choiceCard, shippingAvailable && styles.choiceCardActive]}
+                      onPress={() => setShippingAvailable((value) => !value)}
+                    >
+                      <Text style={[styles.choiceTitle, shippingAvailable && styles.choiceTitleActive]}>Shipping</Text>
+                      <Text style={styles.choiceHint}>Courier or shipping partner handles it.</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <View>
                   <Text style={styles.fieldLabel}>Identity verification</Text>
                   <Text style={styles.fieldHint}>
                     Upload a government-issued photo ID (passport, national ID, or driver's licence). You can submit your profile now — your profile goes live once we've reviewed your ID within 24 hours. You can also add this later from your profile.
@@ -795,11 +919,6 @@ export default function TailorSetupScreen() {
                   )}
                 </View>
 
-                <View style={styles.infoBox}>
-                  <Text style={styles.infoText}>
-                    Your ID is stored securely and only accessed by the Drape verification team. It is never shared with customers or other tailors.
-                  </Text>
-                </View>
               </View>
               </View>
             )}
@@ -808,18 +927,6 @@ export default function TailorSetupScreen() {
 
         {/* CTA */}
         <View style={styles.cta}>
-          <View style={styles.ctaGuideCard}>
-            <Text style={styles.ctaGuideTitle}>Best next move</Text>
-            <Text style={styles.ctaGuideText}>
-              {step === 0
-                ? 'Make this feel like the public version of you that a serious customer can trust at first glance.'
-                : step === 1
-                  ? 'Set expectations honestly so the right briefs reach you and the wrong ones filter themselves out.'
-                  : step === 2
-                    ? 'Show clear, varied work that matches the kinds of orders you want more of.'
-                    : 'Choose the availability you can genuinely support, then submit once your profile feels representative.'}
-            </Text>
-          </View>
           <Button
             label={step < 3 ? 'Continue' : (saving || uploadingId ? 'Submitting…' : 'Submit profile')}
             onPress={next}
@@ -836,6 +943,12 @@ export default function TailorSetupScreen() {
           )}
           {step === 2 && portfolioItems.length < 4 && (
             <Text style={styles.minNote}>Upload at least 4 photos or videos to continue</Text>
+          )}
+          {step === 3 && !(supportsCustomOrders || supportsReadyMade) && (
+            <Text style={styles.minNote}>Choose at least one way customers can order from you</Text>
+          )}
+          {step === 3 && !(pickupAvailable || deliveryAvailable || shippingAvailable) && (
+            <Text style={styles.minNote}>Choose at least one way customers receive orders</Text>
           )}
         </View>
       </KeyboardAvoidingView>
@@ -910,6 +1023,16 @@ const styles = StyleSheet.create({
   fieldLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: Spacing.sm },
   fieldHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18, marginBottom: Spacing.md },
   required: { color: Colors.error },
+  templateRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginTop: Spacing.sm, marginBottom: Spacing.sm },
+  helperChip: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  helperChipText: { fontSize: FontSize.xs, color: Colors.ink, fontWeight: FontWeight.medium },
 
   // Currency selector
   currencyRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginBottom: Spacing.md },
@@ -971,6 +1094,19 @@ const styles = StyleSheet.create({
   availLabel: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
   availLabelActive: { color: Colors.needleGreen },
   availHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
+  choiceGroup: { gap: Spacing.sm },
+  choiceCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    borderWidth: 1.5,
+    borderColor: Colors.lightGrey,
+    gap: 4,
+  },
+  choiceCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
+  choiceTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
+  choiceTitleActive: { color: Colors.needleGreen },
+  choiceHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
 
   // ID verification
   idPickBtn: {

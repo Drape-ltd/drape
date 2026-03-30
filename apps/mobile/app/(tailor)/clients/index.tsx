@@ -19,6 +19,7 @@ import { shareTailorProfile, inviteCustomerFromTailor, sharePassportInvite } fro
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 const DIARY_BANNER_KEY = 'drape:diary_banner_dismissed'
+const CLIENTS_GUIDE_KEY = 'drape_tailor_clients_best_use_dismissed'
 
 type Tab = 'customers' | 'diary'
 
@@ -75,16 +76,25 @@ export default function TailorClientsScreen() {
   const [diaryFetchError, setDiaryFetchError] = useState(false)
   const [showDiaryBanner, setShowDiaryBanner] = useState(false)
   const [sharingDiaryId, setSharingDiaryId] = useState<string | null>(null)
+  const [showGuide, setShowGuide] = useState(false)
 
   useEffect(() => {
     AsyncStorage.getItem(DIARY_BANNER_KEY).then((val) => {
       if (val !== '1') setShowDiaryBanner(true)
     })
+    AsyncStorage.getItem(`${CLIENTS_GUIDE_KEY}:${user?.id ?? 'guest'}`).then((val) => {
+      if (val !== '1') setShowGuide(true)
+    }).catch(() => {})
   }, [])
 
   function dismissDiaryBanner() {
     setShowDiaryBanner(false)
     AsyncStorage.setItem(DIARY_BANNER_KEY, '1').catch(() => {})
+  }
+
+  function dismissGuide() {
+    setShowGuide(false)
+    AsyncStorage.setItem(`${CLIENTS_GUIDE_KEY}:${user?.id ?? 'guest'}`, '1').catch(() => {})
   }
 
   async function fetchClients() {
@@ -379,12 +389,17 @@ export default function TailorClientsScreen() {
         </TouchableOpacity>
       </View>
 
-      <View style={styles.guideCard}>
-        <Text style={styles.guideTitle}>Best CRM rhythm</Text>
-        <Text style={styles.guideText}>
-          Use Customers for live Drape relationships and Diary for offline fitting memory, then move between them as clients return or join the app.
-        </Text>
-      </View>
+      {showGuide && (
+        <View style={styles.guideCard}>
+          <View style={styles.guideHeader}>
+            <Text style={styles.guideEyebrow}>Best use</Text>
+            <TouchableOpacity onPress={dismissGuide} style={styles.guideClose}>
+              <Feather name="x" size={16} color={Colors.midGrey} />
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.guideText}>Use Customers for live Drape relationships and Diary for offline fitting memory.</Text>
+        </View>
+      )}
 
       {/* Search */}
       <View style={styles.searchWrap}>
@@ -418,12 +433,6 @@ export default function TailorClientsScreen() {
                   <Text style={styles.stateHint}>
                     This tab should help you carry offline clients and measurements into Drape without losing context.
                   </Text>
-                  <View style={styles.stateGuideCard}>
-                    <Text style={styles.stateGuideTitle}>Best recovery move</Text>
-                    <Text style={styles.stateGuideText}>
-                      Refresh here first. If diary entries still do not appear, switch to customers first, then open your dashboard if needed, so client work can keep moving while this tab catches up.
-                    </Text>
-                  </View>
                   <TouchableOpacity
                     style={styles.addDiaryBtn}
                     onPress={() => {
@@ -583,12 +592,6 @@ export default function TailorClientsScreen() {
                 <Text style={styles.stateHint}>
                   This tab should help you revisit repeat customers, notes, and order history without guesswork.
                 </Text>
-                <View style={styles.stateGuideCard}>
-                  <Text style={styles.stateGuideTitle}>Best recovery move</Text>
-                  <Text style={styles.stateGuideText}>
-                    Refresh here first. If this still fails, open Diary first, then Dashboard if needed, so you can keep working while your CRM list catches up.
-                  </Text>
-                </View>
                 <TouchableOpacity
                   style={styles.addDiaryBtn}
                   onPress={() => {
@@ -823,28 +826,6 @@ const styles = StyleSheet.create({
   },
   stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
-  stateGuideCard: {
-    alignSelf: 'stretch',
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: 4,
-  },
-  stateGuideTitle: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    textAlign: 'center',
-  },
-  stateGuideText: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
     paddingHorizontal: Spacing.xl, paddingTop: Spacing.md, paddingBottom: Spacing.sm,
@@ -866,7 +847,15 @@ const styles = StyleSheet.create({
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
-  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  guideClose: { padding: 2 },
+  guideEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
   guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   searchWrap: { paddingHorizontal: Spacing.xl, paddingBottom: Spacing.md },

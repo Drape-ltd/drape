@@ -1,34 +1,31 @@
-import { useEffect, useState } from 'react'
+import { useCallback } from 'react'
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, Linking } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { useCustomerMessageOrderInfo, useRefreshOnFocus } from '@/lib/queries'
 import { MessageThread } from '@/components/ui/MessageThread'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { TERMINAL_STAGES, type OrderStage } from '@drape/shared/order-machine'
 
 export default function CustomerMessagesScreen() {
-  const { orderId } = useLocalSearchParams<{ orderId: string }>()
+  const { orderId, returnTo } = useLocalSearchParams<{ orderId: string; returnTo?: string }>()
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
+  const {
+    data: orderInfo,
+    isLoading,
+    isError,
+    refetch,
+  } = useCustomerMessageOrderInfo(orderId, user?.id, user?.user_metadata?.display_name ?? '')
+  const resolvedOrderId = orderInfo?.resolvedOrderId ?? orderId
 
-  const [orderInfo, setOrderInfo] = useState<{
-    garmentType: string
-    tailorName: string
-    tailorId: string
-    customerId: string
-    customerName: string
-    stage: OrderStage
-    videoCallUrl: string | null
-  } | null>(null)
-  const [resolvedOrderId, setResolvedOrderId] = useState(orderId)
-  const [loading, setLoading] = useState(true)
-  const [fetchError, setFetchError] = useState(false)
+  useRefreshOnFocus(() => { void refetch() })
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
+    if (returnTo) router.replace(returnTo as any)
+    else if (navigation.canGoBack()) router.back()
     else router.replace('/(customer)/messages')
   }
 
@@ -46,88 +43,7 @@ export default function CustomerMessagesScreen() {
     }
   }
 
-  async function fetchOrderInfo() {
-    setFetchError(false)
-    setLoading(true)
-    setOrderInfo(null)
-    setResolvedOrderId(orderId)
-    // orderId may be a tailor ID (from "Message" on profile) — find their active order
-    // or an actual order ID — handle both
-
-    try {
-      const { data: order, error: orderError } = await supabase
-        .from('orders')
-        .select(`
-          id, garment_type, stage, customer_id, video_call_url,
-          tailor_profiles!tailor_profile_id(id, display_name),
-          customer_profiles!customer_id(display_name)
-        `)
-        .eq('id', orderId)
-        .eq('customer_id', user?.id)
-        .maybeSingle()
-
-      if (order) {
-        const o = order as any
-        setOrderInfo({
-          garmentType: o.garment_type,
-          tailorName: o.tailor_profiles?.display_name ?? 'Tailor',
-          tailorId: o.tailor_profiles?.id,
-          customerId: o.customer_id,
-          customerName: o.customer_profiles?.display_name ?? user?.user_metadata?.display_name ?? 'Customer',
-          stage: o.stage,
-          videoCallUrl: o.video_call_url ?? null,
-        })
-      } else if (!orderError) {
-        const { data: found, error: foundError } = await supabase
-          .from('orders')
-          .select(`
-            id, garment_type, stage, customer_id, video_call_url,
-            tailor_profiles!inner(id, display_name),
-            customer_profiles(display_name)
-          `)
-          .eq('customer_id', user?.id)
-          .eq('tailor_id', orderId)
-          .not('stage', 'in', '("COMPLETE","DECLINED","EXPIRED","CANCELLED","REFUNDED")')
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle()
-
-        if (found) {
-          const o = found as any
-          setResolvedOrderId(o.id)
-          setOrderInfo({
-            garmentType: o.garment_type,
-            tailorName: o.tailor_profiles?.display_name ?? 'Tailor',
-            tailorId: o.tailor_profiles?.id,
-            customerId: o.customer_id,
-            customerName: o.customer_profiles?.display_name ?? user?.user_metadata?.display_name ?? 'Customer',
-            stage: o.stage,
-            videoCallUrl: o.video_call_url ?? null,
-          })
-        } else if (foundError) {
-          setFetchError(true)
-          setOrderInfo(null)
-        } else {
-          setResolvedOrderId(orderId)
-          setOrderInfo(null)
-        }
-      } else {
-        setFetchError(true)
-        setOrderInfo(null)
-      }
-    } catch {
-      setFetchError(true)
-      setOrderInfo(null)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    void fetchOrderInfo()
-  }, [orderId, user?.id, user?.user_metadata?.display_name])
-
-  if (loading) {
+  if (isLoading && orderInfo === undefined) {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.stateWrap}>
@@ -135,9 +51,7 @@ export default function CustomerMessagesScreen() {
             <Text style={styles.stateEyebrow}>Order conversation</Text>
             <ActivityIndicator color={Colors.needleGreen} size="large" />
             <Text style={styles.stateTitle}>Loading this conversation…</Text>
-            <Text style={styles.stateHint}>
-              We’re pulling together the working thread for this order so quotes, updates, and next steps stay in one place.
-            </Text>
+            <Text style={styles.stateHint}>Loading the latest thread.</Text>
           </View>
         </View>
       </SafeAreaView>
@@ -145,7 +59,7 @@ export default function CustomerMessagesScreen() {
   }
 
   if (!orderInfo) {
-    if (fetchError) {
+    if (isError) {
       return (
         <SafeAreaView style={styles.safe}>
           <View style={styles.header}>
@@ -157,10 +71,8 @@ export default function CustomerMessagesScreen() {
             <View style={styles.stateCard}>
               <Text style={styles.stateEyebrow}>Order conversation</Text>
               <Text style={styles.stateTitle}>Couldn't load this conversation.</Text>
-              <Text style={styles.stateHint}>
-                This thread should keep every order question, quote, and update in one place instead of leaving you guessing.
-              </Text>
-              <TouchableOpacity style={styles.retryBtn} onPress={() => void fetchOrderInfo()}>
+              <Text style={styles.stateHint}>Try again or open the order.</Text>
+              <TouchableOpacity style={styles.retryBtn} onPress={() => void refetch()}>
                 <Text style={styles.retryBtnText}>Try again</Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -185,9 +97,7 @@ export default function CustomerMessagesScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Order conversation</Text>
             <Text style={styles.stateTitle}>No active order with this tailor.</Text>
-            <Text style={styles.stateHint}>
-              Conversations on Drape start from an order, so open your orders or place a new brief to pick the thread back up.
-            </Text>
+            <Text style={styles.stateHint}>Open your orders or place a new brief.</Text>
             <TouchableOpacity
               style={styles.secondaryBtn}
               onPress={() => router.replace('/(customer)/orders')}
@@ -247,27 +157,14 @@ export default function CustomerMessagesScreen() {
           )}
           <TouchableOpacity
             style={styles.orderBtn}
-            onPress={() => router.push(`/(customer)/orders/${resolvedOrderId}`)}
+            onPress={() => router.push({
+              pathname: '/(customer)/orders/[id]',
+              params: { id: resolvedOrderId, returnTo: `/(customer)/messages/${resolvedOrderId}` },
+            })}
           >
             <Text style={styles.orderBtnText}>View order</Text>
           </TouchableOpacity>
         </View>
-      </View>
-
-      <View style={styles.contextBanner}>
-        <Text style={styles.contextBannerEyebrow}>Order thread</Text>
-        <Text style={styles.contextBannerTitle}>Everything about this order lives here.</Text>
-        <Text style={styles.contextBannerText}>
-          Keep quote questions, consultation details, fit notes, and progress updates in this
-          thread so the order stays easy to follow from start to finish.
-        </Text>
-      </View>
-
-      <View style={styles.guideCard}>
-        <Text style={styles.guideTitle}>Best messaging habit</Text>
-        <Text style={styles.guideText}>
-          Keep decisions and clarifications in this thread, then use the order screen for the formal status and delivery checkpoints.
-        </Text>
       </View>
 
       <MessageThread

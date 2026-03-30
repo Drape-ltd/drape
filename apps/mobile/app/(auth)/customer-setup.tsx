@@ -13,14 +13,22 @@ import { validateDisplayName } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 type Unit = 'in' | 'cm'
-type GarmentContext = 'MENSWEAR' | 'WOMENSWEAR' | 'BOTH' | 'PREFER_NOT'
+type GarmentContext = 'MENSWEAR' | 'WOMENSWEAR' | 'BOTH' | 'PREFER_NOT_TO_SAY'
 
 const GARMENT_OPTIONS: Array<{ value: GarmentContext; label: string; hint: string }> = [
   { value: 'MENSWEAR', label: 'Menswear', hint: 'Suits, Agbada, kaftans, shirts, trousers' },
   { value: 'WOMENSWEAR', label: 'Womenswear', hint: 'Dresses, blouses, skirts, saree blouses' },
   { value: 'BOTH', label: 'Both', hint: 'I order menswear and womenswear' },
-  { value: 'PREFER_NOT', label: 'Prefer not to say', hint: 'Tailor works from measurements only' },
+  { value: 'PREFER_NOT_TO_SAY', label: 'Prefer not to say', hint: 'Tailor works from measurements only' },
 ]
+
+function normalizeGarmentContext(value: unknown): GarmentContext | null {
+  if (value === 'PREFER_NOT') return 'PREFER_NOT_TO_SAY'
+  if (value === 'MENSWEAR' || value === 'WOMENSWEAR' || value === 'BOTH' || value === 'PREFER_NOT_TO_SAY') {
+    return value
+  }
+  return null
+}
 
 export default function CustomerSetupScreen() {
   const router = useRouter()
@@ -55,7 +63,7 @@ export default function CustomerSetupScreen() {
         const nextDisplayName = (data as any).display_name ?? oauthName
         const nextPhone = (data as any).phone ?? user.user_metadata?.phone ?? ''
         const nextUnit = ((data as any).unit_preference ?? measurements.unit) as Unit | undefined
-        const nextGarmentContext = ((data as any).garment_context ?? measurements.garmentContext) as GarmentContext | undefined
+        const nextGarmentContext = normalizeGarmentContext((data as any).garment_context ?? measurements.garmentContext)
 
         if (typeof nextDisplayName === 'string' && nextDisplayName.trim().length > 0) {
           setDisplayName(nextDisplayName)
@@ -66,7 +74,7 @@ export default function CustomerSetupScreen() {
         if (nextUnit === 'in' || nextUnit === 'cm') {
           setUnit(nextUnit)
         }
-        if (nextGarmentContext && ['MENSWEAR', 'WOMENSWEAR', 'BOTH', 'PREFER_NOT'].includes(nextGarmentContext)) {
+        if (nextGarmentContext) {
           setGarmentContext(nextGarmentContext)
         }
       })
@@ -151,8 +159,15 @@ export default function CustomerSetupScreen() {
     setSaving(false)
 
     if (error) {
-      setSaveError('We could not save your setup. Please try again.')
-      Alert.alert('Error', 'Could not save your profile. Please try again.')
+      const details = error.message ?? 'Unknown error'
+      console.error('customer setup save failed', {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code,
+      })
+      setSaveError(`We could not save your setup. ${details}`)
+      Alert.alert('Error', `Could not save your profile. ${details}`)
       return
     }
 
@@ -171,20 +186,8 @@ export default function CustomerSetupScreen() {
                 <Text style={styles.heroBadgeText}>Finish your customer setup</Text>
               </View>
               <View style={styles.heading}>
-                <Text style={styles.title}>Set up your side of Drape in one calm pass.</Text>
-                <Text style={styles.subtitle}>
-                  We’ll use this to personalise fit, tailor matching, and order communication from your very first booking.
-                </Text>
-              </View>
-              <View style={styles.heroPoints}>
-                <View style={styles.heroPoint}>
-                  <Text style={styles.heroPointTitle}>Visible to tailors</Text>
-                  <Text style={styles.heroPointCopy}>Your name and order context, so communication stays clear and professional.</Text>
-                </View>
-                <View style={styles.heroPoint}>
-                  <Text style={styles.heroPointTitle}>Used privately</Text>
-                  <Text style={styles.heroPointCopy}>Your phone and sizing preferences, so bookings and recovery flows work cleanly.</Text>
-                </View>
+                <Text style={styles.title}>Set up your side of Drape.</Text>
+                <Text style={styles.subtitle}>These basics shape your fit profile and first booking.</Text>
               </View>
             </View>
 
@@ -195,10 +198,8 @@ export default function CustomerSetupScreen() {
               </View>
 
               <View style={styles.guideCard}>
-                <Text style={styles.guideTitle}>Best starting point</Text>
-                <Text style={styles.guideText}>
-                  Keep this simple and accurate. You can refine measurements and preferences later, but these basics make your first booking feel much smoother.
-                </Text>
+                <Text style={styles.guideTitle}>Best use</Text>
+                <Text style={styles.guideText}>Keep this simple and accurate. You can refine the rest later.</Text>
               </View>
 
               <Input
@@ -275,10 +276,7 @@ export default function CustomerSetupScreen() {
         <View style={styles.cta}>
           <View style={styles.nextCard}>
             <Text style={styles.nextEyebrow}>What happens next</Text>
-            <Text style={styles.nextTitle}>You’ll land in customer home ready to discover tailors and start your first brief.</Text>
-            <Text style={styles.nextCopy}>
-              Measurements, saved tailors, orders, and messages all build from this setup, so we keep it short and get you moving quickly.
-            </Text>
+            <Text style={styles.nextTitle}>You’ll land in customer home ready to start.</Text>
           </View>
           {saveError ? <Text style={styles.saveError}>{saveError}</Text> : null}
           <Button

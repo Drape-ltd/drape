@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Tabs } from 'expo-router'
+import { Tabs, useSegments } from 'expo-router'
 import { Image, Pressable, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
+import { MaterialIcons } from '@expo/vector-icons'
 import { Colors, FontSize, Radius } from '@/constants/theme'
 import { useTailorProfile } from '@/lib/tailorProfile'
 import { useAuth } from '@/lib/auth'
@@ -66,6 +67,8 @@ function ProfileTabIcon({ color, focused }: { color: string; focused: boolean })
 
 export default function TailorTabLayout() {
   const pendingCount = usePendingQuoteCount()
+  const segments = useSegments()
+  const hideTabBar = segments[0] === '(tailor)' && segments.length > 2
 
   return (
     <Tabs
@@ -77,8 +80,13 @@ export default function TailorTabLayout() {
           backgroundColor: Colors.white,
           borderTopColor: Colors.lightGrey,
           borderTopWidth: 1,
+          paddingHorizontal: 10,
           paddingBottom: 8,
           height: 64,
+          display: hideTabBar ? 'none' : 'flex',
+        },
+        tabBarItemStyle: {
+          paddingHorizontal: 2,
         },
         tabBarLabelStyle: {
           fontSize: FontSize.xs,
@@ -113,6 +121,15 @@ export default function TailorTabLayout() {
           tabBarBadgeStyle: { backgroundColor: Colors.kanteRust, fontSize: 10, minWidth: 16, height: 16 },
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => <Pressable {...props} testID="tab-tailor-orders" />,
+        }}
+      />
+      <Tabs.Screen
+        name="shop"
+        options={{
+          title: 'Shop',
+          tabBarIcon: ({ color }) => <MaterialIcons name="shopping-cart" size={22} color={color} />,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          tabBarButton: (props: any) => <Pressable {...props} testID="tab-shop" />,
         }}
       />
       <Tabs.Screen

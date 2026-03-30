@@ -7,17 +7,20 @@
  * auth user_metadata and the bell badge clears.
  */
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useFocusEffect, useNavigation, useRouter } from 'expo-router'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
+
+const CUSTOMER_NOTIFICATIONS_GUIDE_KEY = 'drape_customer_notifications_best_use_dismissed'
 
 type NotifItem = {
   id: string
@@ -76,6 +79,20 @@ export default function NotificationsScreen() {
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState(false)
   const [retryTrigger, setRetryTrigger] = useState(0)
+  const [showGuide, setShowGuide] = useState(true)
+
+  useEffect(() => {
+    AsyncStorage.getItem(`${CUSTOMER_NOTIFICATIONS_GUIDE_KEY}:${user?.id ?? 'guest'}`)
+      .then((value) => setShowGuide(value !== '1'))
+      .catch(() => {})
+  }, [user?.id])
+
+  async function dismissGuide() {
+    setShowGuide(false)
+    try {
+      await AsyncStorage.setItem(`${CUSTOMER_NOTIFICATIONS_GUIDE_KEY}:${user?.id ?? 'guest'}`, '1')
+    } catch {}
+  }
 
   useFocusEffect(
     useCallback(() => {
@@ -226,23 +243,17 @@ export default function NotificationsScreen() {
           showsVerticalScrollIndicator={false}
           ListHeaderComponent={(
             <View>
-              <View style={styles.heroCard}>
-                <View style={styles.heroBadge}>
-                  <Text style={styles.heroBadgeText}>Order activity</Text>
+              {showGuide && (
+                <View style={styles.guideCard}>
+                  <View style={styles.guideHeader}>
+                    <Text style={styles.guideEyebrow}>Best use</Text>
+                    <TouchableOpacity onPress={() => void dismissGuide()} style={styles.guideClose}>
+                      <Feather name="x" size={16} color={Colors.midGrey} />
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.guideTitle}>Treat this as your fast catch-up feed, then jump into the order that needs you.</Text>
                 </View>
-                <Text style={styles.heroTitle}>Keep up with every step without guessing what changed.</Text>
-                <Text style={styles.heroSub}>
-                  Quotes, production updates, shipping milestones, and collection alerts all land
-                  here so you can jump back into the right order fast.
-                </Text>
-              </View>
-              <View style={styles.guideCard}>
-                <Text style={styles.guideEyebrow}>Best use</Text>
-                <Text style={styles.guideTitle}>Treat this as your fast catch-up feed, then jump into the order that needs you.</Text>
-                <Text style={styles.guideCopy}>
-                  New items tell you what changed. The order screen is still where you review details, accept quotes, raise concerns, and finish the handoff.
-                </Text>
-              </View>
+              )}
             </View>
           )}
           contentContainerStyle={{ paddingVertical: Spacing.md, paddingHorizontal: Spacing.xl, gap: Spacing.sm }}
@@ -343,39 +354,6 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
-  heroCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
-    marginBottom: Spacing.md,
-    ...Shadow.sm,
-  },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  heroBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  heroTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    lineHeight: 38,
-  },
-  heroSub: {
-    fontSize: FontSize.md,
-    color: Colors.inkLight,
-    lineHeight: 24,
-  },
   guideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,
@@ -384,6 +362,14 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.md,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
+  },
+  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  guideClose: {
+    width: 28,
+    height: 28,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   guideEyebrow: {
     fontSize: FontSize.xs,
@@ -398,12 +384,6 @@ const styles = StyleSheet.create({
     color: Colors.ink,
     lineHeight: 22,
   },
-  guideCopy: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    lineHeight: 21,
-  },
-
   empty: {
     flex: 1, alignItems: 'center', justifyContent: 'center',
     gap: Spacing.md, padding: Spacing.xxxl,

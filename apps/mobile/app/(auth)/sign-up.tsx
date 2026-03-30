@@ -123,36 +123,14 @@ export default function SignUpScreen() {
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
       <View style={styles.heroCard}>
-        <View style={styles.heroBadge}>
-          <Text style={styles.heroBadgeText}>Create your Drape account</Text>
-        </View>
-        <Text style={styles.heading}>One account. Tailored for whichever side you're on.</Text>
-        <Text style={styles.sub}>
-          Customers discover trusted tailors and track every step. Tailors manage briefs, quotes, consultations, and production in one calm workspace.
-        </Text>
-        <View style={styles.heroPoints}>
-          <View style={styles.heroPoint}>
-            <Text style={styles.heroPointTitle}>For customers</Text>
-            <Text style={styles.heroPointCopy}>Send one clear brief, review your quote, and follow progress without guesswork.</Text>
-          </View>
-          <View style={styles.heroPoint}>
-            <Text style={styles.heroPointTitle}>For tailors</Text>
-            <Text style={styles.heroPointCopy}>Receive serious orders, guide consultations, and keep production beautifully organised.</Text>
-          </View>
-        </View>
+        <Text style={styles.heading}>Create your account.</Text>
+        <Text style={styles.sub}>Choose the side you want first.</Text>
       </View>
 
       <View style={styles.formCard}>
         <View style={styles.formIntro}>
           <Text style={styles.formEyebrow}>Choose your starting role</Text>
           <Text style={styles.formTitle}>You can always switch views later.</Text>
-        </View>
-
-        <View style={styles.roleGuideCard}>
-          <Text style={styles.roleGuideTitle}>Best starting point</Text>
-          <Text style={styles.roleGuideText}>
-            Pick the side you expect to use first. Drape keeps both experiences under one account, so this choice is just your cleanest way in.
-          </Text>
         </View>
 
         {/* Role picker */}
@@ -252,13 +230,7 @@ export default function SignUpScreen() {
         />
 
         <View style={styles.nextCard}>
-          <Text style={styles.nextEyebrow}>What happens next</Text>
-          <Text style={styles.nextTitle}>
-            We’ll take you into the right setup flow so your first booking or first client order starts cleanly.
-          </Text>
-          <Text style={styles.nextCopy}>
-            Customers finish a few fit basics. Tailors continue into storefront, availability, and verification.
-          </Text>
+          <Text style={styles.nextTitle}>You’ll go into the right setup flow next.</Text>
         </View>
 
         <Divider label="or sign up with" />
@@ -313,29 +285,8 @@ const styles = StyleSheet.create({
     padding: Spacing.xl,
     gap: Spacing.lg,
   },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 6,
-  },
-  heroBadgeText: {
-    fontSize: FontSize.xs,
-    color: Colors.needleGreen,
-    fontWeight: FontWeight.semibold,
-  },
   heading: { fontSize: 34, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 40, letterSpacing: -0.6 },
   sub: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 24 },
-  heroPoints: { gap: Spacing.md },
-  heroPoint: {
-    borderRadius: Radius.lg,
-    backgroundColor: Colors.bone,
-    padding: Spacing.md,
-    gap: 4,
-  },
-  heroPointTitle: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
-  heroPointCopy: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   formCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,
@@ -345,14 +296,6 @@ const styles = StyleSheet.create({
   formIntro: { gap: 4 },
   formEyebrow: { fontSize: FontSize.xs, color: Colors.midGrey, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.8 },
   formTitle: { fontSize: FontSize.lg, color: Colors.ink, fontWeight: FontWeight.semibold },
-  roleGuideCard: {
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: 4,
-  },
-  roleGuideTitle: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
-  roleGuideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   roleRow: { gap: Spacing.md },
   roleCard: {
     flexDirection: 'row',

@@ -123,8 +123,7 @@ export default function PrivacyScreen() {
   }
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(customer)/profile')
+    router.replace('/(customer)/profile')
   }
 
   return (
@@ -143,25 +142,11 @@ export default function PrivacyScreen() {
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Privacy control</Text>
           </View>
-          <Text style={styles.heroTitle}>Your measurements stay private until you choose to begin an order.</Text>
-          <Text style={styles.heroSub}>
-            Review how Drape personalises your experience, communicates with you, and helps you
-            manage your account data.
-          </Text>
-        </View>
-
-        <View style={styles.guideCard}>
-          <Text style={styles.guideEyebrow}>Important to know</Text>
-          <Text style={styles.guideTitle}>Fit data stays protected by default and only shares when you start an order.</Text>
-          <Text style={styles.guideCopy}>
-            Most controls here affect personalisation, marketing, and analytics. Your core order flow and transactional updates still work even if you switch those preferences off.
-          </Text>
+          <Text style={styles.heroTitle}>Privacy and account controls.</Text>
         </View>
 
         {/* ── Intro ── */}
-        <Text style={styles.intro}>
-          Control how Drape uses your information. Your measurements are always private and only shared with a tailor when you start an order.
-        </Text>
+        <Text style={styles.intro}>Your measurements only share when you start an order.</Text>
 
         {/* ── Data & personalisation ── */}
         <View style={styles.section}>

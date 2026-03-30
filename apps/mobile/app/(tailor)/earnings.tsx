@@ -14,6 +14,7 @@ import {
 } from 'react-native'
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { formatAmount, fetchRates } from '@/lib/currency'
@@ -23,6 +24,7 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constan
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
 const CHART_WIDTH = SCREEN_WIDTH - Spacing.xl * 2
 const CHART_HEIGHT = 140
+const EARNINGS_GUIDE_KEY = 'drape_tailor_earnings_best_use_dismissed'
 
 type MonthBucket = { label: string; amount: number }
 type PayoutRow = { id: string; reference: string; amount: number; garmentType: string; completedAt: string }
@@ -61,6 +63,7 @@ export default function EarningsScreen() {
   const [fetchError, setFetchError] = useState(false)
   const [currency, setCurrency] = useState<CurrencyCode>('GBP')
   const [rates, setRates] = useState<Rates>({})
+  const [showGuide, setShowGuide] = useState(true)
 
   async function fetchEarnings() {
     if (!user?.id) {
@@ -176,6 +179,19 @@ export default function EarningsScreen() {
     void fetchEarnings().finally(() => setLoading(false))
   }, [user?.id])
 
+  useEffect(() => {
+    AsyncStorage.getItem(`${EARNINGS_GUIDE_KEY}:${user?.id ?? 'guest'}`)
+      .then((value) => setShowGuide(value !== '1'))
+      .catch(() => {})
+  }, [user?.id])
+
+  async function dismissGuide() {
+    setShowGuide(false)
+    try {
+      await AsyncStorage.setItem(`${EARNINGS_GUIDE_KEY}:${user?.id ?? 'guest'}`, '1')
+    } catch {}
+  }
+
   async function onRefresh() {
     setRefreshing(true)
     await fetchEarnings()
@@ -235,8 +251,7 @@ export default function EarningsScreen() {
   const maxBucket = Math.max(...(data?.monthBuckets.map((b) => b.amount) ?? [1]), 1)
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(tailor)/profile')
+    router.replace('/(tailor)/profile')
   }
 
   return (
@@ -247,17 +262,6 @@ export default function EarningsScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />}
       >
-        <View style={styles.introCard}>
-          <View style={styles.introBadge}>
-            <Text style={styles.introBadgeText}>Business visibility</Text>
-          </View>
-          <Text style={styles.introTitle}>See what your tailoring work is earning and what is still waiting to clear.</Text>
-          <Text style={styles.introSub}>
-            Earnings helps you track momentum across completed orders, escrow, and recent payout
-            history so you can understand how the business is moving.
-          </Text>
-        </View>
-
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={goBack}>
@@ -266,6 +270,18 @@ export default function EarningsScreen() {
           <Text style={styles.title}>Earnings</Text>
           <View style={{ width: 60 }} />
         </View>
+
+        {showGuide && (
+          <View style={styles.guideCard}>
+            <View style={styles.guideHeader}>
+              <Text style={styles.guideEyebrow}>Best use</Text>
+              <TouchableOpacity onPress={() => void dismissGuide()} style={styles.guideClose}>
+                <Text style={styles.guideCloseText}>×</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.guideText}>Use this screen to separate cleared earnings from money still waiting on delivery or collection.</Text>
+          </View>
+        )}
 
         {/* Hero stat */}
         <View style={styles.heroCard}>
@@ -276,13 +292,6 @@ export default function EarningsScreen() {
             <View style={styles.heroDivider} />
             <HeroSub label="This week" value={fmt(data?.thisWeek ?? 0)} />
           </View>
-        </View>
-
-        <View style={styles.guideCard}>
-          <Text style={styles.guideTitle}>Best earnings habit</Text>
-          <Text style={styles.guideText}>
-            Use this screen to separate what has already cleared from what is still in escrow, then connect it back to the orders driving those numbers.
-          </Text>
         </View>
 
         {/* Escrow */}
@@ -421,41 +430,6 @@ const styles = StyleSheet.create({
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
   scroll: { flex: 1 },
   content: { paddingBottom: Spacing.xxxl },
-  introCard: {
-    margin: Spacing.xl,
-    marginBottom: 0,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
-    ...Shadow.sm,
-  },
-  introBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  introBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  introTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    lineHeight: 38,
-  },
-  introSub: {
-    fontSize: FontSize.md,
-    color: Colors.inkLight,
-    lineHeight: 24,
-  },
-
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md,
@@ -476,6 +450,7 @@ const styles = StyleSheet.create({
   heroDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.2)' },
   guideCard: {
     marginHorizontal: Spacing.xl,
+    marginBottom: Spacing.md,
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
     padding: Spacing.lg,
@@ -484,7 +459,16 @@ const styles = StyleSheet.create({
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
-  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  guideClose: { padding: 2 },
+  guideCloseText: { fontSize: 18, lineHeight: 18, color: Colors.midGrey },
+  guideEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
   guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   escrowCard: {

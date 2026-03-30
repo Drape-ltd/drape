@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, KeyboardAvoidingView, Platform,
 } from 'react-native'
-import { useNavigation, useRouter } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
@@ -15,8 +16,8 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constan
 
 type Unit = 'in' | 'cm'
 type FitStyle = 'Slim' | 'Regular' | 'Relaxed'
-type GarmentContext = 'MENSWEAR' | 'WOMENSWEAR' | 'BOTH' | 'PREFER_NOT'
-type BodyShape = 'RECTANGLE' | 'BROAD_SHOULDERS' | 'FULL_HIPS' | 'DEFINED_WAIST' | 'FULL_MIDSECTION' | 'ATHLETIC' | 'PREFER_NOT'
+type GarmentContext = 'MENSWEAR' | 'WOMENSWEAR' | 'BOTH' | 'PREFER_NOT_TO_SAY'
+type BodyShape = 'RECTANGLE' | 'BROAD_SHOULDERS' | 'FULL_HIPS' | 'DEFINED_WAIST' | 'FULL_MIDSECTION' | 'ATHLETIC' | 'PREFER_NOT_TO_SAY'
 type FitFlag =
   | 'LARGE_THIGHS' | 'BROAD_SHOULDERS' | 'SHORT_TORSO' | 'FULL_SEAT'
   | 'SLOPING_SHOULDERS' | 'LONG_ARMS' | 'FULL_BELLY' | 'LONG_RISE'
@@ -34,7 +35,7 @@ const GARMENT_CONTEXT_OPTIONS: Array<{ value: GarmentContext; label: string; hin
   { value: 'MENSWEAR', label: 'Menswear cuts', hint: 'Suits, trousers, Agbada, kaftans, shirts, native wear' },
   { value: 'WOMENSWEAR', label: 'Womenswear cuts', hint: 'Dresses, skirts, blouses, Asobi, Lehenga, saree blouses' },
   { value: 'BOTH', label: 'Both', hint: 'I order both menswear and womenswear pieces' },
-  { value: 'PREFER_NOT', label: 'Prefer not to say', hint: 'Tailor works from measurements only' },
+  { value: 'PREFER_NOT_TO_SAY', label: 'Prefer not to say', hint: 'Tailor works from measurements only' },
 ]
 
 const BODY_SHAPE_OPTIONS: Array<{ value: BodyShape; label: string; hint: string }> = [
@@ -44,7 +45,7 @@ const BODY_SHAPE_OPTIONS: Array<{ value: BodyShape; label: string; hint: string 
   { value: 'DEFINED_WAIST', label: 'Defined waist', hint: 'Shoulders and hips similar, clear waist indent' },
   { value: 'FULL_MIDSECTION', label: 'Full midsection', hint: 'Width concentrated through the torso' },
   { value: 'ATHLETIC', label: 'Athletic / muscular', hint: 'Broad frame with visible muscle volume' },
-  { value: 'PREFER_NOT', label: 'Prefer not to say', hint: '' },
+  { value: 'PREFER_NOT_TO_SAY', label: 'Prefer not to say', hint: '' },
 ]
 
 const FIT_FLAG_OPTIONS: Array<{ value: FitFlag; label: string; hint: string }> = [
@@ -74,15 +75,43 @@ const STEP_SUBTITLES = [
   'Where do clothes usually fit you badly off the rack? Select all that apply.',
 ]
 
+const MEASUREMENTS_GUIDE_KEY = 'drape_customer_measurements_best_use_dismissed'
+
+function normalizeGarmentContext(value: unknown): GarmentContext | null {
+  if (value === 'PREFER_NOT') return 'PREFER_NOT_TO_SAY'
+  if (value === 'MENSWEAR' || value === 'WOMENSWEAR' || value === 'BOTH' || value === 'PREFER_NOT_TO_SAY') {
+    return value
+  }
+  return null
+}
+
+function normalizeBodyShape(value: unknown): BodyShape | null {
+  if (value === 'PREFER_NOT') return 'PREFER_NOT_TO_SAY'
+  if (
+    value === 'RECTANGLE' ||
+    value === 'BROAD_SHOULDERS' ||
+    value === 'FULL_HIPS' ||
+    value === 'DEFINED_WAIST' ||
+    value === 'FULL_MIDSECTION' ||
+    value === 'ATHLETIC' ||
+    value === 'PREFER_NOT_TO_SAY'
+  ) {
+    return value
+  }
+  return null
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function MeasurementsScreen() {
   const router = useRouter()
   const navigation = useNavigation()
+  const { returnTo } = useLocalSearchParams<{ returnTo?: string }>()
   const { user } = useAuth()
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
   const [fetchError, setFetchError] = useState(false)
+  const [showGuide, setShowGuide] = useState(true)
 
   // Layer 1
   const [unit, setUnit] = useState<Unit>('in')
@@ -136,9 +165,14 @@ export default function MeasurementsScreen() {
     if (typeof m.neckCircumference === 'number') setNeckCircumference(String(m.neckCircumference))
     if (typeof m.height === 'number') setHeight(String(m.height))
     if (m.fitStyle === 'Slim' || m.fitStyle === 'Regular' || m.fitStyle === 'Relaxed') setFitStyle(m.fitStyle)
-    if (m.garmentContext) setGarmentContext(m.garmentContext as GarmentContext)
-    if (Array.isArray(m.bodyShape)) setBodyShapes(m.bodyShape as BodyShape[])
-    else if (typeof m.bodyShape === 'string') setBodyShapes([m.bodyShape as BodyShape])
+    const nextGarmentContext = normalizeGarmentContext(m.garmentContext)
+    if (nextGarmentContext) setGarmentContext(nextGarmentContext)
+    if (Array.isArray(m.bodyShape)) {
+      setBodyShapes(m.bodyShape.map(normalizeBodyShape).filter((value): value is BodyShape => !!value))
+    } else {
+      const nextBodyShape = normalizeBodyShape(m.bodyShape)
+      if (nextBodyShape) setBodyShapes([nextBodyShape])
+    }
     if (Array.isArray(m.fitFlags)) setFitFlags(m.fitFlags as FitFlag[])
     if (typeof m.bodyNote === 'string') setBodyNote(m.bodyNote)
     const standardKeys = new Set(['chest','waist','hips','shoulderWidth','inseam','sleeveLength','neckCircumference','height','unit','fitStyle','garmentContext','bodyShape','fitFlags','bodyNote'])
@@ -176,6 +210,19 @@ async function loadMeasurements() {
     if (!user?.id) return
     void loadMeasurements()
   }, [user?.id])
+
+  useEffect(() => {
+    AsyncStorage.getItem(`${MEASUREMENTS_GUIDE_KEY}:${user?.id ?? 'guest'}`)
+      .then((value) => setShowGuide(value !== '1'))
+      .catch(() => {})
+  }, [user?.id])
+
+  async function dismissGuide() {
+    setShowGuide(false)
+    try {
+      await AsyncStorage.setItem(`${MEASUREMENTS_GUIDE_KEY}:${user?.id ?? 'guest'}`, '1')
+    } catch {}
+  }
 
   function canProceedStep(): boolean {
     switch (step) {
@@ -215,10 +262,10 @@ async function loadMeasurements() {
 
   function toggleBodyShape(shape: BodyShape) {
     setBodyShapes((prev) => {
-      if (shape === 'PREFER_NOT') {
-        return prev.includes('PREFER_NOT') ? [] : ['PREFER_NOT']
+      if (shape === 'PREFER_NOT_TO_SAY') {
+        return prev.includes('PREFER_NOT_TO_SAY') ? [] : ['PREFER_NOT_TO_SAY']
       }
-      const without = prev.filter((s) => s !== 'PREFER_NOT')
+      const without = prev.filter((s) => s !== 'PREFER_NOT_TO_SAY')
       return without.includes(shape) ? without.filter((s) => s !== shape) : [...without, shape]
     })
   }
@@ -290,7 +337,8 @@ async function loadMeasurements() {
       Alert.alert('Error', 'Could not save your measurements. Please try again.')
     } else {
       capture('measurements_saved', { unit })
-      if (navigation.canGoBack()) router.back()
+      if (typeof returnTo === 'string' && returnTo.length > 0) router.replace(returnTo as any)
+      else if (navigation.canGoBack()) router.back()
       else router.replace('/(customer)/profile')
     }
   }
@@ -307,6 +355,7 @@ async function loadMeasurements() {
 
   function back() {
     if (step > 0) setStep(step - 1)
+    else if (typeof returnTo === 'string' && returnTo.length > 0) router.replace(returnTo as any)
     else if (navigation.canGoBack()) router.back()
     else router.replace('/(customer)/profile')
   }
@@ -321,12 +370,6 @@ async function loadMeasurements() {
             <Text style={styles.stateHint}>
               This screen should help you keep your fit profile accurate so booking a tailor feels faster and more reliable.
             </Text>
-            <View style={styles.stateGuideCard}>
-              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
-              <Text style={styles.stateGuideText}>
-                Refresh here first. If it still fails, open your profile first, then return to the previous step if needed, so your fit details do not block the next booking.
-              </Text>
-            </View>
             <TouchableOpacity style={styles.errorRetry} onPress={() => { void loadMeasurements() }}>
               <Text style={styles.errorRetryText}>Try again</Text>
             </TouchableOpacity>
@@ -366,24 +409,19 @@ async function loadMeasurements() {
 
         <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
           <View style={styles.content}>
-            <View style={styles.heroCard}>
-              <View style={styles.heroBadge}>
-                <Text style={styles.heroBadgeText}>Fit foundation</Text>
+            {showGuide && (
+              <View style={styles.guideCard}>
+                <View style={styles.guideHeader}>
+                  <Text style={styles.guideEyebrow}>Best use</Text>
+                  <TouchableOpacity onPress={() => void dismissGuide()} style={styles.guideClose}>
+                    <Text style={styles.guideCloseText}>×</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.guideCopy}>
+                  Start with your core fit details, then keep refining this profile as you place more orders.
+                </Text>
               </View>
-              <Text style={styles.heroTitle}>Give your tailor a better starting point before they quote or cut.</Text>
-              <Text style={styles.heroSub}>
-                The more accurate your measurements and fit context are here, the smoother each
-                custom order becomes from pricing to final fit.
-              </Text>
-            </View>
-
-            <View style={styles.guideCard}>
-              <Text style={styles.guideEyebrow}>Best approach</Text>
-              <Text style={styles.guideTitle}>Start with the basics, then add more detail over time.</Text>
-              <Text style={styles.guideCopy}>
-                Chest, waist, fit style, garment context, and shape already improve quoting. You can keep refining this profile as you place more orders.
-              </Text>
-            </View>
+            )}
 
             <View style={styles.stepHeading}>
               <Text style={styles.stepTitle}>{STEP_TITLES[step]}</Text>
@@ -614,24 +652,6 @@ const styles = StyleSheet.create({
   },
   stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
-  stateGuideCard: {
-    width: '100%',
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: Spacing.xs,
-  },
-  stateGuideTitle: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-  },
-  stateGuideText: {
-    fontSize: FontSize.sm,
-    color: Colors.midGrey,
-    lineHeight: 20,
-  },
-
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md,
@@ -668,58 +688,24 @@ const styles = StyleSheet.create({
 
   scroll: { flex: 1 },
   content: { padding: Spacing.xl, gap: Spacing.xl },
-  heroCard: {
+  guideCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  heroBadgeText: {
+  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  guideClose: { padding: 2 },
+  guideCloseText: { fontSize: 18, lineHeight: 18, color: Colors.midGrey },
+  guideEyebrow: {
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
     color: Colors.needleGreen,
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  heroTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    lineHeight: 38,
-  },
-  heroSub: {
-    fontSize: FontSize.md,
-    color: Colors.inkLight,
-    lineHeight: 24,
-  },
-  guideCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: 4,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-  },
-  guideEyebrow: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.midGrey,
-    textTransform: 'uppercase',
     letterSpacing: 0.8,
-  },
-  guideTitle: {
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-    lineHeight: 22,
   },
   guideCopy: {
     fontSize: FontSize.sm,

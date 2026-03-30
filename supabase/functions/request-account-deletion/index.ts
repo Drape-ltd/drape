@@ -71,7 +71,7 @@ Deno.serve(async (req) => {
 
     const [{ data: tailorProfile }, { data: customerProfile }] = await Promise.all([
       supabase.from('tailor_profiles').select('id').eq('user_id', caller.id).maybeSingle(),
-      supabase.from('customer_profiles').select('id').eq('id', caller.id).maybeSingle(),
+      supabase.from('customer_profiles').select('id').eq('user_id', caller.id).maybeSingle(),
     ])
 
     const role = tailorProfile ? 'TAILOR' : customerProfile ? 'CUSTOMER' : 'UNKNOWN'

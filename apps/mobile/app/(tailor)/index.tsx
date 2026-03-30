@@ -1,14 +1,15 @@
-import { useCallback, useState } from 'react'
-import { useFocusEffect } from 'expo-router'
+import { useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Modal, ActivityIndicator, Alert,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { inviteCustomerFromTailor, shareTailorProfile } from '@/lib/invite'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
+import { useRefreshOnFocus, useTailorDashboard } from '@/lib/queries'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
 import { stageColor } from '@/lib/stageColors'
@@ -19,10 +20,12 @@ const AVAIL_OPTIONS: { value: Availability; label: string; desc: string; color: 
   { value: 'LIMITED', label: 'Limited availability', desc: 'You appear in search but with a notice. Take on select orders only.', color: Colors.warning },
   { value: 'FULLY_BOOKED', label: 'Fully booked', desc: 'Hidden from new bookings. Existing orders are unaffected.', color: Colors.error },
 ]
+const DASHBOARD_GUIDE_KEY = 'drape_tailor_dashboard_best_use_dismissed'
 
 type DashboardStats = {
   activeOrders: number
   pendingQuotes: number
+  completedOrders: number
   monthEarnings: number
   avgRating: number
   tier: string | null
@@ -38,16 +41,17 @@ type ActiveOrderRow = {
   id: string
   reference: string
   garmentType: string
+  orderKind: 'CUSTOM' | 'READY_MADE'
   stage: OrderStage
   customerName: string
   estimatedDate: string | null
   quotedAmount: number | null
 }
 
-function dashboardOrderHint(stage: OrderStage): string | null {
+function dashboardOrderHint(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): string | null {
   switch (stage) {
     case 'PENDING_QUOTE':
-      return 'Send your quote'
+      return orderKind === 'READY_MADE' ? 'Reply to inquiry' : 'Send your quote'
     case 'CONSULTATION':
       return 'Run consultation, then quote'
     case 'QUOTE_SENT':
@@ -71,13 +75,27 @@ function dashboardOrderHint(stage: OrderStage): string | null {
 export default function TailorDashboard() {
   const router = useRouter()
   const { user, signOut } = useAuth()
-  const [stats, setStats] = useState<DashboardStats | null>(null)
-  const [orders, setOrders] = useState<ActiveOrderRow[]>([])
-  const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [fetchError, setFetchError] = useState(false)
   const [availModal, setAvailModal] = useState(false)
   const [availSaving, setAvailSaving] = useState(false)
+  const [showGuide, setShowGuide] = useState(true)
+  const {
+    data: dashboardData,
+    isLoading,
+    isError,
+    refetch,
+  } = useTailorDashboard(user?.id, user?.user_metadata?.display_name ?? '')
+
+  const stats = (dashboardData?.stats ?? null) as DashboardStats | null
+  const orders = (dashboardData?.orders ?? []) as ActiveOrderRow[]
+
+  useEffect(() => {
+    AsyncStorage.getItem(DASHBOARD_GUIDE_KEY)
+      .then((value) => {
+        if (value === '1') setShowGuide(false)
+      })
+      .catch(() => {})
+  }, [])
 
   const greeting = (() => {
     const h = new Date().getHours()
@@ -86,109 +104,19 @@ export default function TailorDashboard() {
     return 'Good evening'
   })()
 
-  async function fetchDashboard() {
-    setFetchError(false)
-    try {
-      const [profileRes, ordersRes] = await Promise.allSettled([
-        supabase
-          .from('tailor_profiles')
-          .select('id, display_name, tier, avg_rating, availability, currency, is_live, id_verification_status')
-          .eq('user_id', user?.id)
-          .maybeSingle(),
-        supabase
-          .from('orders')
-          .select(`
-            id, reference, garment_type, stage, quoted_completion_date, quoted_amount,
-            customer_profiles!customer_id(display_name)
-          `)
-          .eq('tailor_id', user?.id)
-          .not('stage', 'in', '("COMPLETE","DECLINED","EXPIRED","CANCELLED","REFUNDED")')
-          .order('created_at', { ascending: false })
-          .limit(20),
-      ])
-
-      const profile =
-        profileRes.status === 'fulfilled' && !profileRes.value.error
-          ? (profileRes.value.data as any)
-          : null
-
-      const orderList =
-        ordersRes.status === 'fulfilled' && !ordersRes.value.error
-          ? ((ordersRes.value.data ?? []) as any[])
-          : []
-
-      if (
-        (profileRes.status === 'rejected' || (profileRes.status === 'fulfilled' && profileRes.value.error)) &&
-        (ordersRes.status === 'rejected' || (ordersRes.status === 'fulfilled' && ordersRes.value.error))
-      ) {
-        setFetchError(true)
-        setStats(null)
-        setOrders([])
-        return
-      }
-
-      const pendingQuotes = orderList.filter((o) => o.stage === 'PENDING_QUOTE').length
-      const activeOrders = orderList.filter((o) => o.stage !== 'PENDING_QUOTE').length
-
-      const monthStart = new Date()
-      monthStart.setDate(1)
-      monthStart.setHours(0, 0, 0, 0)
-
-      let monthEarnings = 0
-      const { data: monthOrders, error: monthOrdersError } = await supabase
-        .from('orders')
-        .select('quoted_amount')
-        .eq('tailor_id', user?.id)
-        .in('stage', ['COMPLETE', 'DELIVERED', 'COLLECTED'])
-        .gte('updated_at', monthStart.toISOString())
-
-      if (!monthOrdersError) {
-        monthEarnings = (monthOrders ?? []).reduce((sum: number, o: any) => sum + (o.quoted_amount ?? 0), 0)
-      }
-
-      setStats({
-        activeOrders,
-        pendingQuotes,
-        monthEarnings,
-        avgRating: profile?.avg_rating ?? 0,
-        tier: profile?.tier ?? null,
-        displayName: profile?.display_name ?? user?.user_metadata?.display_name ?? '',
-        availability: profile?.availability ?? 'OPEN',
-        currency: profile?.currency ?? 'GBP',
-        isLive: profile?.is_live ?? false,
-        idVerificationStatus: profile?.id_verification_status ?? 'NOT_SUBMITTED',
-        profileId: profile?.id ?? null,
-      })
-
-      setOrders(
-        orderList.map((o) => ({
-          id: o.id,
-          reference: o.reference,
-          garmentType: o.garment_type,
-          stage: o.stage,
-          customerName: o.customer_profiles?.display_name ?? 'Customer',
-          estimatedDate: o.quoted_completion_date,
-          quotedAmount: o.quoted_amount,
-        }))
-      )
-    } catch {
-      setFetchError(true)
-      setStats(null)
-      setOrders([])
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useFocusEffect(useCallback(() => {
-    setLoading(true)
-    fetchDashboard()
-  }, [user?.id]))
+  useRefreshOnFocus(() => { void refetch() })
 
   async function onRefresh() {
     setRefreshing(true)
-    await fetchDashboard()
+    await refetch()
     setRefreshing(false)
+  }
+
+  async function dismissGuide() {
+    setShowGuide(false)
+    try {
+      await AsyncStorage.setItem(DASHBOARD_GUIDE_KEY, '1')
+    } catch {}
   }
 
   async function setAvailability(value: Availability) {
@@ -202,7 +130,7 @@ export default function TailorDashboard() {
       setAvailSaving(false)
       return
     }
-    setStats((prev) => prev ? { ...prev, availability: value } : prev)
+    await refetch()
     setAvailSaving(false)
     setAvailModal(false)
   }
@@ -211,7 +139,7 @@ export default function TailorDashboard() {
     OPEN: Colors.success, LIMITED: Colors.warning, FULLY_BOOKED: Colors.error,
   }[stats?.availability ?? 'OPEN']
 
-  if (loading) {
+  if (isLoading && !dashboardData) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']} testID="tailor-home-screen">
         <View style={styles.stateWrap}>
@@ -228,7 +156,7 @@ export default function TailorDashboard() {
     )
   }
 
-  if (fetchError) {
+  if (isError && !dashboardData) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']} testID="tailor-home-screen">
         <View style={styles.stateWrap}>
@@ -244,7 +172,7 @@ export default function TailorDashboard() {
                 Refresh here first. If the dashboard still does not load, open Orders first, then Profile if needed, so you can keep working while the overview catches up.
               </Text>
             </View>
-            <TouchableOpacity style={styles.retryBtn} onPress={() => { setLoading(true); fetchDashboard() }}>
+            <TouchableOpacity style={styles.retryBtn} onPress={() => { void refetch() }}>
               <Text style={styles.retryBtnText}>Try again</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.secondaryErrorBtn} onPress={() => router.push('/(tailor)/orders')}>
@@ -267,23 +195,17 @@ export default function TailorDashboard() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />}
       >
-        <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Tailor dashboard</Text>
+        {showGuide ? (
+          <View style={styles.guideCard}>
+            <View style={styles.guideHeader}>
+              <Text style={styles.guideEyebrow}>Best use</Text>
+              <TouchableOpacity onPress={() => { void dismissGuide() }} hitSlop={8}>
+                <Text style={styles.guideClose}>×</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.guideTitle}>Check quotes first, then anything waiting on your reply or update.</Text>
           </View>
-          <Text style={styles.heroTitle}>Run your order book, availability, and momentum from one place.</Text>
-          <Text style={styles.heroSub}>
-            This dashboard is your daily control surface for quotes, production progress, customer
-            trust, and the health of your tailoring business on Drape.
-          </Text>
-        </View>
-
-        <View style={styles.guideCard}>
-          <Text style={styles.guideTitle}>Best daily habit</Text>
-          <Text style={styles.guideText}>
-            Check quotes first, keep availability honest, and use this screen to spot anything that needs a faster reply or stage update.
-          </Text>
-        </View>
+        ) : null}
 
         {/* Header */}
         <View style={styles.header}>
@@ -389,7 +311,9 @@ export default function TailorDashboard() {
                 <Text style={styles.emptyOrdersBadgeText}>Order book</Text>
               </View>
               <Text style={styles.emptyText}>No active orders yet</Text>
-              {stats?.isLive ? (
+              {stats?.completedOrders ? (
+                <Text style={styles.emptyHint}>You’re caught up. Finished work still lives in Orders and Earnings.</Text>
+              ) : stats?.isLive ? (
                 <>
                   <Text style={styles.emptyHint}>Share your profile to attract your first clients.</Text>
                   {stats.profileId && (
@@ -434,8 +358,8 @@ export default function TailorDashboard() {
                 <View style={styles.orderRowLeft}>
                   <Text style={styles.orderGarment}>{order.garmentType}</Text>
                   <Text style={styles.orderCustomer}>{order.customerName}</Text>
-                  {dashboardOrderHint(order.stage) && (
-                    <Text style={styles.orderHint}>{dashboardOrderHint(order.stage)}</Text>
+                  {dashboardOrderHint(order.stage, order.orderKind) && (
+                    <Text style={styles.orderHint}>{dashboardOrderHint(order.stage, order.orderKind)}</Text>
                   )}
                 </View>
                 <View style={styles.orderRowRight}>
@@ -572,6 +496,15 @@ const styles = StyleSheet.create({
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
+  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  guideEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  guideClose: { fontSize: 20, lineHeight: 20, color: Colors.midGrey, paddingHorizontal: 4 },
   guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
