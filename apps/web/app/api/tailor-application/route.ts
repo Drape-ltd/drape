@@ -32,8 +32,14 @@ export async function POST(request: Request) {
   }
 
   const ip = getClientIp(request)
-  const allowed = await checkPublicRateLimit(client, `web:tailor-application:${ip}`, 3600, 10)
-  if (!allowed) {
+  const ipRateLimit = await checkPublicRateLimit(client, `web:tailor-application:ip:${ip}`, 3600, 30)
+  if (!ipRateLimit.ok) {
+    return NextResponse.json(
+      { error: 'We are unable to accept applications right now. Please try again shortly.' },
+      { status: 500 }
+    )
+  }
+  if (!ipRateLimit.allowed) {
     return NextResponse.json({ error: 'Too many requests. Please try again later.' }, { status: 429 })
   }
 
@@ -70,6 +76,22 @@ export async function POST(request: Request) {
       { error: 'Please include at least one portfolio or social proof link.' },
       { status: 400 }
     )
+  }
+
+  const emailRateLimit = await checkPublicRateLimit(
+    client,
+    `web:tailor-application:email:${email}`,
+    3600,
+    3,
+  )
+  if (!emailRateLimit.ok) {
+    return NextResponse.json(
+      { error: 'We are unable to accept applications right now. Please try again shortly.' },
+      { status: 500 }
+    )
+  }
+  if (!emailRateLimit.allowed) {
+    return NextResponse.json({ error: 'Too many requests. Please try again later.' }, { status: 429 })
   }
 
   const { error } = await client.from('tailor_applications').upsert(

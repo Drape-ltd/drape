@@ -22,8 +22,14 @@ export async function POST(request: Request) {
   }
 
   const ip = getClientIp(request)
-  const allowed = await checkPublicRateLimit(client, `web:waitlist:${ip}`, 3600, 20)
-  if (!allowed) {
+  const ipRateLimit = await checkPublicRateLimit(client, `web:waitlist:ip:${ip}`, 3600, 100)
+  if (!ipRateLimit.ok) {
+    return NextResponse.json(
+      { error: 'We are unable to accept waitlist signups right now. Please try again shortly.' },
+      { status: 500 }
+    )
+  }
+  if (!ipRateLimit.allowed) {
     return NextResponse.json({ error: 'Too many requests. Please try again later.' }, { status: 429 })
   }
 
@@ -47,6 +53,17 @@ export async function POST(request: Request) {
 
   if (!role || !name || !isEmail(email)) {
     return NextResponse.json({ error: 'Please provide a valid name, role, and email.' }, { status: 400 })
+  }
+
+  const emailRateLimit = await checkPublicRateLimit(client, `web:waitlist:email:${email}`, 3600, 5)
+  if (!emailRateLimit.ok) {
+    return NextResponse.json(
+      { error: 'We are unable to accept waitlist signups right now. Please try again shortly.' },
+      { status: 500 }
+    )
+  }
+  if (!emailRateLimit.allowed) {
+    return NextResponse.json({ error: 'Too many requests. Please try again later.' }, { status: 429 })
   }
 
   const { error } = await client.from('waitlist_signups').upsert(
