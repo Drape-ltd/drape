@@ -25,7 +25,10 @@ function isOptionalUrl(value: unknown): value is string | null {
 export async function POST(request: Request) {
   const client = createServiceRoleClient()
   if (!client) {
-    return NextResponse.json({ error: 'Server configuration is incomplete.' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'We are unable to accept applications right now. Please try again shortly.' },
+      { status: 500 }
+    )
   }
 
   const ip = getClientIp(request)

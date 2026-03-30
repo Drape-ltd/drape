@@ -1,16 +1,15 @@
 import 'server-only'
 import { createClient } from '@supabase/supabase-js'
-
-function getSupabaseUrl(): string | null {
-  return process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? null
-}
+import {
+  getMissingServiceRoleEnvVars,
+  getSupabasePublishableKey,
+  getSupabaseUrl,
+  logMissingServerSupabaseConfig,
+} from './supabase-config'
 
 export function createPublicServerClient() {
   const supabaseUrl = getSupabaseUrl()
-  const supabaseKey =
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
-    null
+  const supabaseKey = getSupabasePublishableKey()
 
   if (!supabaseUrl || !supabaseKey) {
     return null
@@ -23,11 +22,14 @@ export function createPublicServerClient() {
 
 export function createServiceRoleClient() {
   const supabaseUrl = getSupabaseUrl()
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? null
+  const missing = getMissingServiceRoleEnvVars()
 
-  if (!supabaseUrl || !serviceRoleKey) {
+  if (!supabaseUrl || missing.length) {
+    logMissingServerSupabaseConfig('server-supabase', missing)
     return null
   }
+
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
   return createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
