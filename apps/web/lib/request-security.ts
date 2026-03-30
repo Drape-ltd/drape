@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 const MAX_JSON_BODY_BYTES = 16_384
+const UNKNOWN_IP = 'unknown'
 
 export async function readJsonBody(
   request: Request,
@@ -60,9 +61,11 @@ export async function readJsonBody(
 }
 
 export function getClientIp(request: Request): string {
+  const cloudflareIp = request.headers.get('cf-connecting-ip') ?? ''
   const forwardedFor = request.headers.get('x-forwarded-for') ?? ''
   const realIp = request.headers.get('x-real-ip') ?? ''
-  const candidate = forwardedFor.split(',')[0]?.trim() || realIp.trim() || 'unknown'
+  const candidate =
+    cloudflareIp.trim() || forwardedFor.split(',')[0]?.trim() || realIp.trim() || UNKNOWN_IP
   return candidate.slice(0, 128)
 }
 
@@ -71,7 +74,7 @@ export async function checkPublicRateLimit(
   key: string,
   windowSeconds: number,
   maxRequests: number,
-): Promise<boolean> {
+): Promise<{ ok: true; allowed: boolean } | { ok: false; error: string }> {
   const { data, error } = await client.rpc('check_rate_limit', {
     p_key: key,
     p_window_seconds: windowSeconds,
@@ -80,10 +83,10 @@ export async function checkPublicRateLimit(
 
   if (error) {
     console.error('[web rateLimit] error:', error.message)
-    return false
+    return { ok: false, error: error.message }
   }
 
-  return data === true
+  return { ok: true, allowed: data === true }
 }
 
 export function trimmedString(value: unknown, max: number): string {
