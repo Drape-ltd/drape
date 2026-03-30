@@ -19,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { requestAccountDeletion } from '@/lib/account-deletion'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 type PrivacyPrefs = {
@@ -39,6 +40,7 @@ export default function PrivacyScreen() {
   const { user } = useAuth()
   const [prefs, setPrefs] = useState<PrivacyPrefs>(DEFAULT_PREFS)
   const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     const stored = user?.user_metadata?.privacy_prefs
@@ -84,23 +86,36 @@ export default function PrivacyScreen() {
   function handleDeleteAccount() {
     Alert.alert(
       'Delete account',
-      'This will permanently delete your Drape account and all associated data. This cannot be undone.\n\nWe will process your request within 30 days.',
+      'This starts a permanent account deletion request inside Drape. We may retain transaction records where legally required, but your account will be closed and queued for removal.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Request deletion',
           style: 'destructive',
           onPress: () => {
-            void openExternalUrl(
-              'mailto:support@drapeon.co?subject=Account%20deletion%20request&body=Please%20delete%20my%20Drape%20account%20and%20all%20associated%20data.',
-              'Please email support@drapeon.co with the subject "Account deletion request".',
-            ).then((opened) => {
-              if (!opened) return
+            void (async () => {
+              setDeleting(true)
+              const result = await requestAccountDeletion()
+              setDeleting(false)
+
+              if (result.error) {
+                Alert.alert('Error', 'We could not submit your deletion request right now. Please try again.')
+                return
+              }
+
+              if (result.alreadyPending) {
+                Alert.alert(
+                  'Already requested',
+                  'You already have a pending deletion request. Our team will continue processing it.'
+                )
+                return
+              }
+
               Alert.alert(
-                'Request sent',
-                "We've opened a deletion request email. Send it from your registered address and our team will process it within 30 days.",
+                'Request received',
+                'Your deletion request has been submitted inside Drape. We will process it and contact you if anything requires confirmation.'
               )
-            })
+            })()
           },
         },
       ],
@@ -108,8 +123,7 @@ export default function PrivacyScreen() {
   }
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(customer)/profile')
+    router.replace('/(customer)/profile')
   }
 
   return (
@@ -120,7 +134,7 @@ export default function PrivacyScreen() {
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Privacy</Text>
-        {saving && <ActivityIndicator size="small" color={Colors.midGrey} style={{ marginLeft: 'auto' }} />}
+        {(saving || deleting) && <ActivityIndicator size="small" color={Colors.midGrey} style={{ marginLeft: 'auto' }} />}
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.xl, paddingBottom: 64, gap: Spacing.xl }}>
@@ -128,25 +142,11 @@ export default function PrivacyScreen() {
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Privacy control</Text>
           </View>
-          <Text style={styles.heroTitle}>Your measurements stay private until you choose to begin an order.</Text>
-          <Text style={styles.heroSub}>
-            Review how Drape personalises your experience, communicates with you, and helps you
-            manage your account data.
-          </Text>
-        </View>
-
-        <View style={styles.guideCard}>
-          <Text style={styles.guideEyebrow}>Important to know</Text>
-          <Text style={styles.guideTitle}>Fit data stays protected by default and only shares when you start an order.</Text>
-          <Text style={styles.guideCopy}>
-            Most controls here affect personalisation, marketing, and analytics. Your core order flow and transactional updates still work even if you switch those preferences off.
-          </Text>
+          <Text style={styles.heroTitle}>Privacy and account controls.</Text>
         </View>
 
         {/* ── Intro ── */}
-        <Text style={styles.intro}>
-          Control how Drape uses your information. Your measurements are always private and only shared with a tailor when you start an order.
-        </Text>
+        <Text style={styles.intro}>Your measurements only share when you start an order.</Text>
 
         {/* ── Data & personalisation ── */}
         <View style={styles.section}>

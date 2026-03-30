@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Image, ActivityIndicator, Alert, Linking, Modal, KeyboardAvoidingView, Platform, TextInput, RefreshControl,
 } from 'react-native'
-import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
+import { useFocusEffect, useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
@@ -25,8 +25,15 @@ type StageUpdate = {
 type OrderDetail = {
   id: string
   reference: string
+  orderKind: 'CUSTOM' | 'READY_MADE'
+  sellerItemId: string | null
+  fulfillmentOption: string | null
   garmentType: string
   garmentDescription: string | null
+  itemTitle: string | null
+  itemSize: string | null
+  itemQuantity: number
+  itemSubtotal: number | null
   stage: OrderStage
   tailorId: string
   tailorName: string
@@ -69,54 +76,56 @@ function stageIndex(stage: OrderStage): number {
   return PROGRESS_STAGES.indexOf(normalised as OrderStage)
 }
 
-function stageGuidance(stage: OrderStage, deliveryMethod: string): string | null {
+function stageGuidance(stage: OrderStage, deliveryMethod: string, orderKind: 'CUSTOM' | 'READY_MADE'): string | null {
   if (stage === 'CONSULTATION') {
-    return 'Your tailor wants to speak before quoting. Keep an eye on messages for the consultation link and next steps.'
+    return 'Consultation comes before the quote.'
   }
   if (stage === 'PAYMENT_PENDING') {
-    return 'Your quote has been accepted and payment is being confirmed before production starts.'
+    return orderKind === 'READY_MADE'
+      ? 'Checkout is still pending. Finish payment before this purchase can move forward.'
+      : 'Payment is being confirmed.'
   }
   if (stage === 'CONFIRMED') {
-    return 'Your order is confirmed. Your tailor is preparing to begin production.'
+    return 'Your order is confirmed.'
   }
   if (stage === 'DESIGNING') {
-    return 'Your tailor is working through design details and pattern decisions before cutting begins.'
+    return 'Design details are being worked through.'
   }
   if (stage === 'SOURCING') {
-    return 'Your tailor is sourcing fabric or materials for this order.'
+    return 'Fabric or materials are being sourced.'
   }
   if (stage === 'CUTTING') {
-    return 'Fabric is being cut to your measurements.'
+    return 'Fabric is being cut.'
   }
   if (stage === 'SEWING') {
-    return 'Your garment is being sewn together.'
+    return 'Your garment is being sewn.'
   }
   if (stage === 'FINISHING') {
-    return 'Final touches, pressing, and quality checks are underway.'
+    return 'Final checks and finishing are underway.'
   }
   if (stage === 'SHIPPED') {
-    return 'Your tailor has shipped this order. Track the delivery, then confirm receipt once it reaches you.'
+    return 'Track delivery, then confirm receipt once it arrives.'
   }
   if (stage === 'DELIVERED') {
-    return 'Your order shows as delivered. Check everything carefully, then finish the order once you are happy with it.'
+    return 'Check everything, then finish the order. Review is optional.'
   }
   if (stage === 'COLLECTED') {
-    return 'Collection is confirmed. Check everything carefully, then finish the order once you are happy with it.'
+    return 'Collection is confirmed. Finish the order when you are happy. Review is optional.'
   }
   if (stage === 'COMPLETE') {
-    return 'This order is complete. Your timeline and review stay here if you ever need to look back.'
+    return 'This order is complete.'
   }
   if (stage === 'IN_DISPUTE') {
-    return 'Your concern is under review. Payment stays on hold while we assess what happened.'
+    return 'Your concern is under review.'
   }
   if (stage === 'READY_FOR_COLLECTION' && deliveryMethod === 'LOCAL_COLLECTION') {
-    return 'Bring your collection code when you meet your tailor. Payment only releases after collection is confirmed.'
+    return 'Bring your collection code to pickup.'
   }
   return null
 }
 
 export default function OrderTrackingScreen() {
-  const { id, sent, tab } = useLocalSearchParams<{ id: string; sent?: string; tab?: string }>()
+  const { id, sent, tab, returnTo } = useLocalSearchParams<{ id: string; sent?: string; tab?: string; returnTo?: string }>()
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
@@ -130,6 +139,14 @@ export default function OrderTrackingScreen() {
   }
 
   function goBack() {
+    if (sent === '1') {
+      router.replace({ pathname: '/(customer)/orders', params: { tab: 'active' } })
+      return
+    }
+    if (returnTo) {
+      router.replace(returnTo as any)
+      return
+    }
     if (navigation.canGoBack()) router.back()
     else router.replace({ pathname: '/(customer)/orders', params: { tab: fallbackTab(order?.stage) } })
   }
@@ -174,7 +191,7 @@ export default function OrderTrackingScreen() {
     }
   }
 
-  async function fetchOrder() {
+  const fetchOrder = useCallback(async () => {
     setLoading(true)
     setFetchError(false)
     setOrder(null)
@@ -183,7 +200,7 @@ export default function OrderTrackingScreen() {
         supabase
           .from('orders')
           .select(`
-            id, reference, garment_type, garment_description, stage,
+            id, reference, order_kind, seller_item_id, fulfillment_option, garment_type, garment_description, item_title, item_size, item_quantity, item_subtotal, stage,
             tailor_id, tailor_profile_id, quoted_amount, quoted_currency, consultation_fee, quoted_completion_date,
             fabric_source, delivery_method, fabric_tracking, tracking_number, carrier,
             collection_code, video_call_url, created_at,
@@ -226,8 +243,15 @@ export default function OrderTrackingScreen() {
         setOrder({
           id: d.id,
           reference: d.reference,
+          orderKind: d.order_kind ?? 'CUSTOM',
+          sellerItemId: d.seller_item_id ?? null,
+          fulfillmentOption: d.fulfillment_option ?? null,
           garmentType: d.garment_type,
           garmentDescription: d.garment_description,
+          itemTitle: d.item_title ?? null,
+          itemSize: d.item_size ?? null,
+          itemQuantity: d.item_quantity ?? 1,
+          itemSubtotal: d.item_subtotal ?? null,
           stage: d.stage,
           tailorId: d.tailor_id,
           tailorName: d.tailor_profiles?.display_name ?? '',
@@ -260,7 +284,7 @@ export default function OrderTrackingScreen() {
       setOrder(null)
       setLoading(false)
     }
-  }
+  }, [id, user?.id])
 
   async function handleRefresh() {
     setRefreshing(true)
@@ -268,7 +292,13 @@ export default function OrderTrackingScreen() {
     setRefreshing(false)
   }
 
-  useEffect(() => { void fetchOrder() }, [id, user?.id])
+  useEffect(() => { void fetchOrder() }, [fetchOrder])
+
+  useFocusEffect(
+    useCallback(() => {
+      void fetchOrder()
+    }, [fetchOrder])
+  )
 
   async function confirmReceipt() {
     if (confirming) return
@@ -307,17 +337,17 @@ export default function OrderTrackingScreen() {
       return
     }
     setSavingFabric(true)
-    const { error } = await supabase
-      .from('orders')
-      .update({ fabric_tracking: fabricTracking.trim() })
-      .eq('id', id)
-      .eq('customer_id', user?.id)
+    const { error, data } = await invokeFunction<{ ok: boolean; fabricTracking?: string }>('customer-order-action', {
+      body: { orderId: id, action: 'save-fabric-tracking', fabricTracking: fabricTracking.trim() },
+    })
     setSavingFabric(false)
     if (error) {
       Sentry.captureException(error, { extra: { context: 'save_fabric_tracking', orderId: id } })
       Alert.alert('Error', 'Could not save tracking number. Please try again.')
     } else {
-      setOrder((prev) => prev ? { ...prev, fabricTracking: fabricTracking.trim() } : prev)
+      const nextValue = data?.fabricTracking ?? fabricTracking.trim()
+      setFabricTracking(nextValue)
+      setOrder((prev) => prev ? { ...prev, fabricTracking: nextValue } : prev)
     }
   }
 
@@ -329,9 +359,7 @@ export default function OrderTrackingScreen() {
             <Text style={styles.stateEyebrow}>Order detail</Text>
             <ActivityIndicator color={Colors.needleGreen} size="large" />
             <Text style={styles.stateTitle}>Loading your order…</Text>
-            <Text style={styles.stateHint}>
-              We’re pulling together the latest quote, production progress, delivery details, and timeline.
-            </Text>
+            <Text style={styles.stateHint}>Pulling the latest order updates.</Text>
           </View>
         </View>
       </SafeAreaView>
@@ -345,15 +373,7 @@ export default function OrderTrackingScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Order detail</Text>
             <Text style={styles.stateTitle}>Couldn't load this order.</Text>
-            <Text style={styles.stateHint}>
-              This screen should show your live order status, messages bridge, and delivery or collection details. Please try again.
-            </Text>
-            <View style={styles.stateGuideCard}>
-              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
-              <Text style={styles.stateGuideText}>
-                Refresh here first. If it still fails, open your orders list first, then messages if needed, so you can keep moving while the full detail catches up.
-              </Text>
-            </View>
+            <Text style={styles.stateHint}>Try again, or open this order from your list.</Text>
             <TouchableOpacity onPress={fetchOrder} style={styles.retryBtn}>
               <Text style={styles.retryBtnText}>Try again</Text>
             </TouchableOpacity>
@@ -385,15 +405,7 @@ export default function OrderTrackingScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Order detail</Text>
             <Text style={styles.stateTitle}>Order not found.</Text>
-            <Text style={styles.stateHint}>
-              This order may have moved, expired, or no longer be available on this account.
-            </Text>
-            <View style={styles.stateGuideCard}>
-              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
-              <Text style={styles.stateGuideText}>
-                Go back to your orders list first. If you were following an older link, reopen the live order from there so you land on the current thread.
-              </Text>
-            </View>
+            <Text style={styles.stateHint}>Open your orders list and try again.</Text>
             <TouchableOpacity
               onPress={() => router.replace({ pathname: '/(customer)/orders', params: { tab } })}
               style={styles.secondaryBtn}
@@ -415,7 +427,7 @@ export default function OrderTrackingScreen() {
   const currentStageIdx = stageIndex(progressStage)
   const latestUpdate = [...order.stageUpdates].reverse()[0]
   const isCollection = order.deliveryMethod === 'LOCAL_COLLECTION'
-  const stageHelp = stageGuidance(order.stage, order.deliveryMethod)
+  const stageHelp = stageGuidance(order.stage, order.deliveryMethod, order.orderKind)
 
   // ── QUOTE_SENT state — dedicated accept / decline view ──────────────────
   if (order.stage === 'QUOTE_SENT') {
@@ -432,12 +444,13 @@ export default function OrderTrackingScreen() {
 
   // ── PENDING_QUOTE — waiting on tailor ───────────────────────────────────
   if (order.stage === 'PENDING_QUOTE') {
+    const isReadyMadeInquiry = order.orderKind === 'READY_MADE'
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <TouchableOpacity style={styles.back} onPress={goBack}>
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
-        <View style={styles.content}>
+          <View style={styles.content}>
           {sent === '1' && (
             <View style={styles.sentBanner}>
               <Text style={styles.sentBannerText}>
@@ -448,22 +461,45 @@ export default function OrderTrackingScreen() {
           <Text style={styles.heading}>{order.garmentType}</Text>
           <Text style={styles.subheading}>{order.tailorName}  ·  #{order.reference}</Text>
           <View style={styles.statusCard} testID="order-pending-quote">
-            <Text style={styles.statusStage}>Awaiting quote</Text>
+            <Text style={styles.statusStage}>{isReadyMadeInquiry ? 'Inquiry open' : 'Awaiting quote'}</Text>
             <Text style={styles.statusNote}>
-              Your order has been sent to {order.tailorName.split(' ')[0]}. While you wait for their quote, you can message them with any extra details.
+              {isReadyMadeInquiry
+                ? `Your chat with ${order.tailorName.split(' ')[0]} is open. Ask about size, fit, colour, pickup, or delivery before you buy.`
+                : `Your brief is with ${order.tailorName.split(' ')[0]}. Message them if needed.`}
             </Text>
           </View>
           <View style={styles.nextStepsCard}>
             <Text style={styles.nextStepsTitle}>What happens next</Text>
-            <Text style={styles.nextStepsItem}>1. {order.tailorName.split(' ')[0]} reviews your order and sends a quote</Text>
-            <Text style={styles.nextStepsItem}>2. You review the quote and accept or decline</Text>
-            <Text style={styles.nextStepsItem}>3. Production starts once you accept</Text>
+            {isReadyMadeInquiry ? (
+              <>
+                <Text style={styles.nextStepsItem}>1. Message the seller about this item</Text>
+                <Text style={styles.nextStepsItem}>2. Once you are ready, continue to checkout</Text>
+                <Text style={styles.nextStepsItem}>3. Your purchase order starts after checkout</Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.nextStepsItem}>1. {order.tailorName.split(' ')[0]} reviews your order and sends a quote</Text>
+                <Text style={styles.nextStepsItem}>2. You review the quote and accept or decline</Text>
+                <Text style={styles.nextStepsItem}>3. Production starts once you accept</Text>
+              </>
+            )}
           </View>
           <Button
             label={`Message ${order.tailorName.split(' ')[0]}`}
             variant="secondary"
-            onPress={() => router.navigate(`/(customer)/messages/${order.id}`)}
+            onPress={() =>
+              router.navigate({
+                pathname: '/(customer)/messages/[orderId]',
+                params: { orderId: order.id, returnTo: `/(customer)/orders/${order.id}` },
+              })
+            }
           />
+          {isReadyMadeInquiry && order.sellerItemId ? (
+            <Button
+              label="Continue to checkout"
+              onPress={() => router.navigate(`/(customer)/tailor/item/checkout/${order.sellerItemId}`)}
+            />
+          ) : null}
         </View>
       </SafeAreaView>
     )
@@ -486,13 +522,11 @@ export default function OrderTrackingScreen() {
           <View>
             <Text style={styles.heading}>{order.garmentType}</Text>
             <Text style={styles.subheading}>{order.tailorName}  ·  #{order.reference}</Text>
-          </View>
-
-          <View style={styles.guideCard}>
-            <Text style={styles.guideTitle}>Best way to use this screen</Text>
-            <Text style={styles.guideText}>
-              Use this as your single source of truth for progress, delivery or collection details, and the next action you need to take.
-            </Text>
+            {order.orderKind === 'READY_MADE' ? (
+              <View style={styles.orderTypePill}>
+                <Text style={styles.orderTypePillText}>Ready-made order</Text>
+              </View>
+            ) : null}
           </View>
 
           {/* Stage progress bar */}
@@ -569,7 +603,12 @@ export default function OrderTrackingScreen() {
                 <Button
                   label={`Message ${order.tailorName.split(' ')[0]}`}
                   variant="secondary"
-                  onPress={() => router.navigate(`/(customer)/messages/${order.id}`)}
+                  onPress={() =>
+                    router.navigate({
+                      pathname: '/(customer)/messages/[orderId]',
+                      params: { orderId: order.id, returnTo: `/(customer)/orders/${order.id}` },
+                    })
+                  }
                 />
               )}
             </View>
@@ -624,11 +663,39 @@ export default function OrderTrackingScreen() {
               activeOpacity={0.85}
             >
               <View style={styles.reviewCtaInner}>
-                <Text style={styles.reviewCtaTitle}>How was your order?</Text>
-                <Text style={styles.reviewCtaHint}>Leave a review for {order.tailorName.split(' ')[0]}</Text>
+                <Text style={styles.reviewCtaTitle}>
+                  {order.stage === 'COMPLETE' ? 'Leave a review' : 'Finish this order'}
+                </Text>
+                <Text style={styles.reviewCtaHint}>
+                  {order.stage === 'COMPLETE'
+                    ? `Share how it went with ${order.tailorName.split(' ')[0]}`
+                    : 'Review is optional on the next screen.'}
+                </Text>
               </View>
-              <Text style={styles.reviewCtaArrow}>★  Rate</Text>
+              <Text style={styles.reviewCtaArrow}>
+                {order.stage === 'COMPLETE' ? '★  Rate' : 'Finish →'}
+              </Text>
             </TouchableOpacity>
+          )}
+
+          {order.orderKind === 'READY_MADE' && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Purchase details</Text>
+              <View style={styles.timelineContent}>
+                {order.itemTitle ? <SummaryLine label="Item" value={order.itemTitle} /> : null}
+                {order.itemSize ? <SummaryLine label="Size" value={order.itemSize} /> : null}
+                <SummaryLine label="Quantity" value={`${order.itemQuantity}`} />
+                {order.fulfillmentOption ? (
+                  <SummaryLine
+                    label="Fulfillment"
+                    value={order.fulfillmentOption === 'PICKUP' ? 'Pickup' : order.fulfillmentOption === 'DELIVERY' ? 'Delivery' : order.fulfillmentOption === 'SHIPPING' ? 'Shipping' : order.fulfillmentOption}
+                  />
+                ) : null}
+                {order.itemSubtotal != null ? (
+                  <SummaryLine label="Subtotal" value={formatAmount(order.itemSubtotal, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)} />
+                ) : null}
+              </View>
+            </View>
           )}
 
           {/* Timeline */}
@@ -704,7 +771,12 @@ export default function OrderTrackingScreen() {
         <Button
           label={`Message ${order.tailorName.split(' ')[0]}`}
           variant="secondary"
-          onPress={() => router.navigate(`/(customer)/messages/${order.id}`)}
+          onPress={() =>
+            router.navigate({
+              pathname: '/(customer)/messages/[orderId]',
+              params: { orderId: order.id, returnTo: `/(customer)/orders/${order.id}` },
+            })
+          }
           testID="message-tailor-btn"
         />
         {/* Dispute entry — available from CONFIRMED onward, before auto-release */}
@@ -732,6 +804,15 @@ export default function OrderTrackingScreen() {
         userId={user?.id ?? ''}
       />
     </SafeAreaView>
+  )
+}
+
+function SummaryLine({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.summaryLine}>
+      <Text style={styles.summaryLineLabel}>{label}</Text>
+      <Text style={styles.summaryLineValue}>{value}</Text>
+    </View>
   )
 }
 
@@ -900,7 +981,7 @@ function QuoteReviewScreen({
   order, onAction, router, userId, preferredTab,
 }: {
   order: OrderDetail
-  onAction: () => void
+  onAction: () => Promise<void>
   router: ReturnType<typeof useRouter>
   userId: string
   preferredTab?: string
@@ -943,7 +1024,11 @@ function QuoteReviewScreen({
               Sentry.captureException(error, { extra: { context: 'accept_quote', orderId: order.id } })
               Alert.alert('Error', 'Could not accept the quote. Please try again.')
             } else {
-              onAction()
+              await onAction()
+              router.replace({
+                pathname: `/(customer)/orders/${order.id}` as any,
+                params: { tab: preferredTab === 'completed' ? 'completed' : 'active' },
+              })
             }
           },
         },
@@ -1085,7 +1170,12 @@ function QuoteReviewScreen({
         <Button
           label={`Message ${order.tailorName.split(' ')[0]}`}
           variant="ghost"
-          onPress={() => router.navigate(`/(customer)/messages/${order.id}`)}
+          onPress={() =>
+            router.navigate({
+              pathname: '/(customer)/messages/[orderId]',
+              params: { orderId: order.id, returnTo: `/(customer)/orders/${order.id}` },
+            })
+          }
         />
       </View>
     </SafeAreaView>
@@ -1170,6 +1260,15 @@ const styles = StyleSheet.create({
   },
   videoCallTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   consultationFeeText: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
+  orderTypePill: {
+    marginTop: Spacing.sm,
+    alignSelf: 'flex-start',
+    backgroundColor: Colors.needleGreenLight,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+  },
+  orderTypePillText: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.5 },
   videoCallHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   // Collection code
@@ -1212,6 +1311,9 @@ const styles = StyleSheet.create({
   },
   trackingLabel: { fontSize: FontSize.sm, color: Colors.inkLight },
   trackingNumber: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
+  summaryLine: { flexDirection: 'row', justifyContent: 'space-between', gap: Spacing.md },
+  summaryLineLabel: { fontSize: FontSize.sm, color: Colors.midGrey },
+  summaryLineValue: { flex: 1, textAlign: 'right', fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.medium },
 
   // Fabric tracking input
   trackingHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },

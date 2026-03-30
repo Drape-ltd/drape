@@ -62,8 +62,7 @@ export default function HelpScreen() {
   const [openIndex, setOpenIndex] = useState<number | null>(null)
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(customer)/profile')
+    router.replace('/(customer)/profile')
   }
 
   function toggleFaq(i: number) {

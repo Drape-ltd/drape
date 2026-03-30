@@ -61,23 +61,8 @@ export default function RoleSelectScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.content}>
         <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Choose your starting side</Text>
-          </View>
           <Text style={styles.heading}>How will you use Drape first?</Text>
-          <Text style={styles.sub}>
-            We’ll shape your experience around this choice, and you can still change paths later if you need to.
-          </Text>
-          <View style={styles.heroPoints}>
-            <View style={styles.heroPoint}>
-              <Text style={styles.heroPointTitle}>One account</Text>
-              <Text style={styles.heroPointCopy}>You’re not choosing between two different apps. You’re choosing which side of Drape to enter first.</Text>
-            </View>
-            <View style={styles.heroPoint}>
-              <Text style={styles.heroPointTitle}>Easy to adjust</Text>
-              <Text style={styles.heroPointCopy}>If your needs change later, we can still move you cleanly into the right workflow.</Text>
-            </View>
-          </View>
+          <Text style={styles.sub}>Choose the side you want first.</Text>
         </View>
 
         <View style={styles.roleRow}>
@@ -92,7 +77,7 @@ export default function RoleSelectScreen() {
               <Text style={[styles.roleLabel, role === 'CUSTOMER' && styles.roleLabelActive]}>
                 Customer
               </Text>
-              <Text style={styles.roleHint}>Discover tailors, place an order, review your quote, and follow every stage through to completion.</Text>
+              <Text style={styles.roleHint}>Discover tailors, place orders, and track them.</Text>
             </View>
             <View style={[styles.roleCheck, role === 'CUSTOMER' && styles.roleCheckActive]}>
               <Text style={[styles.roleCheckText, role === 'CUSTOMER' && styles.roleCheckTextActive]}>✓</Text>
@@ -110,7 +95,7 @@ export default function RoleSelectScreen() {
               <Text style={[styles.roleLabel, role === 'TAILOR' && styles.roleLabelActive]}>
                 Tailor
               </Text>
-              <Text style={styles.roleHint}>Receive briefs, run consultations, send quotes, and manage production in one workspace.</Text>
+              <Text style={styles.roleHint}>Receive briefs, send quotes, and manage orders.</Text>
             </View>
             <View style={[styles.roleCheck, role === 'TAILOR' && styles.roleCheckActive]}>
               <Text style={[styles.roleCheckText, role === 'TAILOR' && styles.roleCheckTextActive]}>✓</Text>
@@ -119,20 +104,8 @@ export default function RoleSelectScreen() {
         </View>
 
         <View style={styles.actionCard}>
-          <View style={styles.guideCard}>
-            <Text style={styles.guideTitle}>Best starting point</Text>
-            <Text style={styles.guideText}>
-              Choose the side you want to use first. Drape will take you through the right setup next, and we can still adapt later if your needs change.
-            </Text>
-          </View>
           <View style={styles.nextCard}>
-            <Text style={styles.nextEyebrow}>What happens next</Text>
-            <Text style={styles.nextTitle}>
-              We’ll take you straight into the right setup flow for this side of Drape.
-            </Text>
-            <Text style={styles.nextCopy}>
-              Customers finish a few fit and profile basics. Tailors continue into storefront, availability, and verification.
-            </Text>
+            <Text style={styles.nextTitle}>You’ll go into setup for this side of Drape.</Text>
           </View>
           <TouchableOpacity
             style={[styles.btn, loading && styles.btnDisabled]}
@@ -167,29 +140,8 @@ const styles = StyleSheet.create({
     padding: Spacing.xl,
     gap: Spacing.lg,
   },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 6,
-  },
-  heroBadgeText: {
-    fontSize: FontSize.xs,
-    color: Colors.needleGreen,
-    fontWeight: FontWeight.semibold,
-  },
   heading: { fontSize: 34, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 40, letterSpacing: -0.6 },
   sub: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 24 },
-  heroPoints: { gap: Spacing.md },
-  heroPoint: {
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-    gap: 4,
-  },
-  heroPointTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  heroPointCopy: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   roleRow: { gap: Spacing.md },
   roleCard: {
     flexDirection: 'row',
@@ -246,49 +198,18 @@ const styles = StyleSheet.create({
     padding: Spacing.xl,
     gap: Spacing.sm,
   },
-  guideCard: {
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: 4,
-    marginBottom: Spacing.sm,
-  },
-  guideTitle: {
-    fontSize: FontSize.xs,
-    color: Colors.needleGreen,
-    fontWeight: FontWeight.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  guideText: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    lineHeight: 21,
-  },
   nextCard: {
     backgroundColor: Colors.bone,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: 4,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
     marginBottom: Spacing.sm,
-  },
-  nextEyebrow: {
-    fontSize: FontSize.xs,
-    color: Colors.midGrey,
-    fontWeight: FontWeight.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
   },
   nextTitle: {
     fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
     lineHeight: 21,
-  },
-  nextCopy: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    lineHeight: 20,
   },
   btn: {
     backgroundColor: Colors.needleGreen,

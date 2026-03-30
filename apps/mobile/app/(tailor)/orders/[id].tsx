@@ -31,6 +31,8 @@ type Measurement = {
 
 type OrderDetail = {
   id: string; reference: string; garmentType: string
+  orderKind: 'CUSTOM' | 'READY_MADE'; fulfillmentOption: string | null
+  itemTitle: string | null; itemSize: string | null; itemQuantity: number; itemSubtotal: number | null
   garmentDescription: string | null; stage: OrderStage
   customerId: string; customerName: string
   quotedAmount: number | null; quotedCurrency: string; quotedCompletionDate: string | null
@@ -50,12 +52,15 @@ function asStringList(value: unknown): string[] {
   return []
 }
 
-function orderStatusGuidance(stage: OrderStage): string | null {
+function orderStatusGuidance(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): string | null {
   if (stage === 'CONSULTATION') {
     return 'Use the consultation to clarify fit, fabric, and expectations before you send a quote.'
   }
   if (stage === 'QUOTE_SENT') {
     return 'Your quote is with the customer. Production starts once they accept it.'
+  }
+  if (stage === 'PAYMENT_PENDING' && orderKind === 'READY_MADE') {
+    return 'This ready-made purchase is waiting for checkout to be completed.'
   }
   if (stage === 'CONFIRMED') {
     return 'The customer has accepted your quote. Move this order into the first production stage when work begins.'
@@ -118,19 +123,19 @@ const FLEXIBLE_NEXT_STAGES: Partial<Record<OrderStage, OrderStage[]>> = {
 
 const GARMENT_CONTEXT_LABELS: Record<string, string> = {
   MENSWEAR: 'Menswear cuts', WOMENSWEAR: 'Womenswear cuts',
-  BOTH: 'Both', PREFER_NOT: 'Prefer not to say',
+  BOTH: 'Both', PREFER_NOT: 'Prefer not to say', PREFER_NOT_TO_SAY: 'Prefer not to say',
 }
 const BODY_SHAPE_LABELS: Record<string, string> = {
   RECTANGLE: 'Rectangle', BROAD_SHOULDERS: 'Broad shoulders',
   FULL_HIPS: 'Full hips', DEFINED_WAIST: 'Defined waist',
   FULL_MIDSECTION: 'Full midsection', ATHLETIC: 'Athletic / muscular',
-  PREFER_NOT: 'Prefer not to say',
+  PREFER_NOT: 'Prefer not to say', PREFER_NOT_TO_SAY: 'Prefer not to say',
 }
 
 // ─── Main screen ──────────────────────────────────────────────────────────────
 
 export default function TailorOrderDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>()
+  const { id, returnTo } = useLocalSearchParams<{ id: string; returnTo?: string }>()
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
@@ -150,6 +155,10 @@ export default function TailorOrderDetailScreen() {
   }
 
   function goBack() {
+    if (returnTo) {
+      router.replace(returnTo as any)
+      return
+    }
     if (navigation.canGoBack()) router.back()
     else router.replace('/(tailor)/orders')
   }
@@ -173,7 +182,7 @@ export default function TailorOrderDetailScreen() {
     const { data, error } = await supabase
       .from('orders')
       .select(`
-        id, reference, garment_type, garment_description, stage,
+        id, reference, order_kind, fulfillment_option, garment_type, garment_description, item_title, item_size, item_quantity, item_subtotal, stage,
         customer_id, quoted_amount, quoted_currency, quoted_completion_date,
         fabric_source, delivery_method, delivery_address, tracking_number, carrier, reference_photos, fit_note,
         customer_measurements_snapshot, collection_code, video_call_url,
@@ -194,6 +203,8 @@ export default function TailorOrderDetailScreen() {
       const d = data as any
       setOrder({
         id: d.id, reference: d.reference, garmentType: d.garment_type,
+        orderKind: d.order_kind ?? 'CUSTOM', fulfillmentOption: d.fulfillment_option ?? null,
+        itemTitle: d.item_title ?? null, itemSize: d.item_size ?? null, itemQuantity: d.item_quantity ?? 1, itemSubtotal: d.item_subtotal ?? null,
         garmentDescription: d.garment_description, stage: d.stage,
         customerId: d.customer_id,
         customerName: d.customer_profiles?.display_name ?? 'Customer',
@@ -237,15 +248,7 @@ export default function TailorOrderDetailScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Order detail</Text>
             <Text style={styles.stateTitle}>Couldn't load this order.</Text>
-            <Text style={styles.stateHint}>
-              This screen should give you the full brief, fit context, and next production action. Please try again.
-            </Text>
-            <View style={styles.stateGuideCard}>
-              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
-              <Text style={styles.stateGuideText}>
-                Refresh here first. If it still fails, open Orders first, then Clients if needed, so you can keep quoting and managing live work while the full detail catches up.
-              </Text>
-            </View>
+            <Text style={styles.stateHint}>Try again, or reopen it from Orders.</Text>
             <TouchableOpacity
               style={styles.retryBtn}
               onPress={() => { setLoading(true); fetchOrder() }}
@@ -277,15 +280,7 @@ export default function TailorOrderDetailScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Order detail</Text>
             <Text style={styles.stateTitle}>Order not found.</Text>
-            <Text style={styles.stateHint}>
-              This order may have moved, expired, or no longer belong to the current account.
-            </Text>
-            <View style={styles.stateGuideCard}>
-              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
-              <Text style={styles.stateGuideText}>
-                Go back to Orders first. If you opened an older route, reopen the live order from your pipeline so you land on the current working brief.
-              </Text>
-            </View>
+            <Text style={styles.stateHint}>Open Orders and try again.</Text>
             <TouchableOpacity
               style={styles.secondaryBtn}
               onPress={() => router.replace('/(tailor)/orders')}
@@ -305,7 +300,7 @@ export default function TailorOrderDetailScreen() {
   const flexibleNextStages = FLEXIBLE_NEXT_STAGES[order.stage]
   const isFlexibleStage = !!flexibleNextStages
   const visibleReferencePhotos = order.referencePhotos.filter((url) => !failedReferencePhotos.includes(url))
-  const statusGuidance = orderStatusGuidance(order.stage)
+  const statusGuidance = orderStatusGuidance(order.stage, order.orderKind)
 
   function openStageModal(target: OrderStage) {
     setStageModalTarget(target)
@@ -346,6 +341,11 @@ export default function TailorOrderDetailScreen() {
           <View>
             <Text style={styles.heading}>{order.garmentType}</Text>
             <Text style={styles.subheading}>{order.customerName}  ·  #{order.reference}</Text>
+            {order.orderKind === 'READY_MADE' ? (
+              <View style={styles.orderTypePill}>
+                <Text style={styles.orderTypePillText}>Ready-made order</Text>
+              </View>
+            ) : null}
             <View style={styles.stageRow}>
               <View
                 style={[styles.stagePill, { backgroundColor: stageColor(order.stage).bg }]}
@@ -368,44 +368,57 @@ export default function TailorOrderDetailScreen() {
             </View>
           </View>
 
-          <View style={styles.guideCard}>
-            <Text style={styles.guideTitle}>Best way to use this screen</Text>
-            <Text style={styles.guideText}>
-              Use this as your working brief for fit context, delivery details, customer expectations, and the next production action you need to take.
-            </Text>
-          </View>
-
           {/* PENDING_QUOTE — show brief + quote/consultation CTAs */}
           {order.stage === 'PENDING_QUOTE' && (
             <View style={styles.alertCard}>
-              <Text style={styles.alertTitle}>New order — your quote is needed</Text>
-              <Text style={styles.alertSub}>
-                Review the order details below and send your quote. You can also request a consultation first.
-              </Text>
-              <Button label="Send quote" onPress={() => setShowQuoteModal(true)} testID="tailor-send-quote-btn" />
-              <Button label="Request consultation" variant="secondary" onPress={() => setShowConsultationModal(true)} />
-              <Button
-                label="Decline this order"
-                variant="ghost"
-                onPress={() => {
-                  Alert.alert('Decline order', 'Are you sure you want to decline this order?', [
-                    { text: 'Cancel', style: 'cancel' },
-                    {
-                      text: 'Decline', style: 'destructive',
-                      onPress: async () => {
-                        const { error } = await invokeFunction('tailor-order-action', {
-                          body: { orderId: order.id, action: 'decline-order' },
-                        })
-                        if (error) {
-                          Alert.alert('Error', 'Could not decline the order. Please try again.')
-                          return
-                        }
-                        router.replace('/(tailor)/orders')
-                      },
-                    },
-                  ])
-                }}
-              />
+              {order.orderKind === 'READY_MADE' ? (
+                <>
+                  <Text style={styles.alertTitle}>New item inquiry</Text>
+                  <Text style={styles.alertSub}>
+                    This customer has a question before buying. Open messages to reply about fit, stock, pickup, delivery, or shipping.
+                  </Text>
+                  <Button
+                    label="Open messages"
+                    onPress={() =>
+                      router.push({
+                        pathname: '/(tailor)/messages/[orderId]',
+                        params: { orderId: order.id, returnTo: `/(tailor)/orders/${order.id}` },
+                      })
+                    }
+                  />
+                </>
+              ) : (
+                <>
+                  <Text style={styles.alertTitle}>New order — your quote is needed</Text>
+                  <Text style={styles.alertSub}>
+                    Review the order details below and send your quote. You can also request a consultation first.
+                  </Text>
+                  <Button label="Send quote" onPress={() => setShowQuoteModal(true)} testID="tailor-send-quote-btn" />
+                  <Button label="Request consultation" variant="secondary" onPress={() => setShowConsultationModal(true)} />
+                  <Button
+                    label="Decline this order"
+                    variant="ghost"
+                    onPress={() => {
+                      Alert.alert('Decline order', 'Are you sure you want to decline this order?', [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Decline', style: 'destructive',
+                          onPress: async () => {
+                            const { error } = await invokeFunction('tailor-order-action', {
+                              body: { orderId: order.id, action: 'decline-order' },
+                            })
+                            if (error) {
+                              Alert.alert('Error', 'Could not decline the order. Please try again.')
+                              return
+                            }
+                            router.replace('/(tailor)/orders')
+                          },
+                        },
+                      ])
+                    }}
+                  />
+                </>
+              )}
             </View>
           )}
 
@@ -530,11 +543,23 @@ export default function TailorOrderDetailScreen() {
 
           {/* Brief details */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Brief</Text>
+            <Text style={styles.sectionTitle}>{order.orderKind === 'READY_MADE' ? 'Purchase' : 'Brief'}</Text>
             {order.garmentDescription && (
               <Text style={styles.briefText}>{order.garmentDescription}</Text>
             )}
             <View style={styles.briefMeta}>
+              {order.orderKind === 'READY_MADE' && order.itemTitle ? <BriefRow label="Item" value={order.itemTitle} /> : null}
+              {order.orderKind === 'READY_MADE' && order.itemSize ? <BriefRow label="Size" value={order.itemSize} /> : null}
+              {order.orderKind === 'READY_MADE' ? <BriefRow label="Quantity" value={`${order.itemQuantity}`} /> : null}
+              {order.orderKind === 'READY_MADE' && order.itemSubtotal != null ? (
+                <BriefRow label="Subtotal" value={formatAmount(order.itemSubtotal, order.quotedCurrency as CurrencyCode, order.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)} />
+              ) : null}
+              {order.orderKind === 'READY_MADE' && order.fulfillmentOption ? (
+                <BriefRow
+                  label="Fulfillment"
+                  value={order.fulfillmentOption === 'PICKUP' ? 'Pickup' : order.fulfillmentOption === 'DELIVERY' ? 'Delivery' : order.fulfillmentOption === 'SHIPPING' ? 'Shipping' : order.fulfillmentOption}
+                />
+              ) : null}
               {order.occasion && <BriefRow label="Occasion" value={order.occasion} />}
               {order.deadline && (
                 <BriefRow
@@ -597,7 +622,12 @@ export default function TailorOrderDetailScreen() {
         <Button
           label={`Message ${order.customerName.split(' ')[0]}`}
           variant="secondary"
-          onPress={() => router.navigate(`/(tailor)/messages/${order.id}`)}
+          onPress={() =>
+            router.navigate({
+              pathname: '/(tailor)/messages/[orderId]',
+              params: { orderId: order.id, returnTo: `/(tailor)/orders/${order.id}` },
+            })
+          }
         />
       </View>
 
@@ -606,6 +636,7 @@ export default function TailorOrderDetailScreen() {
         visible={showQuoteModal}
         orderId={order.id}
         defaultCurrency={(order.quotedCurrency as CurrencyCode) ?? 'USD'}
+        customerDeadline={order.deadline}
         onClose={() => setShowQuoteModal(false)}
         onSent={() => { setShowQuoteModal(false); fetchOrder() }}
       />
@@ -742,8 +773,8 @@ function hasMeasurementContent(measurements: Measurement | null): measurements i
 
 // ─── Quote Modal ──────────────────────────────────────────────────────────────
 
-function QuoteModal({ visible, orderId, defaultCurrency, onClose, onSent }: {
-  visible: boolean; orderId: string; defaultCurrency: CurrencyCode; onClose: () => void; onSent: () => void
+function QuoteModal({ visible, orderId, defaultCurrency, customerDeadline, onClose, onSent }: {
+  visible: boolean; orderId: string; defaultCurrency: CurrencyCode; customerDeadline: string | null; onClose: () => void; onSent: () => void
 }) {
   const [amount, setAmount] = useState('')
   const [currency, setCurrency] = useState<CurrencyCode>(defaultCurrency)
@@ -791,6 +822,14 @@ function QuoteModal({ visible, orderId, defaultCurrency, onClose, onSent }: {
     const parsedDate = new Date(completionDate)
     if (isNaN(parsedDate.getTime())) {
       Alert.alert('Invalid date', 'Use YYYY-MM-DD format, e.g. 2026-04-01')
+      return
+    }
+    const deadlineDate = customerDeadline ? new Date(customerDeadline) : null
+    if (deadlineDate && parsedDate.getTime() > deadlineDate.getTime()) {
+      Alert.alert(
+        'Deadline exceeded',
+        `This quote date goes past the customer deadline of ${deadlineDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}. Choose an earlier date.`
+      )
       return
     }
 
@@ -873,7 +912,11 @@ function QuoteModal({ visible, orderId, defaultCurrency, onClose, onSent }: {
               onPressIn={openCompletionDatePicker}
               showSoftInputOnFocus={false}
               required
-              hint="The date you expect to finish. Customer has 48h to accept."
+              hint={
+                customerDeadline
+                  ? `Must be on or before ${new Date(customerDeadline).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}.`
+                  : 'The date you expect to finish. Customer has 48h to accept.'
+              }
               testID="quote-completion-date-input"
             />
             {showDatePicker && (
@@ -885,6 +928,7 @@ function QuoteModal({ visible, orderId, defaultCurrency, onClose, onSent }: {
                 })()}
                 mode="date"
                 minimumDate={new Date()}
+                maximumDate={customerDeadline ? new Date(customerDeadline) : undefined}
                 onChange={(_, date) => {
                   setShowDatePicker(false)
                   if (!date) return
@@ -1390,6 +1434,15 @@ const styles = StyleSheet.create({
   stagePill: { paddingHorizontal: Spacing.md, paddingVertical: 4, borderRadius: Radius.full },
   stageText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
   amount: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  orderTypePill: {
+    marginTop: Spacing.sm,
+    alignSelf: 'flex-start',
+    backgroundColor: Colors.needleGreenLight,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+  },
+  orderTypePillText: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.5 },
 
   alertCard: {
     backgroundColor: Colors.needleGreenLight, borderRadius: Radius.lg,

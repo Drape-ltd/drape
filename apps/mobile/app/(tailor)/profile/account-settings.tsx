@@ -49,8 +49,7 @@ export default function TailorAccountSettingsScreen() {
   const version = '1.0.0'
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(tailor)/profile')
+    router.replace('/(tailor)/profile')
   }
 
   return (
@@ -63,24 +62,6 @@ export default function TailorAccountSettingsScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
-        <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Tailor account</Text>
-          </View>
-          <Text style={styles.heroTitle}>Protect the business side of your Drape presence.</Text>
-          <Text style={styles.heroSub}>
-            Keep your login, notifications, and future payout settings in order so your client
-            experience stays dependable as orders grow.
-          </Text>
-        </View>
-
-        <View style={styles.guideCard}>
-          <Text style={styles.guideEyebrow}>Available now</Text>
-          <Text style={styles.guideTitle}>Keep your login, contact details, and alerts current so client work keeps moving cleanly.</Text>
-          <Text style={styles.guideCopy}>
-            Settings marked <Text style={styles.guideSoon}>Soon</Text> are still on the way, but the account controls above already shape how reliably you operate inside Drape.
-          </Text>
-        </View>
 
         {/* ── Personal & security ── */}
         <View style={styles.group}>
@@ -166,69 +147,6 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
 
   body: { padding: Spacing.xl, paddingBottom: 64, gap: Spacing.md },
-  heroCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
-    ...Shadow.sm,
-  },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  heroBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  heroTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    lineHeight: 38,
-  },
-  heroSub: {
-    fontSize: FontSize.md,
-    color: Colors.inkLight,
-    lineHeight: 24,
-  },
-  guideCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: 4,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-  },
-  guideEyebrow: {
-    fontSize: FontSize.xs,
-    color: Colors.midGrey,
-    fontWeight: FontWeight.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  guideTitle: {
-    fontSize: FontSize.md,
-    color: Colors.ink,
-    fontWeight: FontWeight.semibold,
-    lineHeight: 22,
-  },
-  guideCopy: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    lineHeight: 21,
-  },
-  guideSoon: {
-    color: Colors.ink,
-    fontWeight: FontWeight.semibold,
-  },
-
   group: {
     backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm,
   },

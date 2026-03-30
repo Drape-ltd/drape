@@ -20,7 +20,6 @@
         "NSCameraUsageDescription": "Drape uses your camera to upload reference photos and progress updates.",
         "NSPhotoLibraryUsageDescription": "Drape accesses your photo library for order references and portfolio photos.",
         "NSMicrophoneUsageDescription": "Drape uses your microphone for voice note messages.",
-        "NSLocationWhenInUseUsageDescription": "Drape uses your location to show nearby tailors.",
         "NSFaceIDUsageDescription": "Drape uses Face ID to quickly and securely verify your identity when you return to the app."
       }
     },

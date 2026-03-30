@@ -12,7 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import * as ImageManipulator from 'expo-image-manipulator'
-import { supabase } from '@/lib/supabase'
+import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { useTailorProfile } from '@/lib/tailorProfile'
 import { TagSelector } from '@/components/ui'
@@ -30,11 +30,18 @@ const SPECIALTY_GROUPS: TagGroup[] = [
   { label: 'South Asian', items: ['Lehenga', 'Saree Blouse', 'Kurta', 'Shalwar Kameez', 'Sherwani'] },
   { label: 'Middle Eastern & North African', items: ['Abaya', 'Jalabiya', 'Kaftan'] },
   { label: 'East Asian', items: ['Qipao / Cheongsam'] },
-  { label: 'Craft & Textile', items: ['Embroidery', 'Adire', 'Batik'] },
+  { label: 'Craft & Textile', items: ['Crochet', 'Knitwear', 'Embroidery', 'Beadwork', 'Adire', 'Batik'] },
+  { label: 'Lifestyle & Ready-made', items: ['Two-piece Set', 'Loungewear', 'Beachwear', 'Ready-made'] },
 ]
+const BIO_TEMPLATES = [
+  'I make custom native wear and occasion outfits with clean finishing and reliable delivery.',
+  'I run a boutique and tailor studio, offering custom work and ready-made pieces.',
+  'I focus on crochet and handmade pieces made to order with careful finishing and fit.',
+] as const
 
 type VerificationStatus = 'NOT_SUBMITTED' | 'PENDING' | 'VERIFIED' | 'REJECTED'
 type Currency = 'GBP' | 'USD' | 'EUR' | 'NGN' | 'GHS' | 'KES'
+type SellerType = 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP'
 
 function asStringList(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
@@ -79,8 +86,7 @@ export default function EditProfileScreen() {
   const { avatarUrl, setAvatarUrl } = useTailorProfile()
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(tailor)/profile')
+    router.replace('/(tailor)/profile')
   }
 
   // ── Form state ──────────────────────────────────────────────────────────────
@@ -89,6 +95,12 @@ export default function EditProfileScreen() {
   const [bio, setBio]                     = useState('')
   const [specialties, setSpecialties]     = useState<string[]>([])
   const [availability, setAvailability]   = useState<Availability>('OPEN')
+  const [sellerType, setSellerType]       = useState<SellerType>('TAILOR')
+  const [supportsCustomOrders, setSupportsCustomOrders] = useState(true)
+  const [supportsReadyMade, setSupportsReadyMade] = useState(false)
+  const [pickupAvailable, setPickupAvailable] = useState(true)
+  const [deliveryAvailable, setDeliveryAvailable] = useState(false)
+  const [shippingAvailable, setShippingAvailable] = useState(false)
   const [verifyStatus, setVerifyStatus]   = useState<VerificationStatus>('NOT_SUBMITTED')
   const [portfolioCount, setPortfolioCount] = useState(0)
 
@@ -96,6 +108,12 @@ export default function EditProfileScreen() {
   const [base, setBase] = useState<{
     displayName: string; location: string; bio: string
     specialties: string[]; availability: Availability; currency: Currency
+    sellerType: SellerType
+    supportsCustomOrders: boolean
+    supportsReadyMade: boolean
+    pickupAvailable: boolean
+    deliveryAvailable: boolean
+    shippingAvailable: boolean
   } | null>(null)
 
   const [currency, setCurrency]           = useState<Currency>('GBP')
@@ -123,6 +141,12 @@ export default function EditProfileScreen() {
     bio            !== base.bio ||
     availability   !== base.availability ||
     currency       !== base.currency ||
+    sellerType     !== base.sellerType ||
+    supportsCustomOrders !== base.supportsCustomOrders ||
+    supportsReadyMade !== base.supportsReadyMade ||
+    pickupAvailable !== base.pickupAvailable ||
+    deliveryAvailable !== base.deliveryAvailable ||
+    shippingAvailable !== base.shippingAvailable ||
     JSON.stringify(specialties) !== JSON.stringify(base.specialties)
   )
 
@@ -136,7 +160,7 @@ export default function EditProfileScreen() {
     try {
       const { data, error } = await supabase
         .from('tailor_profiles')
-        .select('id, display_name, location, bio, specialty_tags, availability, currency, id_verification_status')
+        .select('id, display_name, location, bio, specialty_tags, availability, currency, id_verification_status, seller_type, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available')
         .eq('user_id', user.id)
         .maybeSingle()
 
@@ -151,6 +175,12 @@ export default function EditProfileScreen() {
           specialties:  asStringList(d.specialty_tags),
           availability: (d.availability   ?? 'OPEN') as Availability,
           currency:     (d.currency       ?? 'GBP') as Currency,
+          sellerType:   (d.seller_type ?? 'TAILOR') as SellerType,
+          supportsCustomOrders: d.supports_custom_orders ?? true,
+          supportsReadyMade: d.supports_ready_made ?? false,
+          pickupAvailable: d.pickup_available ?? true,
+          deliveryAvailable: d.delivery_available ?? false,
+          shippingAvailable: d.shipping_available ?? false,
         }
         setBase(snap)
         setDisplayName(snap.displayName)
@@ -159,6 +189,12 @@ export default function EditProfileScreen() {
         setSpecialties(snap.specialties)
         setAvailability(snap.availability)
         setCurrency(snap.currency)
+        setSellerType(snap.sellerType)
+        setSupportsCustomOrders(snap.supportsCustomOrders)
+        setSupportsReadyMade(snap.supportsReadyMade)
+        setPickupAvailable(snap.pickupAvailable)
+        setDeliveryAvailable(snap.deliveryAvailable)
+        setShippingAvailable(snap.shippingAvailable)
         setVerifyStatus((d.id_verification_status ?? 'NOT_SUBMITTED') as VerificationStatus)
 
         const { count, error: countError } = await supabase
@@ -178,6 +214,12 @@ export default function EditProfileScreen() {
           specialties: [] as string[],
           availability: 'OPEN' as Availability,
           currency: 'GBP' as Currency,
+          sellerType: 'TAILOR' as SellerType,
+          supportsCustomOrders: true,
+          supportsReadyMade: false,
+          pickupAvailable: true,
+          deliveryAvailable: false,
+          shippingAvailable: false,
         }
         setBase(snap)
         setDisplayName(snap.displayName)
@@ -186,6 +228,12 @@ export default function EditProfileScreen() {
         setSpecialties(snap.specialties)
         setAvailability(snap.availability)
         setCurrency(snap.currency)
+        setSellerType(snap.sellerType)
+        setSupportsCustomOrders(snap.supportsCustomOrders)
+        setSupportsReadyMade(snap.supportsReadyMade)
+        setPickupAvailable(snap.pickupAvailable)
+        setDeliveryAvailable(snap.deliveryAvailable)
+        setShippingAvailable(snap.shippingAvailable)
         setVerifyStatus('NOT_SUBMITTED')
         setPortfolioCount(0)
       }
@@ -224,7 +272,9 @@ export default function EditProfileScreen() {
       if (uploadError) throw uploadError
       const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(fileName)
       const bustUrl = `${publicUrl}?t=${Date.now()}`
-      const { error: profileError } = await supabase.from('tailor_profiles').update({ avatar_url: bustUrl }).eq('user_id', user!.id)
+      const { error: profileError } = await invokeFunction('tailor-profile-action', {
+        body: { action: 'update-avatar', avatarUrl: bustUrl },
+      })
       if (profileError) throw profileError
       setAvatarUrl(bustUrl)
     } catch {
@@ -286,24 +336,47 @@ export default function EditProfileScreen() {
     if (!validate() || !user?.id) return
     if (!validateBio(bio)) return
     setSaving(true)
-    const { error } = await supabase
-      .from('tailor_profiles')
-      .update({
-        display_name:   displayName.trim(),
-        location:       location.trim(),
-        bio:            bio.trim() || null,
-        specialty_tags: specialties,
-        availability,
-        currency,
-        updated_at:     new Date().toISOString(),
-      })
-      .eq('user_id', user.id)
+    const { error } = await invokeFunction('tailor-profile-action', {
+      body: {
+        action: 'update-profile',
+        profile: {
+          displayName: displayName.trim(),
+          location: location.trim(),
+          bio: bio.trim() || null,
+          specialties,
+          languages: [],
+          availability,
+          currency,
+          sellerType,
+          supportsCustomOrders,
+          supportsReadyMade,
+          pickupAvailable,
+          deliveryAvailable,
+          shippingAvailable,
+          priceRangeMin: null,
+          priceRangeMax: null,
+        },
+      },
+    })
     setSaving(false)
     if (error) {
       Alert.alert('Save failed', error.message)
       return
     }
-    setBase({ displayName: displayName.trim(), location: location.trim(), bio: bio.trim(), specialties, availability, currency })
+    setBase({
+      displayName: displayName.trim(),
+      location: location.trim(),
+      bio: bio.trim(),
+      specialties,
+      availability,
+      currency,
+      sellerType,
+      supportsCustomOrders,
+      supportsReadyMade,
+      pickupAvailable,
+      deliveryAvailable,
+      shippingAvailable,
+    })
     goBack()
   }
 
@@ -476,6 +549,20 @@ export default function EditProfileScreen() {
               maxLength={500}
             />
             <Text style={styles.charCount}>{bio.trim().length}/500</Text>
+            <View style={styles.helperRow}>
+              {BIO_TEMPLATES.map((template) => (
+                <TouchableOpacity
+                  key={template}
+                  style={styles.helperChip}
+                  onPress={() => {
+                    setBio(template)
+                    validateBio(template)
+                  }}
+                >
+                  <Text style={styles.helperChipText}>Use template</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </Field>
 
           <Field label="Specialties" required error={errors.specialties}>
@@ -523,6 +610,72 @@ export default function EditProfileScreen() {
               </View>
             </TouchableOpacity>
           ))}
+        </Section>
+
+        <Section title="Selling setup">
+          <Field label="Seller type">
+            <View style={styles.choiceGroup}>
+              {([
+                { value: 'TAILOR', label: 'Tailor', hint: 'Custom work first' },
+                { value: 'BOUTIQUE', label: 'Boutique', hint: 'Shop with tailors behind it' },
+                { value: 'TAILOR_SHOP', label: 'Tailor shop', hint: 'Custom and ready-made together' },
+              ] as const).map((opt) => (
+                <TouchableOpacity
+                  key={opt.value}
+                  style={[styles.choiceCard, sellerType === opt.value && styles.choiceCardActive]}
+                  onPress={() => setSellerType(opt.value)}
+                >
+                  <Text style={[styles.choiceTitle, sellerType === opt.value && styles.choiceTitleActive]}>{opt.label}</Text>
+                  <Text style={styles.choiceHint}>{opt.hint}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </Field>
+
+          <Field label="What customers can do">
+            <View style={styles.choiceGroup}>
+              <TouchableOpacity
+                style={[styles.choiceCard, supportsCustomOrders && styles.choiceCardActive]}
+                onPress={() => setSupportsCustomOrders((value) => !value)}
+              >
+                <Text style={[styles.choiceTitle, supportsCustomOrders && styles.choiceTitleActive]}>Custom order</Text>
+                <Text style={styles.choiceHint}>Customers send details and you quote the work.</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.choiceCard, supportsReadyMade && styles.choiceCardActive]}
+                onPress={() => setSupportsReadyMade((value) => !value)}
+              >
+                <Text style={[styles.choiceTitle, supportsReadyMade && styles.choiceTitleActive]}>Shop now</Text>
+                <Text style={styles.choiceHint}>Customers buy ready-made pieces you already have.</Text>
+              </TouchableOpacity>
+            </View>
+          </Field>
+
+          <Field label="Fulfillment">
+            <View style={styles.choiceGroup}>
+              <TouchableOpacity
+                style={[styles.choiceCard, pickupAvailable && styles.choiceCardActive]}
+                onPress={() => setPickupAvailable((value) => !value)}
+              >
+                <Text style={[styles.choiceTitle, pickupAvailable && styles.choiceTitleActive]}>Pickup</Text>
+                <Text style={styles.choiceHint}>Customer collects from you or your shop.</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.choiceCard, deliveryAvailable && styles.choiceCardActive]}
+                onPress={() => setDeliveryAvailable((value) => !value)}
+              >
+                <Text style={[styles.choiceTitle, deliveryAvailable && styles.choiceTitleActive]}>Delivery</Text>
+                <Text style={styles.choiceHint}>You or your team deliver nearby orders.</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.choiceCard, shippingAvailable && styles.choiceCardActive]}
+                onPress={() => setShippingAvailable((value) => !value)}
+              >
+                <Text style={[styles.choiceTitle, shippingAvailable && styles.choiceTitleActive]}>Shipping</Text>
+                <Text style={styles.choiceHint}>Courier or shipping partner handles it.</Text>
+              </TouchableOpacity>
+            </View>
+          </Field>
         </Section>
 
         {/* ── Portfolio ────────────────────────────────────────────────── */}
@@ -701,6 +854,16 @@ const styles = StyleSheet.create({
   inputError: { borderColor: Colors.error },
   multiline: { minHeight: 100, textAlignVertical: 'top' },
   charCount: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'right', marginTop: 4 },
+  helperRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginTop: Spacing.sm },
+  helperChip: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  helperChipText: { fontSize: FontSize.xs, color: Colors.ink, fontWeight: FontWeight.medium },
 
   // Location suggestions
   suggestBox: {
@@ -741,6 +904,19 @@ const styles = StyleSheet.create({
   availLabel: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
   availLabelActive: { color: Colors.needleGreen },
   availHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
+  choiceGroup: { gap: Spacing.sm },
+  choiceCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    borderWidth: 1.5,
+    borderColor: Colors.lightGrey,
+    gap: 4,
+  },
+  choiceCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
+  choiceTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
+  choiceTitleActive: { color: Colors.needleGreen },
+  choiceHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
 
   // Portfolio link
   portfolioLink: {

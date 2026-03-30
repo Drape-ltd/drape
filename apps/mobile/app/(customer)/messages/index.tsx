@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
@@ -7,6 +7,7 @@ import {
 import { useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -14,6 +15,7 @@ import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
 
 type ConversationItem = {
   orderId: string
+  orderKind: 'CUSTOM' | 'READY_MADE'
   tailorName: string
   tailorInitials: string
   garmentType: string
@@ -26,10 +28,14 @@ type ConversationItem = {
 
 type FilterTab = 'all' | 'support'
 
-function orderPreview(stage: OrderStage, garmentType: string): string {
+const MESSAGES_GUIDE_KEY = 'drape_messages_best_use_dismissed'
+
+function orderPreview(stage: OrderStage, garmentType: string, orderKind: 'CUSTOM' | 'READY_MADE'): string {
   switch (stage) {
     case 'PENDING_QUOTE':
-      return `${garmentType} · Waiting for your tailor's quote`
+      return orderKind === 'READY_MADE'
+        ? `${garmentType} · Item inquiry open`
+        : `${garmentType} · Waiting for your tailor's quote`
     case 'CONSULTATION':
       return `${garmentType} · Consultation requested`
     case 'QUOTE_SENT':
@@ -66,6 +72,20 @@ export default function MessagesInboxScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [fetchError, setFetchError] = useState(false)
   const [filter, setFilter] = useState<FilterTab>('all')
+  const [showGuide, setShowGuide] = useState(true)
+
+  useEffect(() => {
+    AsyncStorage.getItem(MESSAGES_GUIDE_KEY)
+      .then((value) => setShowGuide(value !== '1'))
+      .catch(() => {})
+  }, [])
+
+  async function dismissGuide() {
+    setShowGuide(false)
+    try {
+      await AsyncStorage.setItem(MESSAGES_GUIDE_KEY, '1')
+    } catch {}
+  }
 
   async function fetchConversations() {
     setFetchError(false)
@@ -73,13 +93,13 @@ export default function MessagesInboxScreen() {
       const { data, error } = await supabase
         .from('orders')
         .select(`
-          id, garment_type, stage, created_at,
+          id, garment_type, order_kind, stage, created_at,
           tailor_profiles!tailor_profile_id(display_name),
           messages(body, created_at, sender_role, read_at)
         `)
         .eq('customer_id', user?.id)
         .order('created_at', { ascending: false })
-        .limit(50)
+        .limit(20)
 
       if (error) throw error
 
@@ -101,6 +121,7 @@ export default function MessagesInboxScreen() {
 
         return {
           orderId: o.id,
+          orderKind: o.order_kind ?? 'CUSTOM',
           tailorName: name,
           tailorInitials: initials.toUpperCase(),
           garmentType: o.garment_type,
@@ -188,9 +209,7 @@ export default function MessagesInboxScreen() {
             <Text style={styles.stateEyebrow}>Messages</Text>
             <ActivityIndicator color={Colors.needleGreen} size="large" />
             <Text style={styles.stateTitle}>Loading your conversations…</Text>
-            <Text style={styles.stateHint}>
-              We’re gathering every order thread so quotes, clarifications, and progress updates stay in one place.
-            </Text>
+            <Text style={styles.stateHint}>Checking recent threads.</Text>
           </View>
         </View>
       ) : fetchError ? (
@@ -199,15 +218,7 @@ export default function MessagesInboxScreen() {
             <Text style={styles.stateEyebrow}>Messages</Text>
             <Feather name="alert-circle" size={48} color={Colors.lightGrey} />
             <Text style={styles.stateTitle}>Couldn't load messages</Text>
-            <Text style={styles.stateHint}>
-              This inbox should keep every working conversation tied to its order instead of scattered across the app.
-            </Text>
-            <View style={styles.stateGuideCard}>
-              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
-              <Text style={styles.stateGuideText}>
-                Refresh here first. If it still fails, open your orders first, then continue discovery if needed, so the next working thread can keep moving.
-              </Text>
-            </View>
+            <Text style={styles.stateHint}>Refresh and try again.</Text>
             <TouchableOpacity
               style={styles.retryBtn}
               onPress={() => {
@@ -239,49 +250,36 @@ export default function MessagesInboxScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />}
           ListHeaderComponent={(
             <View>
-              <View style={styles.heroCard}>
-                <View style={styles.heroBadge}>
-                  <Text style={styles.heroBadgeText}>Conversations</Text>
+              {showGuide && conversations.length > 0 ? (
+                <View style={styles.guideCard}>
+                  <View style={styles.guideHeader}>
+                    <Text style={styles.guideEyebrow}>Best use</Text>
+                    <TouchableOpacity onPress={() => { void dismissGuide() }} hitSlop={8}>
+                      <Text style={styles.guideClose}>×</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.guideTitle}>Use messages for discussion. Use the order screen for actions.</Text>
                 </View>
-                <Text style={styles.heroTitle}>Keep every quote, clarification, and progress update in one thread.</Text>
-                <Text style={styles.heroSub}>
-                  Once you place a brief, Drape keeps the whole working conversation here so the
-                  order stays clear from first message to final handoff.
-                </Text>
-              </View>
-              <View style={styles.guideCard}>
-                <Text style={styles.guideEyebrow}>Best use</Text>
-                <Text style={styles.guideTitle}>Use this thread for decisions and clarifications, then use the order screen for state changes.</Text>
-                <Text style={styles.guideCopy}>
-                  Messages are where you align with your tailor. The order screen is where you review the quote, track production, raise concerns, and finish the handoff.
-                </Text>
-              </View>
+              ) : null}
             </View>
           )}
-          contentContainerStyle={conversations.length === 0 ? styles.emptyContainer : undefined}
+          contentContainerStyle={conversations.length === 0 ? styles.emptyContainer : styles.listContent}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
           ListEmptyComponent={
-            <View style={styles.empty}>
-              <View style={styles.emptyBadge}>
-                <Text style={styles.emptyBadgeText}>Inbox</Text>
+            <View style={styles.emptyWrap}>
+              <View style={styles.emptyCard}>
+                <Feather name="message-circle" size={42} color={Colors.lightGrey} />
+                <Text style={styles.emptyTitle}>No messages yet</Text>
+                <Text style={styles.emptyHint}>Custom orders and item inquiries appear here.</Text>
+                <View style={styles.emptyActions}>
+                  <TouchableOpacity style={styles.retryBtn} onPress={() => router.navigate('/(customer)')}>
+                    <Text style={styles.retryBtnText}>Explore sellers</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.navigate('/(customer)/orders')}>
+                    <Text style={styles.secondaryBtnText}>Open orders</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
-              <Feather name="message-circle" size={48} color={Colors.lightGrey} />
-              <Text style={styles.emptyTitle}>No messages yet</Text>
-              <Text style={styles.emptyHint}>
-                Your conversations with tailors will appear here once you place an order and start working through the brief together.
-              </Text>
-              <View style={styles.emptyGuideCard}>
-                <Text style={styles.emptyGuideTitle}>Best way to use this screen</Text>
-                <Text style={styles.emptyGuideText}>
-                  Think of this as the working thread for each order. Once you send a brief, quotes, clarifications, consultation details, and progress updates all stay here.
-                </Text>
-              </View>
-              <TouchableOpacity style={styles.retryBtn} onPress={() => router.navigate('/(customer)')}>
-                <Text style={styles.retryBtnText}>Explore tailors</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.navigate('/(customer)/orders')}>
-                <Text style={styles.secondaryBtnText}>Open orders</Text>
-              </TouchableOpacity>
             </View>
           }
           renderItem={({ item }) => (
@@ -309,7 +307,7 @@ export default function MessagesInboxScreen() {
                     style={[styles.preview, item.unreadCount > 0 && styles.previewBold]}
                     numberOfLines={1}
                   >
-                    {item.lastMessage ?? orderPreview(item.stage, item.garmentType)}
+                    {item.lastMessage ?? orderPreview(item.stage, item.garmentType, item.orderKind)}
                   </Text>
                   {item.unreadCount > 0 && (
                     <View style={styles.badge}>
@@ -357,13 +355,8 @@ function SupportView() {
   return (
     <ScrollView style={styles.supportScroll} contentContainerStyle={styles.supportContent} showsVerticalScrollIndicator={false}>
       <View style={styles.supportHeroCard}>
-        <View style={styles.supportHeroBadge}>
-          <Text style={styles.supportHeroBadgeText}>Support</Text>
-        </View>
-        <Text style={styles.supportHeroTitle}>Get help without losing the context of your order.</Text>
-        <Text style={styles.supportHeroSub}>
-          Use this space when you need help with an order, a payment, or something that doesn’t feel right. We’ll point you to the right path quickly.
-        </Text>
+        <Text style={styles.supportHeroTitle}>Support</Text>
+        <Text style={styles.supportHeroSub}>Help with orders, payments, or anything off.</Text>
       </View>
 
       {/* Support conversation row */}
@@ -414,7 +407,7 @@ function SupportView() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.white },
+  safe: { flex: 1, backgroundColor: Colors.bone },
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
   stateCard: {
     width: '100%',
@@ -435,24 +428,6 @@ const styles = StyleSheet.create({
   },
   stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
-  stateGuideCard: {
-    width: '100%',
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: Spacing.xs,
-  },
-  stateGuideTitle: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-  },
-  stateGuideText: {
-    fontSize: FontSize.sm,
-    color: Colors.midGrey,
-    lineHeight: 20,
-  },
-
   header: {
     paddingHorizontal: Spacing.xl,
     paddingTop: Spacing.md,
@@ -462,50 +437,18 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
   },
   title: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
-  heroCard: {
-    marginHorizontal: Spacing.xl,
-    marginBottom: Spacing.md,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
-    ...Shadow.sm,
-  },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  heroBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  heroTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    lineHeight: 38,
-  },
-  heroSub: {
-    fontSize: FontSize.md,
-    color: Colors.inkLight,
-    lineHeight: 24,
-  },
   guideCard: {
     marginHorizontal: Spacing.xl,
-    marginBottom: Spacing.md,
+    marginTop: Spacing.md,
+    marginBottom: Spacing.sm,
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: 4,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
   },
+  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   guideEyebrow: {
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
@@ -513,17 +456,8 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.8,
   },
-  guideTitle: {
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-    lineHeight: 22,
-  },
-  guideCopy: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    lineHeight: 21,
-  },
+  guideClose: { fontSize: 22, lineHeight: 22, color: Colors.midGrey },
+  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink, lineHeight: 20 },
 
   filterRow: { flexDirection: 'row', gap: Spacing.sm },
   filterChip: {
@@ -545,6 +479,7 @@ const styles = StyleSheet.create({
   filterBadgeText: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white },
 
   separator: { height: 1, backgroundColor: Colors.lightGrey, marginLeft: 76 },
+  listContent: { paddingBottom: Spacing.xxxl },
 
   row: {
     flexDirection: 'row',
@@ -579,44 +514,19 @@ const styles = StyleSheet.create({
   },
   badgeText: { fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white },
 
-  emptyContainer: { flex: 1, justifyContent: 'center' },
-  empty: { alignItems: 'center', gap: Spacing.md, padding: Spacing.xl },
-  emptyBadge: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  emptyBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
+  emptyContainer: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: Spacing.xl, paddingBottom: Spacing.xxxl },
+  emptyWrap: { flex: 1, justifyContent: 'center' },
+  emptyCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+    alignItems: 'center',
+    ...Shadow.sm,
   },
   emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
   emptyHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 22, maxWidth: 280 },
-  emptyGuideCard: {
-    alignSelf: 'stretch',
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: 4,
-  },
-  emptyGuideTitle: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    textAlign: 'center',
-  },
-  emptyGuideText: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
+  emptyActions: { alignSelf: 'stretch', gap: Spacing.sm, marginTop: Spacing.xs },
   retryBtn: {
     marginTop: Spacing.sm,
     backgroundColor: Colors.needleGreen,
@@ -647,30 +557,16 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
     ...Shadow.sm,
   },
-  supportHeroBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  supportHeroBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
   supportHeroTitle: {
-    fontSize: FontSize.xl,
+    fontSize: FontSize.lg,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
-    lineHeight: 34,
+    lineHeight: 24,
   },
   supportHeroSub: {
     fontSize: FontSize.sm,
     color: Colors.inkLight,
-    lineHeight: 22,
+    lineHeight: 20,
   },
   supportAvatar: {
     width: 52, height: 52, borderRadius: 26,

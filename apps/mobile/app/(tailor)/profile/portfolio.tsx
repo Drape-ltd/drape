@@ -13,7 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import * as ImageManipulator from 'expo-image-manipulator'
-import { supabase } from '@/lib/supabase'
+import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
@@ -106,21 +106,12 @@ export default function PortfolioScreen() {
 
       const allBlank = existing.length > 0 && existing.every((i) => !i.imageUrl)
       if (allBlank) {
-        const { error: deleteError } = await supabase.from('portfolio_items').delete().eq('tailor_profile_id', pid)
-        if (deleteError) throw deleteError
         finalItems = []
       }
       if ((existing.length === 0 || allBlank) && setupPhotoUrls.length > 0) {
-        const { error: seedError } = await supabase.from('portfolio_items').insert(
-          setupPhotoUrls.map((url, i) => ({
-            tailor_profile_id: pid,
-            image_url: url,
-            title: `Portfolio photo ${i + 1}`,
-            description: null,
-            category: null,
-            sort_order: i,
-          }))
-        )
+        const { error: seedError } = await invokeFunction('portfolio-item-action', {
+          body: { action: 'seed-from-setup', photoUrls: setupPhotoUrls },
+        })
         if (seedError) throw seedError
         const { data: seeded } = await supabase
           .from('portfolio_items')
@@ -138,7 +129,6 @@ export default function PortfolioScreen() {
       }
 
       setItems(finalItems)
-      await syncProfilePhotoUrls(pid, finalItems)
     } catch {
       setFetchError(true)
       setItems([])
@@ -187,19 +177,6 @@ export default function PortfolioScreen() {
     }
   }
 
-  async function syncProfilePhotoUrls(profileId: string, nextItems: PortfolioItem[]) {
-    const nextUrls = nextItems
-      .map((item) => item.imageUrl)
-      .filter((url): url is string => typeof url === 'string' && url.length > 0)
-
-    const { error } = await supabase
-      .from('tailor_profiles')
-      .update({ portfolio_photo_urls: nextUrls })
-      .eq('id', profileId)
-
-    if (error) throw error
-  }
-
   function openNew() {
     setEditModal({ ...EMPTY_EDIT })
   }
@@ -216,8 +193,7 @@ export default function PortfolioScreen() {
   }
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(tailor)/profile')
+    router.replace('/(tailor)/profile')
   }
 
   async function handleSave() {
@@ -247,24 +223,33 @@ export default function PortfolioScreen() {
       finalImageUrl = uploaded
     }
 
-    const payload = {
-      tailor_profile_id: tailorProfileId,
-      image_url: finalImageUrl,
-      title: editModal.title.trim(),
-      description: editModal.description.trim() || null,
-      category: editModal.category || null,
-      sort_order: editModal.id ? undefined : items.length,
-    }
-
     let error: any
     if (editModal.id) {
-      const res = await supabase
-        .from('portfolio_items')
-        .update({ image_url: finalImageUrl, title: payload.title, description: payload.description, category: payload.category })
-        .eq('id', editModal.id)
+      const res = await invokeFunction('portfolio-item-action', {
+        body: {
+          action: 'update-item',
+          itemId: editModal.id,
+          item: {
+            imageUrl: finalImageUrl!,
+            title: editModal.title.trim(),
+            description: editModal.description.trim() || null,
+            category: editModal.category || null,
+          },
+        },
+      })
       error = res.error
     } else {
-      const res = await supabase.from('portfolio_items').insert(payload)
+      const res = await invokeFunction('portfolio-item-action', {
+        body: {
+          action: 'create-item',
+          item: {
+            imageUrl: finalImageUrl!,
+            title: editModal.title.trim(),
+            description: editModal.description.trim() || null,
+            category: editModal.category || null,
+          },
+        },
+      })
       error = res.error
     }
 
@@ -289,20 +274,15 @@ export default function PortfolioScreen() {
           onPress: async () => {
             if (deletingId) return
             setDeletingId(item.id)
-            const { error } = await supabase.from('portfolio_items').delete().eq('id', item.id)
+            const { error } = await invokeFunction('portfolio-item-action', {
+              body: { action: 'delete-item', itemId: item.id },
+            })
             if (error) {
               setDeletingId(null)
               Alert.alert('Delete failed', error.message)
               return
             }
             const nextItems = items.filter((i) => i.id !== item.id)
-            try {
-              await syncProfilePhotoUrls(tailorProfileId!, nextItems)
-            } catch (syncError: any) {
-              setDeletingId(null)
-              Alert.alert('Delete failed', syncError?.message ?? 'Could not update your public portfolio.')
-              return
-            }
             setItems(nextItems)
             setDeletingId(null)
           },

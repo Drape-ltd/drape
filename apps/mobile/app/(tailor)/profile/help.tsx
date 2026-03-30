@@ -54,8 +54,7 @@ export default function TailorHelpScreen() {
   const [openIndex, setOpenIndex] = useState<number | null>(null)
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(tailor)/profile')
+    router.replace('/(tailor)/profile')
   }
 
   function toggleFaq(i: number) {

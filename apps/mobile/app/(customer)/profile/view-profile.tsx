@@ -82,8 +82,7 @@ export default function ViewProfileScreen() {
   const measureKeys = ['chest', 'waist', 'hips', 'shoulderWidth', 'inseam', 'sleeveLength', 'neckCircumference', 'height']
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(customer)/profile')
+    router.replace('/(customer)/profile')
   }
 
   if (loading) {
@@ -93,9 +92,7 @@ export default function ViewProfileScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Profile preview</Text>
             <Text style={styles.stateTitle}>Loading your profile…</Text>
-            <Text style={styles.stateHint}>
-              We’re pulling together the version of you that tailors see when you start a brief.
-            </Text>
+            <Text style={styles.stateHint}>Loading what tailors see.</Text>
           </View>
         </View>
       </SafeAreaView>
@@ -109,15 +106,7 @@ export default function ViewProfileScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Profile preview</Text>
             <Text style={styles.stateTitle}>Couldn't load your profile preview.</Text>
-            <Text style={styles.stateHint}>
-              This screen should help you understand exactly what tailors see before they quote your order.
-            </Text>
-            <View style={styles.stateGuideCard}>
-              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
-              <Text style={styles.stateGuideText}>
-                Refresh here first. If it still fails, open your profile first, then measurements if needed, or return to the previous step so you can keep your details accurate before the next brief.
-              </Text>
-            </View>
+            <Text style={styles.stateHint}>Try again, or open your profile first.</Text>
             <TouchableOpacity onPress={() => { void loadProfile() }}>
               <Text style={styles.emptyLink}>Try again</Text>
             </TouchableOpacity>
@@ -146,23 +135,8 @@ export default function ViewProfileScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.xl, paddingBottom: 64, gap: Spacing.xl }}>
-        <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Tailor-facing profile</Text>
-          </View>
-          <Text style={styles.heroTitle}>This is the version of you that travels with every brief.</Text>
-          <Text style={styles.heroSub}>
-            Tailors use this snapshot to understand your fit, identity, and readiness before
-            they quote your order.
-          </Text>
-        </View>
-
-        <View style={styles.guideCard}>
-          <Text style={styles.guideEyebrow}>Best use</Text>
-          <Text style={styles.guideTitle}>Think of this as the trust snapshot a tailor sees before saying yes.</Text>
-          <Text style={styles.guideCopy}>
-            Keeping this profile accurate helps quotes feel faster, fit conversations feel clearer, and first-time orders feel less uncertain.
-          </Text>
+        <View style={styles.nextCard}>
+          <Text style={styles.nextTitle}>This is what tailors see when you place a brief.</Text>
         </View>
 
         {/* Identity card */}
@@ -234,63 +208,16 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
-  heroCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
-    ...Shadow.sm,
+  nextCard: {
+    backgroundColor: Colors.boneDeep,
+    borderRadius: Radius.lg,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
   },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  heroBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  heroTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    lineHeight: 38,
-  },
-  heroSub: {
-    fontSize: FontSize.md,
-    color: Colors.inkLight,
-    lineHeight: 24,
-  },
-  guideCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: 4,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    ...Shadow.sm,
-  },
-  guideEyebrow: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.midGrey,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  guideTitle: {
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-    lineHeight: 22,
-  },
-  guideCopy: {
+  nextTitle: {
     fontSize: FontSize.sm,
-    color: Colors.inkLight,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
     lineHeight: 21,
   },
 
@@ -349,27 +276,6 @@ const styles = StyleSheet.create({
   },
   stateTitle: { fontSize: FontSize.lg, color: Colors.ink, fontWeight: FontWeight.bold, textAlign: 'center' },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
-  stateGuideCard: {
-    alignSelf: 'stretch',
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: 4,
-  },
-  stateGuideTitle: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    textAlign: 'center',
-  },
-  stateGuideText: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
 
   measureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   measureCell: {

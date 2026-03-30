@@ -122,21 +122,31 @@ export default function ReviewScreen() {
       ? `${parts[0]} ${parts[parts.length - 1].charAt(0)}.`
       : parts[0] || 'Customer'
 
-    const { error } = await supabase.from('reviews').insert({
-      order_id: orderId,
-      tailor_id: orderSummary.tailorId,
-      tailor_profile_id: orderSummary.tailorProfileId,
-      reviewer_name: reviewerName,
-      rating,
-      body: body.trim() || null,
-      tags,
+    const { error } = await invokeFunction('review-action', {
+      body: {
+        action: 'submit-tailor-review',
+        orderId,
+        reviewerName,
+        rating,
+        body: body.trim() || undefined,
+        tags,
+      },
     })
 
     if (error) {
+      console.error('review submit failed', {
+        orderId,
+        orderSummary,
+        rating,
+        tags,
+        bodyLength: body.trim().length,
+        error,
+      })
       Sentry.captureException(error, { extra: { context: 'review_submit', orderId } })
       setSubmitting(false)
-      setSubmitError('We could not submit your review. Please try again.')
-      Alert.alert('Error', 'Could not submit review. Please try again.')
+      const message = error.message ?? 'Could not submit review. Please try again.'
+      setSubmitError(message)
+      Alert.alert('Error', message)
       return
     }
 
@@ -266,14 +276,13 @@ export default function ReviewScreen() {
             <View style={styles.header}>
               <Text style={styles.heading}>How was your order?</Text>
               <Text style={styles.sub}>
-                {orderSummary.garmentType} with {orderSummary.tailorName}. Your review helps other customers and rewards great tailors.
+                {orderSummary.garmentType} with {orderSummary.tailorName}.
               </Text>
             </View>
 
-            <View style={styles.guideCard}>
-              <Text style={styles.guideTitle}>Best review approach</Text>
-              <Text style={styles.guideText}>
-                Focus on fit, communication, finish quality, and timing. A short, honest review is enough to help the next customer book with confidence.
+            <View style={styles.noteCard}>
+              <Text style={styles.noteText}>
+                Review is optional. You can skip it and still complete the order.
               </Text>
             </View>
 
@@ -379,16 +388,6 @@ const styles = StyleSheet.create({
   header: { gap: Spacing.sm },
   heading: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
   sub: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 22 },
-  guideCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: Spacing.xs,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-  },
-  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   starsSection: { alignItems: 'center', gap: Spacing.md },
   starsLabel: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, minHeight: 26 },

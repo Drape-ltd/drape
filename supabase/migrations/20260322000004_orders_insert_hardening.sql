@@ -17,7 +17,7 @@ CREATE POLICY "Customer creates orders"
   ON orders FOR INSERT
   TO authenticated
   WITH CHECK (
-    auth.uid() = customer_id
+    auth.uid()::text = customer_id::text
     AND stage = 'PENDING_QUOTE'
     AND EXISTS (
       SELECT 1 FROM tailor_profiles tp

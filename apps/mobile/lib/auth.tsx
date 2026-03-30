@@ -33,23 +33,83 @@ function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
 }
 
+function isInvalidCredentialError(message: string | null | undefined) {
+  const normalized = (message ?? '').toLowerCase()
+  return normalized.includes('invalid login credentials') || normalized.includes('invalid credentials')
+}
+
+async function signInWithPasswordResilient(email: string, password: string) {
+  const normalizedEmail = normalizeEmail(email)
+  const firstAttempt = await supabase.auth.signInWithPassword({
+    email: normalizedEmail,
+    password,
+  })
+
+  const trimmedPassword = password.trim()
+  const shouldRetryWithTrimmedPassword =
+    !!firstAttempt.error &&
+    isInvalidCredentialError(firstAttempt.error.message) &&
+    trimmedPassword.length > 0 &&
+    trimmedPassword !== password
+
+  if (!shouldRetryWithTrimmedPassword) {
+    return firstAttempt
+  }
+
+  return supabase.auth.signInWithPassword({
+    email: normalizedEmail,
+    password: trimmedPassword,
+  })
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    let mounted = true
+
+    async function bootstrap() {
+      const { data: { session } } = await supabase.auth.getSession()
+
+      if (!mounted) return
+
+      if (!session) {
+        setSession(null)
+        setCurrentAccessToken(null)
+        setLoading(false)
+        return
+      }
+
+      const { data, error } = await supabase.auth.getUser()
+      if (!mounted) return
+
+      if (error || !data.user) {
+        await supabase.auth.signOut().catch(() => {})
+        if (!mounted) return
+        setSession(null)
+        setCurrentAccessToken(null)
+        setLoading(false)
+        return
+      }
+
       setSession(session)
-      setCurrentAccessToken(session?.access_token ?? null)
+      setCurrentAccessToken(session.access_token)
       setLoading(false)
-    })
+    }
+
+    void bootstrap()
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return
       setSession(session)
       setCurrentAccessToken(session?.access_token ?? null)
     })
 
-    return () => subscription.unsubscribe()
+    return () => {
+      mounted = false
+      subscription.unsubscribe()
+    }
   }, [])
 
   async function signUp(
@@ -83,8 +143,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!isValidEmail(normalizedEmail)) {
       return { error: 'Enter a valid email address.' }
     }
-    const { error } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password })
-    return { error: error?.message ?? null }
+    const { error } = await signInWithPasswordResilient(normalizedEmail, password)
+    return {
+      error:
+        error?.message === 'Invalid login credentials'
+          ? 'That email/password combo did not match. If you pasted the password, try again once, then use Reset password if needed.'
+          : error?.message ?? null,
+    }
   }
 
   async function signInWithGoogle(): Promise<{ error: string | null }> {
@@ -173,3 +238,5 @@ export function useUserRole(): 'CUSTOMER' | 'TAILOR' | null {
   const { user } = useAuth()
   return (user?.user_metadata?.role as 'CUSTOMER' | 'TAILOR') ?? null
 }
+
+export { signInWithPasswordResilient }

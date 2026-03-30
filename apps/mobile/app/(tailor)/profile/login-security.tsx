@@ -18,7 +18,8 @@ import { useFocusEffect, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
-import { useAuth } from '@/lib/auth'
+import { signInWithPasswordResilient, useAuth } from '@/lib/auth'
+import { requestAccountDeletion } from '@/lib/account-deletion'
 import {
   isBiometricAvailable, getBiometricLabel,
   isBiometricEnabled, setBiometricEnabled, authenticate,
@@ -42,6 +43,7 @@ export default function LoginSecurityScreen() {
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [savingPassword, setSavingPassword] = useState(false)
+  const [deletingAccount, setDeletingAccount] = useState(false)
 
   // ── Biometric toggle ─────────────────────────────────────────────────────
   const [biometricAvailable, setBiometricAvailable] = useState(false)
@@ -92,10 +94,7 @@ export default function LoginSecurityScreen() {
       return
     }
     setReauthLoading(true)
-    const { error } = await supabase.auth.signInWithPassword({
-      email: user?.email ?? '',
-      password: reauthPassword,
-    })
+    const { error } = await signInWithPasswordResilient(user?.email ?? '', reauthPassword)
     setReauthLoading(false)
     if (error) {
       Alert.alert('Incorrect password', 'The password you entered is wrong.')
@@ -146,6 +145,45 @@ export default function LoginSecurityScreen() {
     }
   }
 
+  function handleDeleteAccount() {
+    Alert.alert(
+      'Delete account',
+      'This starts a permanent account deletion request inside Drape. We may retain transaction records where legally required, but your account will be closed and queued for removal.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Request deletion',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setDeletingAccount(true)
+              const result = await requestAccountDeletion()
+              setDeletingAccount(false)
+
+              if (result.error) {
+                Alert.alert('Error', 'We could not submit your deletion request right now. Please try again.')
+                return
+              }
+
+              if (result.alreadyPending) {
+                Alert.alert(
+                  'Already requested',
+                  'You already have a pending deletion request. Our team will continue processing it.'
+                )
+                return
+              }
+
+              Alert.alert(
+                'Request received',
+                'Your deletion request has been submitted inside Drape. We will process it and contact you if anything requires confirmation.'
+              )
+            })()
+          },
+        },
+      ],
+    )
+  }
+
   function goBack() {
     if (navigation.canGoBack()) router.back()
     else router.replace('/(tailor)/profile/account-settings')
@@ -161,24 +199,6 @@ export default function LoginSecurityScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
-        <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Security</Text>
-          </View>
-          <Text style={styles.heroTitle}>Protect the account your clients and orders depend on.</Text>
-          <Text style={styles.heroSub}>
-            Manage your password and device lock settings so your business stays secure without
-            slowing down your day-to-day workflow.
-          </Text>
-        </View>
-
-        <View style={styles.guideCard}>
-          <Text style={styles.guideEyebrow}>How this works</Text>
-          <Text style={styles.guideTitle}>You verify first, then change your password or device lock settings.</Text>
-          <Text style={styles.guideCopy}>
-            That extra step protects your business workspace if someone gets temporary access to an unlocked device.
-          </Text>
-        </View>
 
         {/* ── Biometric toggle (always visible) ── */}
         {biometricAvailable && (
@@ -327,6 +347,28 @@ export default function LoginSecurityScreen() {
           Drape uses Supabase Auth — passwords are hashed and never stored in plain text.
         </Text>
 
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Account</Text>
+          <View style={styles.card}>
+            <View style={styles.dangerWrap}>
+              <Text style={styles.dangerTitle}>Delete your account</Text>
+              <Text style={styles.dangerCopy}>
+                Start a permanent deletion request for your Drape account if you no longer want to operate on the platform.
+              </Text>
+              <TouchableOpacity
+                style={[styles.deleteBtn, deletingAccount && { opacity: 0.6 }]}
+                onPress={handleDeleteAccount}
+                disabled={deletingAccount}
+              >
+                {deletingAccount
+                  ? <ActivityIndicator color={Colors.white} size="small" />
+                  : <Text style={styles.deleteBtnText}>Request account deletion</Text>
+                }
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+
       </ScrollView>
     </SafeAreaView>
   )
@@ -345,38 +387,6 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
   body: { padding: Spacing.xl, paddingBottom: 64, gap: Spacing.xl },
-  heroCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
-    ...Shadow.sm,
-  },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  heroBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  heroTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    lineHeight: 38,
-  },
-  heroSub: {
-    fontSize: FontSize.md,
-    color: Colors.inkLight,
-    lineHeight: 24,
-  },
   guideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,
@@ -446,4 +456,16 @@ const styles = StyleSheet.create({
   toggleSub: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   infoNote: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'center', lineHeight: 18 },
+  dangerWrap: { padding: Spacing.xl },
+  dangerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.error },
+  dangerCopy: { marginTop: Spacing.sm, fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 22 },
+  deleteBtn: {
+    marginTop: Spacing.lg,
+    backgroundColor: Colors.error,
+    borderRadius: Radius.full,
+    paddingVertical: Spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deleteBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.white },
 })

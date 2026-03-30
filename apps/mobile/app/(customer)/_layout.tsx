@@ -1,4 +1,4 @@
-import { Tabs } from 'expo-router'
+import { Tabs, useRouter } from 'expo-router'
 import { Image, Pressable, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, Radius } from '@/constants/theme'
@@ -30,6 +30,8 @@ function ProfileTabIcon({ color, focused }: { color: string; focused: boolean })
 }
 
 export default function CustomerTabLayout() {
+  const router = useRouter()
+
   return (
     <Tabs
       screenOptions={{
@@ -55,7 +57,13 @@ export default function CustomerTabLayout() {
           title: 'Explore',
           tabBarIcon: ({ color }) => <Feather name="search" size={22} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tabBarButton: (props: any) => <Pressable {...props} testID="tab-home" />,
+          tabBarButton: (props: any) => (
+            <Pressable
+              {...props}
+              testID="tab-home"
+              onPress={() => router.replace('/(customer)')}
+            />
+          ),
         }}
       />
       <Tabs.Screen
@@ -64,7 +72,13 @@ export default function CustomerTabLayout() {
           title: 'Wishlists',
           tabBarIcon: ({ color }) => <Feather name="heart" size={22} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tabBarButton: (props: any) => <Pressable {...props} testID="tab-saved" />,
+          tabBarButton: (props: any) => (
+            <Pressable
+              {...props}
+              testID="tab-saved"
+              onPress={() => router.replace('/(customer)/saved')}
+            />
+          ),
         }}
       />
       <Tabs.Screen
@@ -73,7 +87,13 @@ export default function CustomerTabLayout() {
           title: 'Orders',
           tabBarIcon: ({ color }) => <Feather name="package" size={22} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tabBarButton: (props: any) => <Pressable {...props} testID="tab-orders" />,
+          tabBarButton: (props: any) => (
+            <Pressable
+              {...props}
+              testID="tab-orders"
+              onPress={() => router.replace({ pathname: '/(customer)/orders', params: { tab: 'active' } })}
+            />
+          ),
         }}
       />
       <Tabs.Screen
@@ -82,7 +102,13 @@ export default function CustomerTabLayout() {
           title: 'Messages',
           tabBarIcon: ({ color }) => <Feather name="message-circle" size={22} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tabBarButton: (props: any) => <Pressable {...props} testID="tab-messages" />,
+          tabBarButton: (props: any) => (
+            <Pressable
+              {...props}
+              testID="tab-messages"
+              onPress={() => router.replace('/(customer)/messages')}
+            />
+          ),
         }}
       />
       <Tabs.Screen
@@ -92,7 +118,13 @@ export default function CustomerTabLayout() {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarIcon: ({ color, focused }: any) => <ProfileTabIcon color={color} focused={focused} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tabBarButton: (props: any) => <Pressable {...props} testID="tab-profile" />,
+          tabBarButton: (props: any) => (
+            <Pressable
+              {...props}
+              testID="tab-profile"
+              onPress={() => router.replace('/(customer)/profile')}
+            />
+          ),
         }}
       />
       {/* Hidden stack groups — not shown in tab bar */}

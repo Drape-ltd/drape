@@ -9,7 +9,7 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "cf:build": "pnpm dlx @opennextjs/cloudflare@latest build",
-    "cf:preview": "pnpm dlx @opennextjs/cloudflare@latest preview",
+    "cf:preview": "node ./scripts/cf-preview.mjs",
     "cf:deploy": "pnpm dlx @opennextjs/cloudflare@latest deploy"
   },
   "dependencies": {

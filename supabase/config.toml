@@ -73,3 +73,33 @@ verify_jwt = false
 
 [functions.on-message-created]
 verify_jwt = false
+
+[functions.custom-order-action]
+verify_jwt = false
+
+[functions.ready-made-order-action]
+verify_jwt = false
+
+[functions.seller-item-action]
+verify_jwt = false
+
+[functions.review-action]
+verify_jwt = false
+
+[functions.diary-entry-action]
+verify_jwt = false
+
+[functions.tailor-profile-action]
+verify_jwt = false
+
+[functions.portfolio-item-action]
+verify_jwt = false
+
+[functions.message-action]
+verify_jwt = false
+
+[functions.saved-tailor-action]
+verify_jwt = false
+
+[functions.request-account-deletion]
+verify_jwt = false

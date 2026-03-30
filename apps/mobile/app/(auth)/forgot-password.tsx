@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native'
-import { useNavigation, useRouter } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { Button, Input } from '@/components/ui'
@@ -13,7 +13,8 @@ function isValidEmail(value: string) {
 export default function ForgotPasswordScreen() {
   const router = useRouter()
   const navigation = useNavigation()
-  const [email, setEmail] = useState('')
+  const { email: emailParam } = useLocalSearchParams<{ email?: string }>()
+  const [email, setEmail] = useState(emailParam ?? '')
   const [loading, setLoading] = useState(false)
   const [sent, setSent] = useState(false)
 

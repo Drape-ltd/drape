@@ -56,8 +56,7 @@ export default function PersonalInfoScreen() {
   }
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(customer)/profile')
+    router.replace('/(customer)/profile')
   }
 
   async function save() {
@@ -110,24 +109,6 @@ export default function PersonalInfoScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
-        <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Profile identity</Text>
-          </View>
-          <Text style={styles.heroTitle}>Keep the details tailors rely on accurate and up to date.</Text>
-          <Text style={styles.heroSub}>
-            Your name and phone number help keep quotes, delivery coordination, and support
-            conversations clear throughout each order.
-          </Text>
-        </View>
-
-        <View style={styles.guideCard}>
-          <Text style={styles.guideEyebrow}>Used across Drape</Text>
-          <Text style={styles.guideTitle}>These details help keep quotes, support, and delivery coordination clear.</Text>
-          <Text style={styles.guideCopy}>
-            Your email stays tied to account identity, while your display name and phone can be updated here as your ordering needs change.
-          </Text>
-        </View>
 
         <View style={styles.card}>
 
@@ -216,38 +197,6 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
 
   body: { padding: Spacing.xl, paddingBottom: 64, gap: Spacing.lg },
-  heroCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
-    ...Shadow.sm,
-  },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  heroBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  heroTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    lineHeight: 38,
-  },
-  heroSub: {
-    fontSize: FontSize.md,
-    color: Colors.inkLight,
-    lineHeight: 24,
-  },
   guideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,

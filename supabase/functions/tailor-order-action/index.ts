@@ -142,7 +142,7 @@ Deno.serve(async (req) => {
     // Only collection confirmation needs the collection code fields.
     const orderSelect = action === 'confirm-collection'
       ? 'id, stage, tailor_id, customer_id, collection_code, collection_code_attempts'
-      : 'id, stage, tailor_id, customer_id'
+      : 'id, stage, tailor_id, customer_id, deadline'
 
     // Fetch order — verify tailor ownership and current stage
     const { data: order, error: orderError } = await supabase
@@ -190,6 +190,14 @@ Deno.serve(async (req) => {
       // Zod already validated: amount, currency, completionDate — extract safely
       const { amount, currency, completionDate } = body as Extract<typeof body, { action: 'send-quote' }>
       const parsedDate = new Date(completionDate)
+      const customerDeadline = order.deadline ? new Date(order.deadline) : null
+
+      if (customerDeadline && parsedDate.getTime() > customerDeadline.getTime()) {
+        return new Response(
+          JSON.stringify({ error: 'Quoted completion date cannot be later than the customer deadline.' }),
+          { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
 
       const { error } = await supabase
         .from('orders')

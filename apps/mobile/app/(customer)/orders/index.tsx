@@ -5,6 +5,7 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useAuth } from '@/lib/auth'
 import { useCustomerOrders, useRefreshOnFocus } from '@/lib/queries'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -36,6 +37,8 @@ const STAGE_COLOR: Partial<Record<OrderStage, string>> = {
 
 type Tab = 'active' | 'completed'
 
+const CUSTOMER_ORDERS_GUIDE_KEY = 'drape_customer_orders_best_use_dismissed'
+
 function orderPriority(stage: OrderStage): number {
   switch (stage) {
     case 'QUOTE_SENT':
@@ -58,38 +61,38 @@ function orderPriority(stage: OrderStage): number {
   }
 }
 
-function orderHint(stage: OrderStage): string | null {
+function orderHint(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): string | null {
   switch (stage) {
     case 'QUOTE_SENT':
-      return 'Review quote and confirm to start production'
+      return 'Quote ready'
     case 'CONSULTATION':
-      return 'Consultation requested. Open the order or messages for the latest call details.'
+      return 'Consultation pending'
     case 'PENDING_QUOTE':
-      return 'Your tailor is reviewing your brief and preparing the next step.'
+      return orderKind === 'READY_MADE' ? 'Inquiry open' : 'Waiting for quote'
     case 'PAYMENT_PENDING':
-      return 'Payment is being confirmed before production starts.'
+      return orderKind === 'READY_MADE' ? 'Checkout pending' : 'Payment confirming'
     case 'CONFIRMED':
-      return 'Your order is confirmed. Your tailor is preparing to begin production.'
+      return orderKind === 'READY_MADE' ? 'Order placed' : 'Confirmed'
     case 'DESIGNING':
-      return 'Design details and pattern work are underway.'
+      return 'Designing'
     case 'SOURCING':
-      return 'Fabric and materials are being sourced for your order.'
+      return 'Sourcing materials'
     case 'CUTTING':
-      return 'Fabric is being cut to your measurements.'
+      return 'Cutting'
     case 'SEWING':
-      return 'Your garment is being sewn together.'
+      return 'Sewing'
     case 'FINISHING':
-      return 'Final touches and quality checks are underway.'
+      return 'Finishing'
     case 'READY_FOR_COLLECTION':
-      return 'Your order is ready. Bring your collection code.'
+      return 'Ready for collection'
     case 'SHIPPED':
-      return 'Your tailor has shipped this order. Open it to track delivery and confirm receipt.'
+      return 'In transit'
     case 'DELIVERED':
-      return 'Delivery confirmed. Check everything carefully, then finish your order.'
+      return 'Finish order'
     case 'COLLECTED':
-      return 'Collection confirmed. Check everything carefully, then finish your order.'
+      return 'Finish order'
     case 'IN_DISPUTE':
-      return 'Concern under review. Open the order for the latest status.'
+      return 'Concern under review'
     default:
       return null
   }
@@ -100,12 +103,26 @@ export default function OrdersListScreen() {
   const params = useLocalSearchParams<{ tab?: string }>()
   const { user } = useAuth()
   const [tab, setTab] = useState<Tab>('active')
+  const [showGuide, setShowGuide] = useState(true)
 
   useEffect(() => {
     if (params.tab === 'completed' || params.tab === 'active') {
       setTab(params.tab)
     }
   }, [params.tab])
+
+  useEffect(() => {
+    AsyncStorage.getItem(`${CUSTOMER_ORDERS_GUIDE_KEY}:${user?.id ?? 'guest'}`)
+      .then((value) => setShowGuide(value !== '1'))
+      .catch(() => {})
+  }, [user?.id])
+
+  async function dismissGuide() {
+    setShowGuide(false)
+    try {
+      await AsyncStorage.setItem(`${CUSTOMER_ORDERS_GUIDE_KEY}:${user?.id ?? 'guest'}`, '1')
+    } catch {}
+  }
 
   const { data: orders = [], isLoading: loading, isFetching, isError, refetch } = useCustomerOrders(user?.id, tab)
 
@@ -140,23 +157,17 @@ export default function OrdersListScreen() {
         </View>
       </View>
 
-      <View style={styles.heroCard}>
-        <View style={styles.heroBadge}>
-          <Text style={styles.heroBadgeText}>Order journey</Text>
+      {showGuide && (
+        <View style={styles.guideCard}>
+          <View style={styles.guideHeader}>
+            <Text style={styles.guideEyebrow}>Best use</Text>
+            <TouchableOpacity onPress={() => void dismissGuide()} style={styles.guideClose}>
+              <Feather name="x" size={16} color={Colors.midGrey} />
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.guideText}>Use Active for live work and Completed for finished orders you may want to revisit or review.</Text>
         </View>
-        <Text style={styles.heroTitle}>Follow every custom order from quote to final handoff.</Text>
-        <Text style={styles.heroSub}>
-          Active orders show what needs your attention now, while completed orders preserve the
-          history of garments you have already finished with a tailor.
-        </Text>
-      </View>
-
-      <View style={styles.guideCard}>
-        <Text style={styles.guideTitle}>Best order habit</Text>
-        <Text style={styles.guideText}>
-          Check this list first for anything waiting on your decision, then open the order itself when you need the full status, timeline, or next action.
-        </Text>
-      </View>
+      )}
 
       {loading ? (
         <View style={styles.stateWrap}>
@@ -243,9 +254,9 @@ export default function OrdersListScreen() {
                   </Text>
                 </View>
               )}
-              {orderHint(item.stage) && (
+              {orderHint(item.stage, item.orderKind) && (
                 <View style={styles.reviewNudge}>
-                  <Text style={styles.reviewNudgeText}>{orderHint(item.stage)}</Text>
+                  <Text style={styles.reviewNudgeText}>{orderHint(item.stage, item.orderKind)}</Text>
                 </View>
               )}
             </TouchableOpacity>
@@ -274,12 +285,6 @@ function EmptyOrdersView({
           <Text style={styles.stateHint}>
             Orders you finish with a tailor will appear here once the full journey is closed out in the app.
           </Text>
-          <View style={styles.stateGuideCard}>
-            <Text style={styles.stateGuideTitle}>Best way to use this tab</Text>
-            <Text style={styles.stateGuideText}>
-              Come back here for finished garments, past references, and the orders you may want to review or revisit later.
-            </Text>
-          </View>
           <TouchableOpacity style={styles.retryBtn} onPress={onExplore}>
             <Text style={styles.retryBtnText}>Explore tailors</Text>
           </TouchableOpacity>
@@ -432,37 +437,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 21,
   },
-  stateGuideCard: {
-    alignSelf: 'stretch',
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: 4,
-  },
-  stateGuideTitle: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  stateGuideText: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
   header: { padding: Spacing.xl, gap: Spacing.md },
   title: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
-  heroCard: {
-    marginHorizontal: Spacing.xl,
-    marginBottom: Spacing.md,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
-    ...Shadow.sm,
-  },
   guideCard: {
     marginHorizontal: Spacing.xl,
     marginBottom: Spacing.md,
@@ -474,33 +450,16 @@ const styles = StyleSheet.create({
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
-  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  heroBadgeText: {
+  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  guideClose: { padding: 2 },
+  guideEyebrow: {
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
     color: Colors.needleGreen,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  heroTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    lineHeight: 38,
-  },
-  heroSub: {
-    fontSize: FontSize.md,
-    color: Colors.inkLight,
-    lineHeight: 24,
-  },
+  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   tabs: {
     flexDirection: 'row', backgroundColor: Colors.boneDeep,
     borderRadius: Radius.full, padding: 3,

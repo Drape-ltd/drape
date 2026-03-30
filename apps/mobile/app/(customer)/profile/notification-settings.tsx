@@ -85,8 +85,7 @@ export default function NotificationSettingsScreen() {
   }
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(customer)/profile/account-settings')
+    router.replace('/(customer)/profile/account-settings')
   }
 
   return (
@@ -104,24 +103,10 @@ export default function NotificationSettingsScreen() {
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Notification control</Text>
           </View>
-          <Text style={styles.heroTitle}>Stay close to the updates that actually move your order forward.</Text>
-          <Text style={styles.heroSub}>
-            Tune what reaches you so important quotes, delivery moments, and tailor replies never
-            get buried under noise.
-          </Text>
+          <Text style={styles.heroTitle}>Choose what reaches you.</Text>
         </View>
 
-        <View style={styles.guideCard}>
-          <Text style={styles.guideEyebrow}>Recommended</Text>
-          <Text style={styles.guideTitle}>Keep order updates, messages, and quotes turned on.</Text>
-          <Text style={styles.guideCopy}>
-            Those alerts are the spine of the Drape order flow. They help you respond on time without needing to keep checking manually.
-          </Text>
-        </View>
-
-        <Text style={styles.intro}>
-          Choose which push notifications you receive from Drape. You can change these at any time.
-        </Text>
+        <Text style={styles.intro}>You can change these any time.</Text>
 
         {/* ── Order activity ── */}
         <View style={styles.section}>

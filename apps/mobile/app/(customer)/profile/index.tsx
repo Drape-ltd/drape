@@ -1,20 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { useFocusEffect } from 'expo-router'
+import { useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert,
   Animated, Image, ActivityIndicator, Linking, Platform,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Feather } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import * as ImageManipulator from 'expo-image-manipulator'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { useCustomerProfile } from '@/lib/customerProfile'
+import { useCustomerProfileOverview, useRefreshOnFocus } from '@/lib/queries'
 import { shareCustomerReferral, shareDiscoverTailors } from '@/lib/invite'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
+
+const CUSTOMER_PROFILE_GUIDE_KEY = 'drape_customer_profile_best_use_dismissed'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -103,11 +106,7 @@ export default function CustomerProfileScreen() {
   const router = useRouter()
   const { user, signOut } = useAuth()
   const { avatarUrl, setAvatarUrl } = useCustomerProfile()
-  const [measurements, setMeasurements] = useState<MeasurementProfile | null>(null)
-  const [recentOrders, setRecentOrders] = useState<RecentOrder[]>([])
-  const [createdAt, setCreatedAt] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [fetchError, setFetchError] = useState(false)
+  const [showGuide, setShowGuide] = useState(true)
 
   async function openExternalUrl(url: string, fallbackMessage: string) {
     const supported = await Linking.canOpenURL(url)
@@ -122,9 +121,41 @@ export default function CustomerProfileScreen() {
       Alert.alert('Unable to open link', fallbackMessage)
     }
   }
-  const [retryTrigger, setRetryTrigger] = useState(0)
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
-  const [notifCount, setNotifCount] = useState(0)
+  const lastNotifCheck = user?.user_metadata?.last_notif_check ?? new Date(0).toISOString()
+  const {
+    data: overview,
+    isError,
+    refetch,
+  } = useCustomerProfileOverview(user?.id, lastNotifCheck)
+
+  const measurements = (overview?.measurements ?? null) as MeasurementProfile | null
+  const recentOrders = (overview?.recentOrders ?? []) as RecentOrder[]
+  const reviewCount = overview?.reviewCount ?? 0
+  const averageRating = overview?.averageRating ?? null
+  const createdAt = overview?.createdAt ?? null
+  const notifCount = overview?.notifCount ?? 0
+
+  useEffect(() => {
+    AsyncStorage.getItem(`${CUSTOMER_PROFILE_GUIDE_KEY}:${user?.id ?? 'guest'}`)
+      .then((value) => setShowGuide(value !== '1'))
+      .catch(() => {})
+  }, [user?.id])
+
+  useEffect(() => {
+    if (overview?.avatarUrl && !avatarUrl) {
+      setAvatarUrl(overview.avatarUrl)
+    }
+  }, [overview?.avatarUrl, avatarUrl, setAvatarUrl])
+
+  useRefreshOnFocus(() => { void refetch() })
+
+  async function dismissGuide() {
+    setShowGuide(false)
+    try {
+      await AsyncStorage.setItem(`${CUSTOMER_PROFILE_GUIDE_KEY}:${user?.id ?? 'guest'}`, '1')
+    } catch {}
+  }
 
   const displayName = user?.user_metadata?.display_name ?? ''
   const initials = displayName
@@ -133,98 +164,6 @@ export default function CustomerProfileScreen() {
     .slice(0, 2)
     .join('')
     .toUpperCase() || '?'
-
-  useFocusEffect(
-    useCallback(() => {
-      async function load() {
-        setFetchError(false)
-        setLoading(true)
-      try {
-        const [profileRes, ordersRes] = await Promise.allSettled([
-          supabase
-            .from('customer_profiles')
-            .select('measurements, created_at, avatar_url')
-            .eq('user_id', user?.id)
-            .maybeSingle(),
-          supabase
-            .from('orders')
-            .select('id, reference, garment_type, stage, created_at, tailor_profiles!tailor_profile_id(display_name)')
-            .eq('customer_id', user?.id)
-            .order('created_at', { ascending: false })
-            .limit(3),
-        ])
-
-        const profileFailed =
-          profileRes.status === 'rejected' ||
-          (profileRes.status === 'fulfilled' && !!profileRes.value.error)
-        const ordersFailed =
-          ordersRes.status === 'rejected' ||
-          (ordersRes.status === 'fulfilled' && !!ordersRes.value.error)
-
-        if (profileFailed && ordersFailed) {
-          setFetchError(true)
-          setMeasurements(null)
-          setCreatedAt(null)
-          setRecentOrders([])
-          setNotifCount(0)
-          setLoading(false)
-          return
-        }
-
-        const profile =
-          profileRes.status === 'fulfilled' && !profileRes.value.error
-            ? profileRes.value.data
-            : null
-        const orders =
-          ordersRes.status === 'fulfilled' && !ordersRes.value.error
-            ? ((ordersRes.value.data ?? []) as any[])
-            : []
-
-        // Count unread notifications — order_stage_updates since last check
-        const lastCheck = user?.user_metadata?.last_notif_check ?? new Date(0).toISOString()
-        let unreadCount = 0
-        if (orders.length > 0) {
-          const { count } = await supabase
-            .from('order_stage_updates')
-            .select('id', { count: 'exact', head: true })
-            .gte('created_at', lastCheck)
-            .in('order_id', orders.map((o) => o.id))
-          unreadCount = count ?? 0
-        }
-
-        if (profile) {
-          setMeasurements(profile.measurements as MeasurementProfile ?? null)
-          setCreatedAt(profile.created_at ?? null)
-          if (profile.avatar_url && !avatarUrl) {
-            setAvatarUrl(profile.avatar_url)
-          }
-        } else {
-          setMeasurements(null)
-          setCreatedAt(null)
-        }
-
-        setNotifCount(unreadCount)
-
-        setRecentOrders(
-          orders.map((o) => ({
-            id: o.id,
-            reference: o.reference,
-            garmentType: o.garment_type,
-            stage: o.stage as OrderStage,
-            tailorName: (o.tailor_profiles as any)?.display_name ?? 'Tailor',
-            createdAt: o.created_at,
-          }))
-        )
-
-        setLoading(false)
-        } catch {
-          setFetchError(true)
-          setLoading(false)
-        }
-      }
-      load()
-    }, [user?.id, retryTrigger]),
-  )
 
   const filledCount = measurements
     ? MEASUREMENT_KEYS.filter((k) => measurements[k] !== null && measurements[k] !== undefined).length
@@ -317,7 +256,7 @@ export default function CustomerProfileScreen() {
     ])
   }
 
-  if (fetchError) {
+  if (isError && !overview) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.stateWrap}>
@@ -329,7 +268,7 @@ export default function CustomerProfileScreen() {
             </Text>
             <TouchableOpacity
               style={styles.statePrimaryBtn}
-              onPress={() => { setFetchError(false); setLoading(true); setRetryTrigger((n) => n + 1) }}
+              onPress={() => { void refetch() }}
             >
               <Text style={styles.statePrimaryBtnText}>Try again</Text>
             </TouchableOpacity>
@@ -401,142 +340,49 @@ export default function CustomerProfileScreen() {
         </View>
 
         <View style={styles.body}>
-          <View style={styles.workspaceCard}>
-            <Text style={styles.workspaceEyebrow}>Your account hub</Text>
-            <Text style={styles.workspaceText}>
-              Keep your measurements, orders, and support paths together here so every booking stays easy to manage.
-            </Text>
-          </View>
-
-          <View style={styles.guideCard}>
-            <Text style={styles.guideTitle}>Best profile habit</Text>
-            <Text style={styles.guideText}>
-              Keep your measurements and contact details current here so new bookings start with cleaner fit context and fewer back-and-forth questions.
-            </Text>
-          </View>
-
-          {/* ── Measurements ── */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Measurement profile</Text>
-              <TouchableOpacity
-                onPress={() => router.push('/(customer)/profile/measurements')}
-                style={styles.sectionLink}
-              >
-                <Text style={styles.sectionLinkText}>{filledCount > 0 ? 'Edit' : 'Set up'}</Text>
-                <Feather name="chevron-right" size={14} color={Colors.needleGreen} />
-              </TouchableOpacity>
-            </View>
-
-            {loading ? (
-              <View style={styles.card}>
-                <SkeletonBox width="50%" height={10} />
-                <SkeletonBox width="100%" height={5} style={{ marginTop: 8 }} />
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs, marginTop: 12 }}>
-                  {[0, 1, 2, 3].map((i) => <SkeletonBox key={i} width="47%" height={44} />)}
-                </View>
+          {showGuide && (
+            <View style={styles.workspaceCard}>
+              <View style={styles.workspaceHeader}>
+                <Text style={styles.workspaceEyebrow}>Best use</Text>
+                <TouchableOpacity onPress={() => void dismissGuide()} style={styles.workspaceClose}>
+                  <Feather name="x" size={16} color={Colors.midGrey} />
+                </TouchableOpacity>
               </View>
-            ) : filledCount === 0 ? (
-              <TouchableOpacity
-                style={styles.emptyRow}
-                onPress={() => router.push('/(customer)/profile/measurements')}
-                activeOpacity={0.7}
-              >
-                <View style={styles.emptyRowIcon}>
-                  <Feather name="sliders" size={20} color={Colors.needleGreen} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.emptyRowTitle}>Add your measurements</Text>
-                  <Text style={styles.emptyRowHint}>Attached automatically to every order</Text>
-                </View>
-                <Feather name="chevron-right" size={18} color={Colors.midGrey} />
-              </TouchableOpacity>
-            ) : (
-              <View style={styles.card}>
-                <View style={styles.completenessRow}>
-                  <Text style={styles.completenessLabel}>{filledCount} of 8 measurements added</Text>
-                  <View style={styles.bar}>
-                    <View style={[styles.barFill, { width: `${(filledCount / 8) * 100}%` as any }]} />
-                  </View>
-                </View>
-                <View style={styles.measureGrid}>
-                  {MEASUREMENT_KEYS.map((k) => {
-                    const val = measurements?.[k]
-                    const labels: Record<string, string> = {
-                      chest: 'Chest', waist: 'Waist', hips: 'Hips', shoulderWidth: 'Shoulder',
-                      inseam: 'Inseam', sleeveLength: 'Sleeve', neckCircumference: 'Neck', height: 'Height',
-                    }
-                    return (
-                      <View key={k} style={styles.measureCell}>
-                        <Text style={styles.measureLabel}>{labels[k]}</Text>
-                        <Text style={[styles.measureValue, !val && styles.measureEmpty]}>
-                          {val ? `${val} ${measurements?.unit ?? 'cm'}` : '—'}
-                        </Text>
-                      </View>
-                    )
-                  })}
-                </View>
-              </View>
-            )}
-
-            {filledCount > 0 && (
-              <Text style={styles.privacyNote}>
-                Measurements are private — shared only when you start an order.
+              <Text style={styles.workspaceText}>
+                Keep your measurements current and use this page to jump back into active orders fast.
               </Text>
-            )}
-          </View>
-
-          {/* ── Recent orders ── */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Recent orders</Text>
-              <TouchableOpacity onPress={() => router.navigate('/(customer)/orders')} style={styles.sectionLink}>
-                <Text style={styles.sectionLinkText}>See all orders</Text>
-                <Feather name="chevron-right" size={14} color={Colors.needleGreen} />
-              </TouchableOpacity>
             </View>
-            {loading ? (
-              <View style={styles.card}>
-                {[0, 1].map((i) => <SkeletonBox key={i} width="100%" height={48} style={{ marginBottom: 8 }} />)}
-              </View>
-            ) : recentOrders.length > 0 ? (
-              <View style={styles.menuList}>
-                {recentOrders.map((order, i) => (
-                  <TouchableOpacity
-                    key={order.id}
-                    style={[styles.orderRow, i === recentOrders.length - 1 && styles.rowLast]}
-                    onPress={() => router.navigate(`/(customer)/orders/${order.id}` as any)}
-                    activeOpacity={0.6}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.orderTitle}>{order.garmentType}</Text>
-                      <Text style={styles.orderSub}>{order.tailorName} · #{order.reference}</Text>
-                      <Text style={styles.orderHint}>{recentOrderHint(order.stage)}</Text>
-                    </View>
-                    <View style={[styles.stagePill, { backgroundColor: (STAGE_COLOR[order.stage] ?? Colors.midGrey) + '18' }]}>
-                      <Text style={[styles.stageText, { color: STAGE_COLOR[order.stage] ?? Colors.midGrey }]}>
-                        {STAGE_LABELS[order.stage] ?? order.stage}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            ) : (
-              <TouchableOpacity
-                style={styles.emptyRow}
-                onPress={() => router.navigate('/(customer)')}
-                activeOpacity={0.7}
-              >
-                <View style={styles.emptyRowIcon}>
-                  <Feather name="shopping-bag" size={20} color={Colors.needleGreen} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.emptyRowTitle}>Start your first order</Text>
-                  <Text style={styles.emptyRowHint}>Browse tailors, place a brief, and track the whole journey here.</Text>
-                </View>
-                <Feather name="chevron-right" size={18} color={Colors.midGrey} />
-              </TouchableOpacity>
-            )}
+          )}
+
+          <View style={styles.quickLinksRow}>
+            <TouchableOpacity
+              style={styles.quickLinkCard}
+              onPress={() => router.push('/(customer)/profile/measurements')}
+              activeOpacity={0.75}
+            >
+              <Text style={styles.quickLinkValue}>{filledCount > 0 ? `${filledCount}/8` : 'Set up'}</Text>
+              <Text style={styles.quickLinkLabel}>Fit profile</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.quickLinkCard}
+              onPress={() => router.push('/(customer)/profile/reviews')}
+              activeOpacity={0.75}
+            >
+              <Text style={styles.quickLinkValue}>
+                {averageRating ? averageRating.toFixed(1) : '—'}
+              </Text>
+              <Text style={styles.quickLinkLabel}>
+                {reviewCount > 0 ? `${reviewCount} review${reviewCount === 1 ? '' : 's'}` : 'Ratings'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.quickLinkCard}
+              onPress={() => router.navigate('/(customer)/orders')}
+              activeOpacity={0.75}
+            >
+              <Text style={styles.quickLinkValue}>{recentOrders.length}</Text>
+              <Text style={styles.quickLinkLabel}>Recent orders</Text>
+            </TouchableOpacity>
           </View>
 
           {/* ── Become a tailor ── */}
@@ -547,8 +393,8 @@ export default function CustomerProfileScreen() {
           >
             <Text style={styles.becomeEmoji}>✂️</Text>
             <View style={{ flex: 1 }}>
-              <Text style={styles.becomeTitle}>Are you a tailor?</Text>
-              <Text style={styles.becomeSub}>Join Drape and reach customers looking for bespoke work.</Text>
+              <Text style={styles.becomeTitle}>Are you a seller?</Text>
+              <Text style={styles.becomeSub}>Join Drape and start selling custom work or ready-made pieces.</Text>
             </View>
             <Feather name="chevron-right" size={18} color={Colors.inkLight} />
           </TouchableOpacity>
@@ -696,22 +542,22 @@ const styles = StyleSheet.create({
   // Hero
   hero: {
     backgroundColor: Colors.needleGreen,
-    paddingTop: Spacing.xxl,
-    paddingBottom: Spacing.xxxl + Spacing.xl,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.xxxl,
     alignItems: 'center',
     gap: Spacing.xs,
     paddingHorizontal: Spacing.xl,
   },
   avatarWrap: { position: 'relative', marginBottom: Spacing.sm },
   avatar: {
-    width: 88, height: 88, borderRadius: 44,
+    width: 76, height: 76, borderRadius: 38,
     backgroundColor: 'rgba(255,255,255,0.2)',
     borderWidth: 3, borderColor: 'rgba(255,255,255,0.45)',
     alignItems: 'center', justifyContent: 'center',
   },
   avatarLoading: { opacity: 0.6 },
   avatarImage: {
-    width: 88, height: 88, borderRadius: 44,
+    width: 76, height: 76, borderRadius: 38,
     borderWidth: 3, borderColor: 'rgba(255,255,255,0.45)',
     overflow: 'hidden',
   },
@@ -742,6 +588,14 @@ const styles = StyleSheet.create({
     gap: Spacing.xs,
     ...Shadow.sm,
   },
+  workspaceHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  workspaceClose: {
+    width: 28,
+    height: 28,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   workspaceEyebrow: {
     fontSize: FontSize.xs,
     color: Colors.needleGreen,
@@ -754,25 +608,21 @@ const styles = StyleSheet.create({
     color: Colors.inkLight,
     lineHeight: 21,
   },
-  guideCard: {
+  quickLinksRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.md },
+  quickLinkCard: {
+    width: '48%',
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: Spacing.xs,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
+    paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.lg,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 92,
+    gap: 6,
     ...Shadow.sm,
   },
-  guideTitle: {
-    fontSize: FontSize.sm,
-    color: Colors.ink,
-    fontWeight: FontWeight.semibold,
-  },
-  guideText: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    lineHeight: 20,
-  },
+  quickLinkValue: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
+  quickLinkLabel: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'center', lineHeight: 16 },
 
   // Sections
   section: { gap: Spacing.md },

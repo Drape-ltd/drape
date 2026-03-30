@@ -48,6 +48,15 @@ type OrderHistoryRow = {
   quotedCurrency: CurrencyCode
 }
 
+type CustomerReviewRow = {
+  id: string
+  rating: number
+  tags: string[]
+  body: string | null
+  reviewerName: string
+  createdAt: string
+}
+
 function asStringList(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
   if (typeof value === 'string' && value.length > 0) return [value]
@@ -79,6 +88,7 @@ export default function ClientDetailScreen() {
   const [notes, setNotes] = useState('')
   const [notesInput, setNotesInput] = useState('')
   const [notesDirty, setNotesDirty] = useState(false)
+  const [reviews, setReviews] = useState<CustomerReviewRow[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -95,8 +105,9 @@ export default function ClientDetailScreen() {
     setNotesInput('')
     setNotesDirty(false)
     setContactWarning(false)
+    setReviews([])
     try {
-      const [profileRes, ordersRes, notesRes] = await Promise.allSettled([
+      const [profileRes, ordersRes, notesRes, reviewsRes] = await Promise.allSettled([
         supabase
           .from('customer_profiles')
           .select('display_name, measurements')
@@ -114,6 +125,11 @@ export default function ClientDetailScreen() {
           .eq('tailor_id', user?.id)
           .eq('customer_id', clientId)
           .maybeSingle(),
+        supabase
+          .from('customer_reviews')
+          .select('id, rating, tags, body, reviewer_name, created_at')
+          .eq('customer_id', clientId)
+          .order('created_at', { ascending: false }),
       ])
 
       const profileData =
@@ -128,6 +144,10 @@ export default function ClientDetailScreen() {
         notesRes.status === 'fulfilled' && !notesRes.value.error
           ? (notesRes.value.data as any)
           : null
+      const customerReviews =
+        reviewsRes.status === 'fulfilled' && !reviewsRes.value.error
+          ? ((reviewsRes.value.data ?? []) as any[])
+          : []
 
       if (
         (profileRes.status === 'rejected' || (profileRes.status === 'fulfilled' && profileRes.value.error)) &&
@@ -158,6 +178,16 @@ export default function ClientDetailScreen() {
       const savedNotes = notesData?.notes ?? ''
       setNotes(savedNotes)
       setNotesInput(savedNotes)
+      setReviews(
+        customerReviews.map((review) => ({
+          id: review.id,
+          rating: review.rating,
+          tags: asStringList(review.tags),
+          body: review.body ?? null,
+          reviewerName: review.reviewer_name ?? 'Tailor',
+          createdAt: review.created_at,
+        }))
+      )
     } catch {
       setFetchError(true)
       setProfile(null)
@@ -267,6 +297,7 @@ export default function ClientDetailScreen() {
   const hasMeasurements = MEAS_LABELS.some(({ key }) => m && (m[key] as number | undefined))
   const bodyShapeLabels = asStringList(m?.bodyShape)
   const fitFlags = asStringList(m?.fitFlags)
+  const latestReviewableOrder = orders.find((row) => ['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(row.stage))
 
   function goBack() {
     if (navigation.canGoBack()) router.back()
@@ -326,11 +357,72 @@ export default function ClientDetailScreen() {
               </Text>
             </View>
             {orders.length > 0 && (
+              <View style={styles.identityActions}>
+                <TouchableOpacity
+                  style={styles.messageBtn}
+                  onPress={() => router.navigate(`/(tailor)/messages/${orders[0].id}`)}
+                >
+                  <Text style={styles.messageBtnText}>Message</Text>
+                </TouchableOpacity>
+                {latestReviewableOrder ? (
+                  <TouchableOpacity
+                    style={styles.secondaryActionBtn}
+                    onPress={() => router.push({
+                      pathname: '/(tailor)/clients/review/[orderId]',
+                      params: { orderId: latestReviewableOrder.id, returnTo: `/(tailor)/clients/${clientId}` },
+                    })}
+                  >
+                    <Text style={styles.secondaryActionText}>Review</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Customer reviews</Text>
+            {reviews.length > 0 ? (
+              <View style={styles.reviewList}>
+                {reviews.map((review) => (
+                  <View key={review.id} style={styles.reviewCard}>
+                    <View style={styles.reviewHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.reviewName}>{review.reviewerName}</Text>
+                        <Text style={styles.reviewDate}>
+                          {new Date(review.createdAt).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}
+                        </Text>
+                      </View>
+                      <Text style={styles.reviewStars}>{'★'.repeat(review.rating)}{'☆'.repeat(5 - review.rating)}</Text>
+                    </View>
+                    {review.tags.length > 0 ? (
+                      <View style={styles.reviewTags}>
+                        {review.tags.map((tag) => (
+                          <View key={tag} style={styles.reviewTag}>
+                            <Text style={styles.reviewTagText}>{tag}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    ) : null}
+                    {review.body ? <Text style={styles.reviewBody}>{review.body}</Text> : null}
+                  </View>
+                ))}
+              </View>
+            ) : (
               <TouchableOpacity
-                style={styles.messageBtn}
-                onPress={() => router.navigate(`/(tailor)/messages/${orders[0].id}`)}
+                style={styles.emptyInfoCard}
+                onPress={() => latestReviewableOrder ? router.push({
+                  pathname: '/(tailor)/clients/review/[orderId]',
+                  params: { orderId: latestReviewableOrder.id, returnTo: `/(tailor)/clients/${clientId}` },
+                }) : undefined}
+                disabled={!latestReviewableOrder}
+                activeOpacity={0.75}
               >
-                <Text style={styles.messageBtnText}>Message</Text>
+                <Text style={styles.emptyInfoTitle}>No customer reviews yet.</Text>
+                <Text style={styles.emptyInfoHint}>
+                  {latestReviewableOrder
+                    ? 'Leave a review after a finished order so future work has better context.'
+                    : 'Reviews appear here after a finished order.'}
+                </Text>
               </TouchableOpacity>
             )}
           </View>
@@ -598,15 +690,53 @@ const styles = StyleSheet.create({
   avatarLgText: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.needleGreen },
   clientName: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
   clientSub: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
+  identityActions: { gap: Spacing.sm },
   messageBtn: {
     paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
     borderRadius: Radius.md, borderWidth: 1.5, borderColor: Colors.needleGreen,
   },
   messageBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
+  secondaryActionBtn: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.needleGreen,
+  },
+  secondaryActionText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
 
   section: { paddingHorizontal: Spacing.xl, gap: Spacing.md, marginBottom: Spacing.xl },
   sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
   sectionHint: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20, marginTop: -Spacing.xs },
+  reviewList: { gap: Spacing.sm },
+  reviewCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
+  reviewHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
+  reviewName: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  reviewDate: { fontSize: FontSize.xs, color: Colors.midGrey },
+  reviewStars: { fontSize: FontSize.sm, color: Colors.warning },
+  reviewTags: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
+  reviewTag: {
+    backgroundColor: Colors.bone,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+    borderRadius: Radius.full,
+  },
+  reviewTagText: { fontSize: FontSize.xs, color: Colors.inkLight },
+  reviewBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  emptyInfoCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: 4,
+    ...Shadow.sm,
+  },
+  emptyInfoTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  emptyInfoHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   emptyCard: {
     backgroundColor: Colors.white, borderRadius: Radius.md,
