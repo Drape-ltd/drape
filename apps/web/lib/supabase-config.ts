@@ -13,11 +13,15 @@ export function getSupabasePublishableKey() {
   )
 }
 
+export function getSupabaseServiceRoleKey() {
+  return process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? null
+}
+
 export function getMissingServiceRoleEnvVars() {
   const missing: string[] = []
 
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    missing.push('SUPABASE_SERVICE_ROLE_KEY')
+  if (!getSupabaseServiceRoleKey()) {
+    missing.push('SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY')
   }
 
   return missing
