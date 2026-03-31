@@ -4,10 +4,7 @@
   "main": ".open-next/worker.js",
   "compatibility_date": "2025-09-27",
   "compatibility_flags": ["nodejs_compat"],
-  "vars": {
-    "NEXT_PUBLIC_SUPABASE_URL": "https://pqptfuqogvrajozfsqzi.supabase.co",
-    "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_zJF6Mqw_5oKbVIDJlb6kbA_CtniN-i4"
-  },
+  "keep_vars": true,
   "secrets": {
     "required": ["SUPABASE_SERVICE_ROLE_KEY"]
   },
