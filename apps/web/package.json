@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "cf:build": "pnpm dlx @opennextjs/cloudflare@latest build",
     "cf:preview": "node ./scripts/cf-preview.mjs",
-    "cf:deploy": "pnpm dlx @opennextjs/cloudflare@latest deploy"
+    "cf:deploy": "node ./scripts/cf-preview.mjs deploy"
   },
   "dependencies": {
     "@drape/db": "workspace:*",

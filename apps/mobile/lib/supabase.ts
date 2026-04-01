@@ -3,10 +3,88 @@ import { createClient } from '@supabase/supabase-js'
 import * as SecureStore from 'expo-secure-store'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!
-const supabasePublishableKey =
-  process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
-  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!
+const VALID_APP_VARIANTS = new Set(['development', 'preview', 'production'])
+const VALID_SUPABASE_ENVS = new Set(['development', 'preview', 'staging', 'test', 'production'])
+
+function getSupabaseProjectRef(url: string) {
+  try {
+    const hostname = new URL(url).hostname
+    const [ref, provider] = hostname.split('.')
+    return provider === 'supabase' ? ref ?? null : null
+  } catch {
+    return null
+  }
+}
+
+function assertMobileSupabaseConfig() {
+  const appVariant = (process.env.EXPO_PUBLIC_APP_VARIANT ?? (__DEV__ ? 'development' : 'production'))
+    .trim()
+    .toLowerCase()
+  const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL?.trim() ?? ''
+  const supabasePublishableKey =
+    process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim() ??
+    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY?.trim() ??
+    ''
+  const supabaseEnv = process.env.EXPO_PUBLIC_SUPABASE_ENV?.trim().toLowerCase() ?? ''
+  const declaredProjectRef = process.env.EXPO_PUBLIC_SUPABASE_PROJECT_REF?.trim() ?? ''
+  const actualProjectRef = getSupabaseProjectRef(supabaseUrl)
+
+  if (!VALID_APP_VARIANTS.has(appVariant)) {
+    throw new Error(
+      `Invalid EXPO_PUBLIC_APP_VARIANT "${appVariant}". Expected one of development, preview, production.`
+    )
+  }
+
+  if (!supabaseUrl) {
+    throw new Error('Missing EXPO_PUBLIC_SUPABASE_URL.')
+  }
+
+  if (!actualProjectRef) {
+    throw new Error(`EXPO_PUBLIC_SUPABASE_URL must point to a Supabase project, received "${supabaseUrl}".`)
+  }
+
+  if (!supabasePublishableKey) {
+    throw new Error('Missing EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY or EXPO_PUBLIC_SUPABASE_ANON_KEY.')
+  }
+
+  if (!supabaseEnv) {
+    throw new Error(
+      'Missing EXPO_PUBLIC_SUPABASE_ENV. Set it explicitly so mobile dev and preview builds cannot drift into production.'
+    )
+  }
+
+  if (!VALID_SUPABASE_ENVS.has(supabaseEnv)) {
+    throw new Error(
+      `Invalid EXPO_PUBLIC_SUPABASE_ENV "${supabaseEnv}". Expected one of development, preview, staging, test, production.`
+    )
+  }
+
+  if (appVariant !== 'production' && !declaredProjectRef) {
+    throw new Error(
+      `Missing EXPO_PUBLIC_SUPABASE_PROJECT_REF for the ${appVariant} mobile environment.`
+    )
+  }
+
+  if (declaredProjectRef && declaredProjectRef !== actualProjectRef) {
+    throw new Error(
+      `Supabase project ref mismatch. EXPO_PUBLIC_SUPABASE_URL points to ${actualProjectRef}, but EXPO_PUBLIC_SUPABASE_PROJECT_REF is ${declaredProjectRef}.`
+    )
+  }
+
+  if (appVariant === 'production' && supabaseEnv !== 'production') {
+    throw new Error('Production mobile builds must use EXPO_PUBLIC_SUPABASE_ENV=production.')
+  }
+
+  if (appVariant !== 'production' && supabaseEnv === 'production') {
+    throw new Error(
+      `Refusing to initialize Supabase for the ${appVariant} app with production mobile data settings.`
+    )
+  }
+
+  return { supabaseUrl, supabasePublishableKey }
+}
+
+const { supabaseUrl, supabasePublishableKey } = assertMobileSupabaseConfig()
 const supabaseHost = new URL(supabaseUrl).host
 const supabaseStorageKey = `drape.auth.${supabaseHost}`
 const LEGACY_AUTH_STORAGE_KEYS = [
