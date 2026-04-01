@@ -4,11 +4,13 @@
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
-    "dev": "expo start",
-    "android": "expo run:android",
-    "ios": "expo run:ios",
-    "build:ios": "eas build --platform ios",
-    "build:android": "eas build --platform android",
+    "dev": "node ./scripts/run-with-env-guard.mjs development expo start",
+    "android": "node ./scripts/run-with-env-guard.mjs development expo run:android",
+    "ios": "node ./scripts/run-with-env-guard.mjs development expo run:ios",
+    "build:ios": "node ./scripts/run-with-env-guard.mjs preview eas build --platform ios --profile preview",
+    "build:android": "node ./scripts/run-with-env-guard.mjs preview eas build --platform android --profile preview",
+    "build:ios:prod": "node ./scripts/run-with-env-guard.mjs production eas build --platform ios --profile production",
+    "build:android:prod": "node ./scripts/run-with-env-guard.mjs production eas build --platform android --profile production",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },
