@@ -2,7 +2,7 @@
  * Account Settings
  *
  * Airbnb-style flat navigation list. Each row navigates to a dedicated
- * sub-screen. Placeholder rows show a "Coming soon" alert.
+ * sub-screen or gives the clearest available in-product route.
  */
 
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native'
@@ -40,8 +40,8 @@ function NavRow({
   )
 }
 
-function comingSoon(feature: string) {
-  Alert.alert(feature, 'This setting is planned, but it is not available in the app yet.')
+function notAvailableYet(feature: string) {
+  Alert.alert(feature, 'This setting is not available in the app yet.')
 }
 
 export default function AccountSettingsScreen() {
@@ -93,18 +93,17 @@ export default function AccountSettingsScreen() {
           <View style={styles.divider} />
           <NavRow
             icon="credit-card"
-            label="Payments & payouts"
-            sublabel="Coming soon"
-            pending
-            onPress={() => comingSoon('Payments & payouts')}
+            label="Payments"
+            sublabel="Quotes, checkout, and order protection"
+            onPress={() => router.push('/(customer)/profile/help')}
           />
           <View style={styles.divider} />
           <NavRow
             icon="file-text"
             label="Taxes"
-            sublabel="Coming soon"
+            sublabel="Not available yet"
             pending
-            onPress={() => comingSoon('Taxes')}
+            onPress={() => notAvailableYet('Taxes')}
           />
         </View>
 
@@ -113,18 +112,18 @@ export default function AccountSettingsScreen() {
           <NavRow
             icon="globe"
             label="Translation"
-            sublabel="Coming soon"
+            sublabel="Not available yet"
             pending
-            onPress={() => comingSoon('Translation')}
+            onPress={() => notAvailableYet('Translation')}
           />
           <View style={styles.divider} />
           <NavRow
             icon="eye"
             label="Accessibility"
-            sublabel="Coming soon"
+            sublabel="Not available yet"
             pending
             last
-            onPress={() => comingSoon('Accessibility')}
+            onPress={() => notAvailableYet('Accessibility')}
           />
         </View>
 

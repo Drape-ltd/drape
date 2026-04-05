@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 type NotifPrefs = {
@@ -79,7 +80,12 @@ export default function TailorNotificationSettingsScreen() {
     setSaving(false)
     if (error) {
       setPrefs(previous)
-      Alert.alert('Error', 'Could not save your notification settings. Please try again.')
+      Alert.alert(
+        'Error',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. We could not save your notification settings yet. Retry when the signal improves.'
+          : 'Could not save your notification settings right now. Please try again in a moment.',
+      )
     }
   }
 

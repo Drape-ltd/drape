@@ -13,10 +13,12 @@ import * as ImagePicker from 'expo-image-picker'
 import { Audio } from 'expo-av'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { stripExif } from '@/lib/stripExif'
+import { readFunctionErrorPayload } from '@/lib/function-errors'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 type MessageType = 'TEXT' | 'PHOTO' | 'VOICE'
+type ThreadNotice = { tone: 'warning' | 'error'; text: string }
 
 type Message = {
   id: string
@@ -39,6 +41,7 @@ interface Props {
   tailorName: string
   customerName: string
   locked?: boolean
+  lockedMessage?: string
 }
 
 // Rate limit: max 8 sends in 30 seconds
@@ -46,13 +49,160 @@ const RATE_LIMIT_COUNT = 8
 const RATE_LIMIT_WINDOW_MS = 30_000
 
 const MSG_PAGE_SIZE = 50
+const CONNECTIVITY_PATTERNS = [
+  'network request failed',
+  'failed to fetch',
+  'fetch failed',
+  'networkerror',
+  'timed out',
+  'connection lost',
+  'offline',
+  'internet connection appears to be offline',
+]
 
-export function MessageThread({ orderId, currentUserId, currentUserRole, tailorName, customerName, locked = false }: Props) {
+function readErrorMessage(error: unknown): string | null {
+  if (error instanceof Error && error.message.trim()) return error.message.trim()
+  if (error && typeof error === 'object') {
+    const maybeMessage = (error as { message?: unknown }).message
+    if (typeof maybeMessage === 'string' && maybeMessage.trim()) {
+      return maybeMessage.trim()
+    }
+  }
+  return null
+}
+
+function readPayloadString(payload: Record<string, unknown> | null, key: string) {
+  const value = payload?.[key]
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+}
+
+function isLikelyConnectivityIssue(error: unknown) {
+  const message = readErrorMessage(error)?.toLowerCase() ?? ''
+  return CONNECTIVITY_PATTERNS.some((pattern) => message.includes(pattern))
+}
+
+async function resolveMessageSendFailure(error: Error | null, fallback: string) {
+  const payload = error ? await readFunctionErrorPayload(error) : null
+  const code = readPayloadString(payload, 'code')
+  const payloadMessage = readPayloadString(payload, 'error')
+  const rawMessage = payloadMessage ?? readErrorMessage(error) ?? fallback
+
+  if (code === 'UNAUTHORIZED' || /session expired/i.test(rawMessage)) {
+    return {
+      title: 'Session expired',
+      message: 'Please sign in again before sending messages.',
+    }
+  }
+
+  if (code === 'BLOCKED_CONTACT') {
+    return {
+      title: 'Keep it on Drape',
+      message: payloadMessage ?? "Contact details can't be shared in messages.",
+      inlineMessage: payloadMessage ?? "Contact details can't be shared in messages.",
+      showAlert: false,
+    }
+  }
+
+  if (code === 'THREATENING_LANGUAGE') {
+    return {
+      title: 'Message blocked',
+      message: payloadMessage ?? "That message can't be sent. Keep communication respectful.",
+      inlineMessage: payloadMessage ?? "That message can't be sent. Keep communication respectful.",
+      showAlert: false,
+    }
+  }
+
+  if (code === 'CONVERSATION_BLOCKED') {
+    return {
+      title: 'Conversation paused',
+      message: payloadMessage ?? 'This conversation is paused while Drape reviews a safety concern.',
+      inlineMessage: payloadMessage ?? 'This conversation is paused while Drape reviews a safety concern.',
+      showAlert: false,
+    }
+  }
+
+  if (code === 'RATE_LIMITED') {
+    return {
+      title: 'Too many attempts',
+      message: payloadMessage ?? 'You are sending messages too quickly. Please wait a moment before trying again.',
+      rateLimited: true,
+    }
+  }
+
+  if (code === 'ORDER_NOT_FOUND' || code === 'FORBIDDEN') {
+    return {
+      title: 'Thread unavailable',
+      message: payloadMessage ?? 'This conversation is not available right now. Refresh the order and try again.',
+    }
+  }
+
+  if (isLikelyConnectivityIssue(error)) {
+    return {
+      title: 'Message not sent',
+      message: 'Your connection looks weak. We kept your draft here so you can retry when the signal stabilizes.',
+      connectivity: true,
+    }
+  }
+
+  return {
+    title: 'Error',
+    message: rawMessage,
+  }
+}
+
+function resolveThreadLoadError(error: unknown, hasCachedMessages: boolean) {
+  if (isLikelyConnectivityIssue(error)) {
+    return hasCachedMessages
+      ? 'Connection is weak. Existing messages stay visible. Refresh this thread when the signal improves.'
+      : 'Connection is weak. We could not load this thread yet. Retry when the signal improves.'
+  }
+
+  const rawMessage = readErrorMessage(error)
+  if (hasCachedMessages) {
+    return 'We could not refresh this conversation just now. Existing messages stay visible while you retry.'
+  }
+
+  return rawMessage ?? 'Could not load this conversation right now.'
+}
+
+function resolveMediaFailure(kind: 'photo' | 'voice', error: unknown) {
+  if (isLikelyConnectivityIssue(error)) {
+    return {
+      title: kind === 'photo' ? 'Photo not sent' : 'Voice note not sent',
+      message:
+        kind === 'photo'
+          ? 'Your connection looks weak. Retry this upload when the signal improves.'
+          : 'Your connection looks weak. Retry this voice note when the signal improves.',
+      connectivity: true,
+    }
+  }
+
+  return {
+    title: 'Error',
+    message:
+      readErrorMessage(error) ??
+      (kind === 'photo' ? 'Could not send photo. Please try again.' : 'Could not send voice note. Please try again.'),
+    connectivity: false,
+  }
+}
+
+export function MessageThread({
+  orderId,
+  currentUserId,
+  currentUserRole,
+  tailorName,
+  customerName,
+  locked = false,
+  lockedMessage,
+}: Props) {
   const [messages, setMessages] = useState<Message[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshingThread, setRefreshingThread] = useState(false)
   const [hasEarlier, setHasEarlier] = useState(false)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
   const loadingEarlierRef = useRef(false)
+  const [loadError, setLoadError] = useState('')
+  const [threadNotice, setThreadNotice] = useState<ThreadNotice | null>(null)
   const [text, setText] = useState('')
   const [textError, setTextError] = useState('')
   const [sending, setSending] = useState(false)
@@ -62,19 +212,37 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
   const flatListRef = useRef<FlatList>(null)
   const sendTimestamps = useRef<number[]>([])
 
-  async function fetchMessages() {
-    const { data } = await supabase
-      .from('messages')
-      .select('*')
-      .eq('order_id', orderId)
-      .order('created_at', { ascending: false })
-      .limit(MSG_PAGE_SIZE)
+  async function fetchMessages(options?: { silent?: boolean }) {
+    const silent = options?.silent === true
+    if (silent) setRefreshingThread(true)
+    else setLoading(true)
+    setLoadError('')
 
-    if (data) {
-      setMessages([...data].reverse() as Message[])
-      setHasEarlier(data.length === MSG_PAGE_SIZE)
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('order_id', orderId)
+        .order('created_at', { ascending: false })
+        .limit(MSG_PAGE_SIZE)
+
+      if (error) throw error
+
+      const nextMessages = data ? ([...data].reverse() as Message[]) : []
+      setMessages(nextMessages)
+      setHasEarlier((data?.length ?? 0) === MSG_PAGE_SIZE)
+      setThreadNotice(null)
+    } catch (error) {
+      const message = resolveThreadLoadError(error, messages.length > 0)
+      if (messages.length > 0) {
+        setThreadNotice({ tone: 'warning', text: message })
+      } else {
+        setLoadError(message)
+      }
+    } finally {
+      setRefreshingThread(false)
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   async function loadEarlier() {
@@ -95,8 +263,11 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
         setMessages((prev) => [...([...data].reverse() as Message[]), ...prev])
         setHasEarlier(data.length === MSG_PAGE_SIZE)
       }
-    } catch {
-      // no-op — spinner cleared in finally
+    } catch (error) {
+      setThreadNotice({
+        tone: 'warning',
+        text: resolveThreadLoadError(error, true),
+      })
     } finally {
       loadingEarlierRef.current = false
       setLoadingEarlier(false)
@@ -154,7 +325,7 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
   function validateText(t: string): boolean {
     const res = filterContactInfo(t)
     if (res.blocked) {
-      setTextError("Contact details can't be shared on Drape.")
+      setTextError(res.userMessage)
       return false
     }
     setTextError('')
@@ -165,6 +336,8 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
     if (!text.trim() || !validateText(text)) return
     if (!checkRateLimit()) return
     setSending(true)
+    setThreadNotice(null)
+
     const { error } = await invokeFunction('message-action', {
       body: {
         action: 'send-message',
@@ -175,16 +348,33 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
         body: text.trim(),
       },
     })
+
     if (error) {
-      console.error('[MessageThread] insert error:', JSON.stringify(error))
-      Alert.alert('Error', 'Could not send message. Please try again.')
+      const failure = await resolveMessageSendFailure(error, 'Could not send message. Please try again.')
+      if (failure.inlineMessage) {
+        setTextError(failure.inlineMessage)
+      }
+      if (failure.rateLimited) {
+        setRateLimited(true)
+        setTimeout(() => setRateLimited(false), RATE_LIMIT_WINDOW_MS)
+      }
+      if (failure.connectivity) {
+        setThreadNotice({
+          tone: 'warning',
+          text: 'Connection looks weak. Your draft stayed in place so you can retry when the signal improves.',
+        })
+      }
+      if (failure.showAlert !== false) {
+        Alert.alert(failure.title, failure.message)
+      }
     } else {
       setText('')
-      await fetchMessages()
+      setTextError('')
+      await fetchMessages({ silent: true })
+      Keyboard.dismiss()
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100)
     }
     setSending(false)
-    Keyboard.dismiss()
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100)
   }
 
   async function sendPhoto() {
@@ -196,6 +386,7 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
     if (result.canceled || !result.assets[0]) return
 
     setSending(true)
+    setThreadNotice(null)
     const cleanUri = await stripExif(result.assets[0].uri)
     const ext = 'jpg' // stripExif always outputs JPEG
     const filename = `messages/${orderId}/${Date.now()}.${ext}`
@@ -224,8 +415,15 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
       })
       if (insertError) throw insertError
       await fetchMessages()
-    } catch {
-      Alert.alert('Error', 'Could not send photo. Please try again.')
+    } catch (error) {
+      const failure = resolveMediaFailure('photo', error)
+      if (failure.connectivity) {
+        setThreadNotice({
+          tone: 'warning',
+          text: 'Connection looks weak. Photo uploads can take longer, so retry when the signal improves.',
+        })
+      }
+      Alert.alert(failure.title, failure.message)
     }
     setSending(false)
   }
@@ -253,6 +451,7 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
     if (!uri) return
 
     setSending(true)
+    setThreadNotice(null)
     const filename = `messages/${orderId}/${Date.now()}.m4a`
     try {
       const response = await fetch(uri)
@@ -278,8 +477,15 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
       })
       if (insertError) throw insertError
       await fetchMessages()
-    } catch {
-      Alert.alert('Error', 'Could not send voice note.')
+    } catch (error) {
+      const failure = resolveMediaFailure('voice', error)
+      if (failure.connectivity) {
+        setThreadNotice({
+          tone: 'warning',
+          text: 'Connection looks weak. Retry this voice note when the signal improves.',
+        })
+      }
+      Alert.alert(failure.title, failure.message)
     }
     setSending(false)
   }
@@ -311,8 +517,27 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
           <View style={styles.empty}>
             <View style={styles.emptyCard}>
               <Text style={styles.emptyEyebrow}>Conversation</Text>
-              <Text style={styles.emptyTitle}>No messages yet</Text>
-              <Text style={styles.emptyText}>Start the conversation with {otherName}. Keep updates and decisions here.</Text>
+              {loadError ? (
+                <>
+                  <Text style={styles.emptyTitle}>Couldn't load messages.</Text>
+                  <Text style={styles.emptyText}>{loadError}</Text>
+                  <TouchableOpacity
+                    style={styles.retryThreadBtn}
+                    onPress={() => void fetchMessages({ silent: true })}
+                    disabled={refreshingThread}
+                  >
+                    {refreshingThread
+                      ? <ActivityIndicator size="small" color={Colors.white} />
+                      : <Text style={styles.retryThreadBtnText}>Refresh thread</Text>
+                    }
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.emptyTitle}>No messages yet</Text>
+                  <Text style={styles.emptyText}>Start the conversation with {otherName}. Keep updates and decisions here.</Text>
+                </>
+              )}
             </View>
           </View>
         }
@@ -321,10 +546,25 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
         )}
       />
 
+      {threadNotice ? (
+        <View style={[styles.threadNotice, threadNotice.tone === 'error' && styles.threadNoticeError]}>
+          <Text style={[styles.threadNoticeText, threadNotice.tone === 'error' && styles.threadNoticeTextError]}>
+            {threadNotice.text}
+          </Text>
+          <TouchableOpacity
+            style={styles.threadNoticeBtn}
+            onPress={() => void fetchMessages({ silent: true })}
+            disabled={refreshingThread}
+          >
+            <Text style={styles.threadNoticeBtnText}>{refreshingThread ? 'Refreshing…' : 'Refresh thread'}</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       {/* Locked banner — shown when order is terminal */}
       {locked ? (
         <View style={styles.lockedBar}>
-          <Text style={styles.lockedText}>This conversation is closed. You can still read previous messages.</Text>
+          <Text style={styles.lockedText}>{lockedMessage ?? 'This conversation is closed. You can still read previous messages.'}</Text>
         </View>
       ) : (
         <>
@@ -366,7 +606,7 @@ export function MessageThread({ orderId, currentUserId, currentUserRole, tailorN
                 if (textError) validateText(v)
               }}
               multiline
-              maxLength={1000}
+              maxLength={2000}
               returnKeyType="default"
               testID="message-input"
             />
@@ -492,6 +732,18 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
   emptyText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 21 },
+  retryThreadBtn: {
+    marginTop: Spacing.sm,
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xl,
+    minHeight: 44,
+  },
+  retryThreadBtnText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
 
   lockedBar: {
     backgroundColor: Colors.lightGrey, paddingHorizontal: Spacing.xl,
@@ -505,6 +757,37 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm, borderTopWidth: 1, borderTopColor: Colors.kanteRust + '30',
   },
   filterWarningText: { fontSize: FontSize.xs, color: Colors.kanteRust, lineHeight: 18 },
+  threadNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+    backgroundColor: Colors.boneDeep,
+    borderTopWidth: 1,
+    borderTopColor: Colors.lightGrey,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.sm,
+  },
+  threadNoticeError: {
+    backgroundColor: Colors.errorLight,
+    borderTopColor: Colors.error + '30',
+  },
+  threadNoticeText: {
+    flex: 1,
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    lineHeight: 18,
+  },
+  threadNoticeTextError: { color: Colors.error },
+  threadNoticeBtn: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+  },
+  threadNoticeBtnText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+  },
 
   recordingBar: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,

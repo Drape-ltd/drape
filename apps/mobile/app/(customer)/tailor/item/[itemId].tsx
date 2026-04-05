@@ -6,6 +6,7 @@ import { Feather } from '@expo/vector-icons'
 import { useSellerItem } from '@/lib/queries'
 import { invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import { Button } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 
@@ -39,7 +40,12 @@ export default function SellerItemDetailScreen() {
       })
 
       if (error || !data?.orderId) {
-        throw new Error(error?.message ?? 'Could not start this conversation.')
+        const payload = error ? await readFunctionErrorPayload(error) : null
+        const message =
+          typeof payload?.error === 'string' && payload.error.length > 0
+            ? payload.error
+            : await readFunctionErrorMessage(error, 'Could not start this conversation.')
+        throw new Error(message)
       }
 
       router.push({
@@ -47,7 +53,12 @@ export default function SellerItemDetailScreen() {
         params: { orderId: data.orderId, returnTo: `/(customer)/tailor/item/${item.id}` },
       })
     } catch (error: any) {
-      Alert.alert('Could not start chat', error?.message ?? 'Please try again.')
+      Alert.alert(
+        'Could not start chat',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. Retry from this item when the signal improves, or check Messages if the inquiry already started.'
+          : error?.message ?? 'Please try again.',
+      )
     } finally {
       setStartingInquiry(false)
     }

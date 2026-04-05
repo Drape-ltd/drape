@@ -14,12 +14,13 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Switch, Alert, ActivityIndicator, Linking,
 } from 'react-native'
-import { useNavigation, useRouter } from 'expo-router'
+import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
+import { setAnalyticsConsent } from '@/lib/analytics'
 import { useAuth } from '@/lib/auth'
-import { requestAccountDeletion } from '@/lib/account-deletion'
+import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 type PrivacyPrefs = {
@@ -36,11 +37,9 @@ const DEFAULT_PREFS: PrivacyPrefs = {
 
 export default function PrivacyScreen() {
   const router = useRouter()
-  const navigation = useNavigation()
   const { user } = useAuth()
   const [prefs, setPrefs] = useState<PrivacyPrefs>(DEFAULT_PREFS)
   const [saving, setSaving] = useState(false)
-  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     const stored = user?.user_metadata?.privacy_prefs
@@ -51,12 +50,23 @@ export default function PrivacyScreen() {
     const previous = prefs
     const updated = { ...prefs, [key]: value }
     setPrefs(updated)
+    if (key === 'analyticsSharing') {
+      setAnalyticsConsent(!!user?.id && value)
+    }
     setSaving(true)
     const { error } = await supabase.auth.updateUser({ data: { privacy_prefs: updated } })
     setSaving(false)
     if (error) {
+      if (key === 'analyticsSharing') {
+        setAnalyticsConsent(!!user?.id && previous.analyticsSharing)
+      }
       setPrefs(previous)
-      Alert.alert('Error', 'Could not save your privacy settings. Please try again.')
+      Alert.alert(
+        'Error',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. We could not save your privacy settings yet. Retry when the signal improves.'
+          : 'Could not save your privacy settings right now. Please try again in a moment.',
+      )
     }
   }
 
@@ -76,52 +86,6 @@ export default function PrivacyScreen() {
     }
   }
 
-  function handleRequestData() {
-    void openExternalUrl(
-      'mailto:support@drapeon.co?subject=Data%20export%20request&body=Please%20send%20me%20a%20copy%20of%20all%20data%20Drape%20holds%20about%20me.',
-      'Please email support@drapeon.co with the subject "Data export request".',
-    )
-  }
-
-  function handleDeleteAccount() {
-    Alert.alert(
-      'Delete account',
-      'This starts a permanent account deletion request inside Drape. We may retain transaction records where legally required, but your account will be closed and queued for removal.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Request deletion',
-          style: 'destructive',
-          onPress: () => {
-            void (async () => {
-              setDeleting(true)
-              const result = await requestAccountDeletion()
-              setDeleting(false)
-
-              if (result.error) {
-                Alert.alert('Error', 'We could not submit your deletion request right now. Please try again.')
-                return
-              }
-
-              if (result.alreadyPending) {
-                Alert.alert(
-                  'Already requested',
-                  'You already have a pending deletion request. Our team will continue processing it.'
-                )
-                return
-              }
-
-              Alert.alert(
-                'Request received',
-                'Your deletion request has been submitted inside Drape. We will process it and contact you if anything requires confirmation.'
-              )
-            })()
-          },
-        },
-      ],
-    )
-  }
-
   function goBack() {
     router.replace('/(customer)/profile')
   }
@@ -134,7 +98,7 @@ export default function PrivacyScreen() {
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Privacy</Text>
-        {(saving || deleting) && <ActivityIndicator size="small" color={Colors.midGrey} style={{ marginLeft: 'auto' }} />}
+        {saving && <ActivityIndicator size="small" color={Colors.midGrey} style={{ marginLeft: 'auto' }} />}
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.xl, paddingBottom: 64, gap: Spacing.xl }}>
@@ -155,7 +119,7 @@ export default function PrivacyScreen() {
             <ToggleRow
               icon="sliders"
               title="Personalised recommendations"
-              description="Allow Drape to tailor search results and tailor suggestions based on your activity."
+              description="When available, let Drape use your activity to shape recommendations and tailor suggestions more thoughtfully."
               value={prefs.personalisation}
               onChange={(v) => toggle('personalisation', v)}
               disabled={saving}
@@ -164,7 +128,7 @@ export default function PrivacyScreen() {
             <ToggleRow
               icon="bar-chart-2"
               title="Analytics & improvement"
-              description="Help us improve the app by sharing anonymous usage data such as which screens you visit."
+              description="If enabled, Drape may collect product-usage analytics to improve the app. Core crash and reliability diagnostics may still run."
               value={prefs.analyticsSharing}
               onChange={(v) => toggle('analyticsSharing', v)}
               disabled={saving}
@@ -194,12 +158,12 @@ export default function PrivacyScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Your data</Text>
           <View style={styles.card}>
-            <TouchableOpacity style={styles.linkRow} onPress={handleRequestData} activeOpacity={0.6}>
+            <TouchableOpacity style={styles.linkRow} onPress={() => router.push('/(customer)/profile/data-request' as never)} activeOpacity={0.6}>
               <View style={styles.linkRowLeft}>
                 <Feather name="download" size={20} color={Colors.inkLight} />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.linkTitle}>Download my data</Text>
-                  <Text style={styles.linkSub}>Request a copy of all information Drape holds about you (GDPR Art. 15).</Text>
+                  <Text style={styles.linkTitle}>Request my data</Text>
+                  <Text style={styles.linkSub}>Submit an in-app request for a copy of your data. We may verify identity before sending anything sensitive.</Text>
                 </View>
               </View>
               <Feather name="chevron-right" size={16} color={Colors.midGrey} />
@@ -210,7 +174,10 @@ export default function PrivacyScreen() {
             <TouchableOpacity
               style={styles.linkRow}
               onPress={() => {
-                void openExternalUrl('https://drapeon.co/privacy', 'Please visit https://drapeon.co/privacy manually.')
+                void openExternalUrl(
+                  'https://drapeon.co/privacy',
+                  'Please visit https://drapeon.co/privacy manually. Your privacy controls here in the app still work while the page is unavailable.',
+                )
               }}
               activeOpacity={0.6}
             >
@@ -230,12 +197,12 @@ export default function PrivacyScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>
           <View style={styles.card}>
-            <TouchableOpacity style={styles.linkRow} onPress={handleDeleteAccount} activeOpacity={0.6}>
+            <TouchableOpacity style={styles.linkRow} onPress={() => router.push('/(customer)/profile/delete-account' as never)} activeOpacity={0.6}>
               <View style={styles.linkRowLeft}>
                 <Feather name="trash-2" size={20} color={Colors.error} />
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.linkTitle, { color: Colors.error }]}>Delete my account</Text>
-                  <Text style={styles.linkSub}>Permanently remove your account and all data. This cannot be undone.</Text>
+                  <Text style={styles.linkSub}>Start an account deletion request. Some records may be retained where required for legal, security, or transaction reasons.</Text>
                 </View>
               </View>
               <Feather name="chevron-right" size={16} color={Colors.midGrey} />

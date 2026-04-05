@@ -3,8 +3,14 @@ import { View, Text, StyleSheet, Alert, TouchableOpacity } from 'react-native'
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
+import { clearRecentReauth } from '@/lib/recent-reauth'
 import { Button, Input } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing } from '@/constants/theme'
+import {
+  MAX_PASSWORD_LENGTH,
+  PASSWORD_POLICY_HINT,
+  validatePasswordStrength,
+} from '@drape/shared/auth-security'
 
 export default function ResetPasswordScreen() {
   const router = useRouter()
@@ -15,6 +21,7 @@ export default function ResetPasswordScreen() {
   const [done, setDone] = useState(false)
   const [ready, setReady] = useState(false)
   const [linkError, setLinkError] = useState<string | null>(null)
+  const passwordError = password ? (validatePasswordStrength(password) ?? '') : ''
 
   // Supabase fires PASSWORD_RECOVERY once the deep-link token is exchanged.
   // Until then we show a loading state rather than a broken form.
@@ -52,8 +59,8 @@ export default function ResetPasswordScreen() {
 
   async function handleSave() {
     if (saving) return
-    if (password.length < 8) {
-      Alert.alert('Too short', 'Password must be at least 8 characters.')
+    if (passwordError) {
+      Alert.alert('Password issue', passwordError)
       return
     }
     if (password !== confirm) {
@@ -69,9 +76,15 @@ export default function ResetPasswordScreen() {
       Alert.alert('Error', error.message)
     } else {
       try {
-        await supabase.auth.signOut()
+        await supabase.auth.signOut({ scope: 'global' })
+        await clearRecentReauth()
       } catch {
-        // Best effort — the success screen still gives the user a way back to sign in.
+        try {
+          await supabase.auth.signOut()
+          await clearRecentReauth()
+        } catch {
+          // Best effort — the success screen still gives the user a way back to sign in.
+        }
       }
       setDone(true)
     }
@@ -93,7 +106,7 @@ export default function ResetPasswordScreen() {
             <Text style={styles.nextEyebrow}>What happens next</Text>
             <Text style={styles.nextTitle}>Sign back in and we’ll return you to the right side of Drape.</Text>
             <Text style={styles.nextCopy}>
-              Your orders, messages, clients, and profile stay exactly where you left them. Only your password changed.
+              Your orders, messages, clients, and profile stay exactly where you left them. For safety, you may need to sign in again on other devices too.
             </Text>
           </View>
           <Button label="Sign in" onPress={() => router.replace('/(auth)/sign-in')} />
@@ -149,7 +162,12 @@ export default function ResetPasswordScreen() {
               placeholder="••••••••"
               value={password}
               onChangeText={setPassword}
+              error={passwordError}
+              hint={PASSWORD_POLICY_HINT}
               secureTextEntry
+              textContentType="newPassword"
+              autoComplete="new-password"
+              maxLength={MAX_PASSWORD_LENGTH}
               required
             />
             <Input
@@ -158,6 +176,9 @@ export default function ResetPasswordScreen() {
               value={confirm}
               onChangeText={setConfirm}
               secureTextEntry
+              textContentType="newPassword"
+              autoComplete="new-password"
+              maxLength={MAX_PASSWORD_LENGTH}
               required
               error={confirm && password !== confirm ? "Passwords don't match" : ''}
             />
@@ -166,7 +187,7 @@ export default function ResetPasswordScreen() {
               label="Save new password"
               onPress={handleSave}
               loading={saving}
-              disabled={!password || !confirm || password !== confirm}
+              disabled={!password || !confirm || !!passwordError || password !== confirm}
             />
           </View>
         </View>

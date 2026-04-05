@@ -48,10 +48,8 @@ export const ORDER_TRANSITIONS: Transition[] = [
   { from: 'CONSULTATION', to: 'QUOTE_SENT', actor: 'TAILOR', trigger: 'send_quote' },
   { from: 'CONSULTATION', to: 'DECLINED', actor: 'TAILOR', trigger: 'decline' },
 
-  // Customer accepts or declines quote.
-  // PAYMENT_PENDING is reserved for Stripe integration (V2), but in V1
-  // accept-quote transitions directly QUOTE_SENT → CONFIRMED.
-  { from: 'QUOTE_SENT', to: 'CONFIRMED', actor: 'CUSTOMER', trigger: 'accept_quote' },
+  // Customer accepts the quote and begins payment, or declines it outright.
+  { from: 'QUOTE_SENT', to: 'PAYMENT_PENDING', actor: 'CUSTOMER', trigger: 'accept_quote' },
   { from: 'QUOTE_SENT', to: 'DECLINED', actor: 'CUSTOMER', trigger: 'decline_quote' },
   { from: 'QUOTE_SENT', to: 'EXPIRED', actor: 'SYSTEM', trigger: 'quote_expired_48h' },
 
@@ -140,7 +138,7 @@ export const STAGE_LABELS: Record<OrderStage, string> = {
   PENDING_QUOTE: 'Pending Quote',
   CONSULTATION: 'Consultation',
   QUOTE_SENT: 'Quote Sent',
-  PAYMENT_PENDING: 'Processing',  // V1: Stripe not integrated; stage unreachable in practice
+  PAYMENT_PENDING: 'Payment Pending',
   CONFIRMED: 'Confirmed',
   DESIGNING: 'Designing',
   SOURCING: 'Sourcing',

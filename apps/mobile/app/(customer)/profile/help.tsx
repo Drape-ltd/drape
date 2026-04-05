@@ -114,6 +114,13 @@ export default function HelpScreen() {
           </Text>
         </View>
 
+        <View style={styles.networkGuideCard}>
+          <Text style={styles.networkGuideTitle}>Weak connection?</Text>
+          <Text style={styles.networkGuideBody}>
+            Drape works best when you keep the order thread as the source of truth. If signal drops, keep your draft, retry from the live order, and use email support when links or pages do not open cleanly.
+          </Text>
+        </View>
+
         <View style={styles.contactGuideCard}>
           <Text style={styles.contactGuideTitle}>Contact us when…</Text>
           <Text style={styles.contactGuideBody}>
@@ -203,12 +210,12 @@ export default function HelpScreen() {
 
 function alertOpenFailed(url: string) {
   if (url.startsWith('mailto:')) {
-    Alert.alert('Unable to open link', 'Please email support@drapeon.co directly with the subject "Drape support request".')
+    Alert.alert('Unable to open link', 'Please email support@drapeon.co directly with the subject "Drape support request". If this is about a live order, keep the order thread updated in Drape too.')
     return
   }
 
   if (url.startsWith('https://wa.me/')) {
-    Alert.alert('Unable to open link', 'Please open WhatsApp and message us directly, or email support@drapeon.co with the subject "Drape support request".')
+    Alert.alert('Unable to open link', 'Please open WhatsApp and message us directly, or email support@drapeon.co with the subject "Drape support request". Keep the live order as the source of truth while you wait.')
     return
   }
 
@@ -217,7 +224,7 @@ function alertOpenFailed(url: string) {
     return
   }
 
-  Alert.alert('Unable to open link', 'Please try again in a moment or email support@drapeon.co directly with the subject "Drape support request".')
+  Alert.alert('Unable to open link', 'Please try again in a moment or email support@drapeon.co directly with the subject "Drape support request". If this is tied to a live order, keep the updates in Drape first.')
 }
 
 // ─── FaqItem ─────────────────────────────────────────────────────────────────
@@ -335,6 +342,24 @@ const styles = StyleSheet.create({
     lineHeight: 26,
   },
   supportGuideBody: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 22,
+  },
+  networkGuideCard: {
+    backgroundColor: Colors.boneDeep,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  networkGuideTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  networkGuideBody: {
     fontSize: FontSize.sm,
     color: Colors.inkLight,
     lineHeight: 22,

@@ -12,6 +12,7 @@ import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { CONTACTS } from '@drape/shared'
 
 const FAQ: Array<{ q: string; a: string }> = [
   {
@@ -41,6 +42,10 @@ const FAQ: Array<{ q: string; a: string }> = [
   {
     q: "How do I build my reputation on Drape?",
     a: "Respond to quotes quickly, communicate clearly, and deliver quality work on time. Completed orders generate star ratings and reviews that appear on your public profile — these drive your ranking in search results.",
+  },
+  {
+    q: "What if Drape pauses my access or asks for more information?",
+    a: "Open Trust & access from Account settings first. Drape should separate fixable setup or payout holds from active review states. Use the verification or payouts inbox when the next step depends on those teams, and use tailor support if the status still looks wrong after you've fixed the requirement.",
   },
   {
     q: "Can I work with international customers?",
@@ -105,10 +110,17 @@ export default function TailorHelpScreen() {
           </Text>
         </View>
 
+        <View style={styles.networkGuideCard}>
+          <Text style={styles.networkGuideTitle}>Weak connection?</Text>
+          <Text style={styles.networkGuideBody}>
+            Keep the active order and message thread as the source of truth. If signal drops, retry from Orders later, keep updates inside Drape, and fall back to email support when external links do not open cleanly.
+          </Text>
+        </View>
+
         <View style={styles.contactGuideCard}>
           <Text style={styles.contactGuideTitle}>Contact us when…</Text>
           <Text style={styles.contactGuideBody}>
-            you need policy clarification, escalation help, verification guidance, or support once the normal order flow is no longer enough.
+            you need policy clarification, escalation help, verification guidance, payout-readiness help, or support once the normal order flow is no longer enough.
           </Text>
         </View>
 
@@ -133,10 +145,31 @@ export default function TailorHelpScreen() {
           <Text style={styles.sectionTitle}>Contact us</Text>
           <View style={styles.card}>
             <ContactRow
+              icon="shield"
+              title="Trust & access"
+              sub="See fix, review, and support paths in-app"
+              onPress={() => router.push('/(tailor)/profile/trust-access' as never)}
+            />
+            <View style={styles.divider} />
+            <ContactRow
               icon="mail"
               title="Email support"
-              sub="tailors@drapeon.co · we reply within 24h"
-              onPress={() => { void openExternal('mailto:tailors@drapeon.co?subject=Tailor%20support%20request') }}
+              sub={`${CONTACTS.tailors} · we reply within 24h`}
+              onPress={() => { void openExternal(`mailto:${CONTACTS.tailors}?subject=Tailor%20support%20request`) }}
+            />
+            <View style={styles.divider} />
+            <ContactRow
+              icon="check-circle"
+              title="Verification review"
+              sub={`${CONTACTS.verify} · ID and review follow-up`}
+              onPress={() => { void openExternal(`mailto:${CONTACTS.verify}?subject=Drape%20verification%20review%20follow-up`) }}
+            />
+            <View style={styles.divider} />
+            <ContactRow
+              icon="credit-card"
+              title="Payout help"
+              sub={`${CONTACTS.payouts} · payout readiness and provider issues`}
+              onPress={() => { void openExternal(`mailto:${CONTACTS.payouts}?subject=Drape%20payout%20readiness%20question`) }}
             />
             <View style={styles.divider} />
             <ContactRow
@@ -144,6 +177,20 @@ export default function TailorHelpScreen() {
               title="WhatsApp"
               sub="Chat with the tailor success team"
               onPress={() => { void openExternal('https://wa.me/message/drapeon') }}
+            />
+            <View style={styles.divider} />
+            <ContactRow
+              icon="download"
+              title="Request your data"
+              sub={`${CONTACTS.privacy} · identity verification may be required`}
+              onPress={() => { void openExternal(`mailto:${CONTACTS.privacy}?subject=Drape%20tailor%20data%20access%20request`) }}
+            />
+            <View style={styles.divider} />
+            <ContactRow
+              icon="trash-2"
+              title="Account deletion"
+              sub={`${CONTACTS.privacy} · request-based review, not instant wipe`}
+              onPress={() => { void openExternal(`mailto:${CONTACTS.privacy}?subject=Drape%20tailor%20account%20deletion%20request`) }}
               last
             />
           </View>
@@ -194,12 +241,13 @@ export default function TailorHelpScreen() {
 
 function alertOpenFailed(url: string) {
   if (url.startsWith('mailto:')) {
-    Alert.alert('Unable to open link', 'Please email tailors@drapeon.co directly with the subject "Tailor support request".')
+    const inbox = url.includes(CONTACTS.privacy) ? CONTACTS.privacy : CONTACTS.tailors
+    Alert.alert('Unable to open link', `Please email ${inbox} directly from your mail app. If this is about a live order, keep the order thread updated in Drape too.`)
     return
   }
 
   if (url.startsWith('https://wa.me/')) {
-    Alert.alert('Unable to open link', 'Please open WhatsApp and message us directly, or email tailors@drapeon.co with the subject "Tailor support request".')
+    Alert.alert('Unable to open link', `Please open WhatsApp and message us directly, or email ${CONTACTS.tailors} with the subject "Tailor support request". Keep the live order as the source of truth while you wait.`)
     return
   }
 
@@ -208,7 +256,7 @@ function alertOpenFailed(url: string) {
     return
   }
 
-  Alert.alert('Unable to open link', 'Please try again in a moment or email tailors@drapeon.co directly with the subject "Tailor support request".')
+  Alert.alert('Unable to open link', `Please try again in a moment or email ${CONTACTS.tailors} directly with the subject "Tailor support request". If this is tied to a live order, keep the updates in Drape first.`)
 }
 
 function FaqItem({
@@ -320,6 +368,24 @@ const styles = StyleSheet.create({
     lineHeight: 26,
   },
   supportGuideBody: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 22,
+  },
+  networkGuideCard: {
+    backgroundColor: Colors.boneDeep,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  networkGuideTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  networkGuideBody: {
     fontSize: FontSize.sm,
     color: Colors.inkLight,
     lineHeight: 22,

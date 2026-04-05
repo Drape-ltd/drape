@@ -4,6 +4,7 @@ import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
+import { deriveTailorReadiness } from '../_shared/tailor-readiness.ts'
 import { parseBody, z } from '../_shared/validate.ts'
 
 const FN = 'seller-item-action'
@@ -65,7 +66,7 @@ Deno.serve(async (req) => {
 
     const { data: profile, error: profileError } = await supabase
       .from('tailor_profiles')
-      .select('id, supports_ready_made')
+      .select('id, supports_ready_made, profile_completed, id_verification_status, stripe_account_id, paystack_account_id')
       .eq('user_id', caller.id)
       .maybeSingle()
 
@@ -78,6 +79,8 @@ Deno.serve(async (req) => {
       return new Response('Seller profile not found.', { status: 404, headers: cors })
     }
 
+    const readiness = deriveTailorReadiness(profile)
+
     if (body.action === 'create-item') {
       if (!(body.pickupAvailable || body.deliveryAvailable || body.shippingAvailable)) {
         return new Response('Choose at least one fulfillment option.', { status: 400, headers: cors })
@@ -85,6 +88,17 @@ Deno.serve(async (req) => {
 
       if (body.isLive && !profile.supports_ready_made) {
         return new Response('Enable Shop now on your seller profile before publishing items.', { status: 400, headers: cors })
+      }
+
+      if (body.isLive && !readiness.canPublishPaidItems) {
+        await audit(supabase, {
+          event: 'seller_item.publish_blocked',
+          actor_id: caller.id,
+          actor_role: 'TAILOR',
+          severity: 'warn',
+          payload: { function: FN, reason: readiness.code, is_live_request: true },
+        })
+        return new Response(readiness.message ?? 'Payout setup is still required before publishing paid items live.', { status: 409, headers: cors })
       }
 
       const { data: created, error: createError } = await supabase
@@ -146,6 +160,16 @@ Deno.serve(async (req) => {
     if (body.action === 'publish-item' || body.action === 'relist-item') {
       if (!profile.supports_ready_made) {
         return new Response('Enable Shop now on your seller profile before publishing items.', { status: 400, headers: cors })
+      }
+      if (!readiness.canPublishPaidItems) {
+        await audit(supabase, {
+          event: 'seller_item.publish_blocked',
+          actor_id: caller.id,
+          actor_role: 'TAILOR',
+          severity: 'warn',
+          payload: { function: FN, seller_item_id: existing.id, action: body.action, reason: readiness.code },
+        })
+        return new Response(readiness.message ?? 'Payout setup is still required before publishing paid items live.', { status: 409, headers: cors })
       }
       nextIsLive = true
       nextStockStatus = 'IN_STOCK'

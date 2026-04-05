@@ -12,14 +12,21 @@ import { AuthProvider, useAuth, useUserRole } from '@/lib/auth'
 import { CustomerProfileProvider } from '@/lib/customerProfile'
 import { TailorProfileProvider } from '@/lib/tailorProfile'
 import { usePushNotifications } from '@/lib/notifications'
+import { getStripePublishableKey } from '@/lib/payments'
+import { OptionalStripeProvider } from '@/lib/stripe-runtime'
 import { supabase } from '@/lib/supabase'
 import { initSentry } from '@/lib/sentry'
-import { initAnalytics, identify, reset } from '@/lib/analytics'
+import { identify, setAnalyticsConsent } from '@/lib/analytics'
 import { isBiometricEnabled, authenticate } from '@/lib/biometric'
 import { queryClient } from '@/lib/queryClient'
 import { Colors } from '@/constants/theme'
+import { validatePhoneForProfile } from '@drape/shared/phone'
 
 const LOCK_AFTER_MS = 5 * 60 * 1000 // lock after 5 minutes in background
+
+function hasUsablePhone(value: unknown): boolean {
+  return typeof value === 'string' && validatePhoneForProfile(value) === null
+}
 
 // ─── BiometricGate ────────────────────────────────────────────────────────────
 
@@ -84,7 +91,6 @@ const gateStyles = StyleSheet.create({
 })
 
 initSentry()
-initAnalytics()
 
 function RouteGuard() {
   const { session, loading, user } = useAuth()
@@ -99,6 +105,8 @@ function RouteGuard() {
   const [customerProfileComplete, setCustomerProfileComplete] = useState(false)
   const customerCheckInProgress = useRef(false)
   const tailorCheckInProgress = useRef(false)
+  const analyticsSharing =
+    user?.user_metadata?.privacy_prefs?.analyticsSharing === true
 
   // Reset profile flags whenever the user changes (sign-out → sign-in as same or different user).
   // RouteGuard never unmounts, so stale `customerProfileComplete = true` from a previous session
@@ -111,17 +119,21 @@ function RouteGuard() {
     setTailorProfileCompleted(false)
   }, [user?.id, role])
 
-  // Identify user in analytics when session starts; reset on sign-out
+  // Optional product analytics stay off until we know the user's preference.
   useEffect(() => {
-    if (user?.id) {
+    if (loading) return
+    setAnalyticsConsent(!!user?.id && analyticsSharing)
+  }, [loading, user?.id, analyticsSharing])
+
+  // Identify only after optional analytics is explicitly enabled for this user.
+  useEffect(() => {
+    if (user?.id && analyticsSharing) {
       identify(user.id, {
         role: role ?? undefined,
         email: user.email,
       })
-    } else if (!loading) {
-      reset()
     }
-  }, [user?.id, loading])
+  }, [user?.id, user?.email, role, analyticsSharing])
 
   // When a customer signs in (or leaves auth screens), check whether their profile exists.
   // Using `id` — any row means setup is done. Re-checks on segment change so the guard
@@ -146,9 +158,7 @@ function RouteGuard() {
         }
         const measurements = (data as any)?.measurements ?? {}
         const hasDisplayName = typeof (data as any)?.display_name === 'string' && (data as any).display_name.trim().length > 0
-        const hasPhone =
-          (typeof (data as any)?.phone === 'string' && (data as any).phone.trim().length >= 7) ||
-          (typeof user?.user_metadata?.phone === 'string' && user.user_metadata.phone.trim().length >= 7)
+        const hasPhone = hasUsablePhone((data as any)?.phone) || hasUsablePhone(user?.user_metadata?.phone)
         const hasUnit =
           typeof (data as any)?.unit_preference === 'string' ||
           typeof measurements?.unit === 'string'
@@ -256,31 +266,37 @@ function RouteGuard() {
 
 export default function RootLayout() {
   return (
-    <QueryClientProvider client={queryClient}>
-    <AuthProvider>
-      <CustomerProfileProvider>
-      <TailorProfileProvider>
-      <RouteGuard />
-      <BiometricGate />
-      <StatusBar style="dark" />
-      <Stack
-        screenOptions={{
-          headerStyle: { backgroundColor: Colors.bone },
-          headerTintColor: Colors.ink,
-          headerTitleStyle: { fontWeight: '600', color: Colors.ink },
-          headerShadowVisible: false,
-          contentStyle: { backgroundColor: Colors.bone },
-          animation: 'slide_from_right',
-        }}
-      >
-        <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-        <Stack.Screen name="(customer)" options={{ headerShown: false }} />
-        <Stack.Screen name="(tailor)" options={{ headerShown: false }} />
-        <Stack.Screen name="passport" options={{ headerShown: false }} />
-      </Stack>
-      </TailorProfileProvider>
-      </CustomerProfileProvider>
-    </AuthProvider>
-    </QueryClientProvider>
+    <OptionalStripeProvider
+      publishableKey={getStripePublishableKey()}
+      urlScheme="drape"
+      setReturnUrlSchemeOnAndroid
+    >
+      <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <CustomerProfileProvider>
+        <TailorProfileProvider>
+        <RouteGuard />
+        <BiometricGate />
+        <StatusBar style="dark" />
+        <Stack
+          screenOptions={{
+            headerStyle: { backgroundColor: Colors.bone },
+            headerTintColor: Colors.ink,
+            headerTitleStyle: { fontWeight: '600', color: Colors.ink },
+            headerShadowVisible: false,
+            contentStyle: { backgroundColor: Colors.bone },
+            animation: 'slide_from_right',
+          }}
+        >
+          <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+          <Stack.Screen name="(customer)" options={{ headerShown: false }} />
+          <Stack.Screen name="(tailor)" options={{ headerShown: false }} />
+          <Stack.Screen name="passport" options={{ headerShown: false }} />
+        </Stack>
+        </TailorProfileProvider>
+        </CustomerProfileProvider>
+      </AuthProvider>
+      </QueryClientProvider>
+    </OptionalStripeProvider>
   )
 }

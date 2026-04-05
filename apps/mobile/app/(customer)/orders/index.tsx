@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, RefreshControl,
+  View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl,
 } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useAuth } from '@/lib/auth'
+import { Button, FeatureStateCard } from '@/components/ui'
 import { useCustomerOrders, useRefreshOnFocus } from '@/lib/queries'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
@@ -70,7 +71,7 @@ function orderHint(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): strin
     case 'PENDING_QUOTE':
       return orderKind === 'READY_MADE' ? 'Inquiry open' : 'Waiting for quote'
     case 'PAYMENT_PENDING':
-      return orderKind === 'READY_MADE' ? 'Checkout pending' : 'Payment confirming'
+      return orderKind === 'READY_MADE' ? 'Finish checkout' : 'Finish payment'
     case 'CONFIRMED':
       return orderKind === 'READY_MADE' ? 'Order placed' : 'Confirmed'
     case 'DESIGNING':
@@ -170,35 +171,27 @@ export default function OrdersListScreen() {
       )}
 
       {loading ? (
-        <View style={styles.stateWrap}>
-          <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Orders</Text>
-            <ActivityIndicator color={Colors.needleGreen} size="large" />
-            <Text style={styles.stateTitle}>Loading your orders…</Text>
-            <Text style={styles.stateHint}>
-              We’re gathering your live quotes, production updates, and completed order history.
-            </Text>
-          </View>
-        </View>
+        <FeatureStateCard
+          eyebrow="Orders"
+          title="Loading your orders…"
+          body="We’re gathering your live quotes, production updates, and completed order history."
+          loading
+        />
       ) : isError ? (
-        <View style={styles.stateWrap}>
-          <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Orders</Text>
-            <Text style={styles.stateTitle}>Couldn't load your orders.</Text>
-            <Text style={styles.stateHint}>
-              This is where your quote decisions, active progress, and finished garments should stay organised.
-            </Text>
-            <TouchableOpacity style={styles.retryBtn} onPress={() => refetch()}>
-              <Text style={styles.retryBtnText}>Try again</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.secondaryBtn}
-              onPress={() => router.navigate('/(customer)')}
-            >
-              <Text style={styles.secondaryBtnText}>Explore tailors</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+        <FeatureStateCard
+          eyebrow="Orders"
+          title="Couldn't load your orders."
+          body="This is where your quote decisions, active progress, and finished garments should stay organised."
+          accentColor={Colors.kanteRust}
+          icon="alert-circle"
+        >
+          <Button label="Try again" onPress={() => refetch()} />
+          <Button
+            label="Explore tailors"
+            variant="secondary"
+            onPress={() => router.navigate('/(customer)')}
+          />
+        </FeatureStateCard>
       ) : (
         <FlatList
           data={sortedOrders}
@@ -278,18 +271,15 @@ function EmptyOrdersView({
 }) {
   if (tab === 'completed') {
     return (
-      <View style={styles.stateWrap}>
-        <View style={styles.stateCard}>
-          <Text style={styles.stateEyebrow}>Completed orders</Text>
-          <Text style={styles.stateTitle}>No completed orders yet.</Text>
-          <Text style={styles.stateHint}>
-            Orders you finish with a tailor will appear here once the full journey is closed out in the app.
-          </Text>
-          <TouchableOpacity style={styles.retryBtn} onPress={onExplore}>
-            <Text style={styles.retryBtnText}>Explore tailors</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+      <FeatureStateCard
+        eyebrow="Completed orders"
+        title="No completed orders yet."
+        body="Orders you finish with a tailor will appear here once the full journey is closed out in the app."
+        accentColor={Colors.warning}
+        icon="archive"
+      >
+        <Button label="Explore tailors" onPress={onExplore} />
+      </FeatureStateCard>
     )
   }
 
@@ -407,36 +397,6 @@ const emptyStyles = StyleSheet.create({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
-  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
-  stateCard: {
-    width: '100%',
-    maxWidth: 440,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.lg,
-    alignItems: 'center',
-    ...Shadow.lg,
-  },
-  stateEyebrow: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  stateTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    textAlign: 'center',
-  },
-  stateHint: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    textAlign: 'center',
-    lineHeight: 21,
-  },
   header: { padding: Spacing.xl, gap: Spacing.md },
   title: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
   guideCard: {
@@ -470,17 +430,6 @@ const styles = StyleSheet.create({
   tabLabelActive: { color: Colors.ink, fontWeight: FontWeight.semibold },
 
   list: { padding: Spacing.xl, gap: Spacing.md, paddingBottom: Spacing.xxxl },
-  retryBtn: { backgroundColor: Colors.needleGreen, borderRadius: Radius.full, paddingVertical: Spacing.md, paddingHorizontal: Spacing.xxxl },
-  retryBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
-  secondaryBtn: {
-    backgroundColor: Colors.white,
-    borderColor: Colors.lightGrey,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.xxxl,
-  },
-  secondaryBtnText: { color: Colors.ink, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
   card: { backgroundColor: Colors.white, borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.md, ...Shadow.sm },
   cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md },
   garment: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },

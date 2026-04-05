@@ -2,7 +2,10 @@ import React, { createContext, useContext, useEffect, useState } from 'react'
 import { Platform } from 'react-native'
 import { type Session, type User } from '@supabase/supabase-js'
 import * as WebBrowser from 'expo-web-browser'
+import { validateDisplayName } from '@drape/shared/contact-filter'
+import { validatePasswordStrength } from '@drape/shared/auth-security'
 import { supabase, setCurrentAccessToken } from './supabase'
+import { clearRecentReauth } from './recent-reauth'
 
 // Required for expo-web-browser OAuth redirect handling on Android
 WebBrowser.maybeCompleteAuthSession()
@@ -125,6 +128,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         requiresEmailConfirmation: false,
       }
     }
+    if (role !== 'CUSTOMER' && role !== 'TAILOR') {
+      return {
+        error: 'Choose whether you are signing up as a customer or tailor.',
+        requiresEmailConfirmation: false,
+      }
+    }
+    const displayNameError = validateDisplayName(displayName)
+    if (displayNameError) {
+      return {
+        error: displayNameError,
+        requiresEmailConfirmation: false,
+      }
+    }
+    const passwordError = validatePasswordStrength(password, {
+      forbiddenValues: [normalizedEmail, displayName],
+    })
+    if (passwordError) {
+      return {
+        error: passwordError,
+        requiresEmailConfirmation: false,
+      }
+    }
     const { data, error } = await supabase.auth.signUp({
       email: normalizedEmail,
       password,
@@ -215,6 +240,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function signOut() {
     const { error } = await supabase.auth.signOut()
+    await clearRecentReauth(session?.user?.id)
     if (error) {
       throw error
     }

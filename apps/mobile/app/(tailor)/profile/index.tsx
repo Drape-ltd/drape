@@ -12,6 +12,8 @@ import * as ImagePicker from 'expo-image-picker'
 import * as ImageManipulator from 'expo-image-manipulator'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { isLikelyConnectivityIssue } from '@/lib/function-errors'
+import { deriveTailorReadiness } from '@/lib/tailor-readiness'
 import { useTailorProfile } from '@/lib/tailorProfile'
 import { shareTailorProfile, inviteTailorColleague, inviteCustomerFromTailor } from '@/lib/invite'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -33,9 +35,12 @@ type TailorProfile = {
   pickupAvailable: boolean
   deliveryAvailable: boolean
   shippingAvailable: boolean
+  shipsInternationally: boolean
   idVerificationStatus: string
   isLive: boolean
   profileCompleted: boolean
+  stripeAccountId: string | null
+  paystackAccountId: string | null
 }
 
 const TAILOR_STOREFRONT_GUIDE_KEY = 'drape_tailor_storefront_best_use_dismissed'
@@ -81,7 +86,7 @@ export default function TailorProfileScreen() {
   const { avatarUrl, setAvatarUrl } = useTailorProfile()
   const [profile, setProfile] = useState<TailorProfile | null>(null)
   const [loading, setLoading] = useState(true)
-  const [fetchError, setFetchError] = useState(false)
+  const [fetchErrorMessage, setFetchErrorMessage] = useState('')
   const [retryTrigger, setRetryTrigger] = useState(0)
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const [pendingQuoteCount, setPendingQuoteCount] = useState(0)
@@ -124,13 +129,13 @@ export default function TailorProfileScreen() {
 
   useFocusEffect(useCallback(() => {
     async function load() {
-      setFetchError(false)
+      setFetchErrorMessage('')
       setLoading(true)
       try {
       const [profileRes, pendingRes] = await Promise.allSettled([
         supabase
           .from('tailor_profiles')
-          .select('id, display_name, location, bio, seller_type, tier, avg_rating, total_reviews, total_orders, availability, specialty_tags, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, id_verification_status, is_live, avatar_url, profile_completed')
+          .select('id, display_name, location, bio, seller_type, tier, avg_rating, total_reviews, total_orders, availability, specialty_tags, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, ships_internationally, id_verification_status, is_live, avatar_url, profile_completed, stripe_account_id, paystack_account_id')
           .eq('user_id', user?.id)
           .maybeSingle(),
         supabase
@@ -148,7 +153,16 @@ export default function TailorProfileScreen() {
         (pendingRes.status === 'fulfilled' && !!pendingRes.value.error)
 
       if (profileFailed && pendingFailed) {
-        setFetchError(true)
+        const profileError =
+          profileRes.status === 'fulfilled' ? profileRes.value.error : profileRes.reason
+        const pendingError =
+          pendingRes.status === 'fulfilled' ? pendingRes.value.error : pendingRes.reason
+        const rootError = profileError ?? pendingError
+        setFetchErrorMessage(
+          isLikelyConnectivityIssue(rootError)
+            ? 'Connection looks weak. Your storefront details should still be there once the signal stabilizes, so retry when it improves.'
+            : 'Your profile is where customers judge trust, portfolio, and reviews. Please try again in a moment.',
+        )
         setProfile(null)
         setPendingQuoteCount(0)
         setLoading(false)
@@ -183,9 +197,12 @@ export default function TailorProfileScreen() {
           pickupAvailable: d.pickup_available ?? false,
           deliveryAvailable: d.delivery_available ?? false,
           shippingAvailable: d.shipping_available ?? false,
+          shipsInternationally: d.ships_internationally ?? false,
           idVerificationStatus: d.id_verification_status ?? 'NOT_SUBMITTED',
           isLive: d.is_live,
           profileCompleted: d.profile_completed ?? false,
+          stripeAccountId: d.stripe_account_id ?? null,
+          paystackAccountId: d.paystack_account_id ?? null,
         })
         if (d.avatar_url) setAvatarUrl(d.avatar_url)
       } else {
@@ -194,8 +211,12 @@ export default function TailorProfileScreen() {
 
       setPendingQuoteCount(pendingCount)
       setLoading(false)
-      } catch {
-        setFetchError(true)
+      } catch (error) {
+        setFetchErrorMessage(
+          isLikelyConnectivityIssue(error)
+            ? 'Connection looks weak. Your storefront details should still be there once the signal stabilizes, so retry when it improves.'
+            : 'Your profile is where customers judge trust, portfolio, and reviews. Please try again in a moment.',
+        )
         setLoading(false)
       }
     }
@@ -258,7 +279,12 @@ export default function TailorProfileScreen() {
       setAvatarUrl(bustUrl)
     } catch (err) {
       console.error('[avatar upload]', err)
-      Alert.alert('Upload failed', 'Could not update your photo. Please try again.')
+      Alert.alert(
+        'Upload failed',
+        isLikelyConnectivityIssue(err)
+          ? 'Connection looks weak. We could not update your photo yet. Retry when the signal improves.'
+          : 'Could not update your photo right now. Please try again in a moment.',
+      )
     } finally {
       setUploadingAvatar(false)
     }
@@ -272,7 +298,7 @@ export default function TailorProfileScreen() {
         style: 'destructive',
         onPress: () => {
           void signOut().catch(() => {
-            Alert.alert('Unable to log out', 'Please try again in a moment.')
+            Alert.alert('Unable to log out', 'Please try again in a moment. Your storefront settings are still here, so you can keep working and log out later.')
           })
         },
       },
@@ -280,24 +306,35 @@ export default function TailorProfileScreen() {
   }
 
   const idStatus = profile?.idVerificationStatus ?? 'NOT_SUBMITTED'
+  const readiness = deriveTailorReadiness(profile)
 
   // Live status badge config
   const liveBadgeKey = profile?.isLive ? 'LIVE' : (idStatus in LIVE_BADGE ? idStatus : 'NOT_SUBMITTED')
   const liveBadge = LIVE_BADGE[liveBadgeKey]
 
-  if (fetchError) {
+  function handleReadinessAction() {
+    if (readiness.actionLabel === 'Review payout status') {
+      router.push('/(tailor)/earnings')
+      return
+    }
+    if (readiness.actionLabel === 'Review live profile') {
+      router.push('/(tailor)/profile/edit')
+      return
+    }
+    router.push('/(tailor)/profile/setup')
+  }
+
+  if (fetchErrorMessage) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Tailor profile</Text>
             <Text style={styles.stateTitle}>Couldn't load your profile.</Text>
-            <Text style={styles.stateHint}>
-              Your profile is where customers judge trust, portfolio, and reviews. Please try again in a moment.
-            </Text>
+            <Text style={styles.stateHint}>{fetchErrorMessage}</Text>
             <TouchableOpacity
               style={styles.statePrimaryBtn}
-              onPress={() => { setFetchError(false); setLoading(true); setRetryTrigger((n) => n + 1) }}
+              onPress={() => { setFetchErrorMessage(''); setLoading(true); setRetryTrigger((n) => n + 1) }}
             >
               <Text style={styles.statePrimaryBtnText}>Try again</Text>
             </TouchableOpacity>
@@ -446,9 +483,38 @@ export default function TailorProfileScreen() {
                 {profile.pickupAvailable ? <CapabilityChip label="Pickup" /> : null}
                 {profile.deliveryAvailable ? <CapabilityChip label="Delivery" /> : null}
                 {profile.shippingAvailable ? <CapabilityChip label="Shipping" /> : null}
+                {profile.shipsInternationally ? <CapabilityChip label="International shipping" /> : null}
               </View>
             </View>
           )}
+
+          {profile ? (
+            <View
+              style={[
+                styles.readinessCard,
+                readiness.tone === 'success'
+                  ? styles.readinessCardSuccess
+                  : readiness.tone === 'warning'
+                    ? styles.readinessCardWarning
+                    : null,
+              ]}
+            >
+              <Text style={styles.readinessTitle}>{readiness.title}</Text>
+              <Text style={styles.readinessBody}>{readiness.body}</Text>
+              {readiness.payoutProviderLabel ? (
+                <Text style={styles.readinessMeta}>Payout path detected: {readiness.payoutProviderLabel}</Text>
+              ) : null}
+              {readiness.actionLabel ? (
+                <TouchableOpacity style={styles.readinessCta} onPress={handleReadinessAction}>
+                  <Text style={styles.readinessCtaText}>{readiness.actionLabel}</Text>
+                  <Feather name="arrow-right" size={14} color={Colors.needleGreen} />
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity style={styles.readinessSecondaryCta} onPress={() => router.push('/(tailor)/profile/trust-access' as never)}>
+                <Text style={styles.readinessSecondaryCtaText}>See trust & access</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
 
           {/* ── No profile CTA ── */}
           {!loading && (!profile || !profile.profileCompleted) && (
@@ -824,6 +890,28 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   capabilityChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
+  readinessCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
+  readinessCardWarning: {
+    borderWidth: 1,
+    borderColor: Colors.warning + '35',
+  },
+  readinessCardSuccess: {
+    borderWidth: 1,
+    borderColor: Colors.success + '30',
+  },
+  readinessTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  readinessBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  readinessMeta: { fontSize: FontSize.xs, color: Colors.midGrey },
+  readinessCta: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start' },
+  readinessCtaText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  readinessSecondaryCta: { alignSelf: 'flex-start', paddingTop: 2 },
+  readinessSecondaryCtaText: { fontSize: FontSize.xs, color: Colors.midGrey, fontWeight: FontWeight.medium },
   guideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,

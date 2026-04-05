@@ -1,12 +1,24 @@
-import { useCallback } from 'react'
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, Linking } from 'react-native'
+import { useEffect, useState } from 'react'
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, Alert } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useAuth } from '@/lib/auth'
+import {
+  blockConversation,
+  getConversationAccessStatus,
+  getEmptyConversationAccessState,
+  type ConversationAccessState,
+} from '@/lib/conversation-access'
+import { openConsultationCallUrl } from '@/lib/consultation'
+import { invokeFunction } from '@/lib/supabase'
+import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { useCustomerMessageOrderInfo, useRefreshOnFocus } from '@/lib/queries'
 import { MessageThread } from '@/components/ui/MessageThread'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { TERMINAL_STAGES, type OrderStage } from '@drape/shared/order-machine'
+import { TERMINAL_STAGES } from '@drape/shared/order-machine'
+
+const SUPPORT_EMAIL = 'support@drapeon.co'
+type SafetyReportCategory = 'ABUSIVE_LANGUAGE' | 'OFF_PLATFORM_PRESSURE' | 'UNSAFE_BEHAVIOR'
 
 export default function CustomerMessagesScreen() {
   const { orderId, returnTo } = useLocalSearchParams<{ orderId: string; returnTo?: string }>()
@@ -17,11 +29,40 @@ export default function CustomerMessagesScreen() {
     data: orderInfo,
     isLoading,
     isError,
+    error: loadError,
     refetch,
   } = useCustomerMessageOrderInfo(orderId, user?.id, user?.user_metadata?.display_name ?? '')
   const resolvedOrderId = orderInfo?.resolvedOrderId ?? orderId
+  const loadErrorMessage = isLikelyConnectivityIssue(loadError)
+    ? 'Your connection looks weak. Keep the order thread as the source of truth and retry here when the signal stabilizes.'
+    : 'Refresh this conversation or reopen the live order to keep working from the latest order record.'
+  const [reportingSafety, setReportingSafety] = useState(false)
+  const [conversationAccess, setConversationAccess] = useState<ConversationAccessState>(getEmptyConversationAccessState())
+  const [loadingConversationAccess, setLoadingConversationAccess] = useState(false)
 
-  useRefreshOnFocus(() => { void refetch() })
+  async function refreshConversationAccess() {
+    if (!resolvedOrderId) return
+    setLoadingConversationAccess(true)
+    try {
+      const nextState = await getConversationAccessStatus(resolvedOrderId)
+      setConversationAccess(nextState)
+    } catch (error) {
+      if (!isLikelyConnectivityIssue(error)) {
+        setConversationAccess(getEmptyConversationAccessState())
+      }
+    } finally {
+      setLoadingConversationAccess(false)
+    }
+  }
+
+  useRefreshOnFocus(() => {
+    void refetch()
+    void refreshConversationAccess()
+  })
+
+  useEffect(() => {
+    void refreshConversationAccess()
+  }, [resolvedOrderId])
 
   function goBack() {
     if (returnTo) router.replace(returnTo as any)
@@ -30,17 +71,69 @@ export default function CustomerMessagesScreen() {
   }
 
   async function openCallUrl(url: string) {
-    const supported = await Linking.canOpenURL(url)
-    if (!supported) {
-      Alert.alert('Unable to open call', 'This consultation link is unavailable right now. Keep this thread open and ask your tailor to resend the consultation details.')
+    await openConsultationCallUrl(url, 'customer')
+  }
+
+  async function submitSafetyReport(category: SafetyReportCategory) {
+    if (reportingSafety) return
+    setReportingSafety(true)
+    const { error } = await invokeFunction('conversation-safety-report', {
+      body: { orderId: resolvedOrderId, category, surface: 'messages' },
+    })
+    setReportingSafety(false)
+
+    if (error) {
+      Alert.alert(
+        'Report unavailable',
+        isLikelyConnectivityIssue(error)
+          ? `Connection looks weak. We could not send this report yet. Retry when the signal improves, or email ${SUPPORT_EMAIL} and keep the thread intact as evidence.`
+          : `Could not send this report right now. Retry in a moment, or email ${SUPPORT_EMAIL} and keep the thread intact as evidence.`,
+      )
       return
     }
 
+    Alert.alert(
+      'Report received',
+      'Drape logged this concern for review. Keep the conversation in Drape and leave the message thread intact as evidence.',
+    )
+  }
+
+  async function pauseConversation(reason: SafetyReportCategory) {
+    if (reportingSafety || !resolvedOrderId) return
+    setReportingSafety(true)
     try {
-      await Linking.openURL(url)
-    } catch {
-      Alert.alert('Unable to open call', 'Please try again in a moment. If it still fails, ask your tailor for a fresh consultation link here in Messages.')
+      const nextState = await blockConversation(resolvedOrderId, reason)
+      setConversationAccess(nextState)
+      Alert.alert(
+        'Conversation paused',
+        nextState.userMessage ?? 'This conversation is paused while Drape reviews a safety concern.',
+      )
+    } catch (error) {
+      Alert.alert(
+        'Pause unavailable',
+        isLikelyConnectivityIssue(error)
+          ? `Connection looks weak. We could not pause this chat yet. Retry when the signal improves, or email ${SUPPORT_EMAIL} and keep the thread intact as evidence.`
+          : `Could not pause this chat right now. Retry in a moment, or email ${SUPPORT_EMAIL} if you need urgent help.`,
+      )
+    } finally {
+      setReportingSafety(false)
     }
+  }
+
+  function openSafetyReportOptions() {
+    if (reportingSafety) return
+
+    Alert.alert(
+      'Safety in chat',
+      'Choose what best matches this conversation.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Abusive language', onPress: () => { void submitSafetyReport('ABUSIVE_LANGUAGE') } },
+        { text: 'Move off Drape', onPress: () => { void submitSafetyReport('OFF_PLATFORM_PRESSURE') } },
+        { text: 'Unsafe behavior', onPress: () => { void submitSafetyReport('UNSAFE_BEHAVIOR') } },
+        { text: 'Pause this chat', onPress: () => { void pauseConversation('UNSAFE_BEHAVIOR') } },
+      ],
+    )
   }
 
   if (isLoading && orderInfo === undefined) {
@@ -71,7 +164,7 @@ export default function CustomerMessagesScreen() {
             <View style={styles.stateCard}>
               <Text style={styles.stateEyebrow}>Order conversation</Text>
               <Text style={styles.stateTitle}>Couldn't load this conversation.</Text>
-              <Text style={styles.stateHint}>Try again or open the order.</Text>
+              <Text style={styles.stateHint}>{loadErrorMessage}</Text>
               <TouchableOpacity style={styles.retryBtn} onPress={() => void refetch()}>
                 <Text style={styles.retryBtnText}>Try again</Text>
               </TouchableOpacity>
@@ -167,13 +260,41 @@ export default function CustomerMessagesScreen() {
         </View>
       </View>
 
+      <View style={styles.safetyCard}>
+        <Text style={styles.safetyTitle}>Safety in chat</Text>
+        <Text style={styles.safetyText}>
+          If someone pressures you to move off Drape, shares abuse, or makes you feel unsafe, report it and keep the order
+          thread intact as evidence.
+        </Text>
+        {conversationAccess.blocked ? (
+          <Text style={styles.safetyWarning}>
+            {conversationAccess.userMessage ?? 'This conversation is paused while Drape reviews a safety concern.'}
+          </Text>
+        ) : null}
+        <TouchableOpacity style={styles.safetyBtn} onPress={openSafetyReportOptions} disabled={reportingSafety}>
+          <Text style={styles.safetyBtnText}>
+            {reportingSafety
+              ? conversationAccess.blocked ? 'Pausing chat…' : 'Sending report…'
+              : conversationAccess.blocked ? 'Conversation paused' : 'Report abuse or pressure'}
+          </Text>
+        </TouchableOpacity>
+        {loadingConversationAccess && !conversationAccess.blocked ? (
+          <Text style={styles.safetyMeta}>Checking conversation safety status…</Text>
+        ) : null}
+      </View>
+
       <MessageThread
         orderId={resolvedOrderId}
         currentUserId={user?.id ?? ''}
         currentUserRole="CUSTOMER"
         tailorName={orderInfo.tailorName}
         customerName={orderInfo.customerName}
-        locked={TERMINAL_STAGES.includes(orderInfo.stage)}
+        locked={TERMINAL_STAGES.includes(orderInfo.stage) || conversationAccess.blocked}
+        lockedMessage={
+          conversationAccess.blocked
+            ? conversationAccess.userMessage ?? 'This conversation is paused while Drape reviews a safety concern.'
+            : undefined
+        }
       />
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -255,6 +376,31 @@ const styles = StyleSheet.create({
   },
   guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: Spacing.xs },
   guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  safetyCard: {
+    backgroundColor: Colors.white,
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.md,
+    marginBottom: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.lg,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
+  safetyTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  safetyText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  safetyWarning: { fontSize: FontSize.sm, color: Colors.kanteRust, lineHeight: 20 },
+  safetyBtn: {
+    alignSelf: 'flex-start',
+    backgroundColor: Colors.kanteRustLight,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.full,
+  },
+  safetyBtnText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.kanteRust },
+  safetyMeta: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   callBtn: {
     width: 40, height: 40, borderRadius: 20,
     backgroundColor: Colors.needleGreen, alignItems: 'center', justifyContent: 'center',

@@ -10,13 +10,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useFocusEffect, useNavigation, useRouter } from 'expo-router'
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator,
+  View, Text, StyleSheet, FlatList, TouchableOpacity,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { Button, FeatureStateCard } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
 
@@ -168,74 +169,58 @@ export default function NotificationsScreen() {
       </View>
 
       {loading ? (
-        <View style={styles.stateWrap}>
-          <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Notifications</Text>
-            <ActivityIndicator color={Colors.needleGreen} />
-            <Text style={styles.stateTitle}>Loading your notifications…</Text>
-            <Text style={styles.stateHint}>
-              We’re gathering the latest quote, production, delivery, and completion updates across your orders.
-            </Text>
-          </View>
-        </View>
+        <FeatureStateCard
+          eyebrow="Notifications"
+          title="Loading your notifications…"
+          body="We’re gathering the latest quote, production, delivery, and completion updates across your orders."
+          loading
+        />
       ) : fetchError ? (
-        <View style={styles.stateWrap}>
-          <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Notifications</Text>
-            <Feather name="alert-circle" size={40} color={Colors.lightGrey} />
-            <Text style={styles.stateTitle}>Couldn't load notifications</Text>
-            <Text style={styles.stateHint}>
-              This feed should keep every order update easy to spot without checking each order manually.
-            </Text>
-            <View style={styles.stateGuideCard}>
-              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
-              <Text style={styles.stateGuideText}>
-                Refresh here first. If updates still do not appear, open your active orders first, then profile if needed, so you can keep moving while the feed catches up.
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={styles.retryBtn}
-              onPress={() => {
-                setFetchError(false)
-                setRetryTrigger((n) => n + 1)
-              }}
-            >
-              <Text style={styles.retryBtnText}>Try again</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.secondaryBtn}
-              onPress={() => router.replace('/(customer)/orders')}
-            >
-              <Text style={styles.secondaryBtnText}>Open orders</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.secondaryBtn}
-              onPress={() => router.replace('/(customer)/profile')}
-            >
-              <Text style={styles.secondaryBtnText}>Open profile</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      ) : items.length === 0 ? (
-        <View style={styles.empty}>
-          <Feather name="bell-off" size={40} color={Colors.lightGrey} />
-          <Text style={styles.emptyTitle}>All caught up</Text>
-          <Text style={styles.emptySub}>
-            Order updates will appear here as your tailor progresses your work.
-          </Text>
-          <TouchableOpacity
-            style={styles.retryBtn}
+        <FeatureStateCard
+          eyebrow="Notifications"
+          title="Couldn't load notifications"
+          body="This feed should keep every order update easy to spot without checking each order manually."
+          accentColor={Colors.kanteRust}
+          icon="alert-circle"
+          supportTitle="Best recovery move"
+          supportBody="Refresh here first. If updates still do not appear, open your active orders first, then profile if needed, so you can keep moving while the feed catches up."
+        >
+          <Button
+            label="Try again"
+            onPress={() => {
+              setFetchError(false)
+              setRetryTrigger((n) => n + 1)
+            }}
+          />
+          <Button
+            label="Open orders"
+            variant="secondary"
             onPress={() => router.replace('/(customer)/orders')}
-          >
-            <Text style={styles.retryBtnText}>Open orders</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.secondaryBtn}
+          />
+          <Button
+            label="Open profile"
+            variant="ghost"
+            onPress={() => router.replace('/(customer)/profile')}
+          />
+        </FeatureStateCard>
+      ) : items.length === 0 ? (
+        <FeatureStateCard
+          eyebrow="Notifications"
+          title="All caught up"
+          body="Order updates will appear here as your tailor progresses your work."
+          accentColor={Colors.warning}
+          icon="bell-off"
+        >
+          <Button
+            label="Open orders"
+            onPress={() => router.replace('/(customer)/orders')}
+          />
+          <Button
+            label="Explore tailors"
+            variant="secondary"
             onPress={() => router.replace('/(customer)')}
-          >
-            <Text style={styles.secondaryBtnText}>Explore tailors</Text>
-          </TouchableOpacity>
-        </View>
+          />
+        </FeatureStateCard>
       ) : (
         <FlatList
           data={items}
@@ -300,48 +285,6 @@ export default function NotificationsScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
-  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
-  stateCard: {
-    width: '100%',
-    maxWidth: 440,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.lg,
-    alignItems: 'center',
-    ...Shadow.lg,
-  },
-  stateEyebrow: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
-  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
-  stateGuideCard: {
-    alignSelf: 'stretch',
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: 4,
-  },
-  stateGuideTitle: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    textAlign: 'center',
-  },
-  stateGuideText: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
     paddingHorizontal: Spacing.xl, paddingVertical: Spacing.lg,
@@ -384,29 +327,6 @@ const styles = StyleSheet.create({
     color: Colors.ink,
     lineHeight: 22,
   },
-  empty: {
-    flex: 1, alignItems: 'center', justifyContent: 'center',
-    gap: Spacing.md, padding: Spacing.xxxl,
-  },
-  emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.inkLight },
-  emptySub: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 22 },
-  retryBtn: {
-    marginTop: Spacing.md,
-    backgroundColor: Colors.needleGreen,
-    borderRadius: Radius.full,
-    paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.sm,
-  },
-  retryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
-  secondaryBtn: {
-    backgroundColor: Colors.white,
-    borderColor: Colors.lightGrey,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.sm,
-  },
-  secondaryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
 
   card: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,

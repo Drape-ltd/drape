@@ -1,0 +1,152 @@
+import type { ReactNode } from 'react'
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native'
+import { Feather } from '@expo/vector-icons'
+import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
+
+type FeatureStateCardProps = {
+  eyebrow: string
+  title: string
+  body: string
+  accentColor?: string
+  icon?: React.ComponentProps<typeof Feather>['name']
+  loading?: boolean
+  supportTitle?: string
+  supportBody?: string
+  children?: ReactNode
+}
+
+export function FeatureStateCard({
+  eyebrow,
+  title,
+  body,
+  accentColor = Colors.needleGreen,
+  icon = 'bell',
+  loading = false,
+  supportTitle,
+  supportBody,
+  children,
+}: FeatureStateCardProps) {
+  return (
+    <View style={styles.wrap}>
+      <View style={styles.card}>
+        <View style={[styles.accentWash, { backgroundColor: `${accentColor}16` }]} />
+        <View style={[styles.accentOrb, { backgroundColor: `${accentColor}12` }]} />
+
+        <View style={[styles.eyebrowPill, { borderColor: `${accentColor}24`, backgroundColor: `${accentColor}10` }]}>
+          <Text style={[styles.eyebrowText, { color: accentColor }]}>{eyebrow}</Text>
+        </View>
+
+        <View style={[styles.iconHalo, { backgroundColor: `${accentColor}16` }]}>
+          {loading ? (
+            <ActivityIndicator color={accentColor} />
+          ) : (
+            <Feather name={icon} size={24} color={accentColor} />
+          )}
+        </View>
+
+        <Text style={styles.title}>{title}</Text>
+        <Text style={styles.body}>{body}</Text>
+
+        {supportTitle && supportBody ? (
+          <View style={styles.supportCard}>
+            <Text style={styles.supportTitle}>{supportTitle}</Text>
+            <Text style={styles.supportBody}>{supportBody}</Text>
+          </View>
+        ) : null}
+
+        {children ? <View style={styles.actions}>{children}</View> : null}
+      </View>
+    </View>
+  )
+}
+
+const styles = StyleSheet.create({
+  wrap: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: Spacing.xl,
+  },
+  card: {
+    width: '100%',
+    maxWidth: 460,
+    overflow: 'hidden',
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    alignItems: 'center',
+    ...Shadow.lg,
+  },
+  accentWash: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 124,
+  },
+  accentOrb: {
+    position: 'absolute',
+    top: -28,
+    right: -18,
+    width: 116,
+    height: 116,
+    borderRadius: 58,
+  },
+  eyebrowPill: {
+    borderWidth: 1,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+  },
+  eyebrowText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  iconHalo: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  title: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    textAlign: 'center',
+  },
+  body: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  supportCard: {
+    alignSelf: 'stretch',
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: 4,
+  },
+  supportTitle: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    textAlign: 'center',
+  },
+  supportBody: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  actions: {
+    alignSelf: 'stretch',
+    gap: Spacing.sm,
+  },
+})

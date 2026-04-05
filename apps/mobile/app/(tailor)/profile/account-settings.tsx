@@ -39,8 +39,8 @@ function NavRow({
   )
 }
 
-function comingSoon(feature: string) {
-  Alert.alert(feature, 'This setting is planned, but it is not available in the app yet.')
+function notAvailableYet(feature: string) {
+  Alert.alert(feature, 'This setting is not available in the app yet.')
 }
 
 export default function TailorAccountSettingsScreen() {
@@ -66,6 +66,13 @@ export default function TailorAccountSettingsScreen() {
         {/* ── Personal & security ── */}
         <View style={styles.group}>
           <NavRow
+            icon="shield"
+            label="Trust & access"
+            sublabel="Verification, review state, payout blockers"
+            onPress={() => router.push('/(tailor)/profile/trust-access' as never)}
+          />
+          <View style={styles.divider} />
+          <NavRow
             icon="user"
             label="Personal information"
             sublabel="Name, phone number"
@@ -90,19 +97,25 @@ export default function TailorAccountSettingsScreen() {
           />
           <View style={styles.divider} />
           <NavRow
+            icon="shield"
+            label="Privacy"
+            sublabel="Data, analytics, deletion requests"
+            onPress={() => router.push('/(tailor)/profile/privacy' as never)}
+          />
+          <View style={styles.divider} />
+          <NavRow
             icon="credit-card"
             label="Payments & payouts"
-            sublabel="Coming soon"
-            pending
-            onPress={() => comingSoon('Payments & payouts')}
+            sublabel="Readiness, pending funds, completed orders"
+            onPress={() => router.push('/(tailor)/earnings')}
           />
           <View style={styles.divider} />
           <NavRow
             icon="file-text"
             label="Taxes"
-            sublabel="Coming soon"
+            sublabel="Not available yet"
             pending
-            onPress={() => comingSoon('Taxes')}
+            onPress={() => notAvailableYet('Taxes')}
           />
         </View>
 
@@ -111,18 +124,18 @@ export default function TailorAccountSettingsScreen() {
           <NavRow
             icon="globe"
             label="Translation"
-            sublabel="Coming soon"
+            sublabel="Not available yet"
             pending
-            onPress={() => comingSoon('Translation')}
+            onPress={() => notAvailableYet('Translation')}
           />
           <View style={styles.divider} />
           <NavRow
             icon="eye"
             label="Accessibility"
-            sublabel="Coming soon"
+            sublabel="Not available yet"
             pending
             last
-            onPress={() => comingSoon('Accessibility')}
+            onPress={() => notAvailableYet('Accessibility')}
           />
         </View>
 

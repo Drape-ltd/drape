@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useId, useRef, useState } from 'react'
+import { type JSX, useEffect, useId, useRef, useState } from 'react'
 
 type Suggestion = {
   display_name: string

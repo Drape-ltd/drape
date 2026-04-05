@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import type { JSX } from 'react'
 import { MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { TailorApplicationForm } from '../../components/tailor-application-form'
 import { buildMetadata } from '../../lib/metadata'

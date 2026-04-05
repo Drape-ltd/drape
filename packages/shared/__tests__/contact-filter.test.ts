@@ -27,6 +27,8 @@ describe('filterContactInfo — social handles and platforms', () => {
     ['@ada_okafor', '@handle'],
     ['my insta is @ada', '@handle in sentence'],
     ['message me on whatsapp', 'whatsapp mention'],
+    ['call me after this fitting', 'call me redirect phrase'],
+    ['text me when you are outside', 'text me redirect phrase'],
     ['find me on instagram', 'instagram mention'],
     ['dm me', 'redirect phrase'],
     ['same handle on telegram', 'telegram with redirect'],
@@ -46,6 +48,7 @@ describe('filterContactInfo — URLs and web addresses', () => {
     ['www.drapeoffplatform.com', 'www prefix'],
     ['myshop.co.uk', '.co.uk domain'],
     ['linktree/adatailors', 'linktree reference'],
+    ['ada@example.com', 'email address'],
   ]
 
   test.each(cases)('blocks "%s" (%s)', (text) => {

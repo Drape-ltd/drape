@@ -8,6 +8,13 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as ImagePicker from 'expo-image-picker'
 import DateTimePicker from '@react-native-community/datetimepicker'
+import { isLikelyConnectivityIssue, readFunctionErrorPayload } from '@/lib/function-errors'
+import {
+  enrichMeasurementSnapshot,
+  FABRIC_HANDOFF_LABELS,
+  MEASUREMENT_SOURCE_LABELS,
+  type FabricHandoffMode,
+} from '@/lib/order-support'
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
@@ -22,6 +29,29 @@ const MEAS_PROMPT_KEY = 'drape_meas_prompt_shown'
 
 type FabricSource = 'CUSTOMER_SUPPLIES' | 'TAILOR_SOURCES'
 type DeliveryMethod = 'SHIPPING' | 'LOCAL_COLLECTION'
+
+const FABRIC_HANDOFF_OPTIONS: Array<{ value: FabricHandoffMode; title: string; hint: string }> = [
+  {
+    value: 'CUSTOMER_SHIPS_TO_TAILOR',
+    title: 'I will ship the fabric',
+    hint: 'You send fabric to the tailor and can save tracking details inside the order.',
+  },
+  {
+    value: 'CUSTOMER_DROPS_OFF_LOCALLY',
+    title: 'I will drop it off locally',
+    hint: 'Best when you and the tailor can meet for a direct handoff.',
+  },
+  {
+    value: 'TAILOR_PICKS_UP_LOCALLY',
+    title: 'Tailor will pick it up',
+    hint: 'Use this when the tailor is collecting fabric from you locally.',
+  },
+  {
+    value: 'BRINGS_TO_CONSULTATION',
+    title: 'I will bring it to consultation',
+    hint: 'Useful when you expect to hand it over during a fitting or consultation.',
+  },
+]
 
 const GARMENT_TYPES = [
   'Agbada', 'Suit', 'Kaftan', 'Ankara Dress', 'Lehenga', 'Saree Blouse',
@@ -73,6 +103,41 @@ function hasCompleteMeasurementProfile(value: any): boolean {
   return hasCore && hasContext && bodyShapes.length > 0
 }
 
+async function resolveOrderSubmitErrorMessage(error: Error | null) {
+  const payload = error ? await readFunctionErrorPayload(error) : null
+  const rawMessage =
+    (typeof payload?.error === 'string' && payload.error.trim().length > 0
+      ? payload.error.trim()
+      : error?.message?.trim()) || 'Could not submit your order. Please try again.'
+  const normalized = rawMessage.toLowerCase()
+
+  if (normalized.includes('delivery address is required')) {
+    return 'Add your full delivery address before submitting this order.'
+  }
+
+  if (normalized.includes('seller not found')) {
+    return 'This tailor profile is no longer available. Go back and choose another seller.'
+  }
+
+  if (normalized.includes('fabric_handoff_required') || normalized.includes('how your fabric will reach them')) {
+    return 'Choose how your fabric will reach the tailor before submitting this order.'
+  }
+
+  if (normalized.includes('not accepting custom orders right now')) {
+    return 'This tailor is not accepting custom orders right now. Refresh their profile before trying again.'
+  }
+
+  if (normalized.includes('too many order attempts') || normalized.includes('too many requests')) {
+    return 'You have tried a few times quickly. Wait a moment, then submit again.'
+  }
+
+  if (normalized.includes('sign in again')) {
+    return 'Your session has expired. Sign in again before placing this order.'
+  }
+
+  return rawMessage
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function OrderBriefScreen() {
@@ -115,6 +180,7 @@ export default function OrderBriefScreen() {
 
   // Step 4
   const [fabricSource, setFabricSource] = useState<FabricSource | null>(null)
+  const [fabricHandoffMode, setFabricHandoffMode] = useState<FabricHandoffMode | null>(null)
   const [deliveryMethod, setDeliveryMethod] = useState<DeliveryMethod | null>(null)
   const [deliveryAddressLine1, setDeliveryAddressLine1] = useState('')
   const [deliveryAddressLine2, setDeliveryAddressLine2] = useState('')
@@ -149,6 +215,7 @@ export default function OrderBriefScreen() {
     setEditingField(null)
     setEditValue('')
     setFabricSource(null)
+    setFabricHandoffMode(null)
     setDeliveryMethod(null)
     setDeliveryAddressLine1('')
     setDeliveryAddressLine2('')
@@ -195,7 +262,7 @@ export default function OrderBriefScreen() {
 
     const hasMeasurements = hasCompleteMeasurementProfile(measurementData?.measurements)
     if (hasMeasurements) {
-      setMeasurements(measurementData?.measurements ?? null)
+      setMeasurements(enrichMeasurementSnapshot(measurementData?.measurements ?? null))
       setInitialLoading(false)
       return
     }
@@ -336,6 +403,7 @@ export default function OrderBriefScreen() {
     if (step === 2) return !!measurements && fitNote.trim().length >= 20 && !fitNoteError
     if (step === 3) {
       if (!fabricSource || !deliveryMethod) return false
+      if (fabricSource === 'CUSTOMER_SUPPLIES' && !fabricHandoffMode) return false
       if (deliveryMethod === 'SHIPPING' && (!composeDeliveryAddress().trim() || !!deliveryAddressError)) return false
       return true
     }
@@ -389,12 +457,28 @@ export default function OrderBriefScreen() {
           const { data: urlData } = supabase.storage.from('order-photos').getPublicUrl(filename)
           uploadedUrls.push(urlData.publicUrl)
         }
-      } catch {
+      } catch (error) {
         setSubmitting(false)
-        Alert.alert('Upload failed', 'One of your reference photos could not be uploaded. Please try again.')
+        Alert.alert(
+          'Upload failed',
+          isLikelyConnectivityIssue(error)
+            ? 'Connection looks weak. One of your reference photos could not be uploaded yet. Retry when the signal improves.'
+            : 'One of your reference photos could not be uploaded right now. Please try again in a moment.',
+        )
         return
       }
     }
+
+    const measurementSnapshot = enrichMeasurementSnapshot(measurements)
+    const supportMeta = fabricSource === 'CUSTOMER_SUPPLIES'
+      ? {
+          fabricHandoffMode,
+          fabricHandoffLabel: fabricHandoffMode ? FABRIC_HANDOFF_LABELS[fabricHandoffMode] : null,
+        }
+      : {
+          fabricHandoffMode: 'NO_CUSTOMER_HANDOFF_REQUIRED' as const,
+          fabricHandoffLabel: FABRIC_HANDOFF_LABELS.NO_CUSTOMER_HANDOFF_REQUIRED,
+        }
 
     const composedFitNote = fitNote.trim()
       ? (inspirationLinks.length > 0 ? `${fitNote.trim()}\n\nStyle inspiration: ${inspirationLinks.join(', ')}` : fitNote.trim())
@@ -409,9 +493,10 @@ export default function OrderBriefScreen() {
         occasion: occasion.trim() || null,
         deadline: deadline?.toISOString() ?? null,
         referencePhotos: uploadedUrls,
-        customerMeasurementsSnapshot: measurements,
+        customerMeasurementsSnapshot: measurementSnapshot,
         fitNote: composedFitNote,
         fabricSource,
+        supportMeta,
         deliveryMethod,
         deliveryAddress: deliveryMethod === 'SHIPPING' ? composeDeliveryAddress() : null,
       },
@@ -421,15 +506,21 @@ export default function OrderBriefScreen() {
 
     if (error || !data?.orderId) {
       console.error('Order create error:', JSON.stringify(error))
-      Alert.alert('Error', error?.message ?? 'Could not submit your order. Please try again.')
+      const message = await resolveOrderSubmitErrorMessage(error)
+      if (message.toLowerCase().includes('delivery address')) {
+        setDeliveryAddressError('Please enter your full delivery address before continuing.')
+      }
+      Alert.alert('Order not sent', message)
       return
     }
 
     capture('order_placed', {
       garment_type: garmentType,
       has_photos: uploadedUrls.length > 0,
-      has_measurements: !!measurements,
+      has_measurements: !!measurementSnapshot,
+      measurement_source: measurementSnapshot?.measurementSource ?? null,
       fabric_source: fabricSource,
+      fabric_handoff_mode: supportMeta.fabricHandoffMode ?? null,
       delivery_method: deliveryMethod,
       has_deadline: !!deadline,
     })
@@ -740,6 +831,14 @@ export default function OrderBriefScreen() {
                         })()}
                       </Text>
                     </View>
+                    {typeof measurements.measurementSource === 'string' ? (
+                      <View style={styles.measureSourceRow}>
+                        <Text style={styles.measureSourceLabel}>Source</Text>
+                        <Text style={styles.measureSourceValue}>
+                          {MEASUREMENT_SOURCE_LABELS[measurements.measurementSource as keyof typeof MEASUREMENT_SOURCE_LABELS] ?? measurements.measurementSource}
+                        </Text>
+                      </View>
+                    ) : null}
                     <View style={styles.measureSummaryGrid}>
                       {[
                         { key: 'chest', label: 'Chest', value: measurements.chest },
@@ -834,7 +933,7 @@ export default function OrderBriefScreen() {
                   <View style={styles.optionCards}>
                     <OptionCard
                       title="I'll supply the fabric"
-                      hint="You'll ship fabric to the tailor. They'll ask for their address."
+                      hint="You can ship it, drop it off locally, let the tailor pick it up, or bring it to consultation."
                       active={fabricSource === 'CUSTOMER_SUPPLIES'}
                       onPress={() => setFabricSource('CUSTOMER_SUPPLIES')}
                     />
@@ -846,6 +945,23 @@ export default function OrderBriefScreen() {
                     />
                   </View>
                 </View>
+
+                {fabricSource === 'CUSTOMER_SUPPLIES' && (
+                  <View>
+                    <Text style={styles.fieldLabel}>How will the fabric reach the tailor? <Text style={styles.required}>*</Text></Text>
+                    <View style={styles.optionCards}>
+                      {FABRIC_HANDOFF_OPTIONS.map((option) => (
+                        <OptionCard
+                          key={option.value}
+                          title={option.title}
+                          hint={option.hint}
+                          active={fabricHandoffMode === option.value}
+                          onPress={() => setFabricHandoffMode(option.value)}
+                        />
+                      ))}
+                    </View>
+                  </View>
+                )}
 
                 <View>
                   <Text style={styles.fieldLabel}>Delivery <Text style={styles.required}>*</Text></Text>
@@ -970,6 +1086,15 @@ export default function OrderBriefScreen() {
                     {fabricSource && (
                       <SummaryRow label="Fabric" value={fabricSource === 'CUSTOMER_SUPPLIES' ? 'You supply' : 'Tailor sources'} />
                     )}
+                    {measurements?.measurementSource ? (
+                      <SummaryRow
+                        label="Measurement source"
+                        value={MEASUREMENT_SOURCE_LABELS[measurements.measurementSource as keyof typeof MEASUREMENT_SOURCE_LABELS] ?? measurements.measurementSource}
+                      />
+                    ) : null}
+                    {fabricSource === 'CUSTOMER_SUPPLIES' && fabricHandoffMode ? (
+                      <SummaryRow label="Fabric handoff" value={FABRIC_HANDOFF_LABELS[fabricHandoffMode]} />
+                    ) : null}
                     {deliveryMethod && (
                       <SummaryRow label="Delivery" value={deliveryMethod === 'SHIPPING' ? 'Shipping' : 'Local collection'} />
                     )}
@@ -1318,6 +1443,18 @@ const styles = StyleSheet.create({
   // Measurements summary
   measureSummaryCard: { backgroundColor: Colors.white, borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.md, ...Shadow.sm },
   measureSummaryTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  measureSourceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: Spacing.md,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.bone,
+  },
+  measureSourceLabel: { fontSize: FontSize.sm, color: Colors.midGrey },
+  measureSourceValue: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   measureSummaryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   measureSummaryItem: { width: '47%', gap: 2 },
   measureSummaryLabel: { fontSize: FontSize.xs, color: Colors.midGrey },

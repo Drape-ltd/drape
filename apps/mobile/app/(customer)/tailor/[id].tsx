@@ -8,6 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRefreshOnFocus, useTailorPublic } from '@/lib/queries'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { useCurrency, formatAmount } from '@/lib/currency'
 import { TierBadgeChip, StarRating, Tag, Button } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -121,8 +122,11 @@ export default function TailorProfileScreen() {
         if (error) throw error
         setSavedOverride(true)
       }
-    } catch {
-      Alert.alert('Error', 'Could not update your saved tailors. Please try again.')
+    } catch (error) {
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. We could not update your saved tailors yet. Retry when the signal improves.'
+        : await readFunctionErrorMessage(error, 'Could not update your saved tailors right now. Please try again in a moment.')
+      Alert.alert('Error', message)
     } finally {
       setSavingHeart(false)
     }

@@ -10,6 +10,7 @@ import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
 import { Sentry } from '@/lib/sentry'
 import { referToTailor } from '@/lib/invite'
+import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import { Button, Input } from '@/components/ui'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -21,6 +22,14 @@ const REVIEW_TAGS = [
   'Exceeded expectations',
   'Quality craftsmanship',
 ]
+const REVIEW_WINDOW_DAYS = 14
+
+function reviewWindowClosed(stageUpdatedAt: string | null) {
+  if (!stageUpdatedAt) return false
+  const reviewClock = new Date(stageUpdatedAt).getTime()
+  if (Number.isNaN(reviewClock)) return false
+  return Date.now() - reviewClock > REVIEW_WINDOW_DAYS * 24 * 60 * 60 * 1000
+}
 
 export default function ReviewScreen() {
   const { orderId } = useLocalSearchParams<{ orderId: string }>()
@@ -28,13 +37,14 @@ export default function ReviewScreen() {
   const { user } = useAuth()
   const [orderSummary, setOrderSummary] = useState<{
     stage: string
+    stageUpdatedAt: string | null
     garmentType: string
     tailorId: string
     tailorProfileId: string | null
     tailorName: string
   } | null>(null)
   const [loadingOrder, setLoadingOrder] = useState(true)
-  const [orderError, setOrderError] = useState(false)
+  const [orderErrorMessage, setOrderErrorMessage] = useState('')
 
   const [rating, setRating] = useState(0)
   const [hovered, setHovered] = useState(0)
@@ -49,22 +59,83 @@ export default function ReviewScreen() {
     router.replace({ pathname: '/(customer)/orders', params: { tab: 'completed' } })
   }
 
+  function readPayloadString(payload: Record<string, unknown> | null, key: string) {
+    const value = payload?.[key]
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+  }
+
+  async function resolveReviewSubmitFailure(error: Error | null) {
+    const payload = error ? await readFunctionErrorPayload(error) : null
+    const code = readPayloadString(payload, 'code')
+    const payloadMessage = readPayloadString(payload, 'error')
+
+    if (code === 'UNAUTHORIZED') {
+      return { message: payloadMessage ?? 'Please sign in again before submitting your review.', bodyError: '', showAlert: true }
+    }
+
+    if (code === 'BLOCKED_CONTACT' || code === 'THREATENING_LANGUAGE') {
+      return {
+        message: payloadMessage ?? "That review can't be submitted yet.",
+        bodyError: payloadMessage ?? "That review can't be submitted yet.",
+        showAlert: false,
+      }
+    }
+
+    if (code === 'RATE_LIMITED') {
+      return {
+        message: payloadMessage ?? 'Too many review attempts right now. Please wait a moment before trying again.',
+        bodyError: '',
+        showAlert: true,
+      }
+    }
+
+    if (code === 'ORDER_NOT_READY_FOR_REVIEW' || code === 'ORDER_NOT_FOUND' || code === 'FORBIDDEN') {
+      return {
+        message: payloadMessage ?? 'This review is not available right now. Reopen the order and try again.',
+        bodyError: '',
+        showAlert: true,
+      }
+    }
+
+    if (code === 'REVIEW_WINDOW_CLOSED') {
+      return {
+        message: payloadMessage ?? `This review window has closed. Reviews can only be added within ${REVIEW_WINDOW_DAYS} days of delivery or collection.`,
+        bodyError: '',
+        showAlert: true,
+      }
+    }
+
+    if (isLikelyConnectivityIssue(error)) {
+      return {
+        message: 'Your connection looks weak. Your review is still here, so retry when the signal improves.',
+        bodyError: '',
+        showAlert: false,
+      }
+    }
+
+    return {
+      message: await readFunctionErrorMessage(error, 'Could not submit this review right now. Please try again in a moment.'),
+      bodyError: '',
+      showAlert: true,
+    }
+  }
+
   async function loadOrderSummary() {
     setLoadingOrder(true)
-    setOrderError(false)
+    setOrderErrorMessage('')
     setOrderSummary(null)
 
     try {
       const { data, error } = await supabase
         .from('orders')
-        .select('stage, garment_type, tailor_id, tailor_profile_id, tailor_profiles!tailor_profile_id(display_name)')
+        .select('stage, stage_updated_at, garment_type, tailor_id, tailor_profile_id, tailor_profiles!tailor_profile_id(display_name)')
         .eq('id', orderId)
         .eq('customer_id', user?.id)
         .maybeSingle()
 
       if (error) throw error
       if (!data) {
-        setOrderError(true)
+        setOrderErrorMessage('This finished order review is no longer available from this account.')
         setLoadingOrder(false)
         return
       }
@@ -77,16 +148,26 @@ export default function ReviewScreen() {
         router.replace(`/(customer)/orders/${orderId}`)
         return
       }
+      if (reviewWindowClosed(order.stage_updated_at ?? null)) {
+        setOrderErrorMessage(`This review window has closed. Reviews can only be added within ${REVIEW_WINDOW_DAYS} days of delivery, collection, or completion.`)
+        setLoadingOrder(false)
+        return
+      }
 
       setOrderSummary({
         stage: order.stage,
+        stageUpdatedAt: order.stage_updated_at ?? null,
         garmentType: order.garment_type,
         tailorId: order.tailor_id,
         tailorProfileId: order.tailor_profile_id ?? null,
         tailorName: order.tailor_profiles?.display_name ?? 'your tailor',
       })
-    } catch {
-      setOrderError(true)
+    } catch (error) {
+      setOrderErrorMessage(
+        isLikelyConnectivityIssue(error)
+          ? 'Connection is weak. We could not load this review yet. Retry when the signal improves.'
+          : 'We could not open this review right now.'
+      )
     } finally {
       setLoadingOrder(false)
     }
@@ -98,7 +179,7 @@ export default function ReviewScreen() {
 
   function validateBody(text: string) {
     const res = filterContactInfo(text)
-    if (res.blocked) { setBodyError("Contact details can't be included in reviews."); return false }
+    if (res.blocked) { setBodyError(res.userMessage); return false }
     setBodyError(''); return true
   }
 
@@ -122,7 +203,7 @@ export default function ReviewScreen() {
       ? `${parts[0]} ${parts[parts.length - 1].charAt(0)}.`
       : parts[0] || 'Customer'
 
-    const { error } = await invokeFunction('review-action', {
+    const { data, error } = await invokeFunction<{ ok?: boolean; publicationStatus?: 'published' | 'held' }>('review-action', {
       body: {
         action: 'submit-tailor-review',
         orderId,
@@ -144,9 +225,12 @@ export default function ReviewScreen() {
       })
       Sentry.captureException(error, { extra: { context: 'review_submit', orderId } })
       setSubmitting(false)
-      const message = error.message ?? 'Could not submit review. Please try again.'
-      setSubmitError(message)
-      Alert.alert('Error', message)
+      const failure = await resolveReviewSubmitFailure(error)
+      if (failure.bodyError) setBodyError(failure.bodyError)
+      setSubmitError(failure.message)
+      if (failure.showAlert) {
+        Alert.alert(failure.message.includes('sign in again') ? 'Session expired' : 'Review unavailable', failure.message)
+      }
       return
     }
 
@@ -159,8 +243,11 @@ export default function ReviewScreen() {
       if (completeError) {
         Sentry.captureException(completeError, { extra: { context: 'complete_order_after_review', orderId } })
         setSubmitting(false)
-        setSubmitError('Your review was saved, but we could not finalize the order yet. Please reopen the order and try again.')
-        Alert.alert('Review saved', 'Your review was submitted, but we could not finalize the order yet. Please reopen the order and try again.')
+        const completeMessage = isLikelyConnectivityIssue(completeError)
+          ? 'Your review was saved, but the order could not finish on this connection yet. Reopen the order when the signal improves.'
+          : 'Your review was saved, but we could not finalize the order yet. Please reopen the order and try again.'
+        setSubmitError(completeMessage)
+        Alert.alert('Review saved', completeMessage)
         router.replace(`/(customer)/orders/${orderId}`)
         return
       }
@@ -175,10 +262,18 @@ export default function ReviewScreen() {
 
     setSubmitting(false)
 
+    const publicationStatus = data?.publicationStatus ?? 'published'
+
     // After a 4 or 5 star review, prompt to refer the tailor to a friend
     const tailorName = orderSummary.tailorName
     const tailorProfileId = orderSummary.tailorProfileId
-    if (rating >= 4 && tailorProfileId) {
+    if (publicationStatus === 'held') {
+      Alert.alert(
+        'Review received',
+        'Your review was saved. It may take a little longer to appear publicly while Drape checks the order context.',
+      )
+      goToCompletedOrders()
+    } else if (rating >= 4 && tailorProfileId) {
       Alert.alert(
         'Glad it went well!',
         `Know someone who could use a great tailor? Share ${tailorName}'s profile with them.`,
@@ -211,16 +306,22 @@ export default function ReviewScreen() {
         if (skipCompleteError) {
           Sentry.captureException(skipCompleteError, { extra: { context: 'complete_order_skip', orderId } })
           setSkipping(false)
-          setSubmitError('We could not complete this order right now. Please try again.')
-          Alert.alert('Error', 'Could not complete the order right now. Please try again.')
+          const message = isLikelyConnectivityIssue(skipCompleteError)
+            ? 'Connection looks weak. We could not complete this order yet. Retry when the signal improves.'
+            : 'We could not complete this order right now. Please try again.'
+          setSubmitError(message)
+          Alert.alert('Error', message)
           return
         }
       }
     } catch (error) {
       Sentry.captureException(error, { extra: { context: 'load_order_before_skip_review', orderId } })
       setSkipping(false)
-      setSubmitError('We could not complete this order right now. Please try again.')
-      Alert.alert('Error', 'Could not complete the order right now. Please try again.')
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. We could not complete this order yet. Retry when the signal improves.'
+        : 'We could not complete this order right now. Please try again.'
+      setSubmitError(message)
+      Alert.alert('Error', message)
       return
     }
     setSkipping(false)
@@ -245,7 +346,7 @@ export default function ReviewScreen() {
     )
   }
 
-  if (orderError || !orderSummary) {
+  if (orderErrorMessage || !orderSummary) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.stateWrap}>
@@ -253,7 +354,7 @@ export default function ReviewScreen() {
             <Text style={styles.stateEyebrow}>Order review</Text>
             <Text style={styles.stateTitle}>Couldn't open this review.</Text>
             <Text style={styles.stateHint}>
-              This screen should help you close the loop on a finished order and leave useful feedback for future customers.
+              {orderErrorMessage || 'This screen should help you close the loop on a finished order and leave useful feedback for future customers.'}
             </Text>
             <TouchableOpacity style={styles.retryBtn} onPress={() => void loadOrderSummary()}>
               <Text style={styles.retryBtnText}>Try again</Text>
@@ -282,7 +383,13 @@ export default function ReviewScreen() {
 
             <View style={styles.noteCard}>
               <Text style={styles.noteText}>
-                Review is optional. You can skip it and still complete the order.
+                Review is optional. You can skip it and still complete the order. If something is still wrong with the garment, reopen the order and raise a concern instead of using the review screen.
+              </Text>
+            </View>
+
+            <View style={styles.noteCard}>
+              <Text style={styles.noteText}>
+                Reviews stay open for {REVIEW_WINDOW_DAYS} days after delivery, collection, or completion. Most go public quickly, but Drape may hold a review a little longer if there is policy or dispute context to check.
               </Text>
             </View>
 

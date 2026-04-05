@@ -4,13 +4,17 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert, TextInput } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { useSellerItem } from '@/lib/queries'
+import { readFunctionErrorPayload } from '@/lib/function-errors'
 import { invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { Button } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
+import { useOrderPaymentFlow } from '@/lib/payments'
 
 type FulfillmentOption = 'PICKUP' | 'DELIVERY' | 'SHIPPING'
 import type { SellerItemDetail as ItemDetail } from '@/lib/queries'
+
+const MAX_READY_MADE_CHECKOUT_QUANTITY = 3
 
 function defaultFulfillment(item: ItemDetail | null): FulfillmentOption | null {
   if (!item) return null
@@ -18,6 +22,13 @@ function defaultFulfillment(item: ItemDetail | null): FulfillmentOption | null {
   if (item.deliveryAvailable) return 'DELIVERY'
   if (item.shippingAvailable) return 'SHIPPING'
   return null
+}
+
+function fulfillmentLabel(value: FulfillmentOption | null) {
+  if (value === 'PICKUP') return 'Pickup'
+  if (value === 'DELIVERY') return 'Delivery'
+  if (value === 'SHIPPING') return 'Shipping'
+  return 'Choose'
 }
 
 export default function ReadyMadeCheckoutScreen() {
@@ -39,6 +50,7 @@ export default function ReadyMadeCheckoutScreen() {
   const [country, setCountry] = useState('')
   const [addressError, setAddressError] = useState('')
   const { data: item, isLoading, isFetching } = useSellerItem(itemId)
+  const { startOrderPayment } = useOrderPaymentFlow()
 
   function goBack() {
     if (returnTo) {
@@ -120,6 +132,10 @@ export default function ReadyMadeCheckoutScreen() {
       Alert.alert('Invalid quantity', 'Quantity must be at least 1.')
       return false
     }
+    if (quantity > MAX_READY_MADE_CHECKOUT_QUANTITY) {
+      Alert.alert('Quantity limit', `For now, you can check out up to ${MAX_READY_MADE_CHECKOUT_QUANTITY} units at once.`)
+      return false
+    }
     if (fulfillment !== 'PICKUP') {
       if (!addressLine1.trim() || !city.trim() || !stateRegion.trim() || !postcode.trim() || !country.trim()) {
         setAddressError('Enter the full delivery address before continuing.')
@@ -131,6 +147,13 @@ export default function ReadyMadeCheckoutScreen() {
   }
 
   const subtotal = useMemo(() => (item ? item.priceAmount * quantity : 0), [item, quantity])
+  const fulfillmentFee = useMemo(() => {
+    if (!item || !fulfillment) return 0
+    if (fulfillment === 'DELIVERY') return item.deliveryFee
+    if (fulfillment === 'SHIPPING') return item.shippingFee
+    return 0
+  }, [fulfillment, item])
+  const total = subtotal + fulfillmentFee
 
   async function createOrder() {
     if (!user?.id || !item || !fulfillment || saving) return
@@ -150,7 +173,45 @@ export default function ReadyMadeCheckoutScreen() {
       })
 
       if (error || !data?.orderId) {
-        Alert.alert('Checkout failed', error?.message ?? 'Could not create this order right now.')
+        const errorPayload = await readFunctionErrorPayload(error)
+        const existingOrderId =
+          typeof errorPayload?.orderId === 'string' && errorPayload.orderId.length > 0
+            ? errorPayload.orderId
+            : null
+        const errorMessage =
+          typeof errorPayload?.error === 'string' && errorPayload.error.length > 0
+            ? errorPayload.error
+            : error?.message ?? 'Could not create this order right now.'
+
+        if (existingOrderId) {
+          Alert.alert('Checkout already saved', errorMessage)
+          router.replace({
+            pathname: '/(customer)/orders/[id]',
+            params: { id: existingOrderId, tab: 'active' },
+          })
+          return
+        }
+
+        Alert.alert('Checkout failed', errorMessage)
+        return
+      }
+
+      const paymentResult = await startOrderPayment({
+        orderId: data.orderId,
+        customerEmail: user?.email,
+      })
+
+      if (!paymentResult.ok) {
+        if (paymentResult.reason === 'cancelled') {
+          Alert.alert('Payment not finished', 'Your checkout is still saved. Finish payment from the order screen any time.')
+        } else {
+          Alert.alert('Payment unavailable', paymentResult.message)
+        }
+
+        router.replace({
+          pathname: '/(customer)/orders/[id]',
+          params: { id: data.orderId, tab: 'active' },
+        })
         return
       }
 
@@ -218,10 +279,11 @@ export default function ReadyMadeCheckoutScreen() {
                   <Text style={styles.quantityBtnText}>−</Text>
                 </TouchableOpacity>
                 <Text style={styles.quantityValue}>{quantity}</Text>
-                <TouchableOpacity style={styles.quantityBtn} onPress={() => setQuantity((value) => Math.min(9, value + 1))}>
+                <TouchableOpacity style={styles.quantityBtn} onPress={() => setQuantity((value) => Math.min(MAX_READY_MADE_CHECKOUT_QUANTITY, value + 1))}>
                   <Text style={styles.quantityBtnText}>+</Text>
                 </TouchableOpacity>
               </View>
+              <Text style={styles.helperText}>Up to {MAX_READY_MADE_CHECKOUT_QUANTITY} units per checkout for now.</Text>
             </View>
 
             <View style={styles.sectionCard}>
@@ -281,16 +343,20 @@ export default function ReadyMadeCheckoutScreen() {
             <View style={styles.breakdownCard}>
               <Text style={styles.sectionTitle}>Order summary</Text>
               <SummaryRow label="Item subtotal" value={`${item.currency} ${(subtotal / 100).toFixed(2)}`} />
-              <SummaryRow label="Fulfillment" value={fulfillment === 'PICKUP' ? 'Pickup' : fulfillment === 'DELIVERY' ? 'Delivery' : 'Shipping'} />
+              <SummaryRow label="Fulfillment" value={fulfillmentLabel(fulfillment)} />
+              <SummaryRow
+                label={fulfillment === 'DELIVERY' ? 'Delivery fee' : fulfillment === 'SHIPPING' ? 'Shipping fee' : 'Fulfillment fee'}
+                value={fulfillmentFee > 0 ? `${item.currency} ${(fulfillmentFee / 100).toFixed(2)}` : 'Free'}
+              />
               <View style={styles.totalRow}>
                 <Text style={styles.totalLabel}>Total</Text>
-                <Text style={styles.totalValue}>{item.currency} {(subtotal / 100).toFixed(2)}</Text>
+                <Text style={styles.totalValue}>{item.currency} {(total / 100).toFixed(2)}</Text>
               </View>
             </View>
 
             <View style={styles.bestUseCard}>
               <Text style={styles.bestUseEyebrow}>Best use</Text>
-              <Text style={styles.bestUseText}>This creates a ready-made order now. Payment breakdowns and live checkout rails plug in next without changing this flow.</Text>
+              <Text style={styles.bestUseText}>You can now see item price and fulfillment cost before payment. Live courier automation is still the next layer.</Text>
             </View>
           </>
         )}
@@ -298,7 +364,11 @@ export default function ReadyMadeCheckoutScreen() {
 
       {item ? (
         <View style={styles.footer}>
-          <Button label={saving ? 'Creating order…' : 'Place order'} onPress={createOrder} disabled={saving || !fulfillment} />
+          <Button
+            label={saving ? 'Preparing payment…' : 'Continue to payment'}
+            onPress={createOrder}
+            disabled={saving || !fulfillment}
+          />
         </View>
       ) : null}
     </SafeAreaView>
@@ -339,6 +409,7 @@ const styles = StyleSheet.create({
   itemPrice: { marginTop: Spacing.xs, fontSize: FontSize.xl, color: Colors.needleGreen, fontWeight: FontWeight.bold },
   sectionCard: { backgroundColor: Colors.white, borderRadius: Radius.xl, padding: Spacing.lg, gap: Spacing.sm, ...Shadow.sm },
   sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  helperText: { fontSize: FontSize.xs, color: Colors.midGrey },
   optionWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   pill: { paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, borderRadius: Radius.full, backgroundColor: Colors.bone, borderWidth: 1, borderColor: Colors.lightGrey },
   pillActive: { backgroundColor: Colors.needleGreenLight, borderColor: Colors.needleGreen },

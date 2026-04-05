@@ -15,7 +15,7 @@ describe('canTransition — valid paths', () => {
     ['DRAFT', 'PENDING_QUOTE', 'CUSTOMER'],
     ['PENDING_QUOTE', 'QUOTE_SENT', 'TAILOR'],
     ['PENDING_QUOTE', 'DECLINED', 'TAILOR'],
-    ['QUOTE_SENT', 'CONFIRMED', 'CUSTOMER'],
+    ['QUOTE_SENT', 'PAYMENT_PENDING', 'CUSTOMER'],
     ['QUOTE_SENT', 'DECLINED', 'CUSTOMER'],
     ['QUOTE_SENT', 'EXPIRED', 'SYSTEM'],
     ['PAYMENT_PENDING', 'CONFIRMED', 'SYSTEM'],
@@ -53,7 +53,7 @@ describe('canTransition — invalid actor', () => {
   })
 
   it('tailor cannot accept or decline a quote on behalf of customer', () => {
-    expect(canTransition('QUOTE_SENT', 'CONFIRMED', 'TAILOR')).toBe(false)
+    expect(canTransition('QUOTE_SENT', 'PAYMENT_PENDING', 'TAILOR')).toBe(false)
     expect(canTransition('QUOTE_SENT', 'DECLINED', 'TAILOR')).toBe(false)
   })
 
@@ -119,7 +119,7 @@ describe('validNextStages', () => {
 
   it('customer at QUOTE_SENT can accept or decline', () => {
     const stages = validNextStages('QUOTE_SENT', 'CUSTOMER')
-    expect(stages).toContain('CONFIRMED')
+    expect(stages).toContain('PAYMENT_PENDING')
     expect(stages).toContain('DECLINED')
   })
 
