@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import type { JSX } from 'react'
 import { buildMetadata } from '../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({

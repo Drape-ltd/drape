@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { CONTACTS } from '@drape/shared'
 import Link from 'next/link'
+import type { JSX } from 'react'
 import { hasOpsAccess, hasOpsDashboardToken } from '../../lib/ops-auth'
 import {
   type OpsAccountDeletionRequest,

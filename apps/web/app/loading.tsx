@@ -1,3 +1,5 @@
+import type { JSX } from 'react'
+
 export default function Loading(): JSX.Element {
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(45,106,79,0.10),transparent_38%),linear-gradient(180deg,#f7f1e8_0%,#f3ede2_100%)]">
