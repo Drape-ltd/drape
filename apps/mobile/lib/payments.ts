@@ -1,7 +1,12 @@
 import * as WebBrowser from 'expo-web-browser'
-import { PaymentSheetError, useStripe } from '@stripe/stripe-react-native'
 import { readFunctionErrorPayload } from '@/lib/function-errors'
 import { invokeFunction } from '@/lib/supabase'
+import {
+  getStripeUnavailableMessage,
+  isNativeStripeRuntimeAvailable,
+  isStripePaymentSheetCanceled,
+  useOptionalStripe,
+} from '@/lib/stripe-runtime'
 
 WebBrowser.maybeCompleteAuthSession()
 
@@ -131,7 +136,7 @@ function successResult(data: {
 }
 
 export function useOrderPaymentFlow() {
-  const { initPaymentSheet, presentPaymentSheet } = useStripe()
+  const { available: stripeRuntimeAvailable, initPaymentSheet, presentPaymentSheet } = useOptionalStripe()
 
   async function confirmPreparedPayment(
     orderId: string,
@@ -244,6 +249,14 @@ export function useOrderPaymentFlow() {
       }
     }
 
+    if (!stripeRuntimeAvailable || !isNativeStripeRuntimeAvailable()) {
+      return {
+        ok: false,
+        reason: 'not_configured',
+        message: getStripeUnavailableMessage(),
+      }
+    }
+
     if (!prepared.clientSecret) {
       return {
         ok: false,
@@ -267,13 +280,13 @@ export function useOrderPaymentFlow() {
       return {
         ok: false,
         reason: 'failed',
-        message: initError.localizedMessage ?? initError.message,
+        message: initError.localizedMessage ?? initError.message ?? getStripeUnavailableMessage(),
       }
     }
 
     const { error: presentError } = await presentPaymentSheet()
     if (presentError) {
-      if (presentError.code === PaymentSheetError.Canceled) {
+      if (isStripePaymentSheetCanceled(presentError.code)) {
         return {
           ok: false,
           reason: 'cancelled',
@@ -285,7 +298,7 @@ export function useOrderPaymentFlow() {
       return {
         ok: false,
         reason: 'failed',
-        message: presentError.localizedMessage ?? presentError.message,
+        message: presentError.localizedMessage ?? presentError.message ?? getStripeUnavailableMessage(),
       }
     }
 

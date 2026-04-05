@@ -8,12 +8,12 @@ import * as SplashScreen from 'expo-splash-screen'
 // This prevents any JS route from flashing through on app start / reload.
 SplashScreen.preventAutoHideAsync()
 import { QueryClientProvider } from '@tanstack/react-query'
-import { StripeProvider } from '@stripe/stripe-react-native'
 import { AuthProvider, useAuth, useUserRole } from '@/lib/auth'
 import { CustomerProfileProvider } from '@/lib/customerProfile'
 import { TailorProfileProvider } from '@/lib/tailorProfile'
 import { usePushNotifications } from '@/lib/notifications'
 import { getStripePublishableKey } from '@/lib/payments'
+import { OptionalStripeProvider } from '@/lib/stripe-runtime'
 import { supabase } from '@/lib/supabase'
 import { initSentry } from '@/lib/sentry'
 import { identify, setAnalyticsConsent } from '@/lib/analytics'
@@ -266,7 +266,7 @@ function RouteGuard() {
 
 export default function RootLayout() {
   return (
-    <StripeProvider
+    <OptionalStripeProvider
       publishableKey={getStripePublishableKey()}
       urlScheme="drape"
       setReturnUrlSchemeOnAndroid
@@ -297,6 +297,6 @@ export default function RootLayout() {
         </CustomerProfileProvider>
       </AuthProvider>
       </QueryClientProvider>
-    </StripeProvider>
+    </OptionalStripeProvider>
   )
 }
