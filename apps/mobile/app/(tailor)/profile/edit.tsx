@@ -14,7 +14,9 @@ import * as ImagePicker from 'expo-image-picker'
 import * as ImageManipulator from 'expo-image-manipulator'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { useTailorProfile } from '@/lib/tailorProfile'
+import { minorUnitsFromInput, moneyInputFromMinorUnits } from '@/lib/money-input'
 import { TagSelector } from '@/components/ui'
 import type { TagGroup } from '@/components/ui'
 import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-filter'
@@ -101,6 +103,8 @@ export default function EditProfileScreen() {
   const [pickupAvailable, setPickupAvailable] = useState(true)
   const [deliveryAvailable, setDeliveryAvailable] = useState(false)
   const [shippingAvailable, setShippingAvailable] = useState(false)
+  const [deliveryFee, setDeliveryFee] = useState('')
+  const [shippingFee, setShippingFee] = useState('')
   const [verifyStatus, setVerifyStatus]   = useState<VerificationStatus>('NOT_SUBMITTED')
   const [portfolioCount, setPortfolioCount] = useState(0)
 
@@ -114,6 +118,8 @@ export default function EditProfileScreen() {
     pickupAvailable: boolean
     deliveryAvailable: boolean
     shippingAvailable: boolean
+    deliveryFee: string
+    shippingFee: string
   } | null>(null)
 
   const [currency, setCurrency]           = useState<Currency>('GBP')
@@ -147,6 +153,8 @@ export default function EditProfileScreen() {
     pickupAvailable !== base.pickupAvailable ||
     deliveryAvailable !== base.deliveryAvailable ||
     shippingAvailable !== base.shippingAvailable ||
+    deliveryFee !== base.deliveryFee ||
+    shippingFee !== base.shippingFee ||
     JSON.stringify(specialties) !== JSON.stringify(base.specialties)
   )
 
@@ -160,7 +168,7 @@ export default function EditProfileScreen() {
     try {
       const { data, error } = await supabase
         .from('tailor_profiles')
-        .select('id, display_name, location, bio, specialty_tags, availability, currency, id_verification_status, seller_type, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available')
+        .select('id, display_name, location, bio, specialty_tags, availability, currency, id_verification_status, seller_type, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, delivery_fee, shipping_fee')
         .eq('user_id', user.id)
         .maybeSingle()
 
@@ -181,6 +189,8 @@ export default function EditProfileScreen() {
           pickupAvailable: d.pickup_available ?? true,
           deliveryAvailable: d.delivery_available ?? false,
           shippingAvailable: d.shipping_available ?? false,
+          deliveryFee: moneyInputFromMinorUnits(d.delivery_fee),
+          shippingFee: moneyInputFromMinorUnits(d.shipping_fee),
         }
         setBase(snap)
         setDisplayName(snap.displayName)
@@ -195,6 +205,8 @@ export default function EditProfileScreen() {
         setPickupAvailable(snap.pickupAvailable)
         setDeliveryAvailable(snap.deliveryAvailable)
         setShippingAvailable(snap.shippingAvailable)
+        setDeliveryFee(snap.deliveryFee)
+        setShippingFee(snap.shippingFee)
         setVerifyStatus((d.id_verification_status ?? 'NOT_SUBMITTED') as VerificationStatus)
 
         const { count, error: countError } = await supabase
@@ -220,6 +232,8 @@ export default function EditProfileScreen() {
           pickupAvailable: true,
           deliveryAvailable: false,
           shippingAvailable: false,
+          deliveryFee: '',
+          shippingFee: '',
         }
         setBase(snap)
         setDisplayName(snap.displayName)
@@ -234,6 +248,8 @@ export default function EditProfileScreen() {
         setPickupAvailable(snap.pickupAvailable)
         setDeliveryAvailable(snap.deliveryAvailable)
         setShippingAvailable(snap.shippingAvailable)
+        setDeliveryFee(snap.deliveryFee)
+        setShippingFee(snap.shippingFee)
         setVerifyStatus('NOT_SUBMITTED')
         setPortfolioCount(0)
       }
@@ -277,8 +293,13 @@ export default function EditProfileScreen() {
       })
       if (profileError) throw profileError
       setAvatarUrl(bustUrl)
-    } catch {
-      Alert.alert('Upload failed', 'Could not update your photo. Please try again.')
+    } catch (error) {
+      Alert.alert(
+        'Upload failed',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. We could not update your photo yet. Retry when the signal improves.'
+          : 'Could not update your photo right now. Please try again in a moment.',
+      )
     } finally {
       setUploadingAvatar(false)
     }
@@ -335,6 +356,15 @@ export default function EditProfileScreen() {
   async function handleSave() {
     if (!validate() || !user?.id) return
     if (!validateBio(bio)) return
+
+    const deliveryFeeMinor = minorUnitsFromInput(deliveryFee)
+    const shippingFeeMinor = minorUnitsFromInput(shippingFee)
+
+    if (deliveryFeeMinor == null || shippingFeeMinor == null) {
+      Alert.alert('Invalid fee', 'Enter delivery and shipping fees as whole numbers or decimals with up to two places.')
+      return
+    }
+
     setSaving(true)
     const { error } = await invokeFunction('tailor-profile-action', {
       body: {
@@ -353,6 +383,8 @@ export default function EditProfileScreen() {
           pickupAvailable,
           deliveryAvailable,
           shippingAvailable,
+          deliveryFee: deliveryAvailable ? deliveryFeeMinor : 0,
+          shippingFee: shippingAvailable ? shippingFeeMinor : 0,
           priceRangeMin: null,
           priceRangeMax: null,
         },
@@ -360,7 +392,10 @@ export default function EditProfileScreen() {
     })
     setSaving(false)
     if (error) {
-      Alert.alert('Save failed', error.message)
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. We could not save these profile changes yet. Your edits are still here, so retry when the signal improves.'
+        : await readFunctionErrorMessage(error, 'Could not save these profile changes right now. Please try again in a moment.')
+      Alert.alert('Save failed', message)
       return
     }
     setBase({
@@ -376,6 +411,8 @@ export default function EditProfileScreen() {
       pickupAvailable,
       deliveryAvailable,
       shippingAvailable,
+      deliveryFee: deliveryAvailable ? deliveryFee : '',
+      shippingFee: shippingAvailable ? shippingFee : '',
     })
     goBack()
   }
@@ -675,6 +712,35 @@ export default function EditProfileScreen() {
                 <Text style={styles.choiceHint}>Courier or shipping partner handles it.</Text>
               </TouchableOpacity>
             </View>
+            {deliveryAvailable || shippingAvailable ? (
+              <View style={styles.fulfillmentFeeBlock}>
+                <Text style={styles.fieldHint}>Show customers the cost before payment. Leave blank if it is free or included.</Text>
+                {deliveryAvailable ? (
+                  <Field label={`Delivery fee (${currency})`}>
+                    <TextInput
+                      style={styles.input}
+                      value={deliveryFee}
+                      onChangeText={setDeliveryFee}
+                      placeholder="e.g. 15"
+                      placeholderTextColor={Colors.midGrey}
+                      keyboardType="decimal-pad"
+                    />
+                  </Field>
+                ) : null}
+                {shippingAvailable ? (
+                  <Field label={`Shipping fee (${currency})`}>
+                    <TextInput
+                      style={styles.input}
+                      value={shippingFee}
+                      onChangeText={setShippingFee}
+                      placeholder="e.g. 25"
+                      placeholderTextColor={Colors.midGrey}
+                      keyboardType="decimal-pad"
+                    />
+                  </Field>
+                ) : null}
+              </View>
+            ) : null}
           </Field>
         </Section>
 
@@ -854,6 +920,7 @@ const styles = StyleSheet.create({
   inputError: { borderColor: Colors.error },
   multiline: { minHeight: 100, textAlignVertical: 'top' },
   charCount: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'right', marginTop: 4 },
+  fieldHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   helperRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginTop: Spacing.sm },
   helperChip: {
     paddingHorizontal: Spacing.md,
@@ -917,6 +984,7 @@ const styles = StyleSheet.create({
   choiceTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
   choiceTitleActive: { color: Colors.needleGreen },
   choiceHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
+  fulfillmentFeeBlock: { gap: Spacing.md, marginTop: Spacing.md },
 
   // Portfolio link
   portfolioLink: {

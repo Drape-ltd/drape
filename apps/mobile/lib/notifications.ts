@@ -6,7 +6,7 @@
 import { useEffect, useRef } from 'react'
 import { Platform } from 'react-native'
 import * as Notifications from 'expo-notifications'
-import { type Subscription } from 'expo-notifications'
+import { type NotificationResponse } from 'expo-notifications'
 import { useRouter } from 'expo-router'
 import { useUserRole } from './auth'
 import { supabase } from './supabase'
@@ -14,11 +14,50 @@ import { supabase } from './supabase'
 // How foreground notifications look
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
   }),
 })
+
+const ALLOWED_SCREENS = new Set([
+  '/(customer)/orders',
+  '/(customer)/profile/notifications',
+  '/(tailor)/orders',
+  '/(tailor)/profile/notifications',
+])
+
+type NotificationSubscription = ReturnType<typeof Notifications.addNotificationReceivedListener>
+
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+}
+
+function resolveNotificationPath(
+  role: 'CUSTOMER' | 'TAILOR',
+  data: Record<string, unknown>,
+) {
+  const base = role === 'TAILOR' ? '/(tailor)' : '/(customer)'
+  const target = typeof data.target === 'string' ? data.target : null
+  const screen = typeof data.screen === 'string' ? data.screen : null
+  const orderId = isUuid(data.orderId) ? data.orderId : null
+
+  if (orderId && target === 'messages') {
+    return `${base}/messages/${orderId}`
+  }
+
+  if (orderId) {
+    return `${base}/orders/${orderId}`
+  }
+
+  if (screen && ALLOWED_SCREENS.has(screen)) {
+    return screen
+  }
+
+  return null
+}
 
 /**
  * Call this hook once in the root layout (inside AuthProvider).
@@ -27,41 +66,51 @@ Notifications.setNotificationHandler({
 export function usePushNotifications(userId: string | null) {
   const router = useRouter()
   const role = useUserRole()
-  const notificationListener = useRef<Subscription>()
-  const responseListener = useRef<Subscription>()
+  const notificationListener = useRef<NotificationSubscription | null>(null)
+  const responseListener = useRef<NotificationSubscription | null>(null)
+  const handledResponseIds = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     if (!userId) return
 
-    registerAndStore(userId)
+    void registerAndStore(userId)
+  }, [userId])
+
+  useEffect(() => {
+    if (!userId || !role) return
+    const activeRole = role
 
     // Foreground: show notification
     notificationListener.current = Notifications.addNotificationReceivedListener((_notification) => {
       // Already displayed by setNotificationHandler above
     })
 
-    // Tap on notification — navigate to relevant screen by role.
-    // Only accept orderId navigations or a strict allowlist of internal screens
-    // to prevent deep-link injection via a crafted push payload.
-    const ALLOWED_SCREENS = new Set([
-      '/(customer)/orders',
-      '/(customer)/profile/notifications',
-      '/(tailor)/orders',
-    ])
+    function handleNotificationResponse(response: NotificationResponse | null) {
+      if (!response) return
+
+      const identifier = response.notification.request.identifier
+      if (handledResponseIds.current.has(identifier)) return
+
+      handledResponseIds.current.add(identifier)
+
+      const data = (response.notification.request.content.data ?? {}) as Record<string, unknown>
+      const nextPath = resolveNotificationPath(activeRole, data)
+      if (nextPath) {
+        router.push(nextPath as any)
+      }
+    }
+
+    void Notifications.getLastNotificationResponseAsync().then((response) => {
+      handleNotificationResponse(response)
+    })
 
     responseListener.current = Notifications.addNotificationResponseReceivedListener((response) => {
-      const data = response.notification.request.content.data as Record<string, string>
-      if (data?.orderId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.orderId)) {
-        const base = role === 'TAILOR' ? '/(tailor)' : '/(customer)'
-        router.push(`${base}/orders/${data.orderId}`)
-      } else if (data?.screen && ALLOWED_SCREENS.has(data.screen)) {
-        router.push(data.screen as any)
-      }
+      handleNotificationResponse(response)
     })
 
     return () => {
-      if (notificationListener.current) Notifications.removeNotificationSubscription(notificationListener.current)
-      if (responseListener.current) Notifications.removeNotificationSubscription(responseListener.current)
+      notificationListener.current?.remove()
+      responseListener.current?.remove()
     }
   }, [userId, role, router])
 }

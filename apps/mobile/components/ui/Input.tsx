@@ -66,8 +66,8 @@ export function Input({
           autoCapitalize={props.secureTextEntry ? 'none' : props.autoCapitalize}
           autoCorrect={props.secureTextEntry ? false : props.autoCorrect}
           spellCheck={props.secureTextEntry ? false : props.spellCheck}
-          textContentType={props.secureTextEntry ? 'password' : props.textContentType}
-          autoComplete={props.secureTextEntry ? 'password' : props.autoComplete}
+          textContentType={props.textContentType ?? (props.secureTextEntry ? 'password' : undefined)}
+          autoComplete={props.autoComplete ?? (props.secureTextEntry ? 'password' : undefined)}
           {...props}
         />
         {rightElement && <View style={styles.right}>{rightElement}</View>}

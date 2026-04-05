@@ -135,6 +135,8 @@ export default function SignInScreen() {
             value={password}
             onChangeText={setPassword}
             secureTextEntry
+            textContentType="password"
+            autoComplete="current-password"
             required
             testID="password-input"
           />

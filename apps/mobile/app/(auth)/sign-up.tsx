@@ -8,6 +8,11 @@ import { capture } from '@/lib/analytics'
 import { Button, Input, Divider } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius } from '@/constants/theme'
 import { validateDisplayName } from '@drape/shared/contact-filter'
+import {
+  MAX_PASSWORD_LENGTH,
+  PASSWORD_POLICY_HINT,
+  validatePasswordStrength,
+} from '@drape/shared/auth-security'
 
 type Role = 'CUSTOMER' | 'TAILOR'
 
@@ -47,16 +52,9 @@ export default function SignUpScreen() {
   }
 
   function validatePassword(value: string) {
-    if (!value) {
-      setPasswordError('Password is required.')
-      return false
-    }
-    if (value.length < 8) {
-      setPasswordError('Password must be at least 8 characters.')
-      return false
-    }
-    setPasswordError('')
-    return true
+    const err = validatePasswordStrength(value, { forbiddenValues: [email, displayName] })
+    setPasswordError(err ?? '')
+    return !err
   }
 
   function goBack() {
@@ -209,7 +207,7 @@ export default function SignUpScreen() {
 
         <Input
           label="Password"
-          placeholder="8+ characters"
+          placeholder="10+ characters"
           value={password}
           onChangeText={(value) => {
             setPassword(value)
@@ -217,7 +215,11 @@ export default function SignUpScreen() {
           }}
           onBlur={() => validatePassword(password)}
           error={passwordError}
+          hint={PASSWORD_POLICY_HINT}
           secureTextEntry
+          textContentType="newPassword"
+          autoComplete="new-password"
+          maxLength={MAX_PASSWORD_LENGTH}
           required
           testID="password-input"
         />

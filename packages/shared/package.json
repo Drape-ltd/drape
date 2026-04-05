@@ -6,7 +6,9 @@
     ".": "./src/index.ts",
     "./contact-filter": "./src/contact-filter.ts",
     "./order-machine": "./src/order-machine.ts",
-    "./constants": "./src/constants.ts"
+    "./constants": "./src/constants.ts",
+    "./auth-security": "./src/auth-security.ts",
+    "./phone": "./src/phone.ts"
   },
   "scripts": {
     "test": "jest --watchman=false"

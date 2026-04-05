@@ -128,7 +128,10 @@ Deno.serve(async (req) => {
     await sendPushToUser(supabase, recipientId, {
       title: msg.sender_name ?? 'New message',
       body: preview || 'Sent you a message.',
-      data: { orderId: msg.order_id, screen: `orders/${msg.order_id}` },
+      data: {
+        orderId: msg.order_id,
+        target: 'messages',
+      },
     })
 
     log('info', FN, 'notification.sent', { order_id: msg.order_id, sender_role: msg.sender_role })

@@ -10,6 +10,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
 
@@ -70,7 +71,7 @@ export default function MessagesInboxScreen() {
   const [conversations, setConversations] = useState<ConversationItem[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [fetchError, setFetchError] = useState(false)
+  const [fetchErrorMessage, setFetchErrorMessage] = useState('')
   const [filter, setFilter] = useState<FilterTab>('all')
   const [showGuide, setShowGuide] = useState(true)
 
@@ -88,7 +89,7 @@ export default function MessagesInboxScreen() {
   }
 
   async function fetchConversations() {
-    setFetchError(false)
+    setFetchErrorMessage('')
     try {
       const { data, error } = await supabase
         .from('orders')
@@ -142,9 +143,12 @@ export default function MessagesInboxScreen() {
       })
 
       setConversations(items)
-    } catch {
-      setFetchError(true)
-      setConversations([])
+    } catch (error) {
+      setFetchErrorMessage(
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. Existing threads will stay here, and you can retry when the signal improves.'
+          : 'We could not refresh your messages right now. Retry here, or open Orders to continue from the latest order record.',
+      )
     }
   }
 
@@ -212,13 +216,13 @@ export default function MessagesInboxScreen() {
             <Text style={styles.stateHint}>Checking recent threads.</Text>
           </View>
         </View>
-      ) : fetchError ? (
+      ) : fetchErrorMessage && conversations.length === 0 ? (
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Messages</Text>
             <Feather name="alert-circle" size={48} color={Colors.lightGrey} />
             <Text style={styles.stateTitle}>Couldn't load messages</Text>
-            <Text style={styles.stateHint}>Refresh and try again.</Text>
+            <Text style={styles.stateHint}>{fetchErrorMessage}</Text>
             <TouchableOpacity
               style={styles.retryBtn}
               onPress={() => {
@@ -259,6 +263,12 @@ export default function MessagesInboxScreen() {
                     </TouchableOpacity>
                   </View>
                   <Text style={styles.guideTitle}>Use messages for discussion. Use the order screen for actions.</Text>
+                </View>
+              ) : null}
+              {fetchErrorMessage && conversations.length > 0 ? (
+                <View style={styles.syncNoticeCard}>
+                  <Text style={styles.syncNoticeEyebrow}>Sync notice</Text>
+                  <Text style={styles.syncNoticeBody}>{fetchErrorMessage}</Text>
                 </View>
               ) : null}
             </View>
@@ -341,14 +351,14 @@ function SupportView() {
 
     const supported = await Linking.canOpenURL(url)
     if (!supported) {
-      Alert.alert('Unable to open email', `Please email ${SUPPORT_EMAIL} directly with the subject "${fallbackSubject}".`)
+      Alert.alert('Unable to open email', `Please email ${SUPPORT_EMAIL} directly with the subject "${fallbackSubject}". If this is about a live order, keep the order thread updated in Drape too.`)
       return
     }
 
     try {
       await Linking.openURL(url)
     } catch {
-      Alert.alert('Unable to open email', `Please email ${SUPPORT_EMAIL} directly with the subject "${fallbackSubject}".`)
+      Alert.alert('Unable to open email', `Please email ${SUPPORT_EMAIL} directly with the subject "${fallbackSubject}". If this is about a live order, keep the order thread updated in Drape too.`)
     }
   }
 
@@ -357,6 +367,13 @@ function SupportView() {
       <View style={styles.supportHeroCard}>
         <Text style={styles.supportHeroTitle}>Support</Text>
         <Text style={styles.supportHeroSub}>Help with orders, payments, or anything off.</Text>
+      </View>
+
+      <View style={styles.supportGuideCard}>
+        <Text style={styles.supportGuideTitle}>Best next step</Text>
+        <Text style={styles.supportGuideBody}>
+          If you already have a live order, open that order first and keep the timeline there. Use support when you need escalation, policy clarity, or recovery after the normal flow stops being enough.
+        </Text>
       </View>
 
       {/* Support conversation row */}
@@ -458,6 +475,25 @@ const styles = StyleSheet.create({
   },
   guideClose: { fontSize: 22, lineHeight: 22, color: Colors.midGrey },
   guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink, lineHeight: 20 },
+  syncNoticeCard: {
+    marginHorizontal: Spacing.xl,
+    marginTop: Spacing.md,
+    marginBottom: Spacing.sm,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  syncNoticeEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  syncNoticeBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   filterRow: { flexDirection: 'row', gap: Spacing.sm },
   filterChip: {
@@ -564,6 +600,28 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
   supportHeroSub: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+  },
+  supportGuideCard: {
+    marginHorizontal: Spacing.xl,
+    marginTop: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  supportGuideTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  supportGuideBody: {
     fontSize: FontSize.sm,
     color: Colors.inkLight,
     lineHeight: 20,

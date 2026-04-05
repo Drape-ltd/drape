@@ -7,12 +7,13 @@
  *
  * Required env vars (set in Supabase Dashboard → Edge Functions → Secrets):
  *   RESEND_API_KEY   – Resend API key
- *   OPS_EMAIL        – email address that receives verification requests (e.g. ops@drape.app)
+ *   RESEND_FROM      – optional verified sender (e.g. Drape Verification <verify@drapeon.co>)
+ *   OPS_EMAIL        – email address that receives verification requests (e.g. ops@drapeon.co)
  *   SUPABASE_URL     – injected automatically by Supabase runtime
  *   SUPABASE_ANON_KEY – injected automatically by Supabase runtime
  *   SUPABASE_SERVICE_ROLE_KEY – injected automatically
- *   DECISION_FUNCTION_URL – public URL of the handle-verification-decision function
- *                           (e.g. https://<ref>.functions.supabase.co/handle-verification-decision)
+ *   DECISION_FUNCTION_URL – optional public URL of the handle-verification-decision function
+ *                           (defaults to https://<project-ref>.supabase.co/functions/v1/handle-verification-decision)
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -20,6 +21,16 @@ import { getAuthUser } from '../_shared/auth.ts'
 import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { signPayload, escapeHtml } from '../_shared/hmac.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
+
+function getDecisionFunctionUrl() {
+  const explicit = Deno.env.get('DECISION_FUNCTION_URL')
+  if (explicit && explicit.trim().length > 0) return explicit.trim()
+
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')
+  if (!supabaseUrl) throw new Error('Missing SUPABASE_URL environment variable.')
+
+  return `${supabaseUrl.replace(/\/+$/u, '')}/functions/v1/handle-verification-decision`
+}
 
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req)
@@ -71,7 +82,7 @@ Deno.serve(async (req) => {
     const approveToken = await signPayload(verificationSecret, `${tailorId}:APPROVE:${exp}`)
     const rejectToken  = await signPayload(verificationSecret, `${tailorId}:REJECT:${exp}`)
 
-    const decisionBase = Deno.env.get('DECISION_FUNCTION_URL')!
+    const decisionBase = getDecisionFunctionUrl()
     const approveUrl = `${decisionBase}?tailorId=${tailorId}&decision=APPROVE&exp=${exp}&token=${approveToken}`
     const rejectUrl  = `${decisionBase}?tailorId=${tailorId}&decision=REJECT&exp=${exp}&token=${rejectToken}`
 
@@ -103,9 +114,10 @@ Deno.serve(async (req) => {
       headers: {
         'Authorization': `Bearer ${Deno.env.get('RESEND_API_KEY')}`,
         'Content-Type': 'application/json',
+        'User-Agent': 'drape-notify-ops-verification/1.0',
       },
       body: JSON.stringify({
-        from: 'Drape Verification <verify@drapeon.co>',
+        from: Deno.env.get('RESEND_FROM') ?? 'Drape Verification <verify@drapeon.co>',
         to: [Deno.env.get('OPS_EMAIL') ?? 'ops@drapeon.co'],
         subject: `Verification request: ${profile.display_name}`,
         html,

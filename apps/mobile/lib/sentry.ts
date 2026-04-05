@@ -22,9 +22,8 @@ export function initSentry() {
     tracesSampleRate: __DEV__ ? 0 : 0.2,
     // Don't send events in dev unless you want to
     enabled: !__DEV__,
-    integrations: [
-      Sentry.mobileReplayIntegration({ maskAllText: true, maskAllImages: true }),
-    ],
+    // Keep replay off in V1 so diagnostics stay narrower than full session capture.
+    integrations: [],
   })
 }
 

@@ -8,6 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
@@ -20,12 +21,38 @@ type ReviewRow = {
   reviewerAvatarUrl: string | null
   createdAt: string
   response: string | null
+  publishedAt: string | null
+  flagged: boolean
 }
 
 function asStringList(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
   if (typeof value === 'string' && value.length > 0) return [value]
   return []
+}
+
+function reviewVisibilityMeta(review: ReviewRow) {
+  if (review.publishedAt) {
+    return {
+      label: 'Public',
+      tone: 'public' as const,
+      description: 'Visible on your profile now.',
+    }
+  }
+
+  if (review.flagged) {
+    return {
+      label: 'Held for review',
+      tone: 'held' as const,
+      description: 'This review is saved, but it is waiting on a trust or moderation check before it can go public.',
+    }
+  }
+
+  return {
+    label: 'Not public yet',
+    tone: 'pending' as const,
+    description: 'This review is saved, but it is not visible on your public profile yet.',
+  }
 }
 
 export default function TailorReviewsScreen() {
@@ -45,7 +72,7 @@ export default function TailorReviewsScreen() {
       setFetchError(false)
       const { data, error } = await supabase
         .from('reviews')
-        .select('id, rating, tags, body, reviewer_name, created_at, tailor_response, orders!order_id(customer_profiles!customer_id(avatar_url))')
+        .select('id, rating, tags, body, reviewer_name, created_at, tailor_response, published_at, flagged, orders!order_id(customer_profiles!customer_id(avatar_url))')
         .eq('tailor_id', user?.id)
         .order('created_at', { ascending: false })
 
@@ -66,6 +93,8 @@ export default function TailorReviewsScreen() {
           reviewerAvatarUrl: r.orders?.customer_profiles?.avatar_url ?? null,
           createdAt: r.created_at,
           response: r.tailor_response ?? null,
+          publishedAt: r.published_at ?? null,
+          flagged: !!r.flagged,
         }))
       )
       setLoading(false)
@@ -98,7 +127,12 @@ export default function TailorReviewsScreen() {
       .eq('id', reviewId)
     setReplySubmitting(false)
     if (error) {
-      Alert.alert('Error', 'Could not save your response. Please try again.')
+      Alert.alert(
+        'Error',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. We could not save your response yet. Your reply is still here, so retry when the signal improves.'
+          : 'Could not save your response right now. Please try again in a moment.',
+      )
       return
     }
     setReviews((prev) => prev.map((r) => r.id === reviewId ? { ...r, response: replyText.trim() } : r))
@@ -126,6 +160,11 @@ export default function TailorReviewsScreen() {
       ) : (
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+            <View style={styles.guidanceCard}>
+              <Text style={styles.guidanceText}>
+                Public reviews appear on your profile once they clear normal trust checks. Honest negative feedback can still stay public, but reviews may be held while Drape checks policy or dispute context.
+              </Text>
+            </View>
             {reviews.length > 0 ? reviews.map((review) => (
               <View key={review.id} style={styles.reviewCard}>
                 <View style={styles.reviewHeader}>
@@ -147,6 +186,35 @@ export default function TailorReviewsScreen() {
                   <Text style={styles.reviewStars}>{'★'.repeat(review.rating)}{'☆'.repeat(5 - review.rating)}</Text>
                 </View>
 
+                {(() => {
+                  const visibility = reviewVisibilityMeta(review)
+                  return (
+                    <View
+                      style={[
+                        styles.visibilityPill,
+                        visibility.tone === 'public'
+                          ? styles.visibilityPillPublic
+                          : visibility.tone === 'held'
+                            ? styles.visibilityPillHeld
+                            : styles.visibilityPillPending,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.visibilityPillText,
+                          visibility.tone === 'public'
+                            ? styles.visibilityPillTextPublic
+                            : visibility.tone === 'held'
+                              ? styles.visibilityPillTextHeld
+                              : styles.visibilityPillTextPending,
+                        ]}
+                      >
+                        {visibility.label}
+                      </Text>
+                    </View>
+                  )
+                })()}
+
                 {review.tags.length > 0 ? (
                   <View style={styles.reviewTags}>
                     {review.tags.map((tag) => (
@@ -158,6 +226,7 @@ export default function TailorReviewsScreen() {
                 ) : null}
 
                 {review.body ? <Text style={styles.reviewBody}>{review.body}</Text> : null}
+                <Text style={styles.reviewVisibilityText}>{reviewVisibilityMeta(review).description}</Text>
 
                 {review.response && replyOpen !== review.id ? (
                   <View style={styles.responseWrap}>
@@ -236,6 +305,14 @@ const styles = StyleSheet.create({
   content: { padding: Spacing.xl, gap: Spacing.md },
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
   stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guidanceCard: {
+    backgroundColor: Colors.boneDeep,
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.needleGreen,
+  },
+  guidanceText: { fontSize: FontSize.xs, lineHeight: 18, color: Colors.inkLight },
   reviewCard: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
     padding: Spacing.lg, gap: Spacing.sm, ...Shadow.sm,
@@ -250,6 +327,19 @@ const styles = StyleSheet.create({
   reviewerName: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   reviewDate: { fontSize: FontSize.xs, color: Colors.midGrey },
   reviewStars: { fontSize: FontSize.sm, color: Colors.warning },
+  visibilityPill: {
+    alignSelf: 'flex-start',
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+  },
+  visibilityPillPublic: { backgroundColor: Colors.needleGreenLight },
+  visibilityPillHeld: { backgroundColor: Colors.errorLight },
+  visibilityPillPending: { backgroundColor: Colors.bone },
+  visibilityPillText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
+  visibilityPillTextPublic: { color: Colors.needleGreen },
+  visibilityPillTextHeld: { color: Colors.kanteRust },
+  visibilityPillTextPending: { color: Colors.inkLight },
   reviewTags: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   reviewTag: {
     backgroundColor: Colors.bone,
@@ -259,6 +349,7 @@ const styles = StyleSheet.create({
   },
   reviewTagText: { fontSize: FontSize.xs, color: Colors.inkLight },
   reviewBody: { fontSize: FontSize.sm, color: Colors.ink, lineHeight: 20 },
+  reviewVisibilityText: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   responseWrap: {
     backgroundColor: Colors.needleGreenLight,
     borderRadius: Radius.md,

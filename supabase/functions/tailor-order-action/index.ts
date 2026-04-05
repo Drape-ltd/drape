@@ -19,9 +19,23 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
+import { rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
 import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
+import {
+  buildFabricReceivedNote,
+  buildMaterialIssueNote,
+  buildMeasurementConfirmationRequestNote,
+  FABRIC_HANDOFF_LABELS,
+  MATERIAL_ISSUE_REASON_LABELS,
+  materialIssueBlocksCutting,
+  MEASUREMENT_SOURCE_LABELS,
+  parseMeasurementSnapshot,
+  parseOrderSupportMeta,
+  serializeOrderSupportMeta,
+} from '../_shared/order-support.ts'
+import { deriveTailorReadiness } from '../_shared/tailor-readiness.ts'
 import { z, parseBody, uuid, isoDate } from '../_shared/validate.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
@@ -31,6 +45,7 @@ const BodySchema = z.discriminatedUnion('action', [
     orderId:        uuid,
     action:         z.literal('send-quote'),
     amount:         z.number().int().positive().max(100_000_00),
+    fulfillmentFee: z.number().int().nonnegative().max(100_000_00).optional(),
     currency:       z.string().trim().min(2).max(5),
     completionDate: isoDate,
     note:           z.string().trim().max(300).optional(),
@@ -61,12 +76,67 @@ const BodySchema = z.discriminatedUnion('action', [
     // 4-digit code the tailor receives from the customer at pickup
     code:    z.string().regex(/^\d{4}$/, 'Must be a 4-digit numeric code'),
   }),
+  z.object({
+    orderId: uuid,
+    action:  z.literal('request-measurement-confirmation'),
+    note:    z.string().trim().min(10).max(300),
+  }),
+  z.object({
+    orderId: uuid,
+    action:  z.literal('confirm-fabric-received'),
+    note:    z.string().trim().max(300).optional(),
+  }),
+  z.object({
+    orderId: uuid,
+    action:  z.literal('open-material-issue'),
+    reason:  z.enum([
+      'POOR_FABRIC_QUALITY',
+      'INSUFFICIENT_YARDAGE',
+      'FABRIC_NOT_RECEIVED',
+      'WRONG_FABRIC_TYPE',
+      'FABRIC_DAMAGED',
+      'FABRIC_MISMATCH',
+    ]),
+    note:    z.string().trim().min(10).max(300),
+  }),
 ])
 
 const FN = 'tailor-order-action'
+const QUOTE_VALIDITY_HOURS = 48
+
+function nextQuoteExpiryIso() {
+  return new Date(Date.now() + QUOTE_VALIDITY_HOURS * 60 * 60 * 1000).toISOString()
+}
 
 
-type Action = 'send-quote' | 'decline-order' | 'request-consultation' | 'advance-stage' | 'confirm-collection'
+type Action =
+  | 'send-quote'
+  | 'decline-order'
+  | 'request-consultation'
+  | 'advance-stage'
+  | 'confirm-collection'
+  | 'request-measurement-confirmation'
+  | 'confirm-fabric-received'
+  | 'open-material-issue'
+type OrderRow = {
+  id: string
+  stage: string
+  tailor_id?: string | null
+  customer_id?: string | null
+  deadline?: string | null
+  fabric_source?: string | null
+  special_note?: string | null
+  customer_measurements_snapshot?: unknown
+  delivery_method?: string | null
+  delivery_address?: string | null
+  fulfillment_fee?: number | null
+  collection_code?: string | null
+  collection_code_attempts?: number | null
+}
+
+declare const EdgeRuntime: {
+  waitUntil(promise: Promise<unknown>): void
+}
 
 // Valid source stages for each advance-stage target
 const ADVANCE_VALID_FROM: Record<string, string[]> = {
@@ -78,6 +148,8 @@ const ADVANCE_VALID_FROM: Record<string, string[]> = {
   READY_FOR_COLLECTION: ['FINISHING'],
   SHIPPED:              ['FINISHING'],
 }
+
+const PRE_CUTTING_STAGES = ['PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING', 'CONFIRMED', 'DESIGNING', 'SOURCING']
 
 // Push notification sent to the CUSTOMER after each tailor action
 const CUSTOMER_NOTIFICATION: Record<string, { title: string; body: string }> = {
@@ -91,6 +163,9 @@ const CUSTOMER_NOTIFICATION: Record<string, { title: string; body: string }> = {
   FINISHING:               { title: 'Almost ready ✨',          body: 'Your tailor is putting the finishing touches on your order.' },
   READY_FOR_COLLECTION:    { title: 'Ready to collect! 📦',    body: 'Your order is ready. Show your collection code at pickup.' },
   SHIPPED:                 { title: 'On the way 🚚',            body: 'Your order has been shipped.' },
+  'request-measurement-confirmation': { title: 'Measurement check needed', body: 'Your tailor wants you to confirm your measurements before cutting starts.' },
+  'confirm-fabric-received': { title: 'Fabric received', body: 'Your tailor confirmed they received your fabric.' },
+  'open-material-issue': { title: 'Fabric issue needs your decision', body: 'Your tailor reviewed the fabric and needs your choice before production can continue.' },
 }
 
 /** Cryptographically random 4-digit collection code (1000–9999). */
@@ -98,6 +173,29 @@ function generateCollectionCode(): string {
   const arr = new Uint32Array(1)
   crypto.getRandomValues(arr)
   return String(1000 + (arr[0] % 9000))
+}
+
+async function auditShippingHandoffBlocked(
+  supabase: any,
+  callerId: string,
+  order: Pick<OrderRow, 'id' | 'stage' | 'delivery_method'>,
+  reason: string,
+  payload?: Record<string, unknown>,
+) {
+  await audit(supabase, {
+    event: 'shipping.handoff_blocked',
+    actor_id: callerId,
+    actor_role: 'TAILOR',
+    order_id: order.id,
+    severity: 'warn',
+    payload: {
+      function: FN,
+      reason,
+      stage: order.stage,
+      delivery_method: order.delivery_method ?? null,
+      ...(payload ?? {}),
+    },
+  })
 }
 
 Deno.serve(async (req) => {
@@ -139,13 +237,42 @@ Deno.serve(async (req) => {
       return new Response('Too many requests', { status: 429, headers: cors })
     }
 
+    if (action === 'send-quote') {
+      const { data: profile, error: profileError } = await supabase
+        .from('tailor_profiles')
+        .select('profile_completed, id_verification_status, stripe_account_id, paystack_account_id')
+        .eq('user_id', caller.id)
+        .maybeSingle()
+
+      if (profileError) {
+        log('error', FN, 'db.error', { actor_id: caller.id, action, error: profileError.message })
+        return new Response('Database error', { status: 500, headers: cors })
+      }
+
+      const readiness = deriveTailorReadiness(profile)
+      if (!readiness.canAcceptPaidOrders) {
+        await audit(supabase, {
+          event: 'seller.paid_work_blocked',
+          actor_id: caller.id,
+          actor_role: 'TAILOR',
+          order_id: orderId,
+          severity: 'warn',
+          payload: { function: FN, action, reason: readiness.code },
+        })
+        return new Response(
+          JSON.stringify({ code: readiness.code, error: readiness.message ?? 'Payout setup is still required before taking paid work.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+    }
+
     // Only collection confirmation needs the collection code fields.
     const orderSelect = action === 'confirm-collection'
       ? 'id, stage, tailor_id, customer_id, collection_code, collection_code_attempts'
-      : 'id, stage, tailor_id, customer_id, deadline'
+      : 'id, stage, tailor_id, customer_id, deadline, fabric_source, special_note, customer_measurements_snapshot, delivery_method, delivery_address, fulfillment_fee'
 
     // Fetch order — verify tailor ownership and current stage
-    const { data: order, error: orderError } = await supabase
+    const { data: orderData, error: orderError } = await supabase
       .from('orders')
       .select(orderSelect)
       .eq('id', orderId)
@@ -156,6 +283,7 @@ Deno.serve(async (req) => {
       return new Response('Database error', { status: 500, headers: cors })
     }
 
+    const order = orderData as unknown as OrderRow | null
     if (!order) return new Response('Order not found', { status: 404, headers: cors })
 
     // Verify caller is the tailor on this order
@@ -170,6 +298,224 @@ Deno.serve(async (req) => {
         payload: { function: FN, action },
       })
       return new Response('Forbidden', { status: 403, headers: cors })
+    }
+
+    const blockedNote = await rejectIfBlockedContact({
+      supabase,
+      fn: FN,
+      cors,
+      actorId: caller.id,
+      actorRole: 'TAILOR',
+      surface: `tailor_order.${action}.note`,
+      text: 'note' in body ? body.note : null,
+      message: "Contact details can't be included in order notes.",
+      orderId,
+      extra: { action },
+    })
+    if (blockedNote) return blockedNote
+
+    if (action === 'request-measurement-confirmation') {
+      if (!PRE_CUTTING_STAGES.includes(order.stage)) {
+        return new Response(
+          JSON.stringify({ error: `Cannot request measurement confirmation from stage ${order.stage}` }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const snapshot = parseMeasurementSnapshot(order.customer_measurements_snapshot)
+      if (Object.keys(snapshot).length === 0) {
+        return new Response(
+          JSON.stringify({ error: 'No measurements are attached to this order yet.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const source = snapshot.measurementSource === 'HELPER_GUIDED' ||
+        snapshot.measurementSource === 'TAILOR_CAPTURED' ||
+        snapshot.measurementSource === 'EXTERNAL_PRO_CAPTURED'
+        ? snapshot.measurementSource
+        : 'SELF_GUIDED'
+      const sourceLabel = MEASUREMENT_SOURCE_LABELS[source]
+      const now = new Date().toISOString()
+      const nextSnapshot = {
+        ...snapshot,
+        needsConfirmation: true,
+        confirmationReason: body.note.trim(),
+        confirmationRequestedAt: now,
+        confirmedAt: null,
+        confirmedBy: null,
+      }
+
+      const { error } = await supabase
+        .from('orders')
+        .update({ customer_measurements_snapshot: nextSnapshot })
+        .eq('id', orderId)
+
+      if (error) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
+        return new Response('Database error', { status: 500, headers: cors })
+      }
+
+      await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: order.stage,
+        note: buildMeasurementConfirmationRequestNote(body.note.trim(), sourceLabel),
+      })
+
+      await audit(supabase, {
+        event: 'measurements.confirmation_requested',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        order_id: orderId,
+        payload: { stage: order.stage, measurement_source: source },
+      })
+
+      if (order.customer_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.customer_id.toString(), {
+            ...CUSTOMER_NOTIFICATION['request-measurement-confirmation'],
+            data: { orderId },
+          })
+        )
+      }
+
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (action === 'confirm-fabric-received') {
+      if (!PRE_CUTTING_STAGES.includes(order.stage)) {
+        return new Response(
+          JSON.stringify({ error: `Cannot confirm fabric receipt from stage ${order.stage}` }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (order.fabric_source !== 'CUSTOMER_SUPPLIES') {
+        return new Response(
+          JSON.stringify({ error: 'Fabric receipt only applies when the customer is supplying fabric.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const meta = parseOrderSupportMeta(order.special_note)
+      const handoffMode = meta.fabricHandoffMode && meta.fabricHandoffMode in FABRIC_HANDOFF_LABELS
+        ? meta.fabricHandoffMode
+        : 'CUSTOMER_SHIPS_TO_TAILOR'
+      const handoffLabel = meta.fabricHandoffLabel?.trim() || FABRIC_HANDOFF_LABELS[handoffMode]
+      const nextMeta = {
+        ...meta,
+        fabricReceivedAt: new Date().toISOString(),
+        fabricReceivedNote: body.note?.trim() || null,
+        materialIssue:
+          meta.materialIssue?.status === 'CUSTOMER_RESPONDED' && meta.materialIssue.response === 'REPLACE_FABRIC'
+            ? { ...meta.materialIssue, status: 'RESOLVED' as const }
+            : meta.materialIssue,
+      }
+
+      const { error } = await supabase
+        .from('orders')
+        .update({ special_note: serializeOrderSupportMeta(nextMeta) })
+        .eq('id', orderId)
+
+      if (error) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
+        return new Response('Database error', { status: 500, headers: cors })
+      }
+
+      await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: order.stage,
+        note: buildFabricReceivedNote(handoffLabel, body.note ?? null),
+      })
+
+      await audit(supabase, {
+        event: 'fabric.received',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        order_id: orderId,
+        payload: { stage: order.stage, handoff_mode: handoffMode },
+      })
+
+      if (order.customer_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.customer_id.toString(), {
+            ...CUSTOMER_NOTIFICATION['confirm-fabric-received'],
+            data: { orderId },
+          })
+        )
+      }
+
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (action === 'open-material-issue') {
+      if (!PRE_CUTTING_STAGES.includes(order.stage)) {
+        return new Response(
+          JSON.stringify({ error: `Cannot open a material issue from stage ${order.stage}` }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const reasonLabel = MATERIAL_ISSUE_REASON_LABELS[body.reason]
+      const now = new Date().toISOString()
+      const meta = parseOrderSupportMeta(order.special_note)
+      const nextMeta = {
+        ...meta,
+        materialIssue: {
+          status: 'OPEN' as const,
+          reason: body.reason,
+          reasonLabel,
+          note: body.note.trim(),
+          openedAt: now,
+          openedBy: 'TAILOR' as const,
+          response: null,
+          responseLabel: null,
+          responseNote: null,
+          respondedAt: null,
+        },
+      }
+
+      const { error } = await supabase
+        .from('orders')
+        .update({ special_note: serializeOrderSupportMeta(nextMeta) })
+        .eq('id', orderId)
+
+      if (error) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
+        return new Response('Database error', { status: 500, headers: cors })
+      }
+
+      await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: order.stage,
+        note: buildMaterialIssueNote(reasonLabel, body.note.trim()),
+      })
+
+      await audit(supabase, {
+        event: 'material_issue.opened',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        order_id: orderId,
+        severity: 'warn',
+        payload: { stage: order.stage, reason: body.reason },
+      })
+
+      if (order.customer_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.customer_id.toString(), {
+            ...CUSTOMER_NOTIFICATION['open-material-issue'],
+            data: { orderId },
+          })
+        )
+      }
+
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      })
     }
 
     // ── send-quote ────────────────────────────────────────────────────────────
@@ -191,6 +537,9 @@ Deno.serve(async (req) => {
       const { amount, currency, completionDate } = body as Extract<typeof body, { action: 'send-quote' }>
       const parsedDate = new Date(completionDate)
       const customerDeadline = order.deadline ? new Date(order.deadline) : null
+      const fulfillmentFee = order.delivery_method === 'LOCAL_COLLECTION'
+        ? 0
+        : Math.max(body.fulfillmentFee ?? order.fulfillment_fee ?? 0, 0)
 
       if (customerDeadline && parsedDate.getTime() > customerDeadline.getTime()) {
         return new Response(
@@ -203,9 +552,13 @@ Deno.serve(async (req) => {
         .from('orders')
         .update({
           stage: 'QUOTE_SENT',
-          quoted_amount: amount,
+          quoted_amount: amount + fulfillmentFee,
+          fulfillment_fee: fulfillmentFee,
           quoted_currency: currency,
           quoted_completion_date: parsedDate.toISOString(),
+          quote_note: body.note?.trim() || null,
+          quote_expires_at: nextQuoteExpiryIso(),
+          stage_updated_at: new Date().toISOString(),
         })
         .eq('id', orderId)
 
@@ -260,7 +613,7 @@ Deno.serve(async (req) => {
 
       const { error } = await supabase
         .from('orders')
-        .update({ stage: 'DECLINED' })
+        .update({ stage: 'DECLINED', stage_updated_at: new Date().toISOString() })
         .eq('id', orderId)
 
       if (error) {
@@ -317,7 +670,11 @@ Deno.serve(async (req) => {
 
       const { error } = await supabase
         .from('orders')
-        .update({ stage: 'CONSULTATION', consultation_fee: consultationFee })
+        .update({
+          stage: 'CONSULTATION',
+          consultation_fee: consultationFee,
+          stage_updated_at: new Date().toISOString(),
+        })
         .eq('id', orderId)
 
       if (error) {
@@ -382,14 +739,86 @@ Deno.serve(async (req) => {
         )
       }
 
+      if (targetStage === 'READY_FOR_COLLECTION' && order.delivery_method !== 'LOCAL_COLLECTION') {
+        await auditShippingHandoffBlocked(supabase, caller.id, order, 'requires_shipping_flow')
+        return new Response(
+          JSON.stringify({ error: 'This order is set for shipping. Mark it as shipped instead.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (targetStage === 'SHIPPED' && order.delivery_method === 'LOCAL_COLLECTION') {
+        await auditShippingHandoffBlocked(supabase, caller.id, order, 'requires_collection_flow')
+        return new Response(
+          JSON.stringify({ error: 'This order is set for local collection. Mark it ready for collection instead.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
       if (targetStage === 'SHIPPED' && !trackingNumber?.trim()) {
+        await auditShippingHandoffBlocked(supabase, caller.id, order, 'tracking_number_missing')
         return new Response(
           JSON.stringify({ error: 'Tracking number is required when marking an order as shipped.' }),
           { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
 
-      const updates: Record<string, unknown> = { stage: targetStage }
+      if (targetStage === 'SHIPPED' && !carrier?.trim()) {
+        await auditShippingHandoffBlocked(supabase, caller.id, order, 'carrier_missing')
+        return new Response(
+          JSON.stringify({ error: 'Carrier is required when marking an order as shipped.' }),
+          { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (targetStage === 'SHIPPED' && !order.delivery_address?.trim()) {
+        await auditShippingHandoffBlocked(supabase, caller.id, order, 'delivery_address_missing')
+        return new Response(
+          JSON.stringify({ error: 'Shipping address is missing on this order. Ask the customer to update it before shipping.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (targetStage === 'SHIPPED' && !photoUrl?.trim()) {
+        await auditShippingHandoffBlocked(supabase, caller.id, order, 'shipment_proof_missing')
+        return new Response(
+          JSON.stringify({ error: 'Add a shipment photo or dispatch proof before marking this order as shipped.' }),
+          { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (targetStage === 'CUTTING') {
+        const snapshot = parseMeasurementSnapshot(order.customer_measurements_snapshot)
+        if (snapshot.needsConfirmation === true) {
+          return new Response(
+            JSON.stringify({ error: 'Measurements still need customer confirmation before cutting can start.' }),
+            { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+          )
+        }
+
+        const supportMeta = parseOrderSupportMeta(order.special_note)
+        const materialIssue = supportMeta.materialIssue
+        const waitingOnTailorSourcing = materialIssue?.status === 'CUSTOMER_RESPONDED' && materialIssue.response === 'ASK_TAILOR_TO_SOURCE'
+
+        if (order.fabric_source === 'CUSTOMER_SUPPLIES' && !supportMeta.fabricReceivedAt && !waitingOnTailorSourcing) {
+          return new Response(
+            JSON.stringify({ error: 'Confirm that the customer fabric has been received before cutting starts.' }),
+            { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+          )
+        }
+
+        if (materialIssueBlocksCutting(supportMeta)) {
+          return new Response(
+            JSON.stringify({ error: 'This order has an open material issue. Resolve it before cutting starts.' }),
+            { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+          )
+        }
+      }
+
+      const updates: Record<string, unknown> = {
+        stage: targetStage,
+        stage_updated_at: new Date().toISOString(),
+      }
 
       // Server-generated collection code — never trusted from client
       if (targetStage === 'READY_FOR_COLLECTION') {
@@ -398,7 +827,7 @@ Deno.serve(async (req) => {
 
       if (targetStage === 'SHIPPED' && trackingNumber?.trim()) {
         updates.tracking_number = trackingNumber.trim().toUpperCase()
-        if (carrier?.trim()) updates.carrier = carrier.trim()
+        updates.carrier = carrier?.trim() ?? null
       }
 
       const { error } = await supabase
@@ -423,7 +852,14 @@ Deno.serve(async (req) => {
         actor_id: caller.id,
         actor_role: 'TAILOR',
         order_id: orderId,
-        payload: { action, from_stage: order.stage, to_stage: targetStage },
+        payload: {
+          action,
+          from_stage: order.stage,
+          to_stage: targetStage,
+          delivery_method: order.delivery_method ?? null,
+          tracking_number: targetStage === 'SHIPPED' ? updates.tracking_number ?? null : null,
+          carrier: targetStage === 'SHIPPED' ? updates.carrier ?? null : null,
+        },
       })
 
       log('info', FN, 'order.stage_changed', { actor_id: caller.id, order_id: orderId, from_stage: order.stage, to_stage: targetStage })
@@ -501,7 +937,7 @@ Deno.serve(async (req) => {
       }
 
       const { error } = await supabase.from('orders')
-        .update({ stage: 'COLLECTED', collection_code_attempts: 0 })
+        .update({ stage: 'COLLECTED', collection_code_attempts: 0, stage_updated_at: new Date().toISOString() })
         .eq('id', orderId)
 
       if (error) {

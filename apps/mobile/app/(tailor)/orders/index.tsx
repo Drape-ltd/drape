@@ -1,13 +1,16 @@
 import { useState, useCallback } from 'react'
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, ActivityIndicator,
-  Alert, Linking, TextInput,
+  View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl,
+  Alert, TextInput,
 } from 'react-native'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Feather } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
+import { Button, FeatureStateCard } from '@/components/ui'
+import { openConsultationCallUrl } from '@/lib/consultation'
+import { deriveTailorReadiness, type TailorReadinessInput } from '@/lib/tailor-readiness'
 import { supabase } from '@/lib/supabase'
 import { useTailorOrders, useRefreshOnFocus } from '@/lib/queries'
 import { shareTailorProfile } from '@/lib/invite'
@@ -86,7 +89,15 @@ export default function TailorOrdersScreen() {
   const [tab, setTab] = useState<Tab>('active')
   const [completedSearch, setCompletedSearch] = useState('')
   const [openingCallOrderId, setOpeningCallOrderId] = useState<string | null>(null)
-  const [tailorProfile, setTailorProfile] = useState<{ id: string; displayName: string; isLive: boolean; idVerificationStatus: string } | null>(null)
+  const [tailorProfile, setTailorProfile] = useState<{
+    id: string
+    displayName: string
+    isLive: boolean
+    idVerificationStatus: string
+    profileCompleted: boolean
+    stripeAccountId: string | null
+    paystackAccountId: string | null
+  } | null>(null)
   const [showGuide, setShowGuide] = useState(true)
 
   const { data: orders = [], isLoading: loading, isFetching, isError, refetch } = useTailorOrders(user?.id, tab)
@@ -99,7 +110,7 @@ export default function TailorOrdersScreen() {
 
     const { data, error } = await supabase
       .from('tailor_profiles')
-      .select('id, display_name, is_live, id_verification_status')
+      .select('id, display_name, is_live, id_verification_status, profile_completed, stripe_account_id, paystack_account_id')
       .eq('user_id', user.id)
       .maybeSingle()
 
@@ -113,6 +124,9 @@ export default function TailorOrdersScreen() {
       displayName: (data as any).display_name,
       isLive: (data as any).is_live,
       idVerificationStatus: (data as any).id_verification_status ?? 'NOT_SUBMITTED',
+      profileCompleted: (data as any).profile_completed ?? false,
+      stripeAccountId: (data as any).stripe_account_id ?? null,
+      paystackAccountId: (data as any).paystack_account_id ?? null,
     })
   }
 
@@ -155,17 +169,7 @@ export default function TailorOrdersScreen() {
   })()
 
   async function openCallUrl(url: string) {
-    const supported = await Linking.canOpenURL(url)
-    if (!supported) {
-      Alert.alert('Unable to open call', 'This call link is unavailable right now.')
-      return
-    }
-
-    try {
-      await Linking.openURL(url)
-    } catch {
-      Alert.alert('Unable to open call', 'Please try again in a moment.')
-    }
+    await openConsultationCallUrl(url, 'tailor')
   }
 
   async function handleConsultationCall(item: typeof orders[number]) {
@@ -229,35 +233,32 @@ export default function TailorOrdersScreen() {
       )}
 
       {(loading || (isFetching && orders.length === 0)) ? (
-        <View style={styles.stateWrap}>
-          <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Orders</Text>
-            <ActivityIndicator color={Colors.needleGreen} size="large" />
-            <Text style={styles.stateTitle}>Loading your pipeline…</Text>
-            <Text style={styles.stateHint}>
-              We’re gathering your pending quotes, live production work, and completed jobs.
-            </Text>
-          </View>
-        </View>
+        <FeatureStateCard
+          eyebrow="Orders"
+          title="Loading your pipeline…"
+          body="We’re gathering your pending quotes, live production work, and completed jobs."
+          loading
+        />
       ) : isError ? (
-        <View style={styles.stateWrap}>
-          <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Orders</Text>
-            <Text style={styles.stateTitle}>Couldn't load your orders.</Text>
-            <Text style={styles.stateHint}>
-              This is where your quote queue, production work, and completed jobs should stay visible.
-            </Text>
-            <TouchableOpacity style={styles.retryBtn} onPress={() => refetch()}>
-              <Text style={styles.retryBtnText}>Try again</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.push('/(tailor)')}>
-              <Text style={styles.secondaryBtnText}>Open dashboard</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.push('/(tailor)/profile')}>
-              <Text style={styles.secondaryBtnText}>Open profile</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+        <FeatureStateCard
+          eyebrow="Orders"
+          title="Couldn't load your orders."
+          body="This is where your quote queue, production work, and completed jobs should stay visible."
+          accentColor={Colors.kanteRust}
+          icon="alert-circle"
+        >
+          <Button label="Try again" onPress={() => refetch()} />
+          <Button
+            label="Open dashboard"
+            variant="secondary"
+            onPress={() => router.push('/(tailor)')}
+          />
+          <Button
+            label="Open profile"
+            variant="ghost"
+            onPress={() => router.push('/(tailor)/profile')}
+          />
+        </FeatureStateCard>
       ) : (
         <FlatList
           data={sortedOrders}
@@ -268,25 +269,23 @@ export default function TailorOrdersScreen() {
           ListEmptyComponent={
             tab === 'active' ? (
               <ActiveEmptyState
-                isLive={tailorProfile?.isLive ?? false}
-                idVerificationStatus={tailorProfile?.idVerificationStatus ?? 'NOT_SUBMITTED'}
+                readinessInput={tailorProfile}
                 profileId={tailorProfile?.id ?? null}
                 displayName={tailorProfile?.displayName ?? ''}
                 onSetupPress={() => router.navigate('/(tailor)/profile/setup')}
+                onPayoutPress={() => router.navigate('/(tailor)/earnings')}
+                onReviewProfilePress={() => router.navigate('/(tailor)/profile/edit')}
               />
             ) : (
-              <View style={styles.stateWrap}>
-                <View style={styles.stateCard}>
-                  <Text style={styles.stateEyebrow}>Completed orders</Text>
-                  <Text style={styles.stateTitle}>No completed orders yet.</Text>
-                  <Text style={styles.stateHint}>
-                    Finished customer jobs will appear here once they are fully closed out in the app.
-                  </Text>
-                  <TouchableOpacity style={styles.retryBtn} onPress={() => setTab('active')}>
-                    <Text style={styles.retryBtnText}>View active orders</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
+              <FeatureStateCard
+                eyebrow="Completed orders"
+                title="No completed orders yet."
+                body="Finished customer jobs will appear here once they are fully closed out in the app."
+                accentColor={Colors.warning}
+                icon="archive"
+              >
+                <Button label="View active orders" onPress={() => setTab('active')} />
+              </FeatureStateCard>
             )
           }
           renderItem={({ item }) => {
@@ -380,16 +379,17 @@ function GhostCard({ opacity }: { opacity: number }) {
 }
 
 function ActiveEmptyState({
-  isLive, idVerificationStatus, profileId, displayName, onSetupPress,
+  readinessInput, profileId, displayName, onSetupPress, onPayoutPress, onReviewProfilePress,
 }: {
-  isLive: boolean
-  idVerificationStatus: string
+  readinessInput: (TailorReadinessInput & { isLive?: boolean | null }) | null
   profileId: string | null
   displayName: string
   onSetupPress: () => void
+  onPayoutPress: () => void
+  onReviewProfilePress: () => void
 }) {
-  const isPending = !isLive && idVerificationStatus === 'PENDING'
-  const isRejected = !isLive && idVerificationStatus === 'REJECTED'
+  const readiness = deriveTailorReadiness(readinessInput)
+  const isLive = readinessInput?.isLive === true
 
   return (
     <View style={emptyStyles.wrap}>
@@ -408,22 +408,27 @@ function ActiveEmptyState({
             </TouchableOpacity>
           )}
         </>
-      ) : isPending ? (
-        <Text style={emptyStyles.sub}>
-          Your profile is under review. You'll start receiving orders once verified — usually within 24 hours.
-        </Text>
-      ) : isRejected ? (
+      ) : readiness.actionLabel === 'Review payout status' ? (
         <>
-          <Text style={emptyStyles.sub}>Your verification was declined. Update your ID to go live.</Text>
-          <TouchableOpacity style={emptyStyles.cta} onPress={onSetupPress}>
-            <Text style={emptyStyles.ctaText}>Resubmit verification</Text>
+          <Text style={emptyStyles.sub}>{readiness.body}</Text>
+          <TouchableOpacity style={emptyStyles.cta} onPress={onPayoutPress}>
+            <Text style={emptyStyles.ctaText}>Review payout status</Text>
           </TouchableOpacity>
         </>
+      ) : readiness.actionLabel === 'Review live profile' ? (
+        <>
+          <Text style={emptyStyles.sub}>{readiness.body}</Text>
+          <TouchableOpacity style={emptyStyles.cta} onPress={onReviewProfilePress}>
+            <Text style={emptyStyles.ctaText}>Review live profile</Text>
+          </TouchableOpacity>
+        </>
+      ) : readiness.actionLabel == null ? (
+        <Text style={emptyStyles.sub}>{readiness.body}</Text>
       ) : (
         <>
-          <Text style={emptyStyles.sub}>Complete your profile and go live to start receiving orders.</Text>
+          <Text style={emptyStyles.sub}>{readiness.body}</Text>
           <TouchableOpacity style={emptyStyles.cta} onPress={onSetupPress}>
-            <Text style={emptyStyles.ctaText}>Complete profile</Text>
+            <Text style={emptyStyles.ctaText}>{readiness.actionLabel ?? 'Complete profile'}</Text>
           </TouchableOpacity>
         </>
       )}
@@ -458,36 +463,6 @@ const emptyStyles = StyleSheet.create({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
-  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
-  stateCard: {
-    width: '100%',
-    maxWidth: 440,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.lg,
-    alignItems: 'center',
-    ...Shadow.lg,
-  },
-  stateEyebrow: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  stateTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    textAlign: 'center',
-  },
-  stateHint: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    textAlign: 'center',
-    lineHeight: 21,
-  },
   header: { padding: Spacing.xl, gap: Spacing.md },
   title: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
   guideCard: {
@@ -555,20 +530,4 @@ const styles = StyleSheet.create({
   empty: { flex: 1, paddingTop: 80, alignItems: 'center', gap: Spacing.md, paddingHorizontal: Spacing.xl },
   emptyText: { fontSize: FontSize.md, color: Colors.inkLight },
   emptySubtext: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
-  retryBtn: {
-    backgroundColor: Colors.needleGreen,
-    borderRadius: Radius.full,
-    paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.sm,
-  },
-  retryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
-  secondaryBtn: {
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    backgroundColor: Colors.white,
-    paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.sm,
-  },
-  secondaryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink },
 })

@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { deriveTailorReadiness, type TailorReadinessInput } from '@/lib/tailor-readiness'
 import { formatAmount, fetchRates } from '@/lib/currency'
 import type { CurrencyCode, Rates } from '@/lib/currency'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -64,11 +65,13 @@ export default function EarningsScreen() {
   const [currency, setCurrency] = useState<CurrencyCode>('GBP')
   const [rates, setRates] = useState<Rates>({})
   const [showGuide, setShowGuide] = useState(true)
+  const [readinessInput, setReadinessInput] = useState<TailorReadinessInput | null>(null)
 
   async function fetchEarnings() {
     if (!user?.id) {
       setData(null)
       setFetchError(false)
+      setReadinessInput(null)
       setLoading(false)
       return
     }
@@ -97,7 +100,7 @@ export default function EarningsScreen() {
 
       supabase
         .from('tailor_profiles')
-        .select('avg_rating, currency')
+        .select('avg_rating, currency, profile_completed, id_verification_status, is_live, stripe_account_id, paystack_account_id')
         .eq('user_id', user?.id)
         .maybeSingle(),
 
@@ -130,6 +133,13 @@ export default function EarningsScreen() {
     const tailorCurrency = (profile?.currency ?? 'GBP') as CurrencyCode
     setCurrency(tailorCurrency)
     setRates(liveRates)
+    setReadinessInput({
+      profileCompleted: profile?.profile_completed ?? false,
+      idVerificationStatus: profile?.id_verification_status ?? 'NOT_SUBMITTED',
+      isLive: profile?.is_live ?? false,
+      stripeAccountId: profile?.stripe_account_id ?? null,
+      paystackAccountId: profile?.paystack_account_id ?? null,
+    })
 
     // Normalise each order's amount to minor units of tailorCurrency
     function toDisplay(amountMinor: number, fromCurrency: CurrencyCode = tailorCurrency): number {
@@ -199,6 +209,7 @@ export default function EarningsScreen() {
   }
 
   const fmt = (minor: number) => formatAmount(minor, currency, currency, rates)
+  const readiness = deriveTailorReadiness(readinessInput)
 
   if (loading) {
     return (
@@ -209,7 +220,7 @@ export default function EarningsScreen() {
             <ActivityIndicator color={Colors.needleGreen} size="large" />
             <Text style={styles.stateTitle}>Loading your earnings…</Text>
             <Text style={styles.stateHint}>
-              We’re pulling together completed orders, escrow, and recent payout activity so you can see the business clearly.
+              We’re pulling together completed orders, pending funds, and recent payout activity so you can see the business clearly.
             </Text>
           </View>
         </View>
@@ -225,7 +236,7 @@ export default function EarningsScreen() {
             <Text style={styles.stateEyebrow}>Earnings</Text>
             <Text style={styles.stateTitle}>Couldn't load your earnings yet.</Text>
             <Text style={styles.stateHint}>
-              This screen should give you a calm view of what has cleared, what is in escrow, and how recent work is stacking up.
+              This screen should give you a calm view of what has cleared, what is still pending, and how recent work is stacking up.
             </Text>
             <TouchableOpacity
               style={styles.retryBtn}
@@ -283,6 +294,28 @@ export default function EarningsScreen() {
           </View>
         )}
 
+        {readinessInput ? (
+          <View
+            style={[
+              styles.readinessCard,
+              readiness.tone === 'success'
+                ? styles.readinessCardSuccess
+                : readiness.tone === 'warning'
+                  ? styles.readinessCardWarning
+                  : null,
+            ]}
+          >
+            <Text style={styles.readinessTitle}>{readiness.title}</Text>
+            <Text style={styles.readinessBody}>{readiness.body}</Text>
+            {readiness.payoutProviderLabel ? (
+              <Text style={styles.readinessMeta}>Payout path detected: {readiness.payoutProviderLabel}</Text>
+            ) : null}
+            <TouchableOpacity style={styles.readinessLink} onPress={() => router.push('/(tailor)/profile/trust-access' as never)}>
+              <Text style={styles.readinessLinkText}>See trust & access</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
         {/* Hero stat */}
         <View style={styles.heroCard}>
           <Text style={styles.heroLabel}>Total earnings</Text>
@@ -294,12 +327,12 @@ export default function EarningsScreen() {
           </View>
         </View>
 
-        {/* Escrow */}
+        {/* Pending funds */}
         {(data?.pendingEscrow ?? 0) > 0 && (
           <View style={styles.escrowCard}>
             <View style={styles.escrowDot} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.escrowLabel}>In escrow (pending delivery)</Text>
+              <Text style={styles.escrowLabel}>Pending delivery or finish</Text>
               <Text style={styles.escrowValue}>{fmt(data!.pendingEscrow)}</Text>
             </View>
           </View>
@@ -379,9 +412,13 @@ export default function EarningsScreen() {
         <View style={styles.payoutInfoCard}>
           <Text style={styles.payoutInfoTitle}>Payout schedule</Text>
           <Text style={styles.payoutInfoText}>
-            Funds are transferred to your bank account 24–48 hours after escrow releases. Connect your payout account in Settings → Bank account.
+            Funds move only after Drape clears the order for payout follow-up. If payout setup is still missing, paid work should stay blocked until Drape can confirm a payout path for your account.
           </Text>
-          <Text style={styles.payoutInfoNote}>Drape takes 0% commission in V1. You keep 100% of every order.</Text>
+          <Text style={styles.payoutInfoNote}>
+            {readiness.payoutReady
+              ? 'Drape currently reads your seller as payout-ready for standard paid work.'
+              : 'This screen is also your payout-readiness checkpoint while dedicated payout setup stays lightweight.'}
+          </Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -470,6 +507,22 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  readinessCard: {
+    marginHorizontal: Spacing.xl,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    ...Shadow.sm,
+  },
+  readinessCardWarning: { borderWidth: 1, borderColor: Colors.warning + '35' },
+  readinessCardSuccess: { borderWidth: 1, borderColor: Colors.success + '30' },
+  readinessTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  readinessBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  readinessMeta: { fontSize: FontSize.xs, color: Colors.midGrey },
+  readinessLink: { alignSelf: 'flex-start' },
+  readinessLinkText: { fontSize: FontSize.xs, color: Colors.midGrey, fontWeight: FontWeight.medium },
 
   escrowCard: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,

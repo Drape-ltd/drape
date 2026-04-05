@@ -16,6 +16,11 @@ const FAQ: Array<{ question: string; answer: string }> = [
       'Concerns should be raised from the order itself, where the history and updates are still visible.',
   },
   {
+    question: 'What if the connection is weak or a live feature fails?',
+    answer:
+      'Start from the live order first. Messages, stage history, and order updates remain the source of truth even when calls, pushes, or other real-time features do not come through cleanly.',
+  },
+  {
     question: 'How do tailors receive and manage orders?',
     answer:
       'Tailors receive a clear brief, review the fit and garment context, then quote and manage production from one workspace.',
@@ -38,7 +43,7 @@ export default function HelpPage(): JSX.Element {
     <MarketingShell
       eyebrow="Help"
       title="Get the right answer without more confusion."
-      description="Quick answers and the right contact path."
+      description="Quick answers, degraded-state guidance, and the right contact path."
       cta={
         <div className="flex flex-col gap-3 sm:flex-row">
           <a
@@ -67,6 +72,35 @@ export default function HelpPage(): JSX.Element {
             <div key={item.question} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
               <h3 className="text-2xl text-ink">{item.question}</h3>
               <p className="mt-3 text-sm leading-7 text-ink/68">{item.answer}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="border-t border-ink/6 py-16">
+        <SectionTitle
+          eyebrow="When Signal Is Weak"
+          title="Use the durable path first."
+          description="Drape should still feel understandable when live features are delayed or connectivity is uneven."
+        />
+        <div className="mt-10 grid gap-5 lg:grid-cols-3">
+          {[
+            [
+              'Open the order first',
+              'Quotes, handoff status, and concern history should still be clearest from the order itself.',
+            ],
+            [
+              'Keep messages in Drape',
+              'If a call or push fails, keep the conversation in the order thread so the shared timeline stays intact.',
+            ],
+            [
+              'Escalate with context',
+              'When the normal flow is no longer enough, support works better when the order history is already preserved in one place.',
+            ],
+          ].map(([title, body]) => (
+            <div key={title} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">{title}</p>
+              <p className="mt-3 text-sm leading-7 text-ink/68">{body}</p>
             </div>
           ))}
         </div>

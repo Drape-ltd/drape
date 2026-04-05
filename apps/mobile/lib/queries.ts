@@ -186,6 +186,9 @@ export type TailorDashboardData = {
     isLive: boolean
     idVerificationStatus: string
     profileId: string | null
+    profileCompleted: boolean
+    stripeAccountId: string | null
+    paystackAccountId: string | null
   } | null
   orders: Array<{
     id: string
@@ -310,6 +313,8 @@ export type SellerItemDetail = {
   pickupAvailable: boolean
   deliveryAvailable: boolean
   shippingAvailable: boolean
+  deliveryFee: number
+  shippingFee: number
 }
 
 function asStringList(value: unknown): string[] {
@@ -540,6 +545,8 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
       .from('reviews')
       .select('id, rating, body, tags, created_at, reviewer_name, tailor_response, orders!order_id(customer_profiles!customer_id(avatar_url))')
       .eq('tailor_profile_id', tailorId)
+      .eq('flagged', false)
+      .not('published_at', 'is', null)
       .order('created_at', { ascending: false })
       .limit(10),
   ] as const
@@ -669,7 +676,7 @@ async function fetchSellerItem(itemId: string): Promise<SellerItemDetail | null>
       pickup_available,
       delivery_available,
       shipping_available,
-      tailor_profiles(display_name, user_id)
+      tailor_profiles(display_name, user_id, delivery_fee, shipping_fee)
     `)
     .eq('id', itemId)
     .eq('is_live', true)
@@ -695,6 +702,8 @@ async function fetchSellerItem(itemId: string): Promise<SellerItemDetail | null>
     pickupAvailable: row.pickup_available ?? false,
     deliveryAvailable: row.delivery_available ?? false,
     shippingAvailable: row.shipping_available ?? false,
+    deliveryFee: row.tailor_profiles?.delivery_fee ?? 0,
+    shippingFee: row.tailor_profiles?.shipping_fee ?? 0,
   }
 }
 
@@ -702,7 +711,7 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
   const [profileRes, ordersRes, completedRes] = await Promise.allSettled([
     supabase
       .from('tailor_profiles')
-      .select('id, display_name, tier, avg_rating, availability, currency, is_live, id_verification_status')
+      .select('id, display_name, tier, avg_rating, availability, currency, is_live, id_verification_status, profile_completed, stripe_account_id, paystack_account_id')
       .eq('user_id', userId)
       .maybeSingle(),
     supabase
@@ -775,6 +784,9 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
       isLive: profile?.is_live ?? false,
       idVerificationStatus: profile?.id_verification_status ?? 'NOT_SUBMITTED',
       profileId: profile?.id ?? null,
+      profileCompleted: profile?.profile_completed ?? false,
+      stripeAccountId: profile?.stripe_account_id ?? null,
+      paystackAccountId: profile?.paystack_account_id ?? null,
     },
     orders: orderList.map((o) => ({
       id: o.id,

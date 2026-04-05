@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { useRefreshOnFocus, useSavedTailors } from '@/lib/queries'
 import { TierBadgeChip, StarRating } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -64,7 +65,10 @@ export default function SavedScreen() {
               body: { action: 'unsave-by-id', savedId },
             })
             if (error) {
-              Alert.alert('Error', 'Could not remove this tailor right now. Please try again.')
+              const message = isLikelyConnectivityIssue(error)
+                ? 'Connection looks weak. We could not update your saved tailors yet. Retry when the signal improves.'
+                : await readFunctionErrorMessage(error, 'Could not update your saved tailors right now. Please try again in a moment.')
+              Alert.alert('Error', message)
               return
             }
             void refetch()

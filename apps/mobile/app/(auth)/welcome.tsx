@@ -10,14 +10,14 @@ export default function WelcomeScreen() {
   async function openLegal(url: string) {
     const supported = await Linking.canOpenURL(url)
     if (!supported) {
-      Alert.alert('Unable to open link', `Please visit ${url.replace('https://', '')} manually.`)
+      Alert.alert('Unable to open link', `Please visit ${url.replace('https://', '')} manually. You can still continue with sign up or sign in here.`)
       return
     }
 
     try {
       await Linking.openURL(url)
     } catch {
-      Alert.alert('Unable to open link', `Please visit ${url.replace('https://', '')} manually.`)
+      Alert.alert('Unable to open link', `Please visit ${url.replace('https://', '')} manually. You can still continue with sign up or sign in here.`)
     }
   }
 

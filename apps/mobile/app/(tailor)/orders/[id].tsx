@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, Image, TextInput, ActivityIndicator, Modal, KeyboardAvoidingView, Platform, Linking,
+  Alert, Image, TextInput, ActivityIndicator, Modal, KeyboardAvoidingView, Platform,
 } from 'react-native'
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -10,8 +10,25 @@ import DateTimePicker from '@react-native-community/datetimepicker'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
+import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
+import { minorUnitsFromInput, moneyInputFromMinorUnits } from '@/lib/money-input'
 import { Sentry } from '@/lib/sentry'
+import { getShipStagePreflightError, normalizeTrackingNumberInput, openTrackingPage } from '@/lib/shipping'
 import { stripExif } from '@/lib/stripExif'
+import { createConsultationRoom, openConsultationCallUrl } from '@/lib/consultation'
+import {
+  enrichMeasurementSnapshot,
+  FABRIC_HANDOFF_LABELS,
+  FIT_CONFIDENCE_LABELS,
+  MATERIAL_ISSUE_REASON_LABELS,
+  MATERIAL_ISSUE_RESPONSE_LABELS,
+  MEASUREMENT_SOURCE_LABELS,
+  hasOpenMaterialIssue,
+  parseOrderSupportMeta,
+  type MaterialIssueReason,
+  type MeasurementSnapshotMeta,
+  type OrderSupportMeta,
+} from '@/lib/order-support'
 import { Button, Input } from '@/components/ui'
 import { filterContactInfo, rejectPlaceholder } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -27,12 +44,13 @@ type Measurement = {
   neckCircumference: number | null; height: number | null; unit: string
   fitStyle: string | null; garmentContext: string | null; bodyShape: string | string[] | null
   fitFlags: string[]; bodyNote: string | null
-}
+} & MeasurementSnapshotMeta
 
 type OrderDetail = {
   id: string; reference: string; garmentType: string
   orderKind: 'CUSTOM' | 'READY_MADE'; fulfillmentOption: string | null
   itemTitle: string | null; itemSize: string | null; itemQuantity: number; itemSubtotal: number | null
+  fulfillmentFee: number
   garmentDescription: string | null; stage: OrderStage
   customerId: string; customerName: string
   quotedAmount: number | null; quotedCurrency: string; quotedCompletionDate: string | null
@@ -40,6 +58,7 @@ type OrderDetail = {
   trackingNumber: string | null; carrier: string | null
   referencePhotos: string[]; fitNote: string | null
   measurements: Measurement | null
+  supportMeta: OrderSupportMeta
   collectionCode: string | null
   videoCallUrl: string | null
   occasion: string | null; deadline: string | null
@@ -59,8 +78,10 @@ function orderStatusGuidance(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MAD
   if (stage === 'QUOTE_SENT') {
     return 'Your quote is with the customer. Production starts once they accept it.'
   }
-  if (stage === 'PAYMENT_PENDING' && orderKind === 'READY_MADE') {
-    return 'This ready-made purchase is waiting for checkout to be completed.'
+  if (stage === 'PAYMENT_PENDING') {
+    return orderKind === 'READY_MADE'
+      ? 'This ready-made purchase is waiting for checkout to be completed.'
+      : 'The customer has started payment. Production starts once payment is confirmed.'
   }
   if (stage === 'CONFIRMED') {
     return 'The customer has accepted your quote. Move this order into the first production stage when work begins.'
@@ -104,8 +125,22 @@ function orderStatusGuidance(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MAD
 function quotedAmountLabel(stage: OrderStage): string {
   if (stage === 'QUOTE_SENT') return 'quoted'
   if (stage === 'DELIVERED' || stage === 'COLLECTED') return 'awaiting finish'
-  if (stage === 'COMPLETE') return 'released'
+  if (stage === 'COMPLETE') return 'closed out'
   return 'held'
+}
+
+function baseAmount(order: Pick<OrderDetail, 'orderKind' | 'itemSubtotal' | 'quotedAmount' | 'fulfillmentFee'>) {
+  if (order.orderKind === 'READY_MADE') {
+    return order.itemSubtotal ?? (order.quotedAmount != null ? Math.max(order.quotedAmount - order.fulfillmentFee, 0) : null)
+  }
+  if (order.quotedAmount == null) return null
+  return Math.max(order.quotedAmount - order.fulfillmentFee, 0)
+}
+
+function fulfillmentFeeLabel(order: Pick<OrderDetail, 'orderKind' | 'deliveryMethod' | 'fulfillmentOption'>) {
+  if (order.orderKind === 'READY_MADE' && order.fulfillmentOption === 'DELIVERY') return 'Delivery fee'
+  if (order.deliveryMethod === 'LOCAL_COLLECTION' || order.fulfillmentOption === 'PICKUP') return 'Fulfillment fee'
+  return 'Shipping fee'
 }
 
 // Linear next stages (one option only)
@@ -120,6 +155,8 @@ const FLEXIBLE_NEXT_STAGES: Partial<Record<OrderStage, OrderStage[]>> = {
   DESIGNING: ['SOURCING', 'CUTTING'],
   SOURCING: ['CUTTING'],
 }
+
+const PRE_CUTTING_STAGES: OrderStage[] = ['PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING', 'CONFIRMED', 'DESIGNING', 'SOURCING']
 
 const GARMENT_CONTEXT_LABELS: Record<string, string> = {
   MENSWEAR: 'Menswear cuts', WOMENSWEAR: 'Womenswear cuts',
@@ -141,17 +178,7 @@ export default function TailorOrderDetailScreen() {
   const { user } = useAuth()
 
   async function openCallUrl(url: string) {
-    const supported = await Linking.canOpenURL(url)
-    if (!supported) {
-      Alert.alert('Unable to open call', 'This consultation link is unavailable right now. Reopen the order and create a fresh consultation room if needed.')
-      return
-    }
-
-    try {
-      await Linking.openURL(url)
-    } catch {
-      Alert.alert('Unable to open call', 'Please try again in a moment. If it still fails, create a fresh consultation room from this order.')
-    }
+    await openConsultationCallUrl(url, 'tailor')
   }
 
   function goBack() {
@@ -165,27 +192,31 @@ export default function TailorOrderDetailScreen() {
 
   const [order, setOrder] = useState<OrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
-  const [fetchError, setFetchError] = useState(false)
+  const [fetchErrorMessage, setFetchErrorMessage] = useState('')
   const [showQuoteModal, setShowQuoteModal] = useState(false)
   const [showStageModal, setShowStageModal] = useState(false)
   const [stageModalTarget, setStageModalTarget] = useState<OrderStage | null>(null)
   const [showConsultationModal, setShowConsultationModal] = useState(false)
   const [showCodeModal, setShowCodeModal] = useState(false)
+  const [showMeasurementRequestModal, setShowMeasurementRequestModal] = useState(false)
+  const [showMaterialIssueModal, setShowMaterialIssueModal] = useState(false)
   const [startingCall, setStartingCall] = useState<'audio' | 'video' | null>(null)
+  const [confirmingFabricReceived, setConfirmingFabricReceived] = useState(false)
   const [failedReferencePhotos, setFailedReferencePhotos] = useState<string[]>([])
 
   async function fetchOrder() {
     setLoading(true)
-    setFetchError(false)
+    setFetchErrorMessage('')
     setOrder(null)
     setFailedReferencePhotos([])
-    const { data, error } = await supabase
+    try {
+      const { data, error } = await supabase
       .from('orders')
       .select(`
         id, reference, order_kind, fulfillment_option, garment_type, garment_description, item_title, item_size, item_quantity, item_subtotal, stage,
-        customer_id, quoted_amount, quoted_currency, quoted_completion_date,
+        customer_id, quoted_amount, quoted_currency, fulfillment_fee, quoted_completion_date,
         fabric_source, delivery_method, delivery_address, tracking_number, carrier, reference_photos, fit_note,
-        customer_measurements_snapshot, collection_code, video_call_url,
+        customer_measurements_snapshot, special_note, collection_code, video_call_url,
         occasion, deadline, created_at,
         customer_profiles!customer_id(display_name)
       `)
@@ -193,30 +224,35 @@ export default function TailorOrderDetailScreen() {
       .eq('tailor_id', user?.id)
       .maybeSingle()
 
-    if (error) {
-      setFetchError(true)
-      setLoading(false)
-      return
-    }
+      if (error) throw error
 
-    if (data) {
-      const d = data as any
-      setOrder({
-        id: d.id, reference: d.reference, garmentType: d.garment_type,
-        orderKind: d.order_kind ?? 'CUSTOM', fulfillmentOption: d.fulfillment_option ?? null,
-        itemTitle: d.item_title ?? null, itemSize: d.item_size ?? null, itemQuantity: d.item_quantity ?? 1, itemSubtotal: d.item_subtotal ?? null,
-        garmentDescription: d.garment_description, stage: d.stage,
-        customerId: d.customer_id,
-        customerName: d.customer_profiles?.display_name ?? 'Customer',
-        quotedAmount: d.quoted_amount, quotedCurrency: d.quoted_currency ?? 'USD', quotedCompletionDate: d.quoted_completion_date,
-        fabricSource: d.fabric_source, deliveryMethod: d.delivery_method, deliveryAddress: d.delivery_address ?? null,
-        trackingNumber: d.tracking_number ?? null, carrier: d.carrier ?? null,
-        referencePhotos: asStringList(d.reference_photos),
-        fitNote: d.fit_note, measurements: d.customer_measurements_snapshot,
-        collectionCode: d.collection_code, videoCallUrl: d.video_call_url ?? null,
-        occasion: d.occasion, deadline: d.deadline, createdAt: d.created_at,
-      })
-    } else {
+      if (data) {
+        const d = data as any
+        setOrder({
+          id: d.id, reference: d.reference, garmentType: d.garment_type,
+          orderKind: d.order_kind ?? 'CUSTOM', fulfillmentOption: d.fulfillment_option ?? null,
+          itemTitle: d.item_title ?? null, itemSize: d.item_size ?? null, itemQuantity: d.item_quantity ?? 1, itemSubtotal: d.item_subtotal ?? null, fulfillmentFee: d.fulfillment_fee ?? 0,
+          garmentDescription: d.garment_description, stage: d.stage,
+          customerId: d.customer_id,
+          customerName: d.customer_profiles?.display_name ?? 'Customer',
+          quotedAmount: d.quoted_amount, quotedCurrency: d.quoted_currency ?? 'USD', quotedCompletionDate: d.quoted_completion_date,
+          fabricSource: d.fabric_source, deliveryMethod: d.delivery_method, deliveryAddress: d.delivery_address ?? null,
+          trackingNumber: d.tracking_number ?? null, carrier: d.carrier ?? null,
+          referencePhotos: asStringList(d.reference_photos),
+          fitNote: d.fit_note, measurements: enrichMeasurementSnapshot(d.customer_measurements_snapshot ?? null) as Measurement | null,
+          supportMeta: parseOrderSupportMeta(d.special_note),
+          collectionCode: d.collection_code, videoCallUrl: d.video_call_url ?? null,
+          occasion: d.occasion, deadline: d.deadline, createdAt: d.created_at,
+        })
+      } else {
+        setOrder(null)
+      }
+    } catch (error) {
+      setFetchErrorMessage(
+        isLikelyConnectivityIssue(error)
+          ? 'Connection is weak. We could not load this order yet. Retry when the signal improves, or reopen it from Orders later.'
+          : 'We could not load this order right now. Retry, or reopen it from your Orders list.'
+      )
       setOrder(null)
     }
     setLoading(false)
@@ -241,14 +277,14 @@ export default function TailorOrderDetailScreen() {
     )
   }
 
-  if (fetchError) {
+  if (fetchErrorMessage) {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Order detail</Text>
             <Text style={styles.stateTitle}>Couldn't load this order.</Text>
-            <Text style={styles.stateHint}>Try again, or reopen it from Orders.</Text>
+            <Text style={styles.stateHint}>{fetchErrorMessage}</Text>
             <TouchableOpacity
               style={styles.retryBtn}
               onPress={() => { setLoading(true); fetchOrder() }}
@@ -301,6 +337,68 @@ export default function TailorOrderDetailScreen() {
   const isFlexibleStage = !!flexibleNextStages
   const visibleReferencePhotos = order.referencePhotos.filter((url) => !failedReferencePhotos.includes(url))
   const statusGuidance = orderStatusGuidance(order.stage, order.orderKind)
+  const measurementSource = order.measurements?.measurementSource
+  const fitConfidence = order.measurements?.fitConfidence
+  const measurementConfirmationNeeded = order.measurements?.needsConfirmation === true
+  const fabricHandoffMode = order.supportMeta.fabricHandoffMode ?? null
+  const fabricHandoffLabel =
+    order.supportMeta.fabricHandoffLabel ??
+    (fabricHandoffMode ? FABRIC_HANDOFF_LABELS[fabricHandoffMode] : null)
+  const materialIssue = order.supportMeta.materialIssue ?? null
+  const materialIssueOpen = hasOpenMaterialIssue(order.supportMeta)
+  const materialIssueNeedsCustomerDecision = materialIssue?.status === 'OPEN'
+  const materialIssueCancellationRequested = materialIssue?.status === 'CUSTOMER_REQUESTED_CANCEL'
+  const materialIssueReasonLabel =
+    materialIssue?.reasonLabel ??
+    (materialIssue?.reason ? MATERIAL_ISSUE_REASON_LABELS[materialIssue.reason] : null)
+  const materialIssueResponseLabel =
+    materialIssue?.responseLabel ??
+    (materialIssue?.response ? MATERIAL_ISSUE_RESPONSE_LABELS[materialIssue.response] : null)
+  const waitingOnTailorSourcing = materialIssue?.status === 'CUSTOMER_RESPONDED' && materialIssue?.response === 'ASK_TAILOR_TO_SOURCE'
+  const canConfirmFabricReceived =
+    order.fabricSource === 'CUSTOMER_SUPPLIES' &&
+    PRE_CUTTING_STAGES.includes(order.stage) &&
+    (!order.supportMeta.fabricReceivedAt || materialIssue?.response === 'REPLACE_FABRIC')
+  const cuttingBlockedLocally =
+    measurementConfirmationNeeded ||
+    materialIssueOpen ||
+    (
+      order.fabricSource === 'CUSTOMER_SUPPLIES' &&
+      !order.supportMeta.fabricReceivedAt &&
+      !waitingOnTailorSourcing
+    )
+
+  async function confirmFabricReceived() {
+    const currentOrderId = order?.id
+    if (!currentOrderId) return
+    if (confirmingFabricReceived) return
+    Alert.alert(
+      'Confirm fabric received',
+      'Only confirm this once the customer fabric is actually in your hands and ready for the next step.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Confirm',
+          onPress: async () => {
+            if (confirmingFabricReceived) return
+            setConfirmingFabricReceived(true)
+            const { error } = await invokeFunction('tailor-order-action', {
+              body: { orderId: currentOrderId, action: 'confirm-fabric-received' },
+            })
+            setConfirmingFabricReceived(false)
+            if (error) {
+              const message = isLikelyConnectivityIssue(error)
+                ? 'Connection looks weak. We could not confirm fabric receipt yet. Retry when the signal improves.'
+                : await readFunctionErrorMessage(error, 'Could not confirm fabric receipt right now. Please try again.')
+              Alert.alert('Update unavailable', message)
+              return
+            }
+            await fetchOrder()
+          },
+        },
+      ]
+    )
+  }
 
   function openStageModal(target: OrderStage) {
     setStageModalTarget(target)
@@ -312,17 +410,19 @@ export default function TailorOrderDetailScreen() {
     if (startingCall) return
     setStartingCall(callType)
     try {
-      const { data, error } = await invokeFunction('create-consultation-room', {
-        body: { orderId: order.id, callType },
-      })
-      if (error || !data?.url) {
-        Alert.alert('Error', 'Could not create call room. Please try again.')
+      const room = await createConsultationRoom(order.id, callType)
+      if (!room?.url) {
         return
       }
-      fetchOrder()
-      await openCallUrl(data.url)
-    } catch {
-      Alert.alert('Error', 'Could not start call.')
+      void fetchOrder()
+      await openCallUrl(room.url)
+    } catch (error) {
+      Alert.alert(
+        'Call unavailable',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. Keep the order thread updated and try starting the consultation again when the signal improves.'
+          : 'Could not start the consultation call. Keep using the order thread and try again in a moment.',
+      )
     } finally {
       setStartingCall(null)
     }
@@ -408,7 +508,10 @@ export default function TailorOrderDetailScreen() {
                               body: { orderId: order.id, action: 'decline-order' },
                             })
                             if (error) {
-                              Alert.alert('Error', 'Could not decline the order. Please try again.')
+                              const message = isLikelyConnectivityIssue(error)
+                                ? 'Connection looks weak. We could not decline this order yet. Retry when the signal improves.'
+                                : await readFunctionErrorMessage(error, 'Could not decline this order right now. Please try again in a moment.')
+                              Alert.alert('Error', message)
                               return
                             }
                             router.replace('/(tailor)/orders')
@@ -462,7 +565,10 @@ export default function TailorOrderDetailScreen() {
                           body: { orderId: order.id, action: 'decline-order' },
                         })
                         if (error) {
-                          Alert.alert('Error', 'Could not decline the order. Please try again.')
+                          const message = isLikelyConnectivityIssue(error)
+                            ? 'Connection looks weak. We could not decline this order yet. Retry when the signal improves.'
+                            : await readFunctionErrorMessage(error, 'Could not decline this order right now. Please try again in a moment.')
+                          Alert.alert('Error', message)
                           return
                         }
                         router.replace('/(tailor)/orders')
@@ -523,7 +629,7 @@ export default function TailorOrderDetailScreen() {
             <View style={[styles.stageCard, { borderColor: Colors.needleGreen, borderWidth: 1.5 }]}>
               <Text style={styles.stageCardTitle}>Awaiting customer collection</Text>
               <Text style={styles.stageCardSub}>
-                Ask the customer to show their 4-digit code, then enter it below to confirm collection and release payment.
+                Ask the customer to show their 4-digit code, then enter it below to confirm collection and close the handoff in Drape.
               </Text>
               <Button label="Enter collection code" onPress={() => setShowCodeModal(true)} />
             </View>
@@ -533,6 +639,152 @@ export default function TailorOrderDetailScreen() {
             <View style={styles.stageCard}>
               <Text style={styles.stageCardTitle}>{STAGE_LABELS[order.stage]}</Text>
               <Text style={styles.stageCardSub}>{statusGuidance}</Text>
+            </View>
+          )}
+
+          {(measurementSource || fitConfidence || order.fabricSource === 'CUSTOMER_SUPPLIES' || materialIssue) && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Pre-cutting checks</Text>
+              {cuttingBlockedLocally && ['CONFIRMED', 'DESIGNING', 'SOURCING'].includes(order.stage) ? (
+                <View style={styles.supportWarningCard}>
+                  <Text style={styles.supportWarningTitle}>Cutting still has a blocker</Text>
+                  <Text style={styles.supportWarningText}>
+                    {measurementConfirmationNeeded
+                      ? 'The customer still needs to confirm measurements before cutting can start.'
+                      : materialIssueOpen
+                        ? 'There is an open material issue that needs a customer decision first.'
+                        : 'Customer fabric still needs to be received before cutting can start.'}
+                  </Text>
+                </View>
+              ) : null}
+
+              {(measurementSource || fitConfidence || measurementConfirmationNeeded) && (
+                <View style={styles.supportCard}>
+                  <Text style={styles.supportCardTitle}>Measurement readiness</Text>
+                  <View style={styles.supportMetaList}>
+                    {measurementSource ? (
+                      <BriefRow
+                        label="Source"
+                        value={MEASUREMENT_SOURCE_LABELS[measurementSource] ?? String(measurementSource)}
+                      />
+                    ) : null}
+                    {fitConfidence ? (
+                      <BriefRow
+                        label="Fit confidence"
+                        value={FIT_CONFIDENCE_LABELS[fitConfidence] ?? String(fitConfidence)}
+                      />
+                    ) : null}
+                  </View>
+                  {measurementConfirmationNeeded ? (
+                    <>
+                      <View style={[styles.supportBadge, styles.supportBadgeWarning]}>
+                        <Text style={[styles.supportBadgeText, styles.supportBadgeTextWarning]}>
+                          Customer confirmation pending
+                        </Text>
+                      </View>
+                      {order.measurements?.confirmationReason ? (
+                        <Text style={styles.supportBodyText}>{order.measurements.confirmationReason}</Text>
+                      ) : null}
+                    </>
+                  ) : PRE_CUTTING_STAGES.includes(order.stage) ? (
+                    <>
+                      <Text style={styles.supportHint}>
+                        If anything looks off, ask the customer to confirm before you move into cutting.
+                      </Text>
+                      <Button
+                        label="Request measurement confirmation"
+                        variant="secondary"
+                        onPress={() => setShowMeasurementRequestModal(true)}
+                      />
+                    </>
+                  ) : null}
+                </View>
+              )}
+
+              {(order.fabricSource === 'CUSTOMER_SUPPLIES' || fabricHandoffLabel || materialIssue) && (
+                <View style={styles.supportCard}>
+                  <Text style={styles.supportCardTitle}>Fabric handoff</Text>
+                  <View style={styles.supportMetaList}>
+                    <BriefRow
+                      label="Fabric source"
+                      value={order.fabricSource === 'CUSTOMER_SUPPLIES' ? 'Customer supplies' : 'Tailor sources'}
+                    />
+                    {fabricHandoffLabel ? <BriefRow label="Handoff plan" value={fabricHandoffLabel} /> : null}
+                    {order.supportMeta.fabricReceivedAt ? (
+                      <BriefRow
+                        label="Received"
+                        value={new Date(order.supportMeta.fabricReceivedAt).toLocaleDateString('en-GB', {
+                          day: 'numeric',
+                          month: 'short',
+                          year: 'numeric',
+                        })}
+                      />
+                    ) : null}
+                  </View>
+                  {order.supportMeta.fabricReceivedNote ? (
+                    <Text style={styles.supportHint}>{order.supportMeta.fabricReceivedNote}</Text>
+                  ) : null}
+                  {waitingOnTailorSourcing ? (
+                    <View style={[styles.supportBadge, styles.supportBadgeSuccess]}>
+                      <Text style={[styles.supportBadgeText, styles.supportBadgeTextSuccess]}>
+                        Customer approved tailor sourcing
+                      </Text>
+                    </View>
+                  ) : null}
+                  {canConfirmFabricReceived ? (
+                    <Button
+                      label="Confirm fabric received"
+                      variant="secondary"
+                      onPress={confirmFabricReceived}
+                      loading={confirmingFabricReceived}
+                      disabled={confirmingFabricReceived}
+                    />
+                  ) : null}
+                </View>
+              )}
+
+              {order.orderKind === 'CUSTOM' && materialIssue ? (
+                <View style={[styles.supportCard, materialIssueOpen && styles.supportCardWarning]}>
+                  <Text style={styles.supportCardTitle}>Material issue</Text>
+                  {materialIssueReasonLabel ? <BriefRow label="Issue" value={materialIssueReasonLabel} /> : null}
+                  {materialIssue.note ? <Text style={styles.supportBodyText}>{materialIssue.note}</Text> : null}
+                  {materialIssueNeedsCustomerDecision ? (
+                    <View style={[styles.supportBadge, styles.supportBadgeWarning]}>
+                      <Text style={[styles.supportBadgeText, styles.supportBadgeTextWarning]}>
+                        Waiting on the customer
+                      </Text>
+                    </View>
+                  ) : materialIssueCancellationRequested ? (
+                    <View style={[styles.supportBadge, styles.supportBadgeWarning]}>
+                      <Text style={[styles.supportBadgeText, styles.supportBadgeTextWarning]}>
+                        Customer requested cancellation review
+                      </Text>
+                    </View>
+                  ) : materialIssueResponseLabel ? (
+                    <BriefRow label="Customer response" value={materialIssueResponseLabel} />
+                  ) : null}
+                  {materialIssue.responseNote ? <Text style={styles.supportHint}>{materialIssue.responseNote}</Text> : null}
+                  {PRE_CUTTING_STAGES.includes(order.stage) && !materialIssueOpen ? (
+                    <Button
+                      label="Open material issue"
+                      variant="secondary"
+                      onPress={() => setShowMaterialIssueModal(true)}
+                    />
+                  ) : null}
+                </View>
+              ) : order.orderKind === 'CUSTOM' && PRE_CUTTING_STAGES.includes(order.stage) && order.fabricSource === 'CUSTOMER_SUPPLIES' ? (
+                <View style={styles.supportCard}>
+                  <Text style={styles.supportCardTitle}>Material issue</Text>
+                  <Text style={styles.supportHint}>
+                    If the customer fabric is unsuitable before cutting, open a material issue instead of moving the order forward blindly.
+                  </Text>
+                  <Button
+                    label="Open material issue"
+                    variant="secondary"
+                    onPress={() => setShowMaterialIssueModal(true)}
+                  />
+                </View>
+              ) : null}
             </View>
           )}
 
@@ -554,6 +806,20 @@ export default function TailorOrderDetailScreen() {
               {order.orderKind === 'READY_MADE' && order.itemSubtotal != null ? (
                 <BriefRow label="Subtotal" value={formatAmount(order.itemSubtotal, order.quotedCurrency as CurrencyCode, order.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)} />
               ) : null}
+              {baseAmount(order) != null && order.orderKind !== 'READY_MADE' ? (
+                <BriefRow label="Quote amount" value={formatAmount(baseAmount(order) ?? 0, order.quotedCurrency as CurrencyCode, order.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)} />
+              ) : null}
+              <BriefRow
+                label={fulfillmentFeeLabel(order)}
+                value={
+                  order.fulfillmentFee > 0
+                    ? formatAmount(order.fulfillmentFee, order.quotedCurrency as CurrencyCode, order.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)
+                    : 'Free'
+                }
+              />
+              {order.quotedAmount != null ? (
+                <BriefRow label="Total" value={formatAmount(order.quotedAmount, order.quotedCurrency as CurrencyCode, order.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)} />
+              ) : null}
               {order.orderKind === 'READY_MADE' && order.fulfillmentOption ? (
                 <BriefRow
                   label="Fulfillment"
@@ -573,12 +839,35 @@ export default function TailorOrderDetailScreen() {
                 <BriefRow label="Ship to" value={order.deliveryAddress} />
               )}
               {order.deliveryMethod === 'SHIPPING' && order.trackingNumber && (
-                <BriefRow
-                  label="Tracking"
-                  value={order.carrier ? `${order.trackingNumber} · ${order.carrier}` : order.trackingNumber}
-                />
+                <>
+                  <BriefRow
+                    label="Tracking"
+                    value={order.carrier ? `${order.trackingNumber} · ${order.carrier}` : order.trackingNumber}
+                  />
+                  <Button
+                    label="Open tracking page"
+                    variant="secondary"
+                    onPress={() => {
+                      void openTrackingPage({
+                        trackingNumber: order.trackingNumber!,
+                        carrier: order.carrier,
+                        audience: 'tailor',
+                      })
+                    }}
+                  />
+                </>
               )}
             </View>
+            {order.deliveryMethod === 'SHIPPING' ? (
+              <View style={styles.supportCard}>
+                <Text style={styles.supportCardTitle}>Shipping proof</Text>
+                <Text style={styles.supportHint}>
+                  Only mark this order as shipped after the parcel has been accepted for dispatch. Keep the tracking number,
+                  dispatch proof, and any customs or duties updates inside Drape so support can follow the same timeline if
+                  the shipment stalls.
+                </Text>
+              </View>
+            ) : null}
             {order.fitNote && (
               <View style={styles.fitNote}>
                 <Text style={styles.fitNoteLabel}>Fit note from customer</Text>
@@ -614,6 +903,20 @@ export default function TailorOrderDetailScreen() {
             <MeasurementsSection measurements={order.measurements} />
           )}
 
+          {['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(order.stage) && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Aftercare</Text>
+              <View style={styles.supportCard}>
+                <Text style={styles.supportCardTitle}>Post-handoff expectations</Text>
+                <Text style={styles.supportHint}>
+                  Keep any fit, finish, alteration, remake, or workmanship follow-up inside Drape. Obvious issues should be
+                  answered quickly, and any remedy should stay tied to the order timeline so support can help if the
+                  conversation becomes disputed later.
+                </Text>
+              </View>
+            </View>
+          )}
+
         </View>
       </ScrollView>
 
@@ -636,6 +939,8 @@ export default function TailorOrderDetailScreen() {
         visible={showQuoteModal}
         orderId={order.id}
         defaultCurrency={(order.quotedCurrency as CurrencyCode) ?? 'USD'}
+        deliveryMethod={order.deliveryMethod}
+        defaultFulfillmentFee={order.fulfillmentFee}
         customerDeadline={order.deadline}
         onClose={() => setShowQuoteModal(false)}
         onSent={() => { setShowQuoteModal(false); fetchOrder() }}
@@ -660,6 +965,26 @@ export default function TailorOrderDetailScreen() {
         defaultCurrency={(order.quotedCurrency as CurrencyCode) ?? 'USD'}
         onClose={() => setShowConsultationModal(false)}
         onSent={() => { setShowConsultationModal(false); fetchOrder() }}
+      />
+
+      <MeasurementConfirmationRequestModal
+        visible={showMeasurementRequestModal}
+        orderId={order.id}
+        onClose={() => setShowMeasurementRequestModal(false)}
+        onSent={() => {
+          setShowMeasurementRequestModal(false)
+          void fetchOrder()
+        }}
+      />
+
+      <MaterialIssueModal
+        visible={showMaterialIssueModal}
+        orderId={order.id}
+        onClose={() => setShowMaterialIssueModal(false)}
+        onSent={() => {
+          setShowMaterialIssueModal(false)
+          void fetchOrder()
+        }}
       />
 
       {/* Collection code modal */}
@@ -771,12 +1096,264 @@ function hasMeasurementContent(measurements: Measurement | null): measurements i
   return false
 }
 
+const MATERIAL_ISSUE_REASON_OPTIONS: MaterialIssueReason[] = [
+  'POOR_FABRIC_QUALITY',
+  'INSUFFICIENT_YARDAGE',
+  'FABRIC_NOT_RECEIVED',
+  'WRONG_FABRIC_TYPE',
+  'FABRIC_DAMAGED',
+  'FABRIC_MISMATCH',
+]
+
+function MeasurementConfirmationRequestModal({ visible, orderId, onClose, onSent }: {
+  visible: boolean
+  orderId: string
+  onClose: () => void
+  onSent: () => void
+}) {
+  const [note, setNote] = useState('')
+  const [noteError, setNoteError] = useState('')
+  const [sending, setSending] = useState(false)
+
+  useEffect(() => {
+    if (!visible) return
+    setNote('')
+    setNoteError('')
+    setSending(false)
+  }, [visible, orderId])
+
+  function validateNote(value: string) {
+    if (value.trim().length < 10) {
+      setNoteError('Tell the customer what needs confirming before cutting can start.')
+      return false
+    }
+    const placeholder = rejectPlaceholder(value, 'Note')
+    if (placeholder) {
+      setNoteError(placeholder)
+      return false
+    }
+    const result = filterContactInfo(value)
+    if (result.blocked) {
+      setNoteError("Contact details can't be included.")
+      return false
+    }
+    setNoteError('')
+    return true
+  }
+
+  async function send() {
+    if (sending) return
+    if (!validateNote(note)) return
+    setSending(true)
+    const { error } = await invokeFunction('tailor-order-action', {
+      body: { orderId, action: 'request-measurement-confirmation', note: note.trim() },
+    })
+    setSending(false)
+    if (error) {
+      Alert.alert(
+        'Request unavailable',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. Your note stayed here, so retry when the signal improves.'
+          : await readFunctionErrorMessage(error, 'Could not request measurement confirmation right now.'),
+      )
+      return
+    }
+    onSent()
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={onClose} disabled={sending}>
+              <Text style={styles.modalClose}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Measurement confirmation</Text>
+            <View style={{ width: 60 }} />
+          </View>
+
+          <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
+            <View style={styles.supportWarningCard}>
+              <Text style={styles.supportWarningTitle}>Pause cutting until this is answered</Text>
+              <Text style={styles.supportWarningText}>
+                Ask one clear question so the customer can confirm the measurements without confusion.
+              </Text>
+            </View>
+
+            <Input
+              label="What needs confirming?"
+              placeholder="e.g. Please confirm the sleeve and shoulder measurements before I cut the fabric."
+              value={note}
+              onChangeText={(value) => {
+                setNote(value)
+                if (noteError) validateNote(value)
+              }}
+              onBlur={() => validateNote(note)}
+              error={noteError}
+              multiline
+              numberOfLines={4}
+              maxLength={300}
+              filterContact
+              required
+            />
+
+            <Button
+              label="Send request"
+              onPress={send}
+              loading={sending}
+              disabled={sending || note.trim().length < 10 || !!noteError}
+            />
+          </ScrollView>
+        </SafeAreaView>
+      </KeyboardAvoidingView>
+    </Modal>
+  )
+}
+
+function MaterialIssueModal({ visible, orderId, onClose, onSent }: {
+  visible: boolean
+  orderId: string
+  onClose: () => void
+  onSent: () => void
+}) {
+  const [reason, setReason] = useState<MaterialIssueReason | null>(null)
+  const [note, setNote] = useState('')
+  const [noteError, setNoteError] = useState('')
+  const [sending, setSending] = useState(false)
+
+  useEffect(() => {
+    if (!visible) return
+    setReason(null)
+    setNote('')
+    setNoteError('')
+    setSending(false)
+  }, [visible, orderId])
+
+  function validateNote(value: string) {
+    if (value.trim().length < 10) {
+      setNoteError('Describe the material issue clearly so the customer can choose what to do next.')
+      return false
+    }
+    const placeholder = rejectPlaceholder(value, 'Note')
+    if (placeholder) {
+      setNoteError(placeholder)
+      return false
+    }
+    const result = filterContactInfo(value)
+    if (result.blocked) {
+      setNoteError("Contact details can't be included.")
+      return false
+    }
+    setNoteError('')
+    return true
+  }
+
+  async function send() {
+    if (sending) return
+    if (!reason) {
+      Alert.alert('Choose a reason', 'Pick the fabric issue before sending this to the customer.')
+      return
+    }
+    if (!validateNote(note)) return
+    setSending(true)
+    const { error } = await invokeFunction('tailor-order-action', {
+      body: { orderId, action: 'open-material-issue', reason, note: note.trim() },
+    })
+    setSending(false)
+    if (error) {
+      Alert.alert(
+        'Issue unavailable',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. Your note stayed here, so retry when the signal improves.'
+          : await readFunctionErrorMessage(error, 'Could not open this material issue right now.'),
+      )
+      return
+    }
+    onSent()
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={onClose} disabled={sending}>
+              <Text style={styles.modalClose}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Open material issue</Text>
+            <View style={{ width: 60 }} />
+          </View>
+
+          <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
+            <View style={styles.supportWarningCard}>
+              <Text style={styles.supportWarningTitle}>Use this before cutting only</Text>
+              <Text style={styles.supportWarningText}>
+                Keep the reason specific so the customer can replace fabric, ask you to source it, revise the design, or request cancellation.
+              </Text>
+            </View>
+
+            <View style={styles.reasonList}>
+              <Text style={styles.fieldLabel}>Issue reason <Text style={styles.required}>*</Text></Text>
+              {MATERIAL_ISSUE_REASON_OPTIONS.map((option) => (
+                <TouchableOpacity
+                  key={option}
+                  style={[styles.reasonRow, reason === option && styles.reasonRowActive]}
+                  disabled={sending}
+                  onPress={() => setReason(option)}
+                >
+                  <View style={[styles.reasonRadio, reason === option && styles.reasonRadioActive]} />
+                  <Text style={[styles.reasonText, reason === option && styles.reasonTextActive]}>
+                    {MATERIAL_ISSUE_REASON_LABELS[option]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Input
+              label="What should the customer know?"
+              placeholder="e.g. The supplied fabric is not enough for the agreed style, so I need a replacement or a design change before cutting."
+              value={note}
+              onChangeText={(value) => {
+                setNote(value)
+                if (noteError) validateNote(value)
+              }}
+              onBlur={() => validateNote(note)}
+              error={noteError}
+              multiline
+              numberOfLines={4}
+              maxLength={300}
+              filterContact
+              required
+            />
+
+            <Button
+              label="Send issue to customer"
+              onPress={send}
+              loading={sending}
+              disabled={sending || !reason || note.trim().length < 10 || !!noteError}
+            />
+          </ScrollView>
+        </SafeAreaView>
+      </KeyboardAvoidingView>
+    </Modal>
+  )
+}
+
 // ─── Quote Modal ──────────────────────────────────────────────────────────────
 
-function QuoteModal({ visible, orderId, defaultCurrency, customerDeadline, onClose, onSent }: {
-  visible: boolean; orderId: string; defaultCurrency: CurrencyCode; customerDeadline: string | null; onClose: () => void; onSent: () => void
+function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, defaultFulfillmentFee, customerDeadline, onClose, onSent }: {
+  visible: boolean
+  orderId: string
+  defaultCurrency: CurrencyCode
+  deliveryMethod: string
+  defaultFulfillmentFee: number
+  customerDeadline: string | null
+  onClose: () => void
+  onSent: () => void
 }) {
   const [amount, setAmount] = useState('')
+  const [fulfillmentFee, setFulfillmentFee] = useState('')
   const [currency, setCurrency] = useState<CurrencyCode>(defaultCurrency)
   const [completionDate, setCompletionDate] = useState('')
   const [completionDateValue, setCompletionDateValue] = useState<Date | null>(null)
@@ -788,6 +1365,7 @@ function QuoteModal({ visible, orderId, defaultCurrency, customerDeadline, onClo
   useEffect(() => {
     if (!visible) return
     setAmount('')
+    setFulfillmentFee(deliveryMethod === 'LOCAL_COLLECTION' ? '' : moneyInputFromMinorUnits(defaultFulfillmentFee))
     setCurrency(defaultCurrency)
     setCompletionDate('')
     setCompletionDateValue(null)
@@ -795,7 +1373,7 @@ function QuoteModal({ visible, orderId, defaultCurrency, customerDeadline, onClo
     setNote('')
     setNoteError('')
     setSending(false)
-  }, [visible, orderId, defaultCurrency])
+  }, [visible, orderId, defaultCurrency, defaultFulfillmentFee, deliveryMethod])
 
   function openCompletionDatePicker() {
     const next = completionDateValue ? new Date(completionDateValue) : new Date()
@@ -836,12 +1414,20 @@ function QuoteModal({ visible, orderId, defaultCurrency, customerDeadline, onClo
     setSending(true)
     try {
       const amountPence = Math.round(parseFloat(amount) * 100)
+      const fulfillmentFeePence = deliveryMethod === 'LOCAL_COLLECTION' ? 0 : minorUnitsFromInput(fulfillmentFee)
+
+      if (fulfillmentFeePence == null) {
+        Alert.alert('Invalid fee', 'Enter the shipping fee as a whole number or decimal with up to two places.')
+        setSending(false)
+        return
+      }
 
       const { data: efData, error: efError } = await invokeFunction('tailor-order-action', {
         body: {
           orderId,
           action: 'send-quote',
           amount: amountPence,
+          fulfillmentFee: fulfillmentFeePence,
           currency,
           completionDate: parsedDate.toISOString(),
           note: note.trim() || undefined,
@@ -854,11 +1440,18 @@ function QuoteModal({ visible, orderId, defaultCurrency, customerDeadline, onClo
         throw err
       }
 
-      capture('quote_sent', { amount_pence: amountPence, has_note: !!note.trim() })
+      capture('quote_sent', { amount_pence: amountPence, fulfillment_fee_pence: fulfillmentFeePence, has_note: !!note.trim() })
       onSent()
     } catch (e) {
       console.error('Send quote error:', e)
-      Alert.alert('Error', 'Could not send quote. Please try again.')
+      Alert.alert(
+        'Error',
+        isLikelyConnectivityIssue(e)
+          ? 'Connection looks weak. We could not send this quote yet. Your draft stayed here, so retry when the signal improves.'
+          : e instanceof Error && e.message
+            ? e.message
+            : 'Could not send this quote right now. Please try again in a moment.',
+      )
     } finally {
       setSending(false)
     }
@@ -902,9 +1495,19 @@ function QuoteModal({ visible, orderId, defaultCurrency, customerDeadline, onClo
               onChangeText={setAmount}
               keyboardType="decimal-pad"
               required
-              hint="Enter total price including fabric if you're sourcing it."
+              hint="Enter your base quote. Shipping stays separate below when needed."
               testID="quote-amount-input"
             />
+            {deliveryMethod !== 'LOCAL_COLLECTION' ? (
+              <Input
+                label={`Shipping fee (${SUPPORTED_CURRENCIES.find((c) => c.code === currency)?.symbol ?? currency})`}
+                placeholder="e.g. 25"
+                value={fulfillmentFee}
+                onChangeText={setFulfillmentFee}
+                keyboardType="decimal-pad"
+                hint="Leave blank if shipping is free or already included."
+              />
+            ) : null}
             <Input
               label="Estimated completion date"
               placeholder="Select a date"
@@ -1013,8 +1616,17 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
       Alert.alert('Photo required', 'A photo at this stage builds trust. Please add at least one image before updating.')
       return
     }
-    if (nextStage === 'SHIPPED' && !trackingNumber.trim()) {
-      Alert.alert('Tracking number required', 'Add the shipment tracking number before marking this order as shipped.')
+    const shippingPreflightError =
+      nextStage === 'SHIPPED'
+        ? getShipStagePreflightError({
+            deliveryMethod: order.deliveryMethod,
+            deliveryAddress: order.deliveryAddress,
+            trackingNumber,
+            carrier,
+          })
+        : null
+    if (shippingPreflightError) {
+      Alert.alert('Shipping details required', shippingPreflightError)
       return
     }
     setUpdating(true)
@@ -1044,13 +1656,20 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
           targetStage: nextStage,
           note: note.trim() || undefined,
           photoUrl: photoUrl ?? undefined,
-          trackingNumber: nextStage === 'SHIPPED' ? trackingNumber.trim() || undefined : undefined,
+          trackingNumber: nextStage === 'SHIPPED' ? normalizeTrackingNumberInput(trackingNumber) || undefined : undefined,
           carrier: nextStage === 'SHIPPED' ? carrier.trim() || undefined : undefined,
         },
       })
 
       if (efError || !efData?.ok) {
-        const err = new Error(efData?.error ?? efError?.message ?? 'Edge Function error')
+        const errorPayload = efError ? await readFunctionErrorPayload(efError) : null
+        const errorMessage =
+          typeof efData?.error === 'string' && efData.error.length > 0
+            ? efData.error
+            : typeof errorPayload?.error === 'string' && errorPayload.error.length > 0
+              ? errorPayload.error
+              : efError?.message ?? 'Edge Function error'
+        const err = new Error(errorMessage)
         Sentry.captureException(err, { extra: { context: 'advance_stage', orderId: order.id, targetStage: nextStage } })
         throw err
       }
@@ -1065,7 +1684,14 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
       onUpdated()
     } catch (e) {
       console.error('Stage update error:', e)
-      Alert.alert('Error', 'Could not update stage. Please try again.')
+      Alert.alert(
+        'Update unavailable',
+        isLikelyConnectivityIssue(e)
+          ? 'Connection looks weak. We could not save this stage update yet. Your note and photo stayed here, so retry when the signal improves.'
+          : e instanceof Error && e.message
+            ? e.message
+            : 'Could not update this stage right now. Please try again.',
+      )
     } finally {
       setUpdating(false)
     }
@@ -1128,18 +1754,29 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
                   label="Tracking number"
                   placeholder="e.g. JD000095006536993823"
                   value={trackingNumber}
-                  onChangeText={setTrackingNumber}
+                  onChangeText={(value) => setTrackingNumber(normalizeTrackingNumberInput(value))}
                   autoCapitalize="characters"
                   hint="Customer will see this in their order tracking."
+                  required
                 />
                 <Input
-                  label="Carrier (optional)"
+                  label="Carrier"
                   placeholder="e.g. DHL, UPS, FedEx"
                   value={carrier}
                   onChangeText={setCarrier}
                   autoCapitalize="words"
-                  hint="Adds clearer delivery context for the customer."
+                  hint="Required so the customer can track the shipment clearly."
+                  required
                 />
+                <Text style={styles.shippingWarning}>
+                  Only mark this as shipped after the carrier has actually accepted the parcel. Keep carrier, tracking, and
+                  customs updates in Drape so support can recover the timeline if anything goes wrong.
+                </Text>
+                {!order.deliveryAddress?.trim() ? (
+                  <Text style={styles.shippingWarning}>
+                    Shipping address is missing on this order. Ask the customer to update it before marking this as shipped.
+                  </Text>
+                ) : null}
               </View>
             )}
 
@@ -1147,7 +1784,7 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
               label="Confirm update"
               onPress={update}
               loading={updating}
-              disabled={updating || note.trim().length < 10 || !!noteError || !photoUri || (nextStage === 'SHIPPED' && !trackingNumber.trim())}
+              disabled={updating || note.trim().length < 10 || !!noteError || !photoUri || (nextStage === 'SHIPPED' && (!trackingNumber.trim() || !carrier.trim()))}
             />
           </ScrollView>
         </SafeAreaView>
@@ -1197,9 +1834,21 @@ function ConsultationModal({ visible, orderId, defaultCurrency, onClose, onSent 
     })
 
     if (efError || !efData?.ok) {
-      const err = new Error(efData?.error ?? efError?.message ?? 'Edge Function error')
+      const errorPayload = efError ? await readFunctionErrorPayload(efError) : null
+      const errorMessage =
+        typeof efData?.error === 'string' && efData.error.length > 0
+          ? efData.error
+          : typeof errorPayload?.error === 'string' && errorPayload.error.length > 0
+            ? errorPayload.error
+            : efError?.message ?? 'Could not request consultation right now.'
+      const err = new Error(errorMessage)
       Sentry.captureException(err, { extra: { context: 'request_consultation', orderId } })
-      Alert.alert('Error', 'Could not request consultation. Please try again.')
+      Alert.alert(
+        'Consultation unavailable',
+        isLikelyConnectivityIssue(efError)
+          ? 'Connection looks weak. Your consultation request details stayed here, so retry when the signal improves.'
+          : errorMessage,
+      )
       setSending(false)
       return
     }
@@ -1297,7 +1946,9 @@ function CollectionCodeModal({ visible, orderId, expectedCode, onClose, onConfir
     setConfirming(false)
 
     if (error || !data?.ok) {
-      const msg = data?.error ?? 'Could not confirm collection. Please try again.'
+      const msg = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. We could not confirm collection yet. Retry when the signal improves.'
+        : await readFunctionErrorMessage(error, data?.error ?? 'Could not confirm collection. Please try again.')
       const remaining = data?.attemptsRemaining
       setError(remaining !== undefined ? `${msg} ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining.` : msg)
       return
@@ -1342,7 +1993,7 @@ function CollectionCodeModal({ visible, orderId, expectedCode, onClose, onConfir
 
           {error ? <Text style={styles.codeError}>{error}</Text> : null}
 
-          <Text style={styles.amountNote}>Payment releases immediately on confirmation.</Text>
+          <Text style={styles.amountNote}>Collection confirmation closes the pickup handoff. Drape handles any payout follow-up after that.</Text>
 
           <Button
             label="Confirm collection"
@@ -1494,6 +2145,40 @@ const styles = StyleSheet.create({
   briefRow: { flexDirection: 'row', justifyContent: 'space-between' },
   briefRowLabel: { fontSize: FontSize.sm, color: Colors.midGrey },
   briefRowValue: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink },
+  supportCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  supportCardWarning: {
+    borderWidth: 1,
+    borderColor: Colors.kanteRust + '40',
+  },
+  supportCardTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  supportMetaList: { gap: Spacing.sm },
+  supportBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+  },
+  supportBadgeWarning: { backgroundColor: Colors.kanteRustLight },
+  supportBadgeSuccess: { backgroundColor: Colors.needleGreenLight },
+  supportBadgeText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
+  supportBadgeTextWarning: { color: Colors.kanteRust },
+  supportBadgeTextSuccess: { color: Colors.needleGreen },
+  supportBodyText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 21 },
+  supportHint: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20 },
+  supportWarningCard: {
+    backgroundColor: Colors.kanteRustLight,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+  },
+  supportWarningTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.kanteRust },
+  supportWarningText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   fitNote: {
     backgroundColor: Colors.needleGreenLight, borderRadius: Radius.md,
@@ -1540,6 +2225,11 @@ const styles = StyleSheet.create({
   modalScroll: { flex: 1 },
   modalContent: { padding: Spacing.xl, gap: Spacing.xl },
   shippingFields: { gap: Spacing.sm },
+  shippingWarning: {
+    fontSize: FontSize.sm,
+    lineHeight: 20,
+    color: Colors.error,
+  },
 
   nextStageRow: {
     backgroundColor: Colors.needleGreenLight, borderRadius: Radius.md,
@@ -1578,6 +2268,36 @@ const styles = StyleSheet.create({
   // Quote modal — currency picker
   fieldLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: Spacing.sm },
   required: { color: Colors.error },
+  reasonList: { gap: Spacing.sm },
+  reasonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.md,
+  },
+  reasonRowActive: {
+    borderColor: Colors.needleGreen,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  reasonRadio: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 2,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+  },
+  reasonRadioActive: {
+    borderColor: Colors.needleGreen,
+    backgroundColor: Colors.needleGreen,
+  },
+  reasonText: { flex: 1, fontSize: FontSize.sm, color: Colors.ink },
+  reasonTextActive: { color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   currencyChip: {
     paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
     borderRadius: Radius.full, borderWidth: 1.5, borderColor: Colors.lightGrey,

@@ -7,9 +7,11 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
+import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { syncUserRow } from '@/lib/syncUserRow'
 import { Button, Input } from '@/components/ui'
 import { validateDisplayName } from '@drape/shared/contact-filter'
+import { normalizePhoneForStorage, PHONE_STORAGE_HINT, validatePhoneForProfile } from '@drape/shared/phone'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 type Unit = 'in' | 'cm'
@@ -90,8 +92,13 @@ export default function CustomerSetupScreen() {
   }
 
   function validatePhone(value: string) {
-    const normalized = value.trim()
-    if (normalized.length < 7) {
+    if (!value.trim()) {
+      setPhoneError('Enter a valid phone number for order updates and account recovery.')
+      return false
+    }
+
+    const error = validatePhoneForProfile(value)
+    if (error) {
       setPhoneError('Enter a valid phone number for order updates and account recovery.')
       return false
     }
@@ -112,7 +119,7 @@ export default function CustomerSetupScreen() {
     setSaving(true)
     const now = new Date().toISOString()
 
-    const normalizedPhone = phone.trim()
+    const normalizedPhone = normalizePhoneForStorage(phone)
 
     const { error } = await supabase
       .from('customer_profiles')
@@ -144,8 +151,11 @@ export default function CustomerSetupScreen() {
 
       if (authError) {
         setSaving(false)
-        setSaveError('We saved part of your setup, but could not finish updating your account. Please try again.')
-        Alert.alert('Error', 'Could not finish saving your account details. Please try again.')
+        const message = isLikelyConnectivityIssue(authError)
+          ? 'We saved part of your setup, but could not finish updating your account yet because the connection looks weak. Retry when the signal improves.'
+          : 'We saved part of your setup, but could not finish updating your account right now. Please try again in a moment.'
+        setSaveError(message)
+        Alert.alert('Error', message)
         return
       }
 
@@ -224,6 +234,7 @@ export default function CustomerSetupScreen() {
                 required
                 keyboardType="phone-pad"
                 autoCapitalize="none"
+                hint={PHONE_STORAGE_HINT}
               />
 
               <View>

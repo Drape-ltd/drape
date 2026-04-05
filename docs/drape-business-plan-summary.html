@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Drape — Business Plan Summary</title>
+  <style>
+    /* ── Print / PDF ── */
+    @page {
+      size: A4;
+      margin: 22mm 20mm 22mm 20mm;
+    }
+    @media print {
+      .no-print { display: none; }
+      body { font-size: 10.5pt; }
+      h1 { font-size: 22pt; }
+      h2 { font-size: 13pt; }
+      h3 { font-size: 11pt; }
+      .page-break { page-break-before: always; }
+      .section { page-break-inside: avoid; }
+    }
+
+    /* ── Base ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Georgia', 'Times New Roman', serif;
+      font-size: 11pt;
+      line-height: 1.65;
+      color: #1a1a1a;
+      background: #fff;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 40px 48px;
+    }
+
+    /* ── Cover Header ── */
+    .cover {
+      text-align: center;
+      padding: 40px 0 32px;
+      border-bottom: 3px solid #1a1a1a;
+      margin-bottom: 36px;
+    }
+    .cover .wordmark {
+      font-size: 42pt;
+      font-weight: 700;
+      letter-spacing: -1.5px;
+      color: #111;
+      display: block;
+    }
+    .cover .tagline {
+      font-size: 13pt;
+      font-style: italic;
+      color: #555;
+      margin-top: 6px;
+    }
+    .cover .doc-label {
+      display: inline-block;
+      margin-top: 20px;
+      font-size: 9pt;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      border: 1.5px solid #1a1a1a;
+      padding: 5px 16px;
+      border-radius: 2px;
+    }
+    .cover .meta {
+      margin-top: 14px;
+      font-size: 9pt;
+      color: #888;
+      letter-spacing: 0.5px;
+    }
+
+    /* ── Section headings ── */
+    h2 {
+      font-size: 13.5pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #111;
+      border-bottom: 1.5px solid #111;
+      padding-bottom: 4px;
+      margin-top: 28px;
+      margin-bottom: 12px;
+    }
+    h3 {
+      font-size: 11pt;
+      font-weight: 700;
+      color: #222;
+      margin-top: 16px;
+      margin-bottom: 5px;
+    }
+
+    /* ── Body text ── */
+    p { margin-bottom: 10px; }
+
+    /* ── Two-column layout ── */
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin-top: 8px;
+    }
+    .col-box {
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 14px 16px;
+    }
+    .col-box h3 { margin-top: 0; }
+
+    /* ── Key metrics bar ── */
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin: 14px 0;
+    }
+    .metric {
+      background: #f5f5f5;
+      border-left: 3px solid #1a1a1a;
+      padding: 10px 14px;
+    }
+    .metric .num {
+      font-size: 16pt;
+      font-weight: 700;
+      display: block;
+      line-height: 1.1;
+    }
+    .metric .label {
+      font-size: 8.5pt;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* ── Lists ── */
+    ul, ol {
+      padding-left: 20px;
+      margin-bottom: 10px;
+    }
+    li { margin-bottom: 4px; }
+
+    /* ── Table ── */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 9.5pt;
+      margin: 12px 0;
+    }
+    th {
+      background: #1a1a1a;
+      color: #fff;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      font-size: 8.5pt;
+      padding: 7px 10px;
+      text-align: left;
+    }
+    td {
+      padding: 7px 10px;
+      border-bottom: 1px solid #e5e5e5;
+      vertical-align: top;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:nth-child(even) td { background: #fafafa; }
+
+    /* ── Callout box ── */
+    .callout {
+      border-left: 4px solid #1a1a1a;
+      background: #f9f9f9;
+      padding: 12px 16px;
+      margin: 14px 0;
+      font-style: italic;
+      font-size: 10.5pt;
+    }
+
+    /* ── Phase timeline ── */
+    .phases {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin: 12px 0;
+    }
+    .phase {
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      padding: 10px 12px;
+    }
+    .phase .phase-label {
+      font-size: 8pt;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #888;
+      display: block;
+      margin-bottom: 4px;
+    }
+    .phase .phase-title {
+      font-weight: 700;
+      font-size: 10pt;
+      display: block;
+      margin-bottom: 5px;
+    }
+    .phase ul { font-size: 8.5pt; padding-left: 16px; }
+
+    /* ── Footer ── */
+    .footer {
+      margin-top: 40px;
+      padding-top: 12px;
+      border-top: 1px solid #ccc;
+      font-size: 8.5pt;
+      color: #aaa;
+      text-align: center;
+    }
+
+    /* ── Print button ── */
+    .no-print {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #1a1a1a;
+      color: #fff;
+      border: none;
+      padding: 10px 22px;
+      font-size: 10pt;
+      border-radius: 4px;
+      cursor: pointer;
+      letter-spacing: 0.5px;
+    }
+    .no-print:hover { background: #333; }
+  </style>
+</head>
+<body>
+
+<button class="no-print" onclick="window.print()">Save as PDF</button>
+
+<!-- ══════════════════════════════════════════════════
+     COVER
+══════════════════════════════════════════════════ -->
+<div class="cover">
+  <span class="wordmark">drape</span>
+  <div class="tagline">"Custom clothing, handled beautifully."</div>
+  <div class="doc-label">Business Plan Summary</div>
+  <div class="meta">Confidential &nbsp;·&nbsp; April 2026 &nbsp;·&nbsp; V1 Pre-Launch</div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════
+     PAGE 1 — OVERVIEW, PROBLEM, SOLUTION, MARKET
+══════════════════════════════════════════════════ -->
+
+<div class="section">
+  <h2>Executive Overview</h2>
+  <p>
+    Drape is a two-sided mobile marketplace connecting customers with independent tailors and boutiques
+    for custom and ready-made clothing. Built Africa-first with global reach, Drape digitises the
+    entire custom-clothing journey — from discovery and measurement capture through quote acceptance,
+    production tracking, and secure payout — removing the opacity and trust friction that plague
+    offline tailoring relationships today.
+  </p>
+  <div class="callout">
+    "Find a tailor you trust, place one clear order, and follow it through."
+  </div>
+</div>
+
+<div class="section">
+  <h2>Problem</h2>
+  <div class="two-col">
+    <div class="col-box">
+      <h3>For Customers</h3>
+      <ul>
+        <li>No reliable way to discover and vet skilled tailors</li>
+        <li>Orders placed over WhatsApp with no paper trail</li>
+        <li>No visibility into production progress</li>
+        <li>Disputes resolved informally, often in the tailor's favour</li>
+        <li>Measurements lost between orders; repeat work starts from scratch</li>
+        <li>Payments handed over with no escrow or protection</li>
+      </ul>
+    </div>
+    <div class="col-box">
+      <h3>For Tailors</h3>
+      <ul>
+        <li>Client acquisition limited to word-of-mouth and social DMs</li>
+        <li>No professional storefront or portfolio hosting</li>
+        <li>Unclear briefs lead to rework and chargebacks</li>
+        <li>No tools to manage multiple concurrent orders</li>
+        <li>International and diaspora clients hard to reach and service</li>
+        <li>Earnings unreliable; no structured payout system</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Solution</h2>
+  <p>
+    Drape provides a structured end-to-end workflow on top of which both parties can operate with
+    confidence. The platform combines a verified tailor directory, guided measurement capture, a
+    collaborative quoting system, escrow-backed payments, production-stage tracking with photo
+    updates, and a post-delivery review system — all in a single mobile app available on iOS and
+    Android.
+  </p>
+  <table>
+    <thead>
+      <tr><th>Capability</th><th>What it does</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>Tailor Discovery</strong></td><td>Browse by specialty, location, price range, portfolio, rating, and response time</td></tr>
+      <tr><td><strong>Guided Measurements</strong></td><td>Customers capture and store body measurements; reused across all future orders</td></tr>
+      <tr><td><strong>Custom Briefs</strong></td><td>Structured order submission with references, garment specs, deadline, and occasion</td></tr>
+      <tr><td><strong>Ready-Made Shop</strong></td><td>Tailors list in-stock items; customers purchase direct without consultation</td></tr>
+      <tr><td><strong>Secure Escrow Payments</strong></td><td>Stripe (USD/GBP/EUR) + Paystack (NGN/GHS/KES); funds released after delivery + 72-hr dispute window</td></tr>
+      <tr><td><strong>Production Tracking</strong></td><td>Designing → Sourcing → Cutting → Sewing → Finishing, each with photo updates</td></tr>
+      <tr><td><strong>In-App Messaging</strong></td><td>Text, photos, and voice notes — all tied to the order thread</td></tr>
+      <tr><td><strong>Fulfillment Flexibility</strong></td><td>Pickup, local delivery, or international shipping — chosen at checkout</td></tr>
+      <tr><td><strong>Reviews & Trust</strong></td><td>5-star ratings with written reviews; tailor reputation visible before any order is placed</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="section">
+  <h2>Market Opportunity</h2>
+  <div class="metrics">
+    <div class="metric">
+      <span class="num">$2.5B+</span>
+      <span class="label">African custom apparel market (est.)</span>
+    </div>
+    <div class="metric">
+      <span class="num">600M+</span>
+      <span class="label">Mobile internet users across Sub-Saharan Africa</span>
+    </div>
+    <div class="metric">
+      <span class="num">$12B</span>
+      <span class="label">African diaspora remittance-linked fashion spend (UK, US, EU)</span>
+    </div>
+  </div>
+  <p>
+    The African fashion market is the fastest-growing apparel segment globally, yet the custom and
+    bespoke clothing sector remains almost entirely offline. Drape's initial focus covers Nigeria,
+    Ghana, and Kenya — three of Africa's largest consumer markets — while immediately addressing
+    the diaspora customer base in the UK, EU, and US, who regularly commission tailors back home
+    with no reliable platform to coordinate across time zones.
+  </p>
+  <p>
+    The global custom apparel market is projected to exceed <strong>$150 billion by 2030</strong>,
+    driven by a consumer shift away from fast fashion toward individuality, quality, and cultural
+    expression. Drape is positioned directly in this white space.
+  </p>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════
+     PAGE 2 — BUSINESS MODEL, COMPETITIVE POSITION, TRACTION
+══════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+
+<div class="section">
+  <h2>Business Model</h2>
+  <p>
+    Drape earns revenue on every completed transaction. The model is designed to align platform
+    incentives with order success — Drape only gets paid when a customer receives their garment
+    and the tailor receives their payout.
+  </p>
+  <table>
+    <thead>
+      <tr><th>Revenue Stream</th><th>Description</th><th>Timing</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Platform Fee</strong></td>
+        <td>Percentage of order value charged to the customer or split with the tailor (exact rate undisclosed; built into checkout breakdown)</td>
+        <td>On payment confirmation</td>
+      </tr>
+      <tr>
+        <td><strong>Ready-Made Fee</strong></td>
+        <td>Same platform-fee structure applied to in-stock item purchases</td>
+        <td>On payment confirmation</td>
+      </tr>
+      <tr>
+        <td><strong>Fulfillment Margin</strong></td>
+        <td>Optional margin on platform-facilitated delivery/shipping fees</td>
+        <td>On order dispatch</td>
+      </tr>
+      <tr>
+        <td><strong>Future: Premium Listings</strong></td>
+        <td>Featured placement for tailors with verified track records (Phase 2+)</td>
+        <td>Monthly subscription</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Payment & Payout Flow</h3>
+  <p>
+    Customers pay via <strong>Stripe</strong> (USD, GBP, EUR) or <strong>Paystack</strong> (NGN,
+    GHS, KES). Funds are held in escrow and released to the tailor <strong>72 hours</strong> after
+    confirmed delivery — providing a dispute window without requiring active ops intervention on
+    most orders. Tailor payouts are processed via Stripe Connect or Paystack's transfer API in the
+    tailor's local settlement currency.
+  </p>
+  <p>
+    All FX conversions are shown as informational only; the source currency is the binding price.
+    This removes ambiguity for both parties and eliminates silent re-pricing on exchange rate moves.
+  </p>
+</div>
+
+<div class="section">
+  <h2>Competitive Landscape</h2>
+  <table>
+    <thead>
+      <tr><th>Competitor</th><th>Strength</th><th>Drape Advantage</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>WhatsApp / Instagram DMs</td>
+        <td>Zero friction to start; tailors already use them</td>
+        <td>No escrow, no tracking, no dispute resolution, no record-keeping — Drape replaces chaos with structure</td>
+      </tr>
+      <tr>
+        <td>Etsy / global craft marketplaces</td>
+        <td>Large discovery surface, global reach</td>
+        <td>Not designed for custom-fit clothing; no measurement capture, production stages, or African-market payment rails</td>
+      </tr>
+      <tr>
+        <td>Stitch Fix / subscription boxes</td>
+        <td>Strong US brand, data-driven styling</td>
+        <td>Mass-market, algorithm-driven; no relationship with a specific named tailor; limited cultural fit</td>
+      </tr>
+      <tr>
+        <td>Local tailor booking apps (niche)</td>
+        <td>Occasionally strong in one city/country</td>
+        <td>Fragmented, single-market, no production tracking, minimal trust infrastructure</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Drape's moat is not a single feature — it is the <strong>trust stack</strong>: verified profiles,
+    production photo evidence, escrow payments, structured disputes, and a review system that protects
+    both sides. This combination does not exist on any platform serving this market today.
+  </p>
+</div>
+
+<div class="section">
+  <h2>Go-to-Market Strategy</h2>
+
+  <h3>Supply Side (Tailors)</h3>
+  <p>
+    Tailors are onboarded through a curated application funnel — portfolio review, ID verification,
+    and payout account setup — ensuring quality before any profile goes live. This supply-gate
+    strategy protects brand trust at launch and creates scarcity-driven demand from customers.
+    Initial tailor acquisition targets Lagos, Accra, and Nairobi, with UK-based African tailors
+    as a high-value second cohort.
+  </p>
+
+  <h3>Demand Side (Customers)</h3>
+  <p>
+    A public waitlist is live, segmented into customer and tailor funnels. Customer acquisition
+    focuses on the African diaspora in the UK and EU — a high-intent, underserved cohort that
+    already tries to commission tailors informally. Secondary demand comes from in-market customers
+    in Nigeria, Ghana, and Kenya through social and community channels.
+  </p>
+
+  <h3>Retention & Network Effects</h3>
+  <ul>
+    <li><strong>Saved Tailors</strong> — customers bookmark favourites, creating sticky repeat purchase loops</li>
+    <li><strong>Measurement Profiles</strong> — storing measurements reduces friction for every subsequent order</li>
+    <li><strong>Reviews</strong> — public reputation data compounds over time, rewarding quality tailors and attracting more demand</li>
+    <li><strong>Order History</strong> — both sides build a trackable relationship history on-platform</li>
+  </ul>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════
+     PAGE 3 — PRODUCT ROADMAP, TEAM/OPS, FINANCIALS, ASK
+══════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+
+<div class="section">
+  <h2>Product Roadmap</h2>
+
+  <div class="phases">
+    <div class="phase">
+      <span class="phase-label">Phase 1 — Now</span>
+      <span class="phase-title">V1 Core Launch</span>
+      <ul>
+        <li>Custom order end-to-end loop</li>
+        <li>Ready-made shop + direct checkout</li>
+        <li>Stripe + Paystack payments</li>
+        <li>Production stage tracking</li>
+        <li>In-app messaging (text, photo, voice)</li>
+        <li>Reviews and dispute flow</li>
+        <li>iOS + Android via Expo/EAS</li>
+      </ul>
+    </div>
+    <div class="phase">
+      <span class="phase-label">Phase 2 — Q3 2026</span>
+      <span class="phase-title">Trust & Growth</span>
+      <ul>
+        <li>Video/audio consultation (Daily.co)</li>
+        <li>ID verification integration</li>
+        <li>Premium tailor listings</li>
+        <li>Referral and credit system</li>
+        <li>Seller analytics dashboard</li>
+        <li>Verified measurement network</li>
+      </ul>
+    </div>
+    <div class="phase">
+      <span class="phase-label">Phase 3 — 2027</span>
+      <span class="phase-title">Scale & Logistics</span>
+      <ul>
+        <li>Logistics partner integrations</li>
+        <li>Multi-seller cart / boutique ERP</li>
+        <li>Returns and exchange flows</li>
+        <li>Additional African markets</li>
+        <li>B2B / corporate gifting vertical</li>
+        <li>AI-assisted measurement and fit</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Operations & Risk</h2>
+  <div class="two-col">
+    <div class="col-box">
+      <h3>Operational Infrastructure</h3>
+      <ul>
+        <li>73 documented ops policies covering payments, disputes, privacy, abuse, customs, and moderation</li>
+        <li>Ops control surface for disputes, bans, and moderation</li>
+        <li>Sentry (error monitoring) + PostHog (analytics) integrated</li>
+        <li>Automated quote expiry, checkout timeout, and payout release</li>
+        <li>App Store + Play Store submission pipeline ready</li>
+      </ul>
+    </div>
+    <div class="col-box">
+      <h3>Key Risks &amp; Mitigations</h3>
+      <ul>
+        <li><strong>Supply quality</strong> → Curated onboarding, portfolio review, ID gating</li>
+        <li><strong>Fulfilment disputes</strong> → Photo evidence at each production stage; structured remedy ladder</li>
+        <li><strong>International shipping</strong> → Customs policy research complete; DDP/DDU disclosure required pre-checkout</li>
+        <li><strong>Payment fraud</strong> → Stripe + Paystack fraud tooling; escrow model limits exposure</li>
+        <li><strong>Platform abuse</strong> → Contact bypass detection, review retaliation prevention, abuse logging</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Financial Projections (Indicative)</h2>
+  <table>
+    <thead>
+      <tr><th>Metric</th><th>Year 1</th><th>Year 2</th><th>Year 3</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Active Tailors on Platform</td><td>200</td><td>1,200</td><td>5,000</td></tr>
+      <tr><td>Active Customers</td><td>2,000</td><td>15,000</td><td>80,000</td></tr>
+      <tr><td>Orders Completed</td><td>4,000</td><td>35,000</td><td>200,000</td></tr>
+      <tr><td>Average Order Value (USD equiv.)</td><td>$120</td><td>$130</td><td>$140</td></tr>
+      <tr><td>Gross Merchandise Value</td><td>$480K</td><td>$4.6M</td><td>$28M</td></tr>
+      <tr><td>Platform Revenue (~10% take rate)</td><td>$48K</td><td>$460K</td><td>$2.8M</td></tr>
+    </tbody>
+  </table>
+  <p style="font-size:8.5pt; color:#777; margin-top:4px;">
+    Projections are illustrative based on comparable two-sided marketplace benchmarks. Actual results will vary.
+  </p>
+</div>
+
+<div class="section">
+  <h2>Technology Stack (Summary)</h2>
+  <p>
+    Drape is built on a modern, cloud-native monorepo. The mobile app (React Native / Expo) targets
+    both iOS and Android from a single codebase. The web presence (Next.js 15 / Cloudflare) handles
+    the public site and waitlist. The backend is <strong>Supabase</strong> (PostgreSQL + Auth +
+    Storage + Edge Functions) with Row-Level Security enforced throughout. Payments are handled
+    server-side to prevent client-side tampering, with native PaymentSheet integration for mobile UX.
+    The stack is low-cost to operate at early scale and has a clear path to horizontal scaling as
+    transaction volume grows.
+  </p>
+</div>
+
+<div class="section">
+  <h2>The Ask</h2>
+  <div class="callout">
+    Drape is raising a pre-seed round to fund V1 launch operations, initial tailor acquisition,
+    and 12 months of runway to reach meaningful GMV and unit-economics validation.
+  </div>
+  <table>
+    <thead>
+      <tr><th>Use of Funds</th><th>Allocation</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Engineering &amp; Product (hiring + contractors)</td><td>40%</td></tr>
+      <tr><td>Tailor Acquisition &amp; Incentives (onboarding grants, photography support)</td><td>25%</td></tr>
+      <tr><td>Marketing &amp; Demand Generation (diaspora-focused digital)</td><td>20%</td></tr>
+      <tr><td>Operations, Legal &amp; Compliance</td><td>10%</td></tr>
+      <tr><td>Infrastructure &amp; Tools</td><td>5%</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="section">
+  <h2>Why Now</h2>
+  <ul>
+    <li><strong>Mobile penetration is at an inflection point</strong> across Nigeria, Ghana, and Kenya — the conditions for a marketplace to scale have arrived.</li>
+    <li><strong>Fast fashion backlash</strong> is driving global consumer demand for bespoke, meaningful clothing — particularly among the African diaspora who want cultural garments made with integrity.</li>
+    <li><strong>Payment infrastructure has matured</strong> — Paystack's API and Stripe's global reach make multi-currency, cross-border escrow viable for the first time at this price point.</li>
+    <li><strong>The market is uncontested</strong> — no platform has successfully productised the African tailor-customer relationship at scale. The window to become the category default is open.</li>
+  </ul>
+</div>
+
+
+<div class="footer">
+  Drape &nbsp;·&nbsp; Confidential Business Plan Summary &nbsp;·&nbsp; April 2026
+  &nbsp;·&nbsp; For investor and partner use only
+</div>
+
+</body>
+</html>

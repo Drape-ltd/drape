@@ -12,10 +12,34 @@
       "resizeMode": "contain",
       "backgroundColor": "#F5F0E8"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.drape.app",
+      "privacyManifests": {
+        "NSPrivacyAccessedAPITypes": [
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryUserDefaults",
+            "NSPrivacyAccessedAPITypeReasons": [
+              "CA92.1"
+            ]
+          },
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategorySystemBootTime",
+            "NSPrivacyAccessedAPITypeReasons": [
+              "35F9.1"
+            ]
+          },
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryFileTimestamp",
+            "NSPrivacyAccessedAPITypeReasons": [
+              "C617.1"
+            ]
+          }
+        ]
+      },
       "infoPlist": {
         "NSCameraUsageDescription": "Drape uses your camera to upload reference photos and progress updates.",
         "NSPhotoLibraryUsageDescription": "Drape accesses your photo library for order references and portfolio photos.",
@@ -71,7 +95,14 @@
         {
           "microphonePermission": "Drape uses your microphone to record voice note messages."
         }
-      ]
+      ],
+      [
+        "@stripe/stripe-react-native",
+        {}
+      ],
+      "@react-native-community/datetimepicker",
+      "@sentry/react-native",
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true
