@@ -1,4 +1,3 @@
-import type { ReactElement } from 'react'
 import type { Metadata } from 'next'
 import { RecoveryBridge } from './recovery-bridge'
 
@@ -10,6 +9,7 @@ export const metadata: Metadata = {
   },
 }
 
-export default function RecoveryBridgePage(): ReactElement {
+// Keep the return type loose so Next/OpenNext do not disagree over React element types.
+export default function RecoveryBridgePage(): any {
   return <RecoveryBridge />
 }
