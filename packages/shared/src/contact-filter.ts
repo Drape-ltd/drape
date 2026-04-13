@@ -35,9 +35,9 @@ const SOCIAL_PATTERNS: RegExp[] = [
   // @username
   /@[a-zA-Z0-9_.]{2,}/,
   // Platform names
-  /\b(instagram|whatsapp|tiktok|snapchat|twitter|telegram|wechat|signal|viber|line|kik)\b/i,
+  /\b(instagram|whatsapp|facebook|messenger|tiktok|snapchat|twitter|telegram|wechat|signal|viber|line|kik)\b/i,
   // Redirect phrases
-  /\b(find me on|dm me|message me on|reach me at|same handle|my @ is|look me up|hit me up on|slide into)\b/i,
+  /\b(find me on|dm me|message me on|reach me at|same handle|my @ is|look me up|hit me up on|slide into|call me|text me|email me|send me your number|drop me your number)\b/i,
 ]
 
 // URL and web address patterns
@@ -46,6 +46,10 @@ const URL_PATTERNS: RegExp[] = [
   /www\./i,
   /\b\w+\.(com|co|io|ng|co\.uk|net|org|info|biz|app|dev|me)\b/i,
   /\b(linktree|link\.tree|beacons\.ai|bio\.site|allmylinks|taplink)\b/i,
+]
+
+const EMAIL_PATTERNS: RegExp[] = [
+  /\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/i,
 ]
 
 // Threat and abuse patterns
@@ -57,6 +61,7 @@ const ABUSE_PATTERNS: RegExp[] = [
 
 const ALL_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   ...PHONE_PATTERNS.map((p) => ({ pattern: p, label: 'phone number' })),
+  ...EMAIL_PATTERNS.map((p) => ({ pattern: p, label: 'email address' })),
   ...SOCIAL_PATTERNS.map((p) => ({ pattern: p, label: 'social handle or platform' })),
   ...URL_PATTERNS.map((p) => ({ pattern: p, label: 'URL or web address' })),
   ...ABUSE_PATTERNS.map((p) => ({ pattern: p, label: 'threatening language' })),

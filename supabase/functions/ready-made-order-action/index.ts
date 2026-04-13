@@ -7,6 +7,7 @@ import { log, audit } from '../_shared/logger.ts'
 import { parseBody, uuid, z } from '../_shared/validate.ts'
 
 const FN = 'ready-made-order-action'
+const MAX_READY_MADE_CHECKOUT_QUANTITY = 3
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
@@ -17,7 +18,7 @@ const BodySchema = z.discriminatedUnion('action', [
     action: z.literal('create-checkout'),
     sellerItemId: uuid,
     size: z.string().trim().max(40).optional(),
-    quantity: z.number().int().min(1).max(20),
+    quantity: z.number().int().min(1).max(MAX_READY_MADE_CHECKOUT_QUANTITY),
     fulfillment: z.enum(['PICKUP', 'DELIVERY', 'SHIPPING']),
     address: z.string().trim().max(500).optional(),
   }),
@@ -25,6 +26,15 @@ const BodySchema = z.discriminatedUnion('action', [
 
 function buildReference() {
   return `DRP${Date.now().toString(36).toUpperCase().slice(-6)}`
+}
+
+function resolveFulfillmentFee(
+  sellerProfile: { delivery_fee?: number | null; shipping_fee?: number | null } | null | undefined,
+  fulfillment: 'PICKUP' | 'DELIVERY' | 'SHIPPING',
+) {
+  if (fulfillment === 'PICKUP') return 0
+  if (fulfillment === 'DELIVERY') return sellerProfile?.delivery_fee ?? 0
+  return sellerProfile?.shipping_fee ?? 0
 }
 
 Deno.serve(async (req) => {
@@ -75,7 +85,7 @@ Deno.serve(async (req) => {
         delivery_available,
         shipping_available,
         tailor_profile_id,
-        tailor_profiles!tailor_profile_id(id, user_id, is_live, display_name)
+        tailor_profiles!tailor_profile_id(id, user_id, is_live, display_name, delivery_fee, shipping_fee)
       `)
       .eq('id', body.sellerItemId)
       .maybeSingle()
@@ -177,11 +187,57 @@ Deno.serve(async (req) => {
     }
 
     const needsAddress = body.fulfillment !== 'PICKUP'
-    if (needsAddress && !(body.address?.trim())) {
+    const normalizedAddress = needsAddress ? body.address?.trim() ?? '' : ''
+    if (needsAddress && !normalizedAddress) {
       return new Response('Delivery address is required for this fulfillment option.', { status: 400, headers: cors })
     }
 
+    if ((item.stock_status ?? 'IN_STOCK') === 'LOW_STOCK' && body.quantity > 1) {
+      return new Response('Only one unit can be checked out right now for this item.', { status: 409, headers: cors })
+    }
+
+    const { data: existingCheckout, error: existingCheckoutError } = await supabase
+      .from('orders')
+      .select('id, item_size, item_quantity, fulfillment_option, delivery_address')
+      .eq('customer_id', caller.id)
+      .eq('seller_item_id', item.id)
+      .eq('order_kind', 'READY_MADE')
+      .eq('stage', 'PAYMENT_PENDING')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (existingCheckoutError) {
+      log('error', FN, 'db.error', { actor_id: caller.id, error: existingCheckoutError.message })
+      return new Response('Database error', { status: 500, headers: cors })
+    }
+
+    if (existingCheckout?.id) {
+      const existingAddress = existingCheckout.delivery_address?.trim() ?? ''
+      const sameCheckout =
+        (existingCheckout.item_size ?? '') === nextSize &&
+        (existingCheckout.item_quantity ?? 1) === body.quantity &&
+        (existingCheckout.fulfillment_option ?? '') === body.fulfillment &&
+        existingAddress === normalizedAddress
+
+      if (sameCheckout) {
+        return new Response(JSON.stringify({ ok: true, orderId: existingCheckout.id, existing: true }), {
+          headers: { ...cors, 'Content-Type': 'application/json' },
+        })
+      }
+
+      return new Response(
+        JSON.stringify({
+          error: `You already have a checkout in progress for this item. Finish it or wait for it to expire before starting another.`,
+          orderId: existingCheckout.id,
+        }),
+        { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+      )
+    }
+
     const subtotal = item.price_amount * body.quantity
+    const fulfillmentFee = resolveFulfillmentFee(sellerProfile, body.fulfillment)
+    const total = subtotal + fulfillmentFee
 
     const { data: checkoutOrder, error: checkoutError } = await supabase
       .from('orders')
@@ -199,11 +255,12 @@ Deno.serve(async (req) => {
         item_quantity: body.quantity,
         item_unit_price: item.price_amount,
         item_subtotal: subtotal,
-        quoted_amount: subtotal,
+        fulfillment_fee: fulfillmentFee,
+        quoted_amount: total,
         quoted_currency: item.currency,
         fulfillment_option: body.fulfillment,
         delivery_method: body.fulfillment === 'PICKUP' ? 'LOCAL_COLLECTION' : 'SHIPPING',
-        delivery_address: needsAddress ? body.address?.trim() ?? null : null,
+        delivery_address: needsAddress ? normalizedAddress : null,
         stage: 'PAYMENT_PENDING',
         stage_updated_at: new Date().toISOString(),
       })
@@ -228,7 +285,7 @@ Deno.serve(async (req) => {
       },
     })
 
-    return new Response(JSON.stringify({ ok: true, orderId: checkoutOrder.id }), {
+    return new Response(JSON.stringify({ ok: true, orderId: checkoutOrder.id, existing: false }), {
       headers: { ...cors, 'Content-Type': 'application/json' },
     })
   } catch (error) {

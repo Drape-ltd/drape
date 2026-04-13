@@ -19,7 +19,7 @@
  *      → Dispute opened confirmation, resolution notice
  *
  *   4. id-verification-email
- *      Table: tailor_profiles  |  Event: UPDATE  (id_verified_at field changes)
+ *      Table: tailor_profiles  |  Event: UPDATE  (verification decision changes)
  *      → Approval / rejection notice to tailor
  *
  * Deploy:
@@ -27,14 +27,18 @@
  *
  * Set secrets:
  *   supabase secrets set RESEND_API_KEY=re_xxxx --project-ref <ref>
- *   supabase secrets set RESEND_FROM=noreply@drape.app --project-ref <ref>
+ *   supabase secrets set RESEND_FROM="Drape <noreply@drapeon.co>" --project-ref <ref>
  *   supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<key> --project-ref <ref>
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const RESEND_API = 'https://api.resend.com/emails'
-const FROM = Deno.env.get('RESEND_FROM') ?? 'Drape <noreply@drape.app>'
+const FROM = Deno.env.get('RESEND_FROM') ?? 'Drape <noreply@drapeon.co>'
+const APP_URL =
+  Deno.env.get('SITE_URL') ??
+  Deno.env.get('NEXT_PUBLIC_SITE_URL') ??
+  'https://drapeon.co'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -49,6 +53,7 @@ async function sendEmail(to: string, subject: string, html: string) {
     headers: {
       'Authorization': `Bearer ${Deno.env.get('RESEND_API_KEY')}`,
       'Content-Type': 'application/json',
+      'User-Agent': 'drape-send-email/1.0',
     },
     body: JSON.stringify({ from: FROM, to, subject, html }),
   })
@@ -67,10 +72,10 @@ function welcomeEmail(displayName: string, role: string): string {
 
   return `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#1a1a2e">
-  <img src="https://drape.app/logo.png" alt="Drape" width="80" style="margin:32px 0 16px"/>
+  <img src="${APP_URL}/logo.png" alt="Drape" width="80" style="margin:32px 0 16px"/>
   <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">Welcome to Drape, ${displayName}!</h1>
   <p style="color:#555;line-height:1.6">${roleBlurb}</p>
-  <a href="https://drape.app" style="display:inline-block;margin-top:24px;padding:12px 24px;background:#2d6a4f;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Open Drape</a>
+  <a href="${APP_URL}" style="display:inline-block;margin-top:24px;padding:12px 24px;background:#2d6a4f;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Open Drape</a>
   <p style="margin-top:32px;font-size:12px;color:#aaa">You're receiving this because you created a Drape account. © Drape Ltd.</p>
 </div>`
 }
@@ -80,15 +85,15 @@ function paymentReceiptEmail(displayName: string, ref: string, amountPence: numb
   const symbol: Record<string, string> = { GBP: '£', USD: '$', EUR: '€', NGN: '₦', GHS: '₵', KES: 'KSh' }
   return `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#1a1a2e">
-  <img src="https://drape.app/logo.png" alt="Drape" width="80" style="margin:32px 0 16px"/>
+  <img src="${APP_URL}/logo.png" alt="Drape" width="80" style="margin:32px 0 16px"/>
   <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">Payment received</h1>
-  <p style="color:#555;line-height:1.6">Hi ${displayName}, your payment for order <strong>#${ref}</strong> has been received and held in escrow.</p>
+  <p style="color:#555;line-height:1.6">Hi ${displayName}, your payment for order <strong>#${ref}</strong> has been received and the order is now funded in Drape.</p>
   <table style="border-collapse:collapse;width:100%;margin:24px 0">
     <tr><td style="padding:8px 0;color:#555">Order</td><td style="padding:8px 0;font-weight:600">#${ref}</td></tr>
     <tr><td style="padding:8px 0;color:#555">Amount</td><td style="padding:8px 0;font-weight:600">${symbol[currency] ?? currency}${amount}</td></tr>
-    <tr><td style="padding:8px 0;color:#555">Status</td><td style="padding:8px 0;color:#2d6a4f;font-weight:600">Held in escrow — released when you confirm delivery</td></tr>
+    <tr><td style="padding:8px 0;color:#555">Status</td><td style="padding:8px 0;color:#2d6a4f;font-weight:600">Order funded — payout stays governed by delivery, review, and dispute status</td></tr>
   </table>
-  <a href="https://drape.app" style="display:inline-block;padding:12px 24px;background:#2d6a4f;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Track your order</a>
+  <a href="${APP_URL}" style="display:inline-block;padding:12px 24px;background:#2d6a4f;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Track your order</a>
   <p style="margin-top:32px;font-size:12px;color:#aaa">© Drape Ltd. Questions? Reply to this email.</p>
 </div>`
 }
@@ -99,12 +104,12 @@ function disputeOpenedEmail(displayName: string, ref: string, isCustomer: boolea
     : 'A dispute has been opened on your order. Our team will contact you within 2 business days.'
   return `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#1a1a2e">
-  <img src="https://drape.app/logo.png" alt="Drape" width="80" style="margin:32px 0 16px"/>
+  <img src="${APP_URL}/logo.png" alt="Drape" width="80" style="margin:32px 0 16px"/>
   <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">Dispute opened — Order #${ref}</h1>
   <p style="color:#555;line-height:1.6">Hi ${displayName},</p>
   <p style="color:#555;line-height:1.6">${roleNote}</p>
   <p style="color:#555;line-height:1.6">No funds will be released while the dispute is under review.</p>
-  <a href="https://drape.app" style="display:inline-block;margin-top:16px;padding:12px 24px;background:#c0392b;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">View dispute</a>
+  <a href="${APP_URL}" style="display:inline-block;margin-top:16px;padding:12px 24px;background:#c0392b;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">View dispute</a>
   <p style="margin-top:32px;font-size:12px;color:#aaa">© Drape Ltd.</p>
 </div>`
 }
@@ -115,7 +120,7 @@ function disputeResolvedEmail(displayName: string, ref: string, resolution: stri
     : 'The payment has been released to the tailor.'
   return `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#1a1a2e">
-  <img src="https://drape.app/logo.png" alt="Drape" width="80" style="margin:32px 0 16px"/>
+  <img src="${APP_URL}/logo.png" alt="Drape" width="80" style="margin:32px 0 16px"/>
   <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">Dispute resolved — Order #${ref}</h1>
   <p style="color:#555;line-height:1.6">Hi ${displayName},</p>
   <p style="color:#555;line-height:1.6">The dispute on order <strong>#${ref}</strong> has been resolved.</p>
@@ -132,11 +137,11 @@ function idVerifiedEmail(displayName: string, approved: boolean): string {
     : 'We were unable to verify your ID document. Please re-submit a clear photo of a valid government-issued ID in your profile settings.'
   return `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#1a1a2e">
-  <img src="https://drape.app/logo.png" alt="Drape" width="80" style="margin:32px 0 16px"/>
+  <img src="${APP_URL}/logo.png" alt="Drape" width="80" style="margin:32px 0 16px"/>
   <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">${headline}</h1>
   <p style="color:#555;line-height:1.6">Hi ${displayName},</p>
   <p style="color:#555;line-height:1.6">${body}</p>
-  <a href="https://drape.app" style="display:inline-block;margin-top:16px;padding:12px 24px;background:#2d6a4f;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Open Drape</a>
+  <a href="${APP_URL}" style="display:inline-block;margin-top:16px;padding:12px 24px;background:#2d6a4f;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Open Drape</a>
   <p style="margin-top:32px;font-size:12px;color:#aaa">© Drape Ltd.</p>
 </div>`
 }
@@ -209,7 +214,7 @@ Deno.serve(async (req) => {
           : Promise.resolve({ data: null }),
       ])
 
-      const ref = order.reference ?? order.order_id?.slice(0, 8).toUpperCase() ?? ''
+      const ref = order.reference ?? dispute.order_id?.slice(0, 8).toUpperCase() ?? ''
 
       if (customer?.email) {
         await sendEmail(
@@ -275,17 +280,16 @@ Deno.serve(async (req) => {
       return new Response('ok')
     }
 
-    // ── Tailor profile UPDATE — ID verification status changed ────────────────
+    // ── Tailor profile UPDATE — ID verification decision ──────────────────────
     if (table === 'tailor_profiles' && type === 'UPDATE') {
       const profile = record
-      const prevVerified = old_record?.id_verified_at
-      const nowVerified = profile.id_verified_at
+      const prevStatus = old_record?.id_verification_status
+      const nextStatus = profile.id_verification_status
 
-      // Only fire when id_verified_at transitions (null → value = approved, value → null = rejected)
-      if (prevVerified === nowVerified) return new Response('ok')
+      if (prevStatus === nextStatus) return new Response('ok')
 
-      const approved = !!nowVerified && !prevVerified
-      const rejected = !nowVerified && !!prevVerified
+      const approved = nextStatus === 'VERIFIED'
+      const rejected = nextStatus === 'REJECTED'
 
       if (!approved && !rejected) return new Response('ok')
 

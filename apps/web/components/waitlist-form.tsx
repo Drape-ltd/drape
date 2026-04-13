@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useState } from 'react'
+import { type JSX, useState } from 'react'
 import { LocationAutocomplete } from './location-autocomplete'
 
 type WaitlistFormProps = {

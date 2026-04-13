@@ -15,6 +15,8 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { isLikelyConnectivityIssue } from '@/lib/function-errors'
+import { minorUnitsFromInput, moneyInputFromMinorUnits } from '@/lib/money-input'
 import { syncUserRow } from '@/lib/syncUserRow'
 import { stripExif } from '@/lib/stripExif'
 import { Button, Input, TagSelector, ProgressStepper } from '@/components/ui'
@@ -153,7 +155,7 @@ export default function TailorSetupScreen() {
         style: 'destructive',
         onPress: () => {
           void signOut().catch(() => {
-            Alert.alert('Unable to sign out', 'Please try again in a moment.')
+            Alert.alert('Unable to sign out', 'Please try again in a moment. You can stay here and continue setup, then sign out later if needed.')
           })
         },
       },
@@ -193,6 +195,8 @@ export default function TailorSetupScreen() {
   const [pickupAvailable, setPickupAvailable] = useState(true)
   const [deliveryAvailable, setDeliveryAvailable] = useState(false)
   const [shippingAvailable, setShippingAvailable] = useState(false)
+  const [deliveryFee, setDeliveryFee] = useState('')
+  const [shippingFee, setShippingFee] = useState('')
   const [idPhotoUri, setIdPhotoUri] = useState<string | null>(null)
   const [uploadingId, setUploadingId] = useState(false)
 
@@ -207,6 +211,7 @@ export default function TailorSetupScreen() {
         price_range_min, price_range_max, currency, seller_type,
         supports_custom_orders, supports_ready_made,
         pickup_available, delivery_available, shipping_available,
+        delivery_fee, shipping_fee,
         portfolio_photo_urls, portfolio_video_urls, availability
       `)
       .eq('user_id', user.id)
@@ -266,6 +271,8 @@ export default function TailorSetupScreen() {
         if (typeof row.pickup_available === 'boolean') setPickupAvailable(row.pickup_available)
         if (typeof row.delivery_available === 'boolean') setDeliveryAvailable(row.delivery_available)
         if (typeof row.shipping_available === 'boolean') setShippingAvailable(row.shipping_available)
+        setDeliveryFee(moneyInputFromMinorUnits(row.delivery_fee))
+        setShippingFee(moneyInputFromMinorUnits(row.shipping_fee))
       })
     return () => {
       cancelled = true
@@ -401,7 +408,9 @@ export default function TailorSetupScreen() {
       }
     } catch (error: any) {
       pickedUris.current.delete(asset.uri)
-      const details = error?.message ?? 'Please try again.'
+      const details = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. We could not upload this media yet. Retry from this setup step when the signal improves.'
+        : error?.message ?? 'Please try again.'
       console.error('tailor setup media upload failed', {
         message: error?.message,
         details: error?.details,
@@ -454,7 +463,16 @@ export default function TailorSetupScreen() {
 
     if (idPhotoUri && !idUrl) {
       setSaving(false)
-      Alert.alert('ID upload failed', 'We could not upload your ID document. Please try again before submitting.')
+      Alert.alert('ID upload failed', 'We could not upload your ID document yet. Retry from this setup step before submitting.')
+      return
+    }
+
+    const deliveryFeeMinor = minorUnitsFromInput(deliveryFee)
+    const shippingFeeMinor = minorUnitsFromInput(shippingFee)
+
+    if (deliveryFeeMinor == null || shippingFeeMinor == null) {
+      setSaving(false)
+      Alert.alert('Invalid fee', 'Enter delivery and shipping fees as whole numbers or decimals with up to two places.')
       return
     }
 
@@ -479,6 +497,8 @@ export default function TailorSetupScreen() {
           pickupAvailable,
           deliveryAvailable,
           shippingAvailable,
+          deliveryFee: deliveryAvailable ? deliveryFeeMinor : 0,
+          shippingFee: shippingAvailable ? shippingFeeMinor : 0,
           idDocumentUrl: idUrl,
         },
       },
@@ -487,7 +507,12 @@ export default function TailorSetupScreen() {
     setSaving(false)
 
     if (error) {
-      Alert.alert('Error', 'Could not save your profile. Please try again.')
+      Alert.alert(
+        'Error',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. We could not save your setup yet. Your details are still here, so retry when the signal improves.'
+          : 'Could not save your profile right now. Please try again in a moment.',
+      )
       return
     }
 
@@ -896,6 +921,30 @@ export default function TailorSetupScreen() {
                       <Text style={styles.choiceHint}>Courier or shipping partner handles it.</Text>
                     </TouchableOpacity>
                   </View>
+                  {deliveryAvailable || shippingAvailable ? (
+                    <View style={styles.fulfillmentFeeBlock}>
+                      <Text style={styles.fieldLabel}>Default fulfillment fees</Text>
+                      <Text style={styles.fieldHint}>Show buyers the cost before payment. Leave blank if it is free or included.</Text>
+                      {deliveryAvailable ? (
+                        <Input
+                          label={`Delivery fee (${currency})`}
+                          placeholder="e.g. 15"
+                          value={deliveryFee}
+                          onChangeText={setDeliveryFee}
+                          keyboardType="decimal-pad"
+                        />
+                      ) : null}
+                      {shippingAvailable ? (
+                        <Input
+                          label={`Shipping fee (${currency})`}
+                          placeholder="e.g. 25"
+                          value={shippingFee}
+                          onChangeText={setShippingFee}
+                          keyboardType="decimal-pad"
+                        />
+                      ) : null}
+                    </View>
+                  ) : null}
                 </View>
 
                 <View>
@@ -1107,6 +1156,7 @@ const styles = StyleSheet.create({
   choiceTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
   choiceTitleActive: { color: Colors.needleGreen },
   choiceHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
+  fulfillmentFeeBlock: { gap: Spacing.md, marginTop: Spacing.md },
 
   // ID verification
   idPickBtn: {

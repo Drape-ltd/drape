@@ -8,8 +8,10 @@
  * The token is HMAC-SHA256(VERIFICATION_SECRET, tailorId:decision:exp).
  * Links expire after 7 days. Invalid or tampered links are rejected.
  *
- * On APPROVE: sets id_verification_status = 'VERIFIED', is_live = true
- * On REJECT:  sets id_verification_status = 'REJECTED', is_live = false
+ * On APPROVE: sets id_verification_status = 'VERIFIED', is_live = true,
+ *             id_verified_at = now()
+ * On REJECT:  sets id_verification_status = 'REJECTED', is_live = false,
+ *             id_verified_at = null
  *
  * Required env vars:
  *   SUPABASE_URL
@@ -19,7 +21,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { verifyPayload, escapeHtml } from '../_shared/hmac.ts'
-import { log, audit } from '../_shared/logger.ts'
+import { log } from '../_shared/logger.ts'
 import { checkRateLimit } from '../_shared/rateLimit.ts'
 
 const FN = 'handle-verification-decision'
@@ -103,32 +105,16 @@ Deno.serve(async (req) => {
     )
   }
 
-  const updates =
-    decision === 'APPROVE'
-      ? { id_verification_status: 'VERIFIED', is_live: true,  updated_at: new Date().toISOString() }
-      : { id_verification_status: 'REJECTED', is_live: false, updated_at: new Date().toISOString() }
-
-  const { error } = await supabase
-    .from('tailor_profiles')
-    .update(updates)
-    .eq('user_id', tailorId)
+  const { error } = await supabase.rpc('ops_decide_verification', {
+    p_tailor_user_id: tailorId,
+    p_decision: decision,
+  })
 
   if (error) {
     log('error', FN, 'db.error', { tailor_id: tailorId, decision, error: error.message })
     return htmlPage('Database error', '<h1>Database error</h1><p>Could not update profile. Please update manually in the dashboard.</p>')
   }
 
-  const supabaseForAudit = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-  )
-  await audit(supabaseForAudit, {
-    event: 'id_verification.decision',
-    actor_id: tailorId,
-    actor_role: 'OPS',
-    severity: decision === 'APPROVE' ? 'info' : 'warn',
-    payload: { decision, tailor_id: tailorId, display_name: profile.display_name },
-  })
   log('info', FN, 'id_verification.decision', { tailor_id: tailorId, decision })
 
   if (decision === 'APPROVE') {
@@ -136,7 +122,7 @@ Deno.serve(async (req) => {
       'Tailor approved',
       `<h1 style="color:#2F6844">✓ Approved</h1>
        <p><strong>${escapeHtml(profile.display_name)}</strong> is now live on Drape.</p>
-       <p style="font-size:13px;margin-top:16px">They will receive a push notification shortly.</p>`,
+       <p style="font-size:13px;margin-top:16px">They will receive an email confirmation shortly.</p>`,
     )
   } else {
     return htmlPage(

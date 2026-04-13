@@ -1,5 +1,6 @@
 import { CONTACTS } from '@drape/shared'
 import Link from 'next/link'
+import type { JSX } from 'react'
 
 export function SiteFooter(): JSX.Element {
   return (

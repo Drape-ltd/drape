@@ -7,7 +7,9 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { inviteCustomerFromTailor, shareTailorProfile } from '@/lib/invite'
+import { deriveTailorReadiness } from '@/lib/tailor-readiness'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { useRefreshOnFocus, useTailorDashboard } from '@/lib/queries'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -35,6 +37,9 @@ type DashboardStats = {
   isLive: boolean
   idVerificationStatus: string
   profileId: string | null
+  profileCompleted: boolean
+  stripeAccountId: string | null
+  paystackAccountId: string | null
 }
 
 type ActiveOrderRow = {
@@ -88,6 +93,7 @@ export default function TailorDashboard() {
 
   const stats = (dashboardData?.stats ?? null) as DashboardStats | null
   const orders = (dashboardData?.orders ?? []) as ActiveOrderRow[]
+  const readiness = deriveTailorReadiness(stats)
 
   useEffect(() => {
     AsyncStorage.getItem(DASHBOARD_GUIDE_KEY)
@@ -126,7 +132,12 @@ export default function TailorDashboard() {
       .update({ availability: value })
       .eq('user_id', user?.id)
     if (error) {
-      Alert.alert('Error', 'Could not update your availability. Please try again.')
+      Alert.alert(
+        'Error',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. We could not update your availability yet. Retry when the signal improves.'
+          : 'Could not update your availability right now. Please try again in a moment.',
+      )
       setAvailSaving(false)
       return
     }
@@ -225,6 +236,41 @@ export default function TailorDashboard() {
             {stats && <LiveStatusBadge isLive={stats.isLive} idStatus={stats.idVerificationStatus} />}
           </View>
         </View>
+
+        {stats ? (
+          <View
+            style={[
+              styles.readinessCard,
+              readiness.tone === 'success'
+                ? styles.readinessCardSuccess
+                : readiness.tone === 'warning'
+                  ? styles.readinessCardWarning
+                  : null,
+            ]}
+          >
+            <Text style={styles.readinessTitle}>{readiness.title}</Text>
+            <Text style={styles.readinessBody}>{readiness.body}</Text>
+            {readiness.payoutProviderLabel ? (
+              <Text style={styles.readinessMeta}>Payout path detected: {readiness.payoutProviderLabel}</Text>
+            ) : null}
+            {readiness.actionLabel === 'Review payout status' ? (
+              <TouchableOpacity style={styles.readinessLink} onPress={() => router.push('/(tailor)/earnings')}>
+                <Text style={styles.readinessLinkText}>Review payout status</Text>
+              </TouchableOpacity>
+            ) : readiness.actionLabel === 'Review live profile' ? (
+              <TouchableOpacity style={styles.readinessLink} onPress={() => router.push('/(tailor)/profile/edit')}>
+                <Text style={styles.readinessLinkText}>Review live profile</Text>
+              </TouchableOpacity>
+            ) : readiness.actionLabel ? (
+              <TouchableOpacity style={styles.readinessLink} onPress={() => router.push('/(tailor)/profile/setup')}>
+                <Text style={styles.readinessLinkText}>{readiness.actionLabel}</Text>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity style={styles.readinessSecondaryLink} onPress={() => router.push('/(tailor)/profile/trust-access' as never)}>
+              <Text style={styles.readinessSecondaryLinkText}>See trust & access</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
 
         {/* Availability modal */}
         <Modal visible={availModal} transparent animationType="slide">
@@ -329,6 +375,13 @@ export default function TailorDashboard() {
                       </TouchableOpacity>
                     </View>
                   )}
+                </>
+              ) : readiness.actionLabel === 'Review payout status' ? (
+                <>
+                  <Text style={styles.emptyHint}>{readiness.body}</Text>
+                  <TouchableOpacity style={styles.shareBtn} onPress={() => router.push('/(tailor)/earnings')}>
+                    <Text style={styles.shareBtnText}>Review payout status</Text>
+                  </TouchableOpacity>
                 </>
               ) : stats?.idVerificationStatus === 'PENDING' ? (
                 <Text style={styles.emptyHint}>Your profile is under review. You'll start receiving orders once verified.</Text>
@@ -507,6 +560,22 @@ const styles = StyleSheet.create({
   guideClose: { fontSize: 20, lineHeight: 20, color: Colors.midGrey, paddingHorizontal: 4 },
   guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  readinessCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.xs,
+    ...Shadow.sm,
+  },
+  readinessCardWarning: { borderWidth: 1, borderColor: Colors.warning + '35' },
+  readinessCardSuccess: { borderWidth: 1, borderColor: Colors.success + '30' },
+  readinessTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  readinessBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  readinessMeta: { fontSize: FontSize.xs, color: Colors.midGrey },
+  readinessLink: { alignSelf: 'flex-start', paddingTop: 2 },
+  readinessLinkText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  readinessSecondaryLink: { alignSelf: 'flex-start' },
+  readinessSecondaryLinkText: { fontSize: FontSize.xs, color: Colors.midGrey, fontWeight: FontWeight.medium },
 
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   headerRight: { alignItems: 'flex-end', gap: Spacing.sm },

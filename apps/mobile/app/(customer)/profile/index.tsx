@@ -12,6 +12,7 @@ import * as ImageManipulator from 'expo-image-manipulator'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { useCustomerProfile } from '@/lib/customerProfile'
+import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { useCustomerProfileOverview, useRefreshOnFocus } from '@/lib/queries'
 import { shareCustomerReferral, shareDiscoverTailors } from '@/lib/invite'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -126,6 +127,7 @@ export default function CustomerProfileScreen() {
   const {
     data: overview,
     isError,
+    error: overviewError,
     refetch,
   } = useCustomerProfileOverview(user?.id, lastNotifCheck)
 
@@ -172,6 +174,9 @@ export default function CustomerProfileScreen() {
   const memberSince = createdAt
     ? new Date(createdAt).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
     : null
+  const profileLoadErrorMessage = isLikelyConnectivityIssue(overviewError)
+    ? 'Connection looks weak. Your fit profile and account tools are still here once the signal stabilizes, so retry when it improves.'
+    : 'This is where your fit profile, recent orders, and account tools stay organised. Please try again in a moment.'
 
   // ── Photo upload ────────────────────────────────────────────────────────────
 
@@ -233,7 +238,12 @@ export default function CustomerProfileScreen() {
       setAvatarUrl(bustUrl)
     } catch (err) {
       console.error('[avatar upload]', err)
-      Alert.alert('Upload failed', 'Could not update your photo. Please try again.')
+      Alert.alert(
+        'Upload failed',
+        isLikelyConnectivityIssue(err)
+          ? 'Connection looks weak. We could not update your photo yet. Retry when the signal improves.'
+          : 'Could not update your photo right now. Please try again in a moment.',
+      )
     } finally {
       setUploadingAvatar(false)
     }
@@ -249,7 +259,7 @@ export default function CustomerProfileScreen() {
         style: 'destructive',
         onPress: () => {
           void signOut().catch(() => {
-            Alert.alert('Unable to log out', 'Please try again in a moment.')
+            Alert.alert('Unable to log out', 'Please try again in a moment. You can keep using your profile and come back to log out later.')
           })
         },
       },
@@ -263,9 +273,7 @@ export default function CustomerProfileScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Customer profile</Text>
             <Text style={styles.stateTitle}>Couldn't load your profile.</Text>
-            <Text style={styles.stateHint}>
-              This is where your fit profile, recent orders, and account tools stay organised. Please try again in a moment.
-            </Text>
+            <Text style={styles.stateHint}>{profileLoadErrorMessage}</Text>
             <TouchableOpacity
               style={styles.statePrimaryBtn}
               onPress={() => { void refetch() }}

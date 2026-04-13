@@ -25,6 +25,20 @@ Every open state should answer three questions:
 If the app cannot answer those clearly, it will feel loose and people will
 abuse the gaps.
 
+## Recommended V1 Defaults To Review This Week
+
+These are the defaults worth pressure-testing with product and ops before we
+lock implementation:
+
+- custom brief first response target: `24 hours`
+- consultation resolution target: `24 hours`
+- quote validity window: `48 hours`
+- custom payment checkout timeout: `30 minutes`
+- ready-made checkout timeout: `30 minutes`
+- delivered / collected review window: `7 days`
+- ready-made per-checkout quantity cap before full inventory exists: `3`
+- consultation no-show grace period before follow-up: `10 minutes`
+
 ## 1. Customer Brief Sent, Tailor Has Not Responded
 
 ### State
@@ -92,10 +106,18 @@ abuse the gaps.
 
 - at `24 hours`
   - remind customer quote is waiting
+- at `42 hours`
+  - send final reminder that quote will expire soon
 - at `48 hours`
   - auto-expire
   - set order to `EXPIRED`
   - notify tailor and customer
+
+### Recommended Guardrail
+
+- tailor can replace an open quote before acceptance, but the system should keep
+  only one active quote snapshot per order
+- do not allow silent quote edits after payment has started
 
 ### Current Status
 
@@ -103,7 +125,54 @@ abuse the gaps.
   - [expire-quotes/index.ts](/Users/onaopemipodimowo/drape/packages/db/supabase/functions/expire-quotes/index.ts)
 - this should be moved into active Supabase deployment/runtime and scheduled properly
 
-## 4. Ready-Made Inquiry, Seller Does Not Reply
+## 4. Custom Quote Accepted, But Payment Is Not Finished
+
+### Planned State
+
+- `PAYMENT_PENDING`
+- applies to custom orders once online payment is active
+
+### Current Status
+
+- Stripe sandbox is now wired through quote acceptance
+- customer flow now moves through:
+  - `QUOTE_SENT`
+  - `PAYMENT_PENDING`
+  - `CONFIRMED` after server-side confirmation
+- `stripe-webhook` exists for payment confirmation and failure visibility
+- abandoned payment windows now have a deployed timeout worker:
+  - `expire-pending-payments`
+
+### Rule
+
+- customer should finish payment within `30 minutes`
+
+### System Behavior
+
+- when customer taps accept quote
+  - create exactly one open payment session for that order
+  - move order into `PAYMENT_PENDING`
+- at `15 minutes`
+  - remind customer payment is still incomplete
+- at `30 minutes`
+  - expire the payment session
+  - if quote validity is still open, move order back to `QUOTE_SENT`
+  - if the quote validity window has already ended, move order to `EXPIRED`
+
+### Guardrails
+
+- do not allow multiple open payment sessions for one order
+- do not move to `CONFIRMED` until payment succeeds server-side
+- if payment succeeds but order update fails, route to ops/manual-recovery queue
+  instead of leaving the order invisible
+
+### Why
+
+- avoids duplicate charges
+- avoids fake acceptance without payment
+- gives customers a clean retry path
+
+## 5. Ready-Made Inquiry, Seller Does Not Reply
 
 ### State
 
@@ -128,7 +197,7 @@ abuse the gaps.
 
 - shop messaging cannot be a dead-end
 
-## 5. Ready-Made Checkout Started, Payment Not Finished
+## 6. Ready-Made Checkout Started, Payment Not Finished
 
 ### State
 
@@ -148,8 +217,55 @@ abuse the gaps.
 
 - use a dedicated payment/session expiry timestamp
 - do not keep `PAYMENT_PENDING` open indefinitely
+- if a temporary quantity hold exists, release it immediately when the payment
+  window expires
 
-## 6. Seller Accepts Work Beyond Customer Deadline
+### Current Status
+
+- server-side duplicate checkout protection already exists
+- abandoned ready-made `PAYMENT_PENDING` orders now expire through the same
+  `expire-pending-payments` worker
+- quantity is still guarded, but true numeric inventory / hold release is still
+  the next implementation layer
+
+## 7. Ready-Made Quantity And Stock Rules
+
+### Goal
+
+Keep V1 simple without pretending inventory is more mature than it is.
+
+### V1 Recommendation
+
+- every live ready-made item should have either:
+  - a simple `available_quantity`
+  - or a strict operational stock bucket that still resolves to a numeric limit
+- until a richer inventory model exists:
+  - max quantity per checkout should default to `3`
+  - seller can lower availability per item
+
+### System Behavior
+
+- before checkout:
+  - validate requested quantity against current available quantity
+- when payment starts:
+  - create a temporary hold or soft reservation
+- when payment succeeds:
+  - decrement available quantity atomically server-side
+- when payment fails or expires:
+  - release the held quantity
+
+### Guardrails
+
+- if two buyers race for the last units, server-side validation decides the winner
+- never partially charge without explicit customer confirmation
+- if quantity becomes unavailable mid-checkout, fail clearly and tell the buyer to
+  re-open the item
+
+### Why
+
+- this is the fastest way to avoid overselling before a full inventory engine exists
+
+## 8. Seller Accepts Work Beyond Customer Deadline
 
 ### Current Status
 
@@ -165,7 +281,7 @@ abuse the gaps.
 
 - this should remain a hard server-side rule
 
-## 7. Production Stalls After Quote Acceptance
+## 9. Production Stalls After Quote Acceptance
 
 ### States
 
@@ -193,7 +309,7 @@ abuse the gaps.
 
 - keeps “accepted but abandoned” orders visible
 
-## 8. Delivered / Collected But Customer Never Finishes Order
+## 10. Delivered / Collected But Customer Never Finishes Order
 
 ### States
 
@@ -208,6 +324,8 @@ abuse the gaps.
 
 - at `3 days`
   - remind customer to review and finish
+- at `6 days`
+  - warn customer that the order will auto-complete soon
 - at `7 days`
   - auto-complete if no dispute raised
 
@@ -216,7 +334,7 @@ abuse the gaps.
 - mirrors marketplace behavior like Airbnb/Fiverr style “action window”
 - prevents earnings from being stuck forever
 
-## 9. Dispute Window
+## 11. Dispute Window
 
 ### Rule
 
@@ -231,7 +349,40 @@ abuse the gaps.
 
 - creates a clear end to transaction ambiguity
 
-## 10. Response Rate And Seller Quality Signals
+## 12. Call And Consultation Rules
+
+### Goal
+
+Calls should help orders move forward, not become a new source of ambiguity.
+
+### V1 Recommendation
+
+- use one hosted provider for both voice and video
+- allow one active consultation room per order at a time
+- keep the order itself as the source of truth, not the call room
+
+### System Behavior
+
+- room can be created only for valid pre-production stages:
+  - `PENDING_QUOTE`
+  - `CONSULTATION`
+  - optional later: `QUOTE_SENT` if follow-up clarification is needed
+- if nobody joins within `10 minutes`
+  - mark it as a no-show in logs
+  - keep the order open
+  - prompt the tailor to continue in messages or send/decline the quote
+- if the room fails to open
+  - do not block the order forever in a broken call state
+- after a consultation ends
+  - tailor still needs to send quote or decline within the existing response window
+
+### Guardrails
+
+- do not make live calls a hard dependency for all orders
+- do not allow expired or terminal orders to create fresh rooms
+- camera/mic denial should fail gracefully and return users to messages/order detail
+
+## 13. Response Rate And Seller Quality Signals
 
 These should affect ranking over time:
 
@@ -241,13 +392,15 @@ These should affect ranking over time:
 - on-time delivery rate
 - dispute rate
 - cancellation rate
+- quote expiry rate
+- ready-made inquiry expiry rate
 
 ### Recommendation
 
 - do not surface every number publicly yet
 - use them internally for search ranking and quality review first
 
-## 11. Abuse Prevention Rules
+## 14. Abuse Prevention Rules
 
 ### Contact Bypass
 
@@ -281,7 +434,53 @@ Add internal flags for:
 
 These should feed moderation and ranking.
 
-## 12. Notifications Needed For This To Work
+## 15. Preflight Checks Before Critical Actions
+
+These are the checks that should happen before the user reaches a broken state.
+
+### Before tailor sends quote
+
+- order still active and not expired
+- caller owns the order
+- quoted amount is positive and sane
+- completion date does not exceed customer deadline
+- fulfillment path is coherent with the order
+- payment configuration is present if online payment is required next
+
+### Before customer accepts custom quote
+
+- quote still valid
+- order has not already moved forward elsewhere
+- no open dispute exists
+- payment provider is configured
+- delivery address exists if shipping is required
+
+### Before ready-made checkout starts
+
+- item is still live
+- item is not sold out or hidden
+- selected size is valid if sizes exist
+- requested quantity is valid
+- fulfillment option is allowed for the item
+- address is complete for delivery/shipping
+- there is no conflicting open checkout for the same item/order
+
+### Before tailor marks order shipped
+
+- order is in the right stage
+- tracking number is present
+- carrier is present
+- shipping address exists
+- payment state is valid for fulfillment
+
+### Before voice/video call starts
+
+- order is in a call-eligible stage
+- room token or URL was created successfully
+- camera/mic permissions are granted if needed
+- consultation has not already expired
+
+## 16. Notifications Needed For This To Work
 
 For the above rules to feel real, notifications need to exist for:
 
@@ -289,42 +488,60 @@ For the above rules to feel real, notifications need to exist for:
 - consultation requested
 - quote sent
 - quote expiring soon
+- custom payment pending
 - inquiry waiting
 - checkout pending
 - production stalled
 - delivered / collected
 - finish order reminder
 - auto-complete warning
+- consultation no-show or failed join fallback
 
-## 13. Minimum V1 Automation We Should Actually Implement
+## 17. Minimum V1 Automation We Should Actually Implement This Week
 
 If we keep this lean, the highest-value automation set is:
 
 1. auto-expire unanswered custom briefs after `48 hours`
 2. auto-expire untouched consultations after `48 hours`
 3. auto-expire quotes after `48 hours`
-4. auto-expire ready-made inquiries after `48 hours`
-5. auto-expire abandoned payment-pending shop checkouts after `30 minutes`
-6. remind customer to finish delivered/collected orders
-7. auto-complete delivered/collected orders after `7 days` if no concern exists
+4. custom-order payment timeout that returns to `QUOTE_SENT` or `EXPIRED`
+5. auto-expire ready-made inquiries after `48 hours`
+6. auto-expire abandoned ready-made `PAYMENT_PENDING` checkouts after `30 minutes`
+7. quantity/stock revalidation before finalizing ready-made payments
+8. remind customer to finish delivered/collected orders
+9. auto-complete delivered/collected orders after `7 days` if no concern exists
 
-## 14. Recommended Implementation Order
+## 18. Recommended Implementation Order This Week
 
-1. deploy real scheduled expiry for `QUOTE_SENT`
-2. add scheduled expiry for `PENDING_QUOTE` and `CONSULTATION`
-3. add scheduled expiry for `READY_MADE + PAYMENT_PENDING`
-4. add delivered/collected auto-complete window
-5. wire push/email reminders around those timers
-6. feed response and expiry metrics into ranking/moderation
+1. add preflight checks for custom quote acceptance and ready-made checkout
+2. wire Stripe sandbox into custom and ready-made payment flows
+3. add quantity limits and stock revalidation for ready-made items
+4. wire shipping dependency and tracking lifecycle
+5. add voice/video provider with graceful fallback rules
+6. deploy scheduled expiry/reminder jobs
+7. feed response and expiry metrics into ranking/moderation
 
-## 15. What This Means Product-Wise
+## 19. Partner Review Questions
+
+These are the decisions worth getting a second opinion on before hard-coding them:
+
+1. Should quote validity be `48 hours` or `72 hours`?
+2. Should a tailor get one manual quote extension, or none?
+3. If custom payment times out, should the order return to `QUOTE_SENT` or expire immediately?
+4. What is the right V1 max quantity per ready-made checkout: `1`, `3`, or `5`?
+5. Should ready-made checkout hold stock for the full `30 minutes`, or only soft-hold until payment confirmation?
+6. Is a `10-minute` consultation no-show window too short, right, or too long?
+7. Should some sellers be allowed inquiry-only ready-made listings before direct checkout is enabled?
+
+## 20. What This Means Product-Wise
 
 Drape should not just track stages.
 
 It should enforce:
 
 - response expectations
-- time windows
+- payment deadlines
+- quantity limits
 - clean closure
 - marketplace accountability
 

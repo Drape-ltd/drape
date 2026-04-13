@@ -1,5 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
+import { rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
 import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
@@ -58,21 +59,6 @@ const BodySchema = z.discriminatedUnion('action', [
   }),
 ])
 
-function hasBlockedContact(text: string) {
-  return /(https?:\/\/|www\.|instagram|whatsapp|telegram|@\w+|\+?\d[\d\s().-]{6,}\d)/i.test(text)
-}
-
-function validateNoContact(entry: z.infer<typeof EntrySchema>) {
-  const textFields = [
-    entry.full_name,
-    entry.client_notes,
-    entry.fabric_preference,
-    entry.style_preference,
-    entry.special_fitting_notes,
-  ]
-  return !textFields.some((value) => typeof value === 'string' && value.trim() && hasBlockedContact(value))
-}
-
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
@@ -91,8 +77,27 @@ Deno.serve(async (req) => {
     const body = parsed.data
 
     if (body.action === 'create' || body.action === 'update') {
-      if (!validateNoContact(body.entry)) {
-        return new Response('Contact details are not allowed in diary entries.', { status: 400, headers: cors })
+      const textFields = [
+        { surface: 'diary_entries.full_name', text: body.entry.full_name, field: 'full_name' },
+        { surface: 'diary_entries.client_notes', text: body.entry.client_notes, field: 'client_notes' },
+        { surface: 'diary_entries.fabric_preference', text: body.entry.fabric_preference, field: 'fabric_preference' },
+        { surface: 'diary_entries.style_preference', text: body.entry.style_preference, field: 'style_preference' },
+        { surface: 'diary_entries.special_fitting_notes', text: body.entry.special_fitting_notes, field: 'special_fitting_notes' },
+      ] as const
+
+      for (const field of textFields) {
+        const blockedField = await rejectIfBlockedContact({
+          supabase,
+          fn: FN,
+          cors,
+          actorId: caller.id,
+          actorRole: 'TAILOR',
+          surface: field.surface,
+          text: field.text,
+          message: 'Contact details are not allowed in diary entries.',
+          extra: { action: body.action, field: field.field },
+        })
+        if (blockedField) return blockedField
       }
 
       const payload = {

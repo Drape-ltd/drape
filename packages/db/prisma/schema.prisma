@@ -210,6 +210,8 @@ model TailorProfile {
   pickupAvailable      Boolean            @default(false) @map("pickup_available")
   deliveryAvailable    Boolean            @default(false) @map("delivery_available")
   shippingAvailable    Boolean            @default(false) @map("shipping_available")
+  deliveryFee          Int                @default(0) @map("delivery_fee")
+  shippingFee          Int                @default(0) @map("shipping_fee")
   shipsInternationally Boolean            @default(false) @map("ships_internationally")
   stripeAccountId      String?            @map("stripe_account_id")
   paystackAccountId    String?            @map("paystack_account_id")
@@ -373,6 +375,7 @@ model Order {
   itemQuantity                 Int             @default(1) @map("item_quantity")
   itemUnitPrice                Int?            @map("item_unit_price")
   itemSubtotal                 Int?            @map("item_subtotal")
+  fulfillmentFee               Int             @default(0) @map("fulfillment_fee")
   occasion                     String?
   deadline                     DateTime?
   fabricSource                 FabricSource?   @map("fabric_source")
@@ -392,6 +395,7 @@ model Order {
   stageUpdatedAt               DateTime        @default(now()) @map("stage_updated_at")
   paymentProvider              PaymentProvider? @map("payment_provider")
   paymentIntentId              String?         @map("payment_intent_id")
+  paymentCheckoutUrl           String?         @map("payment_checkout_url")
   escrowReleased               Boolean         @default(false) @map("escrow_released")
   escrowReleasedAt             DateTime?       @map("escrow_released_at")
   autoReleaseAt                DateTime?       @map("auto_release_at")
@@ -526,6 +530,25 @@ model Payout {
   processedAt      DateTime        @default(now()) @map("processed_at")
 
   @@map("payouts")
+}
+
+// ─────────────────────────────────────────────
+// ACCOUNT DELETION REQUESTS
+// ─────────────────────────────────────────────
+
+model AccountDeletionRequest {
+  id             String   @id @default(uuid())
+  userId         String   @map("user_id")
+  email          String?
+  role           String
+  status         String   @default("PENDING")
+  reason         String?
+  requestedAt    DateTime @default(now()) @map("requested_at")
+  acknowledgedAt DateTime? @map("acknowledged_at")
+  processedAt    DateTime? @map("processed_at")
+  metadata       Json?
+
+  @@map("account_deletion_requests")
 }
 
 // ─────────────────────────────────────────────

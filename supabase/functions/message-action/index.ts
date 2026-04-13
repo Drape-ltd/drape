@@ -1,5 +1,10 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
+import { hasBlockedContact, logContactBypassAttempt } from '../_shared/contact-bypass.ts'
+import {
+  buildConversationBlockedMessage,
+  readConversationAccessState,
+} from '../_shared/conversation-access.ts'
 import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
@@ -8,10 +13,15 @@ import { parseBody, z, uuid } from '../_shared/validate.ts'
 
 const FN = 'message-action'
 
+const THREATENING_LANGUAGE_PATTERNS = [
+  /\b(i('ll| will|'m going to| am going to)) (kill|hurt|harm|beat|attack|destroy|ruin) (you|u|your|ur)\b/i,
+  /\b(you('re| are) (dead|finished|done)|watch your back|i know where you live)\b/i,
+]
+
 const BodySchema = z.object({
   action: z.literal('send-message'),
   orderId: uuid,
-  senderRole: z.enum(['CUSTOMER', 'TAILOR']),
+  senderRole: z.enum(['CUSTOMER', 'TAILOR']).optional(),
   senderName: z.string().trim().min(1).max(80),
   type: z.enum(['TEXT', 'PHOTO', 'VOICE']),
   body: z.string().trim().max(2000).optional(),
@@ -19,31 +29,48 @@ const BodySchema = z.object({
   voiceUrl: z.string().url().optional(),
 })
 
+function jsonResponse(body: Record<string, unknown>, status: number, cors: HeadersInit) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...cors, 'Content-Type': 'application/json' },
+  })
+}
+
+function jsonError(cors: HeadersInit, status: number, code: string, error: string) {
+  return jsonResponse({ code, error }, status, cors)
+}
+
+function hasThreateningLanguage(text: string) {
+  return THREATENING_LANGUAGE_PATTERNS.some((pattern) => pattern.test(text))
+}
+
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
 
   try {
     const caller = await getAuthUser(req)
-    if (!caller) return new Response('Unauthorized', { status: 401, headers: cors })
+    if (!caller) return jsonError(cors, 401, 'UNAUTHORIZED', 'You need to sign in again before sending a message.')
 
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
-    if (!parsed.ok) return new Response(parsed.error, { status: 400, headers: cors })
+    if (!parsed.ok) return jsonError(cors, 400, 'VALIDATION_FAILED', parsed.error)
 
     const body = parsed.data
     if (body.type === 'TEXT' && !body.body?.trim()) {
-      return new Response('Message body is required.', { status: 400, headers: cors })
+      return jsonError(cors, 400, 'MESSAGE_BODY_REQUIRED', 'Message body is required.')
     }
     if (body.type === 'PHOTO' && !body.photoUrl) {
-      return new Response('Photo URL is required.', { status: 400, headers: cors })
+      return jsonError(cors, 400, 'PHOTO_URL_REQUIRED', 'Photo URL is required.')
     }
     if (body.type === 'VOICE' && !body.voiceUrl) {
-      return new Response('Voice URL is required.', { status: 400, headers: cors })
+      return jsonError(cors, 400, 'VOICE_URL_REQUIRED', 'Voice URL is required.')
     }
 
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
     const allowed = await checkRateLimit(supabase, `${FN}:${caller.id}`, 3600, 180)
-    if (!allowed) return new Response('Too many requests', { status: 429, headers: cors })
+    if (!allowed) {
+      return jsonError(cors, 429, 'RATE_LIMITED', 'You are sending messages too quickly. Please wait a moment before trying again.')
+    }
 
     const { data: order, error: orderError } = await supabase
       .from('orders')
@@ -51,20 +78,81 @@ Deno.serve(async (req) => {
       .eq('id', body.orderId)
       .maybeSingle()
 
-    if (orderError) return new Response('Database error', { status: 500, headers: cors })
-    if (!order) return new Response('Order not found.', { status: 404, headers: cors })
+    if (orderError) return jsonError(cors, 500, 'DATABASE_ERROR', 'Could not check this conversation right now.')
+    if (!order) return jsonError(cors, 404, 'ORDER_NOT_FOUND', 'This order conversation could not be found anymore.')
 
     const isCustomer = order.customer_id === caller.id
     const isTailor = order.tailor_id === caller.id
-    if (!isCustomer && !isTailor) return new Response('Forbidden', { status: 403, headers: cors })
+    if (!isCustomer && !isTailor) {
+      return jsonError(cors, 403, 'FORBIDDEN', 'This conversation is not available from your account.')
+    }
 
-    const expectedRole = isTailor ? 'TAILOR' : 'CUSTOMER'
-    if (body.senderRole !== expectedRole) return new Response('Role mismatch.', { status: 403, headers: cors })
+    const actorRole = isTailor ? 'TAILOR' : 'CUSTOMER'
+    const messageText = body.type === 'TEXT' ? body.body?.trim() ?? '' : ''
+    const conversationState = await readConversationAccessState(supabase, body.orderId)
+
+    if (conversationState.blocked) {
+      return jsonError(
+        cors,
+        409,
+        'CONVERSATION_BLOCKED',
+        buildConversationBlockedMessage(conversationState),
+      )
+    }
+
+    if (messageText && hasBlockedContact(messageText)) {
+      await logContactBypassAttempt({
+        supabase,
+        fn: FN,
+        actorId: caller.id,
+        actorRole,
+        surface: 'messages.text',
+        content: messageText,
+        orderId: body.orderId,
+        extra: { message_type: body.type },
+      })
+
+      return jsonError(
+        cors,
+        400,
+        'BLOCKED_CONTACT',
+        "Contact details can't be shared in messages. Keep everything on Drape so your order and payment stay protected.",
+      )
+    }
+
+    if (messageText && hasThreateningLanguage(messageText)) {
+      await audit(supabase, {
+        event: 'message.blocked',
+        actor_id: caller.id,
+        actor_role: actorRole,
+        order_id: body.orderId,
+        severity: 'warn',
+        payload: {
+          function: FN,
+          message_type: body.type,
+          reason: 'THREATENING_LANGUAGE',
+        },
+      })
+
+      log('warn', FN, 'message.blocked', {
+        actor_id: caller.id,
+        actor_role: actorRole,
+        order_id: body.orderId,
+        reason: 'THREATENING_LANGUAGE',
+      })
+
+      return jsonError(
+        cors,
+        400,
+        'THREATENING_LANGUAGE',
+        "That message can't be sent. Keep communication respectful — our team reviews flagged messages.",
+      )
+    }
 
     const payload: Record<string, unknown> = {
       order_id: body.orderId,
       sender_id: caller.id,
-      sender_role: body.senderRole,
+      sender_role: actorRole,
       sender_name: body.senderName,
       type: body.type,
     }
@@ -75,21 +163,19 @@ Deno.serve(async (req) => {
     const { error } = await supabase.from('messages').insert(payload)
     if (error) {
       log('error', FN, 'message.insert_failed', { actor_id: caller.id, error: error.message })
-      return new Response('Could not send message', { status: 500, headers: cors })
+      return jsonError(cors, 500, 'MESSAGE_INSERT_FAILED', 'Could not send this message right now.')
     }
 
     await audit(supabase, {
       event: 'message.sent',
       actor_id: caller.id,
-      actor_role: body.senderRole,
+      actor_role: actorRole,
       payload: { function: FN, order_id: body.orderId, type: body.type },
     })
 
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    })
+    return jsonResponse({ ok: true }, 200, cors)
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return new Response('Internal server error', { status: 500, headers: cors })
+    return jsonError(cors, 500, 'INTERNAL_ERROR', 'Could not send this message right now.')
   }
 })

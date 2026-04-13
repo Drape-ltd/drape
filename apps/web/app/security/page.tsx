@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { CONTACTS } from '@drape/shared'
+import type { JSX } from 'react'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 

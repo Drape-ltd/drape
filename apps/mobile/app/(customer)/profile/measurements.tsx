@@ -8,6 +8,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
+import { isLikelyConnectivityIssue } from '@/lib/function-errors'
+import {
+  deriveMeasurementFitConfidence,
+  MEASUREMENT_SOURCE_LABELS,
+  type MeasurementSource,
+} from '@/lib/order-support'
 import { Button, Input } from '@/components/ui'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -75,6 +81,13 @@ const STEP_SUBTITLES = [
   'Where do clothes usually fit you badly off the rack? Select all that apply.',
 ]
 
+const MEASUREMENT_SOURCE_OPTIONS: Array<{ value: MeasurementSource; label: string; hint: string }> = [
+  { value: 'SELF_GUIDED', label: 'I measured myself', hint: 'Best when you used a tape carefully and double-checked the numbers.' },
+  { value: 'HELPER_GUIDED', label: 'A helper measured me', hint: 'Useful when a friend or family member helped with the tape.' },
+  { value: 'TAILOR_CAPTURED', label: 'A tailor measured me', hint: 'Usually stronger for fit-critical garments.' },
+  { value: 'EXTERNAL_PRO_CAPTURED', label: 'Another professional measured me', hint: 'For showroom, bridal, or alteration-desk measurements.' },
+]
+
 const MEASUREMENTS_GUIDE_KEY = 'drape_customer_measurements_best_use_dismissed'
 
 function normalizeGarmentContext(value: unknown): GarmentContext | null {
@@ -124,6 +137,7 @@ export default function MeasurementsScreen() {
   const [neckCircumference, setNeckCircumference] = useState('')
   const [height, setHeight] = useState('')
   const [fitStyle, setFitStyle] = useState<FitStyle | null>(null)
+  const [measurementSource, setMeasurementSource] = useState<MeasurementSource>('SELF_GUIDED')
   const [customMeasurements, setCustomMeasurements] = useState<CustomMeasurement[]>([])
 
   // Layer 2
@@ -148,6 +162,7 @@ export default function MeasurementsScreen() {
     setNeckCircumference('')
     setHeight('')
     setFitStyle(null)
+    setMeasurementSource('SELF_GUIDED')
     setGarmentContext(null)
     setBodyShapes([])
     setFitFlags([])
@@ -165,6 +180,14 @@ export default function MeasurementsScreen() {
     if (typeof m.neckCircumference === 'number') setNeckCircumference(String(m.neckCircumference))
     if (typeof m.height === 'number') setHeight(String(m.height))
     if (m.fitStyle === 'Slim' || m.fitStyle === 'Regular' || m.fitStyle === 'Relaxed') setFitStyle(m.fitStyle)
+    if (
+      m.measurementSource === 'SELF_GUIDED' ||
+      m.measurementSource === 'HELPER_GUIDED' ||
+      m.measurementSource === 'TAILOR_CAPTURED' ||
+      m.measurementSource === 'EXTERNAL_PRO_CAPTURED'
+    ) {
+      setMeasurementSource(m.measurementSource)
+    }
     const nextGarmentContext = normalizeGarmentContext(m.garmentContext)
     if (nextGarmentContext) setGarmentContext(nextGarmentContext)
     if (Array.isArray(m.bodyShape)) {
@@ -175,7 +198,12 @@ export default function MeasurementsScreen() {
     }
     if (Array.isArray(m.fitFlags)) setFitFlags(m.fitFlags as FitFlag[])
     if (typeof m.bodyNote === 'string') setBodyNote(m.bodyNote)
-    const standardKeys = new Set(['chest','waist','hips','shoulderWidth','inseam','sleeveLength','neckCircumference','height','unit','fitStyle','garmentContext','bodyShape','fitFlags','bodyNote'])
+    const standardKeys = new Set([
+      'chest', 'waist', 'hips', 'shoulderWidth', 'inseam', 'sleeveLength', 'neckCircumference', 'height',
+      'unit', 'fitStyle', 'measurementSource', 'measurementSourceLabel', 'fitConfidence',
+      'needsConfirmation', 'confirmationReason', 'confirmationRequestedAt', 'confirmedAt', 'confirmedBy',
+      'garmentContext', 'bodyShape', 'fitFlags', 'bodyNote',
+    ])
     const extras = Object.entries(m).filter(([k]) => !standardKeys.has(k))
     setCustomMeasurements(
       extras.map(([name, value]) => ({
@@ -226,7 +254,7 @@ async function loadMeasurements() {
 
   function canProceedStep(): boolean {
     switch (step) {
-      case 0: return !!chest.trim() && !!waist.trim() && !!fitStyle
+      case 0: return !!chest.trim() && !!waist.trim() && !!fitStyle && !!measurementSource
       case 1: return !!garmentContext
       case 2: return bodyShapes.length > 0
       case 3: return true
@@ -236,7 +264,7 @@ async function loadMeasurements() {
 
   function stepBlockedMessage(): string {
     switch (step) {
-      case 0: return 'Please enter your chest, waist, and select a fit style to continue.'
+      case 0: return 'Please enter your chest, waist, fit style, and how these measurements were taken to continue.'
       case 1: return 'Please select the garment cut style that applies to you.'
       case 2: return 'Please select the body shape that closest matches yours.'
       default: return ''
@@ -316,6 +344,14 @@ async function loadMeasurements() {
       height: safeParse(height),
       unit,
       fitStyle,
+      measurementSource,
+      measurementSourceLabel: MEASUREMENT_SOURCE_LABELS[measurementSource],
+      fitConfidence: deriveMeasurementFitConfidence(measurementSource),
+      needsConfirmation: false,
+      confirmationReason: null,
+      confirmationRequestedAt: null,
+      confirmedAt: null,
+      confirmedBy: null,
       garmentContext,
       bodyShape: bodyShapes,
       fitFlags,
@@ -334,9 +370,14 @@ async function loadMeasurements() {
     setSaving(false)
 
     if (error) {
-      Alert.alert('Error', 'Could not save your measurements. Please try again.')
+      Alert.alert(
+        'Error',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. We could not save your measurements yet. Your edits are still here, so retry when the signal improves.'
+          : 'Could not save your measurements right now. Please try again in a moment.',
+      )
     } else {
-      capture('measurements_saved', { unit })
+      capture('measurements_saved', { unit, measurement_source: measurementSource })
       if (typeof returnTo === 'string' && returnTo.length > 0) router.replace(returnTo as any)
       else if (navigation.canGoBack()) router.back()
       else router.replace('/(customer)/profile')
@@ -481,6 +522,25 @@ async function loadMeasurements() {
                       </TouchableOpacity>
                     ))}
                   </View>
+                </View>
+
+                <View style={styles.optionList}>
+                  <Text style={styles.fieldLabel}>How were these taken?</Text>
+                  {MEASUREMENT_SOURCE_OPTIONS.map((opt) => (
+                    <TouchableOpacity
+                      key={opt.value}
+                      style={[styles.optionCard, measurementSource === opt.value && styles.optionCardActive]}
+                      onPress={() => setMeasurementSource(opt.value)}
+                    >
+                      <View style={[styles.optionRadio, measurementSource === opt.value && styles.optionRadioActive]} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.optionLabel, measurementSource === opt.value && styles.optionLabelActive]}>
+                          {opt.label}
+                        </Text>
+                        <Text style={styles.optionHint}>{opt.hint}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
                 </View>
 
                 {/* Custom measurements */}

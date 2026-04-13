@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import type { Route } from 'next'
+import type { JSX } from 'react'
 import { SiteFooter } from './site-footer'
 
 type MarketingShellProps = {

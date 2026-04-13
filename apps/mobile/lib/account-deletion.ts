@@ -1,4 +1,5 @@
 import { invokeFunction } from './supabase'
+import { isLikelyConnectivityIssue, readFunctionErrorMessage } from './function-errors'
 
 export async function requestAccountDeletion(reason?: string): Promise<{
   error: string | null
@@ -11,7 +12,11 @@ export async function requestAccountDeletion(reason?: string): Promise<{
   )
 
   if (error) {
-    return { error: error.message }
+    return {
+      error: isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. We could not submit your deletion request yet. Retry when the signal improves.'
+        : await readFunctionErrorMessage(error, 'We could not submit your deletion request right now.'),
+    }
   }
 
   return {

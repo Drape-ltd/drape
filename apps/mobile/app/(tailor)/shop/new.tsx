@@ -6,6 +6,8 @@ import { Feather } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
+import { deriveTailorReadiness, type TailorReadinessInput } from '@/lib/tailor-readiness'
 import { stripExif } from '@/lib/stripExif'
 import { Button } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
@@ -38,6 +40,7 @@ export default function NewShopItemScreen() {
   const [deliveryAvailable, setDeliveryAvailable] = useState(false)
   const [shippingAvailable, setShippingAvailable] = useState(false)
   const [isLive, setIsLive] = useState(false)
+  const [sellerStatus, setSellerStatus] = useState<(TailorReadinessInput & { supportsReadyMade?: boolean | null }) | null>(null)
 
   function goBack() {
     if (navigation.canGoBack()) router.back()
@@ -52,13 +55,22 @@ export default function NewShopItemScreen() {
     if (!user?.id) return
     const { data } = await supabase
       .from('tailor_profiles')
-      .select('currency')
+      .select('currency, supports_ready_made, profile_completed, id_verification_status, is_live, stripe_account_id, paystack_account_id')
       .eq('user_id', user.id)
       .maybeSingle()
 
     if (data?.currency && CURRENCIES.includes(data.currency as (typeof CURRENCIES)[number])) {
       setCurrency(data.currency as (typeof CURRENCIES)[number])
     }
+
+    setSellerStatus({
+      supportsReadyMade: (data as any)?.supports_ready_made ?? false,
+      profileCompleted: (data as any)?.profile_completed ?? false,
+      idVerificationStatus: (data as any)?.id_verification_status ?? 'NOT_SUBMITTED',
+      isLive: (data as any)?.is_live ?? false,
+      stripeAccountId: (data as any)?.stripe_account_id ?? null,
+      paystackAccountId: (data as any)?.paystack_account_id ?? null,
+    })
   }
 
   function applyTemplate(template: { title: string; category: (typeof ITEM_CATEGORIES)[number]; sizes: string[] }) {
@@ -111,7 +123,12 @@ export default function NewShopItemScreen() {
       const { data } = supabase.storage.from('seller-item-media').getPublicUrl(filename)
       setPhotoUrls((prev) => [...prev, data.publicUrl])
     } catch (error: any) {
-      Alert.alert('Upload failed', error?.message ?? 'Could not upload this photo. Please try again.')
+      Alert.alert(
+        'Upload failed',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. We could not upload this photo yet. Retry when the signal improves.'
+          : error?.message ?? 'Could not upload this photo right now. Please try again in a moment.',
+      )
     } finally {
       setUploadingPhoto(false)
     }
@@ -153,7 +170,10 @@ export default function NewShopItemScreen() {
       })
 
       if (error) {
-        Alert.alert('Save failed', error.message)
+        const message = isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. We could not save this item yet. Your details are still here, so retry when the signal improves.'
+          : await readFunctionErrorMessage(error, 'Could not save this item right now. Please try again in a moment.')
+        Alert.alert('Save failed', message)
         return
       }
 
@@ -162,6 +182,9 @@ export default function NewShopItemScreen() {
       setSaving(false)
     }
   }
+
+  const readiness = deriveTailorReadiness(sellerStatus)
+  const canPublishLive = (sellerStatus?.supportsReadyMade ?? false) && readiness.canPublishPaidItems
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -178,6 +201,32 @@ export default function NewShopItemScreen() {
           <Text style={styles.bestUseEyebrow}>Best use</Text>
           <Text style={styles.bestUseText}>Start simple: one clear title, one clear price, one clear way the buyer receives it.</Text>
         </View>
+
+        {sellerStatus ? (
+          <View
+            style={[
+              styles.readinessCard,
+              sellerStatus.supportsReadyMade && readiness.canPublishPaidItems
+                ? styles.readinessCardSuccess
+                : styles.readinessCardWarning,
+            ]}
+          >
+            <Text style={styles.readinessTitle}>
+              {sellerStatus.supportsReadyMade
+                ? readiness.canPublishPaidItems
+                  ? 'Live publishing is available'
+                  : readiness.title
+                : 'Enable Shop now before publishing live items'}
+            </Text>
+            <Text style={styles.readinessBody}>
+              {sellerStatus.supportsReadyMade
+                ? readiness.canPublishPaidItems
+                  ? 'You can keep this as a draft or publish it live once the listing looks right.'
+                  : readiness.body
+                : 'Draft items are fine, but paid ready-made listings should stay hidden until Shop now is enabled on your seller profile.'}
+            </Text>
+          </View>
+        ) : null}
 
         <Field label="Quick start">
           <View style={styles.rowWrap}>
@@ -310,7 +359,30 @@ export default function NewShopItemScreen() {
         </Field>
 
         <Field label="Visibility">
-          <ChoiceCard title={isLive ? 'Live' : 'Draft'} hint={isLive ? 'Customers can see this item now.' : 'Keep it hidden until you are ready.'} active={isLive} onPress={() => setIsLive((value) => !value)} />
+          <ChoiceCard
+            title={isLive ? 'Live' : 'Draft'}
+            hint={
+              isLive
+                ? 'Customers can see this item now.'
+                : canPublishLive
+                  ? 'Keep it hidden until you are ready.'
+                  : 'Live publishing stays blocked until Shop now and payout readiness are in place.'
+            }
+            active={isLive}
+            disabled={!canPublishLive}
+            onPress={() => {
+              if (!canPublishLive) {
+                Alert.alert(
+                  'Live publishing unavailable',
+                  sellerStatus?.supportsReadyMade
+                    ? readiness.body
+                    : 'Enable Shop now on your seller profile before publishing items live.',
+                )
+                return
+              }
+              setIsLive((value) => !value)
+            }}
+          />
         </Field>
       </ScrollView>
 
@@ -330,9 +402,9 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-function ChoiceCard({ title, hint, active, onPress }: { title: string; hint: string; active: boolean; onPress: () => void }) {
+function ChoiceCard({ title, hint, active, onPress, disabled }: { title: string; hint: string; active: boolean; onPress: () => void; disabled?: boolean }) {
   return (
-    <TouchableOpacity style={[styles.choiceCard, active && styles.choiceCardActive]} onPress={onPress}>
+    <TouchableOpacity style={[styles.choiceCard, active && styles.choiceCardActive, disabled && styles.choiceCardDisabled]} onPress={onPress} disabled={disabled}>
       <Text style={[styles.choiceTitle, active && styles.choiceTitleActive]}>{title}</Text>
       <Text style={styles.choiceHint}>{hint}</Text>
     </TouchableOpacity>
@@ -355,6 +427,11 @@ const styles = StyleSheet.create({
   bestUseCard: { backgroundColor: Colors.white, borderRadius: Radius.xl, padding: Spacing.lg, gap: 6, ...Shadow.sm },
   bestUseEyebrow: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.6 },
   bestUseText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  readinessCard: { backgroundColor: Colors.white, borderRadius: Radius.xl, padding: Spacing.lg, gap: 6, ...Shadow.sm },
+  readinessCardWarning: { borderWidth: 1, borderColor: Colors.warning + '35' },
+  readinessCardSuccess: { borderWidth: 1, borderColor: Colors.success + '30' },
+  readinessTitle: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
+  readinessBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   field: { gap: Spacing.sm },
   label: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
   input: {
@@ -421,6 +498,7 @@ const styles = StyleSheet.create({
   choiceGroup: { gap: Spacing.sm },
   choiceCard: { backgroundColor: Colors.white, borderRadius: Radius.lg, padding: Spacing.lg, gap: 4, borderWidth: 1.5, borderColor: Colors.lightGrey, ...Shadow.sm },
   choiceCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
+  choiceCardDisabled: { opacity: 0.6 },
   choiceTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   choiceTitleActive: { color: Colors.needleGreen },
   choiceHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },

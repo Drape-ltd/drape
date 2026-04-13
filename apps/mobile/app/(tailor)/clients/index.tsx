@@ -271,7 +271,7 @@ export default function TailorClientsScreen() {
         await markInviteSentWithFeedback(entryId)
       }
     } catch {
-      Alert.alert('Unable to share invite', 'Please try again in a moment.')
+      Alert.alert('Unable to share invite', 'Sharing is unavailable right now. Retry from this diary entry in a moment, or come back later and try again.')
     }
   }
 
@@ -280,7 +280,7 @@ export default function TailorClientsScreen() {
       await sharePassportInvite(item.passportId, item.fullName, tailorName)
       await markInviteSentWithFeedback(item.id)
     } catch {
-      Alert.alert('Unable to share invite', 'Please try again in a moment.')
+      Alert.alert('Unable to share invite', 'Sharing is unavailable right now. Retry from this diary entry in a moment, or come back later and try again.')
     }
   }
 
@@ -337,7 +337,7 @@ export default function TailorClientsScreen() {
       )
     } catch {
       setSharingDiaryId(null)
-      Alert.alert('Unable to share invite', 'Please try again in a moment.')
+      Alert.alert('Unable to share invite', 'Sharing is unavailable right now. Retry from this diary entry in a moment, or come back later and try again.')
     }
   }
 

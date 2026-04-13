@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { CONTACTS } from '@drape/shared'
+import type { JSX } from 'react'
 import { MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
@@ -13,7 +14,7 @@ export const metadata: Metadata = buildMetadata({
 export default function DiscoverPage(): JSX.Element {
   return (
     <MarketingShell
-      eyebrow="Coming soon"
+      eyebrow="Rolling out"
       title="Discovery is opening in stages."
       description="The public site is live now. Richer discovery comes next."
       cta={
@@ -43,7 +44,7 @@ export default function DiscoverPage(): JSX.Element {
           {[
             ['Join the queue', 'Tell us whether you are coming in as a customer or a tailor.'],
             ['Share Drape', 'Use the site to explain the idea cleanly while access opens in stages.'],
-            ['Come back soon', 'Richer discovery will follow after the queue and rollout.' ],
+            ['Come back later', 'Richer discovery will follow after the queue and rollout.' ],
           ].map(([title, body]) => (
             <div key={title} className="rounded-[1.5rem] border border-ink/6 bg-white/80 p-5 shadow-sm">
               <div className="text-lg text-ink">{title}</div>

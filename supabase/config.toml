@@ -103,3 +103,33 @@ verify_jwt = false
 
 [functions.request-account-deletion]
 verify_jwt = false
+
+[functions.request-data-access]
+verify_jwt = false
+
+[functions.payment-action]
+verify_jwt = false
+
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.paystack-webhook]
+verify_jwt = false
+
+[functions.expire-pending-payments]
+verify_jwt = false
+
+[functions.expire-quotes]
+verify_jwt = false
+
+[functions.auto-release]
+verify_jwt = false
+
+[functions.conversation-access]
+verify_jwt = false
+
+[functions.conversation-safety-report]
+verify_jwt = false
+
+[functions.seller-access-review-request]
+verify_jwt = false

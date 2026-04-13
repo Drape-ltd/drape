@@ -175,7 +175,7 @@ Everything here should be treated as launch-critical unless explicitly moved out
 ### Shipping
 
 - Global / US: `Shippo` or `EasyPost`
-- Africa: `Topship` first
+- Africa: `Shipbubble` or `Topship`
 - Fallbacks can be added later if real operations require them
 - For V1:
   - rate

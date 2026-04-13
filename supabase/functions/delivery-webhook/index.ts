@@ -1,36 +1,46 @@
 /**
  * delivery-webhook
  *
- * Unified webhook handler for Shippo and Topship delivery tracking events.
+ * Unified webhook handler for Shippo, Topship, and Shipbubble delivery tracking events.
  * Receives carrier status updates and automatically advances order stage to
  * DELIVERED when a delivery-confirmed event arrives.
  *
  * Configure in each provider's dashboard:
  *   Shippo:  Webhooks → Events: tracking_updated
  *   Topship: Webhooks → Events: shipment.delivered / shipment.out_for_delivery
+ *   Shipbubble: API keys & Webhooks → Events: shipment.status.changed
  *
  * Required env vars:
  *   SUPABASE_URL
  *   SUPABASE_SERVICE_ROLE_KEY
- *   SHIPPO_WEBHOOK_SECRET   – HMAC secret from Shippo dashboard (optional but recommended)
- *   TOPSHIP_WEBHOOK_SECRET  – HMAC secret from Topship dashboard (optional but recommended)
+ *   SHIPPO_WEBHOOK_SECRET      – HMAC secret from Shippo dashboard
+ *   TOPSHIP_WEBHOOK_SECRET     – HMAC secret from Topship dashboard
+ *   SHIPBUBBLE_WEBHOOK_SECRET  – secret used to verify x-ship-signature
+ *                                (SHIPBUBBLE_SECRET_KEY is also accepted)
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getCorsHeaders } from '../_shared/cors.ts'
+import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
+
+declare const EdgeRuntime: {
+  waitUntil(promise: Promise<unknown>): void
+}
+
+const FN = 'delivery-webhook'
 
 /**
  * Timing-safe HMAC-SHA256 verification using the Web Crypto API.
  * incomingHex may be prefixed with "sha256=" or "v1=" — both are stripped.
  */
-async function verifyHmacSha256(secret: string, incomingHex: string, payload: string): Promise<boolean> {
+async function verifyHmac(secret: string, incomingHex: string, payload: string, hash: 'SHA-256' | 'SHA-512'): Promise<boolean> {
   const encoder = new TextEncoder()
   const keyData = encoder.encode(secret)
   const msgData = encoder.encode(payload)
 
   const key = await crypto.subtle.importKey(
-    'raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'],
+    'raw', keyData, { name: 'HMAC', hash }, false, ['verify'],
   )
 
   const cleanHex = incomingHex.replace(/^(sha256=|v1=)/, '')
@@ -43,6 +53,14 @@ async function verifyHmacSha256(secret: string, incomingHex: string, payload: st
 
   // crypto.subtle.verify is constant-time — prevents timing attacks
   return crypto.subtle.verify('HMAC', key, sigBytes, msgData)
+}
+
+async function verifyHmacSha256(secret: string, incomingHex: string, payload: string): Promise<boolean> {
+  return verifyHmac(secret, incomingHex, payload, 'SHA-256')
+}
+
+async function verifyHmacSha512(secret: string, incomingHex: string, payload: string): Promise<boolean> {
+  return verifyHmac(secret, incomingHex, payload, 'SHA-512')
 }
 
 // Shippo tracking statuses that mean "delivered"
@@ -58,17 +76,20 @@ const TOPSHIP_DELIVERED_EVENTS = new Set([
 // Shippo tracking statuses that mean "out for delivery" → advance to SHIPPED (already there, but update timestamp)
 // We only act on DELIVERED for now
 
-type Provider = 'shippo' | 'topship' | 'unknown'
+type Provider = 'shippo' | 'topship' | 'shipbubble' | 'unknown'
 
 function detectProvider(req: Request): Provider {
   const ua = req.headers.get('user-agent') ?? ''
   const sig = req.headers.get('x-shippo-signature') ?? req.headers.get('shippo-webhook-signature') ?? ''
   const topshipSig = req.headers.get('x-topship-signature') ?? ''
+  const shipbubbleSig = req.headers.get('x-ship-signature') ?? ''
 
   if (sig) return 'shippo'
   if (topshipSig) return 'topship'
+  if (shipbubbleSig) return 'shipbubble'
   if (ua.toLowerCase().includes('shippo')) return 'shippo'
   if (ua.toLowerCase().includes('topship')) return 'topship'
+  if (ua.toLowerCase().includes('shipbubble')) return 'shipbubble'
   return 'unknown'
 }
 
@@ -96,6 +117,47 @@ function parseTopship(body: any): { trackingNumber: string | null; carrier: stri
     carrier,
     isDelivered: TOPSHIP_DELIVERED_EVENTS.has(event),
   }
+}
+
+/** Parse a Shipbubble webhook payload. */
+function parseShipbubble(body: any): { trackingNumber: string | null; carrier: string | null; isDelivered: boolean } {
+  const event: string = body?.event ?? ''
+  const status = typeof body?.status === 'string'
+    ? body.status
+    : Array.isArray(body?.package_status) && body.package_status.length > 0
+      ? body.package_status[body.package_status.length - 1]?.status
+      : ''
+  const normalizedStatus = typeof status === 'string' ? status.trim().toLowerCase() : ''
+
+  return {
+    trackingNumber:
+      body?.courier?.tracking_code?.toUpperCase?.() ??
+      body?.courier?.trackingCode?.toUpperCase?.() ??
+      body?.tracking_code?.toUpperCase?.() ??
+      null,
+    carrier: body?.courier?.name ?? 'Shipbubble',
+    isDelivered:
+      event === 'shipment.status.changed' &&
+      (normalizedStatus === 'completed' || normalizedStatus === 'delivered'),
+  }
+}
+
+async function auditDeliveryWebhookEvent(
+  supabase: any,
+  event: string,
+  severity: 'info' | 'warn' | 'error',
+  payload: Record<string, unknown>,
+  orderId?: string | null,
+) {
+  await audit(supabase, {
+    event,
+    order_id: orderId ?? null,
+    severity,
+    payload: {
+      function: FN,
+      ...payload,
+    },
+  })
 }
 
 Deno.serve(async (req) => {
@@ -153,6 +215,26 @@ Deno.serve(async (req) => {
     }
   }
 
+  if (provider === 'shipbubble') {
+    const shipbubbleSecret =
+      Deno.env.get('SHIPBUBBLE_WEBHOOK_SECRET') ??
+      Deno.env.get('SHIPBUBBLE_SECRET_KEY')
+    if (!shipbubbleSecret) {
+      console.error('[delivery-webhook] SHIPBUBBLE_WEBHOOK_SECRET not set — rejecting request to prevent spoofing')
+      return new Response('Webhook not configured', { status: 401 })
+    }
+    const shipbubbleSig = req.headers.get('x-ship-signature')
+    if (!shipbubbleSig) {
+      console.warn('[delivery-webhook] Shipbubble: no signature header present — rejecting')
+      return new Response('Missing signature', { status: 401 })
+    }
+    const valid = await verifyHmacSha512(shipbubbleSecret, shipbubbleSig, rawBody)
+    if (!valid) {
+      console.warn('[delivery-webhook] Shipbubble HMAC verification failed')
+      return new Response('Invalid signature', { status: 401 })
+    }
+  }
+
   let body: any
   try {
     body = JSON.parse(rawBody)
@@ -168,27 +250,16 @@ Deno.serve(async (req) => {
     ;({ trackingNumber, carrier, isDelivered } = parseShippo(body))
   } else if (provider === 'topship') {
     ;({ trackingNumber, carrier, isDelivered } = parseTopship(body))
+  } else if (provider === 'shipbubble') {
+    ;({ trackingNumber, carrier, isDelivered } = parseShipbubble(body))
   } else {
     // Try both parsers as a fallback
     const fromShippo = parseShippo(body)
     const fromTopship = parseTopship(body)
-    trackingNumber = fromShippo.trackingNumber ?? fromTopship.trackingNumber
-    carrier = fromShippo.carrier ?? fromTopship.carrier
-    isDelivered = fromShippo.isDelivered || fromTopship.isDelivered
-  }
-
-  if (!trackingNumber) {
-    console.log('[delivery-webhook] No tracking number found in payload')
-    return new Response(JSON.stringify({ ok: true, skipped: 'no_tracking_number' }), {
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
-
-  if (!isDelivered) {
-    console.log(`[delivery-webhook] Non-delivery event for ${trackingNumber} — ignoring`)
-    return new Response(JSON.stringify({ ok: true, skipped: 'not_delivered' }), {
-      headers: { 'Content-Type': 'application/json' },
-    })
+    const fromShipbubble = parseShipbubble(body)
+    trackingNumber = fromShippo.trackingNumber ?? fromTopship.trackingNumber ?? fromShipbubble.trackingNumber
+    carrier = fromShippo.carrier ?? fromTopship.carrier ?? fromShipbubble.carrier
+    isDelivered = fromShippo.isDelivered || fromTopship.isDelivered || fromShipbubble.isDelivered
   }
 
   const supabase = createClient(
@@ -196,15 +267,50 @@ Deno.serve(async (req) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   )
 
+  if (!trackingNumber) {
+    log('warn', FN, 'webhook.skipped', { provider, reason: 'no_tracking_number' })
+    await auditDeliveryWebhookEvent(supabase, 'shipping.webhook_skipped', 'warn', {
+      provider,
+      reason: 'no_tracking_number',
+      carrier,
+    })
+    return new Response(JSON.stringify({ ok: true, skipped: 'no_tracking_number' }), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  if (!isDelivered) {
+    log('info', FN, 'webhook.skipped', {
+      provider,
+      reason: 'not_delivered',
+      tracking_number: trackingNumber,
+      carrier,
+    })
+    await auditDeliveryWebhookEvent(supabase, 'shipping.webhook_skipped', 'info', {
+      provider,
+      reason: 'not_delivered',
+      tracking_number: trackingNumber,
+      carrier,
+    })
+    return new Response(JSON.stringify({ ok: true, skipped: 'not_delivered' }), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
   // Find the matching order
   const { data: order } = await supabase
     .from('orders')
-    .select('id, stage, reference, customer_id, tailor_id')
+    .select('id, stage, reference, customer_id, tailor_id, carrier')
     .eq('tracking_number', trackingNumber)
     .single()
 
   if (!order) {
-    console.log(`[delivery-webhook] No order found for tracking number ${trackingNumber}`)
+    log('warn', FN, 'delivery.order_missing', { provider, tracking_number: trackingNumber, carrier })
+    await auditDeliveryWebhookEvent(supabase, 'shipping.delivery_order_missing', 'warn', {
+      provider,
+      tracking_number: trackingNumber,
+      carrier,
+    })
     return new Response(JSON.stringify({ ok: true, skipped: 'no_order' }), {
       headers: { 'Content-Type': 'application/json' },
     })
@@ -212,20 +318,54 @@ Deno.serve(async (req) => {
 
   // Only advance if currently SHIPPED (avoid double-processing)
   if (order.stage !== 'SHIPPED') {
-    console.log(`[delivery-webhook] Order ${order.reference} is already in stage ${order.stage} — skipping`)
+    log('info', FN, 'delivery.skipped_wrong_stage', {
+      provider,
+      order_id: order.id,
+      reference: order.reference,
+      tracking_number: trackingNumber,
+      stage: order.stage,
+    })
+    await auditDeliveryWebhookEvent(supabase, 'shipping.delivery_skipped_wrong_stage', 'info', {
+      provider,
+      reference: order.reference,
+      tracking_number: trackingNumber,
+      carrier,
+      stage: order.stage,
+    }, order.id)
     return new Response(JSON.stringify({ ok: true, skipped: 'wrong_stage', stage: order.stage }), {
       headers: { 'Content-Type': 'application/json' },
     })
   }
 
   // Advance to DELIVERED
+  const updates: Record<string, unknown> = {
+    stage: 'DELIVERED',
+    stage_updated_at: new Date().toISOString(),
+  }
+  if (!order.carrier && carrier) {
+    updates.carrier = carrier
+  }
+
   const { error: updateError } = await supabase
     .from('orders')
-    .update({ stage: 'DELIVERED' })
+    .update(updates)
     .eq('id', order.id)
 
   if (updateError) {
-    console.error('[delivery-webhook] Failed to update order stage:', updateError)
+    log('error', FN, 'delivery.update_failed', {
+      provider,
+      order_id: order.id,
+      reference: order.reference,
+      tracking_number: trackingNumber,
+      error: updateError.message,
+    })
+    await auditDeliveryWebhookEvent(supabase, 'shipping.delivery_update_failed', 'error', {
+      provider,
+      reference: order.reference,
+      tracking_number: trackingNumber,
+      carrier,
+      error: updateError.message,
+    }, order.id)
     return new Response('DB update failed', { status: 500 })
   }
 
@@ -256,7 +396,19 @@ Deno.serve(async (req) => {
     )
   }
 
-  console.log(`[delivery-webhook] Order ${order.reference} advanced to DELIVERED via ${trackingNumber}`)
+  log('info', FN, 'delivery.confirmed', {
+    provider,
+    order_id: order.id,
+    reference: order.reference,
+    tracking_number: trackingNumber,
+    carrier: carrier ?? order.carrier ?? null,
+  })
+  await auditDeliveryWebhookEvent(supabase, 'shipping.delivered', 'info', {
+    provider,
+    reference: order.reference,
+    tracking_number: trackingNumber,
+    carrier: carrier ?? order.carrier ?? null,
+  }, order.id)
 
   return new Response(JSON.stringify({ ok: true, orderId: order.id, stage: 'DELIVERED' }), {
     headers: { 'Content-Type': 'application/json' },

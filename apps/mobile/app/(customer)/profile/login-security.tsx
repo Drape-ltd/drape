@@ -23,7 +23,13 @@ import {
   isBiometricAvailable, getBiometricLabel,
   isBiometricEnabled, setBiometricEnabled, authenticate,
 } from '@/lib/biometric'
+import { markRecentReauth } from '@/lib/recent-reauth'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import {
+  MAX_PASSWORD_LENGTH,
+  PASSWORD_POLICY_HINT,
+  validatePasswordStrength,
+} from '@drape/shared/auth-security'
 
 type Step = 'reauth' | 'change'
 
@@ -48,6 +54,9 @@ export default function LoginSecurityScreen() {
   const [biometricLabel, setBiometricLabel] = useState('Biometrics')
   const [biometricEnabled, setBiometricEnabledState] = useState(false)
   const [togglingBiometric, setTogglingBiometric] = useState(false)
+  const newPasswordError = newPassword
+    ? (validatePasswordStrength(newPassword, { forbiddenValues: [user?.email] }) ?? '')
+    : ''
 
   useFocusEffect(
     useCallback(() => {
@@ -73,6 +82,7 @@ export default function LoginSecurityScreen() {
       setReauthLoading(true)
       const ok = await authenticate('Verify your identity to change your password')
       if (ok) {
+        await markRecentReauth(user?.id)
         setStep('change')
       } else {
         Alert.alert('Verification failed', 'Could not verify your identity. Enter your current password instead.')
@@ -97,6 +107,7 @@ export default function LoginSecurityScreen() {
     if (error) {
       Alert.alert('Incorrect password', 'The password you entered is wrong.')
     } else {
+      await markRecentReauth(user?.id)
       setReauthPassword('')
       setStep('change')
     }
@@ -105,8 +116,8 @@ export default function LoginSecurityScreen() {
   // ── Change password ──────────────────────────────────────────────────────
   async function changePassword() {
     if (savingPassword) return
-    if (!newPassword || newPassword.length < 8) {
-      Alert.alert('Too short', 'New password must be at least 8 characters.')
+    if (newPasswordError) {
+      Alert.alert('Password issue', newPasswordError)
       return
     }
     if (newPassword !== confirmPassword) {
@@ -137,7 +148,7 @@ export default function LoginSecurityScreen() {
       await setBiometricEnabled(value)
       setBiometricEnabledState(value)
     } catch {
-      Alert.alert('Could not update setting', `We couldn't update ${biometricLabel} just now. Please try again.`)
+      Alert.alert('Could not update setting', `We couldn't update ${biometricLabel} just now. Your current lock setting has not changed.`)
     } finally {
       setTogglingBiometric(false)
     }
@@ -231,7 +242,9 @@ export default function LoginSecurityScreen() {
                     placeholder="Enter current password"
                     placeholderTextColor={Colors.midGrey}
                     secureTextEntry
-                    maxLength={72}
+                    textContentType="password"
+                    autoComplete="current-password"
+                    maxLength={MAX_PASSWORD_LENGTH}
                     returnKeyType="done"
                     onSubmitEditing={reauthWithPassword}
                   />
@@ -266,12 +279,17 @@ export default function LoginSecurityScreen() {
                     style={styles.input}
                     value={newPassword}
                     onChangeText={setNewPassword}
-                    placeholder="8+ characters"
+                    placeholder="10+ characters"
                     placeholderTextColor={Colors.midGrey}
                     secureTextEntry
-                    maxLength={72}
+                    textContentType="newPassword"
+                    autoComplete="new-password"
+                    maxLength={MAX_PASSWORD_LENGTH}
                     returnKeyType="next"
                   />
+                  <Text style={newPasswordError ? styles.fieldError : styles.fieldHint}>
+                    {newPasswordError || PASSWORD_POLICY_HINT}
+                  </Text>
                 </View>
                 <View style={styles.divider} />
                 <View style={styles.field}>
@@ -283,15 +301,20 @@ export default function LoginSecurityScreen() {
                     placeholder="Repeat new password"
                     placeholderTextColor={Colors.midGrey}
                     secureTextEntry
-                    maxLength={72}
+                    textContentType="newPassword"
+                    autoComplete="new-password"
+                    maxLength={MAX_PASSWORD_LENGTH}
                     returnKeyType="done"
                   />
+                  {confirmPassword && newPassword !== confirmPassword ? (
+                    <Text style={styles.fieldError}>Passwords do not match.</Text>
+                  ) : null}
                 </View>
               </View>
               <TouchableOpacity
                 style={[styles.saveBtn, savingPassword && { opacity: 0.6 }]}
                 onPress={changePassword}
-                disabled={savingPassword}
+                disabled={savingPassword || !newPassword || !confirmPassword || !!newPasswordError || newPassword !== confirmPassword}
               >
                 {savingPassword
                   ? <ActivityIndicator color={Colors.white} size="small" />
@@ -363,6 +386,8 @@ const styles = StyleSheet.create({
     padding: Spacing.md, fontSize: FontSize.md, color: Colors.ink,
     borderWidth: 1, borderColor: Colors.lightGrey,
   },
+  fieldHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
+  fieldError: { fontSize: FontSize.xs, color: Colors.error, lineHeight: 18 },
 
   // Re-auth gate
   gateWrap: { padding: Spacing.xl, alignItems: 'center', gap: Spacing.sm },

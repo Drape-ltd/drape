@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
+import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { Button, Input } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing } from '@/constants/theme'
 
@@ -13,6 +14,10 @@ function isValidEmail(value: string) {
 function getHostedRecoveryUrl() {
   const siteUrl = (process.env.EXPO_PUBLIC_SITE_URL ?? 'https://drapeon.co').replace(/\/+$/, '')
   return `${siteUrl}/auth/recover`
+}
+
+function getPasswordRecoveryRedirectUrl() {
+  return getHostedRecoveryUrl()
 }
 
 export default function ForgotPasswordScreen() {
@@ -33,11 +38,16 @@ export default function ForgotPasswordScreen() {
 
     setLoading(true)
     const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
-      redirectTo: getHostedRecoveryUrl(),
+      redirectTo: getPasswordRecoveryRedirectUrl(),
     })
     setLoading(false)
     if (error) {
-      Alert.alert('Error', error.message)
+      Alert.alert(
+        'Could not start reset',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. We could not start password reset yet. Retry when the signal improves.'
+          : 'We could not start password reset right now. Please try again in a moment.',
+      )
     } else {
       setEmail(normalizedEmail)
       setSent(true)
@@ -98,6 +108,7 @@ export default function ForgotPasswordScreen() {
             <Text style={styles.reassuranceTitle}>What happens next</Text>
             <Text style={styles.reassuranceText}>We’ll send a secure recovery link to your inbox.</Text>
             <Text style={styles.reassuranceText}>Your orders, messages, and profile stay exactly where you left them.</Text>
+            <Text style={styles.reassuranceText}>If you no longer control this inbox, support may need stronger proof before helping with account recovery.</Text>
           </View>
 
           <View style={styles.formCard}>

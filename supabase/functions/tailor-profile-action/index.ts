@@ -28,6 +28,8 @@ const BaseProfileSchema = z.object({
   pickupAvailable: z.boolean().default(false),
   deliveryAvailable: z.boolean().default(false),
   shippingAvailable: z.boolean().default(false),
+  deliveryFee: z.number().int().nonnegative().max(100_000_00).default(0),
+  shippingFee: z.number().int().nonnegative().max(100_000_00).default(0),
 })
 
 const BodySchema = z.discriminatedUnion('action', [
@@ -104,6 +106,8 @@ Deno.serve(async (req) => {
     }
 
     const profile = body.profile
+    const languages = profile.languages ?? []
+    const specialties = profile.specialties ?? []
     if (profile.priceRangeMin != null && profile.priceRangeMax != null && profile.priceRangeMax < profile.priceRangeMin) {
       return new Response('Maximum price must be greater than or equal to minimum price.', { status: 400, headers: cors })
     }
@@ -131,8 +135,8 @@ Deno.serve(async (req) => {
       display_name: profile.displayName,
       bio: profile.bio?.trim() || null,
       location: profile.location,
-      languages: profile.languages.length > 0 ? profile.languages : (existingRow.languages ?? []),
-      specialty_tags: profile.specialties,
+      languages: languages.length > 0 ? languages : (existingRow.languages ?? []),
+      specialty_tags: specialties,
       price_range_min: profile.priceRangeMin ?? existingRow.price_range_min ?? null,
       price_range_max: profile.priceRangeMax ?? existingRow.price_range_max ?? null,
       currency: profile.currency,
@@ -143,14 +147,17 @@ Deno.serve(async (req) => {
       pickup_available: profile.pickupAvailable,
       delivery_available: profile.deliveryAvailable,
       shipping_available: profile.shippingAvailable,
+      delivery_fee: profile.deliveryFee,
+      shipping_fee: profile.shippingFee,
       updated_at: new Date().toISOString(),
     }
 
     if (body.action === 'upsert-setup') {
-      payload.portfolio_photo_urls = profile.portfolioPhotoUrls
-      payload.portfolio_video_urls = profile.portfolioVideoUrls
-      payload.id_document_url = profile.idDocumentUrl ?? null
-      payload.id_verification_status = profile.idDocumentUrl ? 'PENDING' : 'NOT_SUBMITTED'
+      const setupProfile = body.profile
+      payload.portfolio_photo_urls = setupProfile.portfolioPhotoUrls
+      payload.portfolio_video_urls = setupProfile.portfolioVideoUrls
+      payload.id_document_url = setupProfile.idDocumentUrl ?? null
+      payload.id_verification_status = setupProfile.idDocumentUrl ? 'PENDING' : 'NOT_SUBMITTED'
     }
 
     const query = body.action === 'upsert-setup'
