@@ -1,5 +1,6 @@
 'use client'
 
+import type { ReactElement } from 'react'
 import { useEffect, useState } from 'react'
 
 const APP_RESET_URL = 'drape://reset-password'
@@ -13,7 +14,7 @@ function buildDeepLinkTarget() {
   return `${APP_RESET_URL}${suffix}`
 }
 
-export function RecoveryBridge() {
+export function RecoveryBridge(): ReactElement {
   const [targetUrl, setTargetUrl] = useState(APP_RESET_URL)
   const [showFallback, setShowFallback] = useState(false)
 
