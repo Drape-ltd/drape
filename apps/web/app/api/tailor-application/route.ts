@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServiceRoleClient } from '../../../lib/server-supabase'
+import { sendTailorApplicationNotification } from '../../../lib/lead-notifications'
 import {
   checkPublicRateLimit,
   getClientIp,
@@ -20,6 +21,45 @@ function isOptionalUrl(value: unknown): value is string | null {
   } catch {
     return false
   }
+}
+
+function hasMeaningfulApplicationChanges(
+  existing: {
+    business_name: string
+    display_name: string
+    location: string
+    specialty: string
+    portfolio_url: string | null
+    instagram_url: string | null
+    notes: string
+    source: string
+    status: string
+  } | null,
+  next: {
+    business_name: string
+    display_name: string
+    location: string
+    specialty: string
+    portfolio_url: string | null
+    instagram_url: string | null
+    notes: string
+    source: string
+    status: string
+  },
+) {
+  if (!existing) return true
+
+  return (
+    existing.business_name !== next.business_name ||
+    existing.display_name !== next.display_name ||
+    existing.location !== next.location ||
+    existing.specialty !== next.specialty ||
+    existing.portfolio_url !== next.portfolio_url ||
+    existing.instagram_url !== next.instagram_url ||
+    existing.notes !== next.notes ||
+    existing.source !== next.source ||
+    existing.status !== next.status
+  )
 }
 
 export async function POST(request: Request) {
@@ -94,26 +134,66 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Too many requests. Please try again later.' }, { status: 429 })
   }
 
-  const { error } = await client.from('tailor_applications').upsert(
-    {
-      business_name: businessName,
-      display_name: displayName,
+  const application = {
+    business_name: businessName,
+    display_name: displayName,
+    email,
+    location,
+    specialty,
+    portfolio_url: portfolioUrl,
+    instagram_url: instagramUrl,
+    notes,
+    source: 'WEB' as const,
+    status: 'PENDING' as const,
+  }
+
+  const { data: existingApplication, error: existingApplicationError } = await client
+    .from('tailor_applications')
+    .select('business_name, display_name, location, specialty, portfolio_url, instagram_url, notes, source, status')
+    .eq('email', email)
+    .maybeSingle()
+
+  if (existingApplicationError) {
+    console.error('[tailor-application] Unable to read existing application before upsert.', {
       email,
-      location,
-      specialty,
-      portfolio_url: portfolioUrl,
-      instagram_url: instagramUrl,
-      notes,
-      source: 'WEB',
-      status: 'PENDING',
-    },
-    {
+      message: existingApplicationError.message,
+    })
+    return NextResponse.json({ error: 'Unable to submit your application right now.' }, { status: 500 })
+  }
+
+  const shouldNotifyInbox = hasMeaningfulApplicationChanges(existingApplication, application)
+
+  const { data: savedApplication, error } = await client
+    .from('tailor_applications')
+    .upsert(application, {
       onConflict: 'email',
-    }
-  )
+    })
+    .select('created_at, status')
+    .single()
 
   if (error) {
     return NextResponse.json({ error: 'Unable to submit your application right now.' }, { status: 500 })
+  }
+
+  if (shouldNotifyInbox) {
+    const notification = await sendTailorApplicationNotification({
+      mode: existingApplication ? 'updated' : 'created',
+      businessName,
+      displayName,
+      email,
+      location,
+      specialty,
+      portfolioUrl,
+      instagramUrl,
+      notes,
+      source: application.source,
+      status: savedApplication?.status ?? application.status,
+      createdAt: savedApplication?.created_at ?? null,
+    })
+
+    if (!notification.ok && !notification.skipped) {
+      console.error('[tailor-application] Application saved but lead email failed.', { email })
+    }
   }
 
   return NextResponse.json({ ok: true })

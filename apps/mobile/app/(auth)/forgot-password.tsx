@@ -10,6 +10,11 @@ function isValidEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 }
 
+function getHostedRecoveryUrl() {
+  const siteUrl = (process.env.EXPO_PUBLIC_SITE_URL ?? 'https://drapeon.co').replace(/\/+$/, '')
+  return `${siteUrl}/auth/recover`
+}
+
 export default function ForgotPasswordScreen() {
   const router = useRouter()
   const navigation = useNavigation()
@@ -28,7 +33,7 @@ export default function ForgotPasswordScreen() {
 
     setLoading(true)
     const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
-      redirectTo: 'drape://reset-password',
+      redirectTo: getHostedRecoveryUrl(),
     })
     setLoading(false)
     if (error) {
