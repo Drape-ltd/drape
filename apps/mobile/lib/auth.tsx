@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import { Platform } from 'react-native'
 import { type Session, type User } from '@supabase/supabase-js'
+import * as ExpoLinking from 'expo-linking'
 import * as WebBrowser from 'expo-web-browser'
 import { validateDisplayName } from '@drape/shared/contact-filter'
 import { validatePasswordStrength } from '@drape/shared/auth-security'
@@ -39,6 +40,26 @@ function isValidEmail(email: string) {
 function isInvalidCredentialError(message: string | null | undefined) {
   const normalized = (message ?? '').toLowerCase()
   return normalized.includes('invalid login credentials') || normalized.includes('invalid credentials')
+}
+
+function parseAuthTokensFromUrl(url: string) {
+  try {
+    const parsedUrl = new URL(url)
+    const hashParams = new URLSearchParams(parsedUrl.hash.replace(/^#/, ''))
+    const searchParams = parsedUrl.searchParams
+    const accessToken = hashParams.get('access_token') ?? searchParams.get('access_token')
+    const refreshToken = hashParams.get('refresh_token') ?? searchParams.get('refresh_token')
+
+    if (!accessToken || !refreshToken) return null
+
+    return {
+      accessToken,
+      refreshToken,
+      type: hashParams.get('type') ?? searchParams.get('type'),
+    }
+  } catch {
+    return null
+  }
 }
 
 async function signInWithPasswordResilient(email: string, password: string) {
@@ -115,6 +136,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
+  useEffect(() => {
+    let active = true
+    let lastHandledUrl: string | null = null
+
+    async function handleAuthDeepLink(url: string | null) {
+      if (!active || !url || url === lastHandledUrl) return
+
+      const tokens = parseAuthTokensFromUrl(url)
+      if (!tokens) return
+
+      lastHandledUrl = url
+
+      const { error } = await supabase.auth.setSession({
+        access_token: tokens.accessToken,
+        refresh_token: tokens.refreshToken,
+      })
+
+      if (error) {
+        console.warn('Unable to exchange auth deep link session', {
+          type: tokens.type ?? 'unknown',
+          message: error.message,
+        })
+      }
+    }
+
+    ExpoLinking.getInitialURL().then((url) => {
+      void handleAuthDeepLink(url)
+    })
+
+    const subscription = ExpoLinking.addEventListener('url', ({ url }) => {
+      void handleAuthDeepLink(url)
+    })
+
+    return () => {
+      active = false
+      subscription.remove()
+    }
+  }, [])
+
   async function signUp(
     email: string,
     password: string,
@@ -179,7 +239,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function signInWithGoogle(): Promise<{ error: string | null }> {
     try {
-      const redirectUrl = 'drape:///(auth)/callback'
+      const redirectUrl = ExpoLinking.createURL('/callback')
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: { redirectTo: redirectUrl, skipBrowserRedirect: true },
