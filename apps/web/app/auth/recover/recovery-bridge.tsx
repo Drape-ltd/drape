@@ -13,7 +13,7 @@ function buildDeepLinkTarget() {
   return `${APP_RESET_URL}${suffix}`
 }
 
-export function RecoveryBridge(): JSX.Element {
+export function RecoveryBridge(): any {
   const [targetUrl, setTargetUrl] = useState(APP_RESET_URL)
   const [showFallback, setShowFallback] = useState(false)
 

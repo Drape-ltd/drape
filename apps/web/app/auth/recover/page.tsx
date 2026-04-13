@@ -9,6 +9,7 @@ export const metadata: Metadata = {
   },
 }
 
-export default function RecoveryBridgePage(): JSX.Element {
+// Keep the return type loose so Next/OpenNext do not disagree over React element types.
+export default function RecoveryBridgePage(): any {
   return <RecoveryBridge />
 }
