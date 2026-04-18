@@ -19,15 +19,22 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
+import {
+  MAX_COLLECTION_CODE_ATTEMPTS,
+  readCollectionCodeAttempts,
+  shouldResetCollectionCodeAttempts,
+} from '../_shared/collection-code.ts'
 import { rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
 import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import {
   buildFabricReceivedNote,
+  buildFitProfileReviewedNote,
   buildMaterialIssueNote,
   buildMeasurementConfirmationRequestNote,
   FABRIC_HANDOFF_LABELS,
+  fitProfileNeedsTailorReview,
   MATERIAL_ISSUE_REASON_LABELS,
   materialIssueBlocksCutting,
   MEASUREMENT_SOURCE_LABELS,
@@ -83,6 +90,11 @@ const BodySchema = z.discriminatedUnion('action', [
   }),
   z.object({
     orderId: uuid,
+    action:  z.literal('confirm-fit-readiness'),
+    note:    z.string().trim().min(10).max(300),
+  }),
+  z.object({
+    orderId: uuid,
     action:  z.literal('confirm-fabric-received'),
     note:    z.string().trim().max(300).optional(),
   }),
@@ -116,6 +128,7 @@ type Action =
   | 'advance-stage'
   | 'confirm-collection'
   | 'request-measurement-confirmation'
+  | 'confirm-fit-readiness'
   | 'confirm-fabric-received'
   | 'open-material-issue'
 type OrderRow = {
@@ -132,6 +145,8 @@ type OrderRow = {
   fulfillment_fee?: number | null
   collection_code?: string | null
   collection_code_attempts?: number | null
+  collection_code_last_attempt_at?: string | null
+  updated_at?: string | null
 }
 
 declare const EdgeRuntime: {
@@ -164,6 +179,7 @@ const CUSTOMER_NOTIFICATION: Record<string, { title: string; body: string }> = {
   READY_FOR_COLLECTION:    { title: 'Ready to collect! 📦',    body: 'Your order is ready. Show your collection code at pickup.' },
   SHIPPED:                 { title: 'On the way 🚚',            body: 'Your order has been shipped.' },
   'request-measurement-confirmation': { title: 'Measurement check needed', body: 'Your tailor wants you to confirm your measurements before cutting starts.' },
+  'confirm-fit-readiness': { title: 'Fit intake reviewed', body: 'Your tailor reviewed the guided fit intake attached to this order.' },
   'confirm-fabric-received': { title: 'Fabric received', body: 'Your tailor confirmed they received your fabric.' },
   'open-material-issue': { title: 'Fabric issue needs your decision', body: 'Your tailor reviewed the fabric and needs your choice before production can continue.' },
 }
@@ -268,7 +284,7 @@ Deno.serve(async (req) => {
 
     // Only collection confirmation needs the collection code fields.
     const orderSelect = action === 'confirm-collection'
-      ? 'id, stage, tailor_id, customer_id, collection_code, collection_code_attempts'
+      ? 'id, stage, tailor_id, customer_id, collection_code, collection_code_attempts, collection_code_last_attempt_at, updated_at'
       : 'id, stage, tailor_id, customer_id, deadline, fabric_source, special_note, customer_measurements_snapshot, delivery_method, delivery_address, fulfillment_fee'
 
     // Fetch order — verify tailor ownership and current stage
@@ -452,10 +468,83 @@ Deno.serve(async (req) => {
       })
     }
 
+    if (action === 'confirm-fit-readiness') {
+      if (!PRE_CUTTING_STAGES.includes(order.stage)) {
+        return new Response(
+          JSON.stringify({ error: `Cannot confirm fit readiness from stage ${order.stage}` }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const meta = parseOrderSupportMeta(order.special_note)
+      if (!meta.fitProfile) {
+        return new Response(
+          JSON.stringify({ error: 'No guided fit intake is attached to this order yet.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const nextMeta = {
+        ...meta,
+        fitProfile: {
+          ...meta.fitProfile,
+          status: 'TAILOR_REVIEWED' as const,
+          requiresTailorReview: false,
+          tailorMeasurementOverride: true,
+          tailorMeasurementOverrideReason: body.note.trim(),
+          tailorMeasurementOverrideAt: new Date().toISOString(),
+        },
+      }
+
+      const { error } = await supabase
+        .from('orders')
+        .update({ special_note: serializeOrderSupportMeta(nextMeta) })
+        .eq('id', orderId)
+
+      if (error) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
+        return new Response('Database error', { status: 500, headers: cors })
+      }
+
+      await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: order.stage,
+        note: buildFitProfileReviewedNote(body.note.trim()),
+      })
+
+      await audit(supabase, {
+        event: 'measurements.fit_reviewed',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        order_id: orderId,
+        payload: { stage: order.stage },
+      })
+
+      if (order.customer_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.customer_id.toString(), {
+            ...CUSTOMER_NOTIFICATION['confirm-fit-readiness'],
+            data: { orderId },
+          })
+        )
+      }
+
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      })
+    }
+
     if (action === 'open-material-issue') {
       if (!PRE_CUTTING_STAGES.includes(order.stage)) {
         return new Response(
           JSON.stringify({ error: `Cannot open a material issue from stage ${order.stage}` }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (order.fabric_source !== 'CUSTOMER_SUPPLIES') {
+        return new Response(
+          JSON.stringify({ error: 'Material issues only apply when the customer is supplying fabric.' }),
           { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
@@ -813,6 +902,13 @@ Deno.serve(async (req) => {
             { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
           )
         }
+
+        if (fitProfileNeedsTailorReview(supportMeta)) {
+          return new Response(
+            JSON.stringify({ error: 'Review the guided fit intake or request measurement confirmation before cutting starts.' }),
+            { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+          )
+        }
       }
 
       const updates: Record<string, unknown> = {
@@ -823,6 +919,8 @@ Deno.serve(async (req) => {
       // Server-generated collection code — never trusted from client
       if (targetStage === 'READY_FOR_COLLECTION') {
         updates.collection_code = generateCollectionCode()
+        updates.collection_code_attempts = 0
+        updates.collection_code_last_attempt_at = null
       }
 
       if (targetStage === 'SHIPPED' && trackingNumber?.trim()) {
@@ -885,7 +983,6 @@ Deno.serve(async (req) => {
     // ── confirm-collection ────────────────────────────────────────────────────
     if (action === 'confirm-collection') {
       const { code } = body as Extract<typeof body, { action: 'confirm-collection' }>
-      const MAX_ATTEMPTS = 5
 
       if (order.stage === 'COLLECTED') {
         return new Response(JSON.stringify({ ok: true, idempotent: true }), {
@@ -899,10 +996,31 @@ Deno.serve(async (req) => {
         )
       }
 
-      const attempts = order.collection_code_attempts ?? 0
-      // V1.1 TODO: add time-based reset (e.g. reset attempts after 24h) to prevent permanent lockout
-      // on legitimate collections where the code was misread multiple times.
-      if (attempts >= MAX_ATTEMPTS) {
+      let attempts = readCollectionCodeAttempts({
+        attempts: order.collection_code_attempts,
+        lastAttemptAt: order.collection_code_last_attempt_at,
+        updatedAt: order.updated_at,
+      })
+
+      if (shouldResetCollectionCodeAttempts({
+        attempts,
+        lastAttemptAt: order.collection_code_last_attempt_at,
+        updatedAt: order.updated_at,
+      })) {
+        const { error: resetError } = await supabase
+          .from('orders')
+          .update({ collection_code_attempts: 0, collection_code_last_attempt_at: null })
+          .eq('id', orderId)
+
+        if (resetError) {
+          log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: resetError.message })
+          return new Response('Database error', { status: 500, headers: cors })
+        }
+
+        attempts = 0
+      }
+
+      if (attempts >= MAX_COLLECTION_CODE_ATTEMPTS) {
         await audit(supabase, {
           event: 'collection_code.order_locked',
           actor_id: caller.id,
@@ -912,14 +1030,15 @@ Deno.serve(async (req) => {
           payload: { attempts },
         })
         return new Response(
-          JSON.stringify({ error: 'Too many incorrect attempts. Contact support.' }),
+          JSON.stringify({ error: 'Too many incorrect attempts. Try again after the 24-hour reset window or contact support.' }),
           { status: 423, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
 
       if (code !== order.collection_code) {
+        const nowIso = new Date().toISOString()
         await supabase.from('orders')
-          .update({ collection_code_attempts: attempts + 1 })
+          .update({ collection_code_attempts: attempts + 1, collection_code_last_attempt_at: nowIso })
           .eq('id', orderId)
         await audit(supabase, {
           event: 'collection_code.wrong',
@@ -929,7 +1048,7 @@ Deno.serve(async (req) => {
           severity: 'warn',
           payload: { attempts: attempts + 1 },
         })
-        const remaining = MAX_ATTEMPTS - attempts - 1
+        const remaining = MAX_COLLECTION_CODE_ATTEMPTS - attempts - 1
         return new Response(
           JSON.stringify({ error: 'Incorrect code.', attemptsRemaining: remaining }),
           { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
@@ -937,7 +1056,12 @@ Deno.serve(async (req) => {
       }
 
       const { error } = await supabase.from('orders')
-        .update({ stage: 'COLLECTED', collection_code_attempts: 0, stage_updated_at: new Date().toISOString() })
+        .update({
+          stage: 'COLLECTED',
+          collection_code_attempts: 0,
+          collection_code_last_attempt_at: null,
+          stage_updated_at: new Date().toISOString(),
+        })
         .eq('id', orderId)
 
       if (error) {

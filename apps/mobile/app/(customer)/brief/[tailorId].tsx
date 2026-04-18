@@ -10,9 +10,15 @@ import * as ImagePicker from 'expo-image-picker'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import { isLikelyConnectivityIssue, readFunctionErrorPayload } from '@/lib/function-errors'
 import {
+  buildOrderFitProfile,
+  COVERAGE_PREFERENCE_LABELS,
   enrichMeasurementSnapshot,
   FABRIC_HANDOFF_LABELS,
+  FABRIC_STRETCH_LABELS,
+  FIT_INTENT_LABELS,
   MEASUREMENT_SOURCE_LABELS,
+  MEASUREMENT_SCAN_STATUS_LABELS,
+  WEAR_DAY_SUPPORT_LABELS,
   type FabricHandoffMode,
 } from '@/lib/order-support'
 import { invokeFunction, supabase } from '@/lib/supabase'
@@ -192,6 +198,7 @@ export default function OrderBriefScreen() {
   const [deliveryAddressSearch, setDeliveryAddressSearch] = useState('')
   const [deliveryAddressSuggestions, setDeliveryAddressSuggestions] = useState<any[]>([])
   const [showDeliverySuggestions, setShowDeliverySuggestions] = useState(false)
+  const guidedFitProfile = buildOrderFitProfile(measurements)
 
   useEffect(() => {
     setStep(0)
@@ -470,14 +477,17 @@ export default function OrderBriefScreen() {
     }
 
     const measurementSnapshot = enrichMeasurementSnapshot(measurements)
+    const fitProfile = buildOrderFitProfile(measurementSnapshot)
     const supportMeta = fabricSource === 'CUSTOMER_SUPPLIES'
       ? {
           fabricHandoffMode,
           fabricHandoffLabel: fabricHandoffMode ? FABRIC_HANDOFF_LABELS[fabricHandoffMode] : null,
+          fitProfile,
         }
       : {
           fabricHandoffMode: 'NO_CUSTOMER_HANDOFF_REQUIRED' as const,
           fabricHandoffLabel: FABRIC_HANDOFF_LABELS.NO_CUSTOMER_HANDOFF_REQUIRED,
+          fitProfile,
         }
 
     const composedFitNote = fitNote.trim()
@@ -874,6 +884,64 @@ export default function OrderBriefScreen() {
                         ))}
                       </View>
                     )}
+                    <View style={styles.measureSubcard}>
+                      <View style={styles.measureSourceRow}>
+                        <Text style={styles.measureSourceLabel}>Guided fit intake</Text>
+                        <Text style={styles.measureSourceValue}>
+                          {guidedFitProfile?.status
+                            ? MEASUREMENT_SCAN_STATUS_LABELS[guidedFitProfile.status]
+                            : 'Recommended'}
+                        </Text>
+                      </View>
+                      {guidedFitProfile ? (
+                        <>
+                          {guidedFitProfile.fitIntent ? (
+                            <View style={styles.measureSourceRow}>
+                              <Text style={styles.measureSourceLabel}>Fit direction</Text>
+                              <Text style={styles.measureSourceValue}>{FIT_INTENT_LABELS[guidedFitProfile.fitIntent]}</Text>
+                            </View>
+                          ) : null}
+                          {guidedFitProfile.fabricStretch ? (
+                            <View style={styles.measureSourceRow}>
+                              <Text style={styles.measureSourceLabel}>Stretch</Text>
+                              <Text style={styles.measureSourceValue}>{FABRIC_STRETCH_LABELS[guidedFitProfile.fabricStretch]}</Text>
+                            </View>
+                          ) : null}
+                          {guidedFitProfile.wearDaySupport ? (
+                            <View style={styles.measureSourceRow}>
+                              <Text style={styles.measureSourceLabel}>Support</Text>
+                              <Text style={styles.measureSourceValue}>{WEAR_DAY_SUPPORT_LABELS[guidedFitProfile.wearDaySupport]}</Text>
+                            </View>
+                          ) : null}
+                          {guidedFitProfile.coveragePreference ? (
+                            <View style={styles.measureSourceRow}>
+                              <Text style={styles.measureSourceLabel}>Coverage</Text>
+                              <Text style={styles.measureSourceValue}>{COVERAGE_PREFERENCE_LABELS[guidedFitProfile.coveragePreference]}</Text>
+                            </View>
+                          ) : null}
+                          <Text style={styles.measureSubcardHint}>
+                            {guidedFitProfile.requiresTailorReview
+                              ? 'This order will carry a tailor-review checkpoint before cutting starts.'
+                              : 'This fit intake will be attached to the order for pre-cutting review.'}
+                          </Text>
+                        </>
+                      ) : (
+                        <>
+                          <Text style={styles.measureSubcardHint}>
+                            Add posture, stretch, coverage, and symmetry notes once so future quotes start from a fuller fit brief.
+                          </Text>
+                          <TouchableOpacity
+                            style={styles.measureActionBtn}
+                            onPress={() => router.push({
+                              pathname: '/(customer)/profile/guided-fit',
+                              params: { returnTo: `/(customer)/brief/${tailorId}` },
+                            })}
+                          >
+                            <Text style={styles.measureActionBtnText}>Add guided fit intake</Text>
+                          </TouchableOpacity>
+                        </>
+                      )}
+                    </View>
                   </View>
                 ) : (
                   <View style={styles.noMeasureCard}>
@@ -1462,6 +1530,31 @@ const styles = StyleSheet.create({
   flagsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   flagBadge: { paddingHorizontal: Spacing.sm, paddingVertical: 3, backgroundColor: Colors.kanteRustLight, borderRadius: Radius.full },
   flagBadgeText: { fontSize: FontSize.xs, color: Colors.kanteRust, fontWeight: FontWeight.medium },
+  measureSubcard: {
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+    backgroundColor: Colors.white,
+  },
+  measureSubcardHint: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+  },
+  measureActionBtn: {
+    alignSelf: 'flex-start',
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreen,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+  },
+  measureActionBtnText: {
+    color: Colors.white,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+  },
   measureEditNote: { fontSize: FontSize.xs, color: Colors.midGrey },
   measureEditHint: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium },
 

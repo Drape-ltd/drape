@@ -12,6 +12,7 @@ export default function ProfileLayout() {
     >
       <Stack.Screen name="index" />
       <Stack.Screen name="measurements" />
+      <Stack.Screen name="guided-fit" />
       <Stack.Screen name="account-settings" />
       <Stack.Screen name="personal-info" />
       <Stack.Screen name="login-security" />

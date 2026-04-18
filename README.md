@@ -1,0 +1,190 @@
+# Drape
+
+Drape is a tailoring marketplace for custom orders and ready-made pieces.
+
+The repo currently contains:
+
+- an Expo / React Native customer + tailor app
+- a Next.js web app deployed through Cloudflare
+- Supabase database migrations and Edge Functions
+- shared order, auth, and validation logic for both surfaces
+
+## Stack
+
+- `apps/mobile`: Expo Router, React Native, Supabase, React Query
+- `apps/web`: Next.js, Supabase, Cloudflare / OpenNext
+- `supabase/`: SQL migrations and Edge Functions
+- `packages/shared`: shared order state, contact filtering, and auth helpers
+- `packages/db`: Prisma schema and DB tooling
+
+## Repo Layout
+
+```text
+apps/
+  mobile/      Expo app for customers and tailors
+  web/         Marketing + auth bridge + web APIs
+packages/
+  db/          Prisma schema and DB scripts
+  shared/      Shared TS utilities used across apps
+supabase/
+  functions/   Edge Functions for order actions, messaging, auth workflows
+  migrations/  SQL schema + policy history
+docs/          Product, QA, and rollout notes
+```
+
+## What Works Today
+
+- customer sign up, onboarding, measurement profile, and order brief flow
+- tailor setup, quoting, consultation, messaging, and production-stage updates
+- local collection and shipping handoff workflows
+- hosted password recovery bridge for mobile auth recovery
+- waitlist and tailor-application submissions saved to DB and mirrored into inbox notifications
+- guided fit intake with `measurement_scans` and pre-cutting tailor review support
+
+## Local Setup
+
+### 1. Install dependencies
+
+```bash
+pnpm install
+```
+
+### 2. Copy env files
+
+Use the example files inside each app as your starting point:
+
+- `apps/mobile/.env.local.example`
+- `apps/web/.env.local.example`
+
+You will also need working Supabase project credentials for local development.
+
+### 3. Start the app you need
+
+Web:
+
+```bash
+pnpm --filter @drape/web dev
+```
+
+Mobile:
+
+```bash
+pnpm --filter @drape/mobile dev -- --clear
+```
+
+Root workspace dev:
+
+```bash
+pnpm dev
+```
+
+## Useful Commands
+
+```bash
+pnpm typecheck
+pnpm build
+pnpm --filter @drape/mobile typecheck
+pnpm --filter @drape/web typecheck
+pnpm --filter @drape/shared test
+pnpm db:generate
+pnpm db:migrate
+```
+
+## Database And Functions
+
+Supabase is the operational backbone for:
+
+- auth
+- orders
+- messaging
+- notifications
+- storage
+- server-side workflow enforcement
+
+Important folders:
+
+- `supabase/migrations`
+- `supabase/functions`
+
+Recent workflow additions include:
+
+- collection-code lock reset window
+- guided fit session storage via `measurement_scans`
+- cutting preflight rules that can block progression until fit review, fabric receipt, or measurement confirmation is complete
+
+## Current Guided Fit Flow
+
+The current implementation starts with the most honest useful slice instead of pretending full camera automation already exists.
+
+It includes:
+
+- manual measurement baseline on the customer profile
+- guided fit intake for stretch, support, posture, symmetry, coverage, and fit direction
+- `measurement_scans` history table for reusable capture sessions
+- order-level fit profile attached at brief submission
+- tailor-side pre-cutting review and override before cutting can start
+
+Relevant files:
+
+- `apps/mobile/app/(customer)/profile/guided-fit.tsx`
+- `apps/mobile/lib/order-support.ts`
+- `supabase/functions/tailor-order-action/index.ts`
+- `supabase/migrations/20260414000002_measurement_scans.sql`
+
+## Deploy Notes
+
+### Web
+
+The web app is built for Cloudflare via OpenNext.
+
+Useful commands:
+
+```bash
+pnpm --filter @drape/web build
+pnpm --filter @drape/web cf:build
+pnpm --filter @drape/web cf:deploy
+```
+
+### Mobile
+
+The mobile app uses EAS profiles defined in `apps/mobile/eas.json`.
+
+Useful commands:
+
+```bash
+pnpm --filter @drape/mobile build:ios
+pnpm --filter @drape/mobile build:android
+pnpm --filter @drape/mobile build:ios:prod
+pnpm --filter @drape/mobile build:android:prod
+```
+
+### Edge Functions
+
+Deploy Supabase functions after workflow changes that touch `supabase/functions/**`.
+
+Typical examples:
+
+```bash
+supabase functions deploy tailor-order-action
+supabase functions deploy customer-order-action
+supabase functions deploy custom-order-action
+```
+
+Apply any matching SQL migration before testing those changes in a live environment.
+
+## Testing Focus
+
+Highest-signal manual passes right now:
+
+- customer signup to custom order placement
+- tailor quote to production-stage movement
+- shipping and local collection handoff
+- waitlist and tailor-application submission notifications
+- password reset email to hosted recovery bridge to in-app reset
+- guided fit intake to pre-cutting tailor review
+
+## Notes
+
+- This repo is actively evolving, so some docs may describe in-flight work before it is fully deployed.
+- The DB remains the source of truth for leads and orders; inbox notifications are secondary visibility, not the primary record.
+- If you are testing a workflow that touches Supabase Edge Functions, always make sure the matching migration and function deploy happened together.

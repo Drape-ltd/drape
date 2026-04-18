@@ -150,6 +150,7 @@ export default function MeasurementsScreen() {
   const [fitFlags, setFitFlags] = useState<FitFlag[]>([])
   const [bodyNote, setBodyNote] = useState('')
   const [bodyNoteError, setBodyNoteError] = useState('')
+  const [fitCaptureMeta, setFitCaptureMeta] = useState<Record<string, unknown>>({})
 
   function applyMeasurements(m: Record<string, unknown> | null) {
     setUnit('in')
@@ -169,6 +170,7 @@ export default function MeasurementsScreen() {
     setBodyNote('')
     setBodyNoteError('')
     setCustomMeasurements([])
+    setFitCaptureMeta({})
     if (!m) return
     if (m.unit === 'cm' || m.unit === 'in') setUnit(m.unit)
     if (typeof m.chest === 'number') setChest(String(m.chest))
@@ -203,7 +205,32 @@ export default function MeasurementsScreen() {
       'unit', 'fitStyle', 'measurementSource', 'measurementSourceLabel', 'fitConfidence',
       'needsConfirmation', 'confirmationReason', 'confirmationRequestedAt', 'confirmedAt', 'confirmedBy',
       'garmentContext', 'bodyShape', 'fitFlags', 'bodyNote',
+      'captureMethod', 'captureVersion', 'capturedAt', 'confidenceOverall', 'confidenceByField', 'sourceDevice',
+      'latestMeasurementScanId', 'latestMeasurementScanStatus', 'bodyFlags', 'symmetryFlags', 'requiresTailorReview', 'latestFitProfile',
     ])
+    const preservedLatestFitProfile =
+      m.latestFitProfile && typeof m.latestFitProfile === 'object' && !Array.isArray(m.latestFitProfile)
+        ? {
+            ...(m.latestFitProfile as Record<string, unknown>),
+            measurementScanId: null,
+            captureMethod: null,
+            captureMethodLabel: null,
+            captureVersion: null,
+            status: null,
+            capturedAt: null,
+            confidenceOverall: null,
+            confidenceByField: null,
+            requiresTailorReview: false,
+            tailorMeasurementOverride: false,
+            tailorMeasurementOverrideReason: null,
+            tailorMeasurementOverrideAt: null,
+          }
+        : null
+    setFitCaptureMeta({
+      bodyFlags: Array.isArray(m.bodyFlags) ? m.bodyFlags : [],
+      symmetryFlags: Array.isArray(m.symmetryFlags) ? m.symmetryFlags : [],
+      latestFitProfile: preservedLatestFitProfile,
+    })
     const extras = Object.entries(m).filter(([k]) => !standardKeys.has(k))
     setCustomMeasurements(
       extras.map(([name, value]) => ({
@@ -356,6 +383,7 @@ async function loadMeasurements() {
       bodyShape: bodyShapes,
       fitFlags,
       bodyNote: bodyNote.trim() || null,
+      ...fitCaptureMeta,
       ...customExtras,
     }
 

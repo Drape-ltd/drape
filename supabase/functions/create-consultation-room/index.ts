@@ -51,6 +51,24 @@ function jsonError(
   return jsonResponse({ code, error }, status, corsHeaders)
 }
 
+function extractRoomCreatedAt(url: string) {
+  try {
+    const pathname = new URL(url).pathname
+    const roomName = pathname.split('/').filter(Boolean).at(-1) ?? ''
+    const timestamp = Number(roomName.split('-').at(-1))
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return null
+    return timestamp
+  } catch {
+    return null
+  }
+}
+
+function isFreshRoomUrl(url: string) {
+  const createdAt = extractRoomCreatedAt(url)
+  if (createdAt == null) return false
+  return Date.now() - createdAt < ROOM_TTL_SECONDS * 1000
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
@@ -96,9 +114,12 @@ Deno.serve(async (req) => {
       return jsonError(corsHeaders, 409, 'CONSULTATION_NOT_READY', 'This order is no longer in the consultation stage.')
     }
 
-    // Return existing room if one already exists (same room works for both audio/video)
+    // Reuse only rooms that still fall within the app TTL. Old Daily rooms can expire
+    // while the stale URL remains on the order record.
     if (order.video_call_url) {
-      return jsonResponse({ url: order.video_call_url, existing: true }, 200, corsHeaders)
+      if (isFreshRoomUrl(order.video_call_url)) {
+        return jsonResponse({ url: order.video_call_url, existing: true }, 200, corsHeaders)
+      }
     }
 
     // Create a new Daily.co room
@@ -154,14 +175,18 @@ Deno.serve(async (req) => {
     // Atomic write: re-verify ownership + stage + no existing URL in one UPDATE.
     // The WHERE clause prevents TOCTOU: if another request already set the URL,
     // this update matches 0 rows and we fall through to return the existing URL.
-    const { data: persistedRows } = await supabase
+    let updateQuery = supabase
       .from('orders')
       .update({ video_call_url: roomUrl })
       .eq('id', orderId)
-      .eq('tailor_id', order.tailor_id)      // re-verify ownership at write time
-      .eq('stage', 'CONSULTATION')            // re-verify stage at write time
-      .is('video_call_url', null)             // only write if still unset (prevents double-create)
-      .select('id')
+      .eq('tailor_id', order.tailor_id)
+      .eq('stage', 'CONSULTATION')
+
+    updateQuery = order.video_call_url
+      ? updateQuery.eq('video_call_url', order.video_call_url)
+      : updateQuery.is('video_call_url', null)
+
+    const { data: persistedRows } = await updateQuery.select('id')
 
     if (!persistedRows || persistedRows.length === 0) {
       // Race: another request beat us — return the URL it set

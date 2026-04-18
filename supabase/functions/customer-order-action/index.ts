@@ -10,11 +10,6 @@
  *   accept-quote     QUOTE_SENT → PAYMENT_PENDING
  *   decline-quote    QUOTE_SENT → DECLINED
  *   complete-order   DELIVERED|COLLECTED → COMPLETE
- *   collect-order    READY_FOR_COLLECTION → COLLECTED  (customer enters 4-digit code)
- *                    NOTE: collect-order is currently dead from the UI. The active
- *                    collection path is tailor-order-action/confirm-collection, which
- *                    the tailor initiates by entering the code the customer shows them.
- *                    This action is retained for future customer-side code entry flow.
  *
  * Required env vars:
  *   SUPABASE_URL
@@ -48,7 +43,6 @@ const BodySchema = z.object({
     'accept-quote',
     'decline-quote',
     'complete-order',
-    'collect-order',
     'save-fabric-tracking',
     'confirm-measurements',
     'respond-material-issue',
@@ -56,8 +50,6 @@ const BodySchema = z.object({
   reason:      z.string().trim().min(1).max(200).optional(),
   description: z.string().trim().min(10).max(1000).optional(),
   note:        optionalNote,
-  // collect-order only — 4-digit numeric collection code
-  code:        z.string().regex(/^\d{4}$/, 'Must be a 4-digit code').optional(),
   fabricTracking: z.string().trim().min(1).max(120).optional(),
   materialIssueResponse: z.enum(['REPLACE_FABRIC', 'ASK_TAILOR_TO_SOURCE', 'REVISE_DESIGN', 'CANCEL_ORDER']).optional(),
 })
@@ -74,7 +66,6 @@ type Action =
   | 'accept-quote'
   | 'decline-quote'
   | 'complete-order'
-  | 'collect-order'
   | 'save-fabric-tracking'
   | 'confirm-measurements'
   | 'respond-material-issue'
@@ -85,14 +76,13 @@ type OrderRow = {
   order_kind?: string | null
   customer_id?: string | null
   tailor_id?: string | null
+  fabric_source?: string | null
   quoted_amount?: number | null
   quote_expires_at?: string | null
   delivery_method?: string | null
   delivery_address?: string | null
   special_note?: string | null
   customer_measurements_snapshot?: unknown
-  collection_code?: string | null
-  collection_code_attempts?: number | null
 }
 
 const PRE_CUTTING_STAGES = ['PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING', 'CONFIRMED', 'DESIGNING', 'SOURCING']
@@ -108,13 +98,10 @@ const VALID_FROM: Record<Action, string[]> = {
   'accept-quote':    ['QUOTE_SENT'],
   'decline-quote':   ['QUOTE_SENT'],
   'complete-order':  ['DELIVERED', 'COLLECTED'],
-  'collect-order':   ['READY_FOR_COLLECTION'],
   'save-fabric-tracking': ['PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'],
   'confirm-measurements': PRE_CUTTING_STAGES,
   'respond-material-issue': PRE_CUTTING_STAGES,
 }
-
-const MAX_CODE_ATTEMPTS = 5
 
 // The stage each action transitions TO (dispute handled separately)
 const NEXT_STAGE: Partial<Record<Action, string>> = {
@@ -139,7 +126,6 @@ const STAGE_NOTE: Partial<Record<Action, string>> = {
   'accept-quote':    'Customer accepted the quote and started payment.',
   'decline-quote':   'Customer declined the quote.',
   'complete-order':  'Order marked complete.',
-  'collect-order':   'Customer collected the order in person.',
 }
 
 function jsonResponse(body: Record<string, unknown>, status: number, cors: HeadersInit) {
@@ -196,12 +182,9 @@ Deno.serve(async (req) => {
       return new Response('Too many requests', { status: 429, headers: cors })
     }
 
-    // Only collect-order needs the collection code fields.
-    const orderSelect = action === 'collect-order'
-      ? 'id, stage, customer_id, tailor_id, collection_code, collection_code_attempts'
-      : action === 'accept-quote'
-        ? 'id, stage, order_kind, customer_id, tailor_id, quoted_amount, quote_expires_at, delivery_method, delivery_address, special_note, customer_measurements_snapshot'
-        : 'id, stage, customer_id, tailor_id, special_note, customer_measurements_snapshot'
+    const orderSelect = action === 'accept-quote'
+      ? 'id, stage, order_kind, customer_id, tailor_id, fabric_source, quoted_amount, quote_expires_at, delivery_method, delivery_address, special_note, customer_measurements_snapshot'
+      : 'id, stage, customer_id, tailor_id, fabric_source, special_note, customer_measurements_snapshot'
 
     // Fetch order — verify ownership and current stage
     const { data: orderData, error: orderError } = await supabase
@@ -285,114 +268,30 @@ Deno.serve(async (req) => {
     })
     if (blockedNote) return blockedNote
 
-    // ── collect-order ─────────────────────────────────────────────────────────
-    // Customer presents the 4-digit code at pickup.
-    // Locked after MAX_CODE_ATTEMPTS wrong guesses.
-    if (action === 'collect-order') {
-      const { code } = parsed.data
-      if (!code) return new Response('code is required', { status: 400, headers: cors })
-
-      // Tight rate limit: 10 code attempts per hour per customer (separate bucket)
-      const codeAllowed = await checkRateLimit(supabase, `collect-order-code:${caller.id}`, 3600, 10)
-      if (!codeAllowed) {
-        await audit(supabase, {
-          event: 'collection_code.rate_limited',
-          actor_id: caller.id,
-          actor_role: 'CUSTOMER',
-          order_id: orderId,
-          severity: 'warn',
-          payload: { function: FN },
-        })
-        return new Response('Too many attempts. Please try again later.', { status: 429, headers: cors })
-      }
-
-      // Per-order lock — blocks even if rate limit not yet hit
-      const attempts = order.collection_code_attempts ?? 0
-      if (attempts >= MAX_CODE_ATTEMPTS) {
-        await audit(supabase, {
-          event: 'collection_code.order_locked',
-          actor_id: caller.id,
-          actor_role: 'CUSTOMER',
-          order_id: orderId,
-          severity: 'warn',
-          payload: { attempts },
-        })
-        return new Response(
-          JSON.stringify({ error: 'Too many incorrect attempts. Contact support to unlock collection.' }),
-          { status: 423, headers: { ...cors, 'Content-Type': 'application/json' } },
-        )
-      }
-
-      if (code !== order.collection_code) {
-        // Wrong code — increment attempt counter
-        await supabase
-          .from('orders')
-          .update({ collection_code_attempts: attempts + 1 })
-          .eq('id', orderId)
-
-        await audit(supabase, {
-          event: 'collection_code.wrong',
-          actor_id: caller.id,
-          actor_role: 'CUSTOMER',
-          order_id: orderId,
-          severity: 'warn',
-          payload: { attempt_number: attempts + 1, remaining: MAX_CODE_ATTEMPTS - attempts - 1 },
-        })
-
-        log('warn', FN, 'collection_code.wrong', { actor_id: caller.id, order_id: orderId, attempt: attempts + 1 })
-        return new Response(
-          JSON.stringify({ error: 'Incorrect code.', remaining: MAX_CODE_ATTEMPTS - attempts - 1 }),
-          { status: 403, headers: { ...cors, 'Content-Type': 'application/json' } },
-        )
-      }
-
-      // Correct — transition to COLLECTED and reset attempts
-      const { error } = await supabase
-        .from('orders')
-        .update({ stage: 'COLLECTED', collection_code_attempts: 0, stage_updated_at: new Date().toISOString() })
-        .eq('id', orderId)
-
-      if (error) {
-        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
-        return new Response('Database error', { status: 500, headers: cors })
-      }
-
-      await supabase.from('order_stage_updates').insert({
-        order_id: orderId,
-        stage: 'COLLECTED',
-        note: STAGE_NOTE['collect-order'] ?? null,
-      })
-
-      await audit(supabase, {
-        event: 'order.stage_changed',
-        actor_id: caller.id,
-        actor_role: 'CUSTOMER',
-        order_id: orderId,
-        payload: { action, from_stage: order.stage, to_stage: 'COLLECTED' },
-      })
-
-      log('info', FN, 'order.stage_changed', { actor_id: caller.id, order_id: orderId, from_stage: order.stage, to_stage: 'COLLECTED' })
-
-      if (order.tailor_id) {
-        EdgeRuntime.waitUntil(
-          sendPushToUser(supabase, order.tailor_id.toString(), {
-            title: 'Order collected ✅',
-            body: 'The customer collected their order in person.',
-            data: { orderId },
-          })
-        )
-      }
-
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { ...cors, 'Content-Type': 'application/json' },
-      })
-    }
-
     if (action === 'save-fabric-tracking') {
       const value = fabricTracking?.trim() ?? ''
       if (!value) return new Response('fabricTracking is required', { status: 400, headers: cors })
       if (hasBlockedContact(value)) {
         return new Response("Contact details can't be included in tracking numbers.", { status: 400, headers: cors })
+      }
+
+      if (order.fabric_source !== 'CUSTOMER_SUPPLIES') {
+        return jsonError(
+          cors,
+          409,
+          'FABRIC_TRACKING_NOT_ALLOWED',
+          'Fabric tracking only applies when the customer is supplying fabric.',
+        )
+      }
+
+      const supportMeta = parseOrderSupportMeta(order.special_note)
+      if (supportMeta.fabricHandoffMode && supportMeta.fabricHandoffMode !== 'CUSTOMER_SHIPS_TO_TAILOR') {
+        return jsonError(
+          cors,
+          409,
+          'FABRIC_TRACKING_NOT_ALLOWED',
+          'Fabric tracking only applies when the customer is shipping fabric to the tailor.',
+        )
       }
 
       const { error } = await supabase

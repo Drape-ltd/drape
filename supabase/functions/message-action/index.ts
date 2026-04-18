@@ -21,8 +21,6 @@ const THREATENING_LANGUAGE_PATTERNS = [
 const BodySchema = z.object({
   action: z.literal('send-message'),
   orderId: uuid,
-  senderRole: z.enum(['CUSTOMER', 'TAILOR']).optional(),
-  senderName: z.string().trim().min(1).max(80),
   type: z.enum(['TEXT', 'PHOTO', 'VOICE']),
   body: z.string().trim().max(2000).optional(),
   photoUrl: z.string().url().optional(),
@@ -42,6 +40,49 @@ function jsonError(cors: HeadersInit, status: number, code: string, error: strin
 
 function hasThreateningLanguage(text: string) {
   return THREATENING_LANGUAGE_PATTERNS.some((pattern) => pattern.test(text))
+}
+
+async function resolveSenderName(
+  supabase: any,
+  callerId: string,
+  actorRole: 'CUSTOMER' | 'TAILOR',
+) {
+  if (actorRole === 'TAILOR') {
+    const { data } = await supabase
+      .from('tailor_profiles')
+      .select('display_name')
+      .eq('user_id', callerId)
+      .maybeSingle()
+    const tailorProfile = data as { display_name?: string | null } | null
+
+    if (typeof tailorProfile?.display_name === 'string' && tailorProfile.display_name.trim().length > 0) {
+      return tailorProfile.display_name.trim()
+    }
+  } else {
+    const { data } = await supabase
+      .from('customer_profiles')
+      .select('display_name')
+      .eq('user_id', callerId)
+      .maybeSingle()
+    const customerProfile = data as { display_name?: string | null } | null
+
+    if (typeof customerProfile?.display_name === 'string' && customerProfile.display_name.trim().length > 0) {
+      return customerProfile.display_name.trim()
+    }
+  }
+
+  const { data } = await supabase
+    .from('users')
+    .select('display_name')
+    .eq('id', callerId)
+    .maybeSingle()
+  const userRow = data as { display_name?: string | null } | null
+
+  if (typeof userRow?.display_name === 'string' && userRow.display_name.trim().length > 0) {
+    return userRow.display_name.trim()
+  }
+
+  return actorRole === 'TAILOR' ? 'Tailor' : 'Customer'
 }
 
 Deno.serve(async (req) => {
@@ -90,6 +131,7 @@ Deno.serve(async (req) => {
     const actorRole = isTailor ? 'TAILOR' : 'CUSTOMER'
     const messageText = body.type === 'TEXT' ? body.body?.trim() ?? '' : ''
     const conversationState = await readConversationAccessState(supabase, body.orderId)
+    const senderName = await resolveSenderName(supabase, caller.id, actorRole)
 
     if (conversationState.blocked) {
       return jsonError(
@@ -153,7 +195,7 @@ Deno.serve(async (req) => {
       order_id: body.orderId,
       sender_id: caller.id,
       sender_role: actorRole,
-      sender_name: body.senderName,
+      sender_name: senderName,
       type: body.type,
     }
     if (body.type === 'TEXT') payload.body = body.body!.trim()
