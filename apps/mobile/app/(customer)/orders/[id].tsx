@@ -12,12 +12,17 @@ import { Sentry } from '@/lib/sentry'
 import { openTrackingPage } from '@/lib/shipping'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import {
+  COVERAGE_PREFERENCE_LABELS,
   enrichMeasurementSnapshot,
   FABRIC_HANDOFF_LABELS,
+  FABRIC_STRETCH_LABELS,
   FIT_CONFIDENCE_LABELS,
+  FIT_INTENT_LABELS,
   MATERIAL_ISSUE_REASON_LABELS,
   MATERIAL_ISSUE_RESPONSE_LABELS,
   MEASUREMENT_SOURCE_LABELS,
+  MEASUREMENT_SCAN_STATUS_LABELS,
+  WEAR_DAY_SUPPORT_LABELS,
   hasOpenMaterialIssue,
   isShippingFabricHandoff,
   parseOrderSupportMeta,
@@ -534,6 +539,7 @@ export default function OrderTrackingScreen() {
   const measurementSource = order.measurementSnapshot?.measurementSource
   const fitConfidence = order.measurementSnapshot?.fitConfidence
   const measurementConfirmationNeeded = order.measurementSnapshot?.needsConfirmation === true
+  const fitProfile = order.supportMeta.fitProfile ?? null
   const fabricHandoffMode = order.supportMeta.fabricHandoffMode ?? null
   const fabricHandoffLabel =
     order.supportMeta.fabricHandoffLabel ??
@@ -877,6 +883,62 @@ export default function OrderTrackingScreen() {
               </View>
             </View>
           )}
+
+          {fitProfile ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Guided fit intake</Text>
+              <View style={styles.supportCard}>
+                <View style={styles.supportMetaList}>
+                  {fitProfile.status ? (
+                    <SummaryLine label="Status" value={MEASUREMENT_SCAN_STATUS_LABELS[fitProfile.status]} />
+                  ) : null}
+                  {fitProfile.fitIntent ? (
+                    <SummaryLine label="Fit direction" value={FIT_INTENT_LABELS[fitProfile.fitIntent]} />
+                  ) : null}
+                  {fitProfile.fabricStretch ? (
+                    <SummaryLine label="Stretch" value={FABRIC_STRETCH_LABELS[fitProfile.fabricStretch]} />
+                  ) : null}
+                  {fitProfile.wearDaySupport ? (
+                    <SummaryLine label="Support" value={WEAR_DAY_SUPPORT_LABELS[fitProfile.wearDaySupport]} />
+                  ) : null}
+                  {fitProfile.coveragePreference ? (
+                    <SummaryLine label="Coverage" value={COVERAGE_PREFERENCE_LABELS[fitProfile.coveragePreference]} />
+                  ) : null}
+                  {typeof fitProfile.heelHeightCm === 'number' ? (
+                    <SummaryLine label="Heel height" value={`${fitProfile.heelHeightCm} cm`} />
+                  ) : null}
+                </View>
+                {fitProfile.styleEaseNotes ? <Text style={styles.supportBodyText}>{fitProfile.styleEaseNotes}</Text> : null}
+                {fitProfile.postureNote ? <Text style={styles.supportHint}>Posture: {fitProfile.postureNote}</Text> : null}
+                {fitProfile.asymmetryNote ? <Text style={styles.supportHint}>Asymmetry: {fitProfile.asymmetryNote}</Text> : null}
+                {fitProfile.tailorMeasurementOverrideReason ? (
+                  <>
+                    <View style={[styles.supportStatusBadge, styles.supportStatusSuccess]}>
+                      <Text style={[styles.supportStatusText, styles.supportStatusTextSuccess]}>
+                        Tailor reviewed this fit intake
+                      </Text>
+                    </View>
+                    <Text style={styles.supportHint}>{fitProfile.tailorMeasurementOverrideReason}</Text>
+                  </>
+                ) : fitProfile.requiresTailorReview ? (
+                  <>
+                    <View style={[styles.supportStatusBadge, styles.supportStatusWarning]}>
+                      <Text style={[styles.supportStatusText, styles.supportStatusTextWarning]}>
+                        Tailor review will happen before cutting
+                      </Text>
+                    </View>
+                    <Text style={styles.supportHint}>
+                      Your tailor will review these fit notes before moving this order into cutting.
+                    </Text>
+                  </>
+                ) : (
+                  <Text style={styles.supportHint}>
+                    This guided fit intake was attached to help your tailor quote and cut with more context.
+                  </Text>
+                )}
+              </View>
+            </View>
+          ) : null}
 
           {(order.fabricSource === 'CUSTOMER_SUPPLIES' || fabricHandoffLabel || materialIssue) && (
             <View style={styles.section}>

@@ -145,6 +145,11 @@ Run each major flow in at least one of these conditions:
 4. Confirm:
    - handoff closes correctly
    - completed-order aftercare path remains visible
+5. Enter the wrong code 5 times on a staging order.
+6. Confirm:
+   - the order locks cleanly
+   - the API copy mentions the 24-hour reset window
+   - after 24 hours, the code can be retried without ops intervention
 
 ## Reviews / Aftercare Flow
 

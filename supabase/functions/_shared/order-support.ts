@@ -4,6 +4,51 @@ export type MeasurementSource =
   | 'TAILOR_CAPTURED'
   | 'EXTERNAL_PRO_CAPTURED'
 
+export type MeasurementFitConfidence = 'LOW' | 'MEDIUM' | 'HIGH'
+
+export type MeasurementScanCaptureMethod =
+  | 'GUIDED_MANUAL_BASELINE'
+  | 'GUIDED_HELPER_BASELINE'
+  | 'TAILOR_REVIEWED_BASELINE'
+
+export type MeasurementScanStatus =
+  | 'CAPTURED'
+  | 'TAILOR_REVIEW_REQUIRED'
+  | 'TAILOR_REVIEWED'
+
+export type MeasurementFieldKey =
+  | 'chest'
+  | 'waist'
+  | 'hips'
+  | 'shoulderWidth'
+  | 'inseam'
+  | 'sleeveLength'
+  | 'neckCircumference'
+  | 'height'
+
+export type FitIntent = 'FITTED' | 'BALANCED' | 'RELAXED'
+
+export type FabricStretch = 'NO_STRETCH' | 'LOW_STRETCH' | 'HIGH_STRETCH'
+
+export type WearDaySupport = 'NONE' | 'LIGHT_SUPPORT' | 'STRUCTURED_SUPPORT' | 'SHAPEWEAR'
+
+export type CoveragePreference = 'STANDARD' | 'MODEST' | 'FULL_COVERAGE'
+
+export type BodyProfileFlag =
+  | 'FULLER_BUST'
+  | 'FULLER_HIPS'
+  | 'LONG_TORSO'
+  | 'SHORT_TORSO'
+  | 'ROUNDED_SHOULDERS'
+  | 'FORWARD_POSTURE'
+
+export type SymmetryFlag =
+  | 'LEFT_SHOULDER_LOWER'
+  | 'RIGHT_SHOULDER_LOWER'
+  | 'HIP_IMBALANCE'
+  | 'ARM_LENGTH_DIFFERENCE'
+  | 'HEEL_HEIGHT_AFFECTS_DRAPE'
+
 export type FabricHandoffMode =
   | 'CUSTOMER_SHIPS_TO_TAILOR'
   | 'CUSTOMER_DROPS_OFF_LOCALLY'
@@ -44,11 +89,37 @@ export type MaterialIssueMeta = {
   respondedAt?: string | null
 }
 
+export type FitProfileMeta = {
+  measurementScanId?: string | null
+  captureMethod?: MeasurementScanCaptureMethod | null
+  captureMethodLabel?: string | null
+  captureVersion?: string | null
+  status?: MeasurementScanStatus | null
+  capturedAt?: string | null
+  confidenceOverall?: MeasurementFitConfidence | null
+  confidenceByField?: Partial<Record<MeasurementFieldKey, MeasurementFitConfidence | null>> | null
+  fitIntent?: FitIntent | null
+  heelHeightCm?: number | null
+  fabricStretch?: FabricStretch | null
+  wearDaySupport?: WearDaySupport | null
+  postureNote?: string | null
+  asymmetryNote?: string | null
+  coveragePreference?: CoveragePreference | null
+  styleEaseNotes?: string | null
+  bodyFlags?: BodyProfileFlag[] | null
+  symmetryFlags?: SymmetryFlag[] | null
+  requiresTailorReview?: boolean
+  tailorMeasurementOverride?: boolean
+  tailorMeasurementOverrideReason?: string | null
+  tailorMeasurementOverrideAt?: string | null
+}
+
 export type OrderSupportMeta = {
   fabricHandoffMode?: FabricHandoffMode | null
   fabricHandoffLabel?: string | null
   fabricReceivedAt?: string | null
   fabricReceivedNote?: string | null
+  fitProfile?: FitProfileMeta | null
   materialIssue?: MaterialIssueMeta | null
 }
 
@@ -57,6 +128,12 @@ export const MEASUREMENT_SOURCE_LABELS: Record<MeasurementSource, string> = {
   HELPER_GUIDED: 'Measured with a helper',
   TAILOR_CAPTURED: 'Measured by a tailor',
   EXTERNAL_PRO_CAPTURED: 'Measured by another professional',
+}
+
+export const MEASUREMENT_SCAN_CAPTURE_METHOD_LABELS: Record<MeasurementScanCaptureMethod, string> = {
+  GUIDED_MANUAL_BASELINE: 'Guided fit intake',
+  GUIDED_HELPER_BASELINE: 'Guided fit intake with helper',
+  TAILOR_REVIEWED_BASELINE: 'Tailor-reviewed fit intake',
 }
 
 export const FABRIC_HANDOFF_LABELS: Record<FabricHandoffMode, string> = {
@@ -116,12 +193,21 @@ export function materialIssueBlocksCutting(meta: OrderSupportMeta | null | undef
   return status === 'OPEN' || status === 'CUSTOMER_REQUESTED_CANCEL'
 }
 
+export function fitProfileNeedsTailorReview(meta: OrderSupportMeta | null | undefined) {
+  const fitProfile = meta?.fitProfile
+  return fitProfile?.requiresTailorReview === true && fitProfile?.tailorMeasurementOverride !== true
+}
+
 export function buildMeasurementConfirmationRequestNote(reason: string, sourceLabel: string) {
   return `Measurement confirmation requested before cutting. Source: ${sourceLabel}. Reason: ${reason}`
 }
 
 export function buildMeasurementConfirmedNote() {
   return 'Customer confirmed the measurements on this order.'
+}
+
+export function buildFitProfileReviewedNote(reason: string) {
+  return `Tailor reviewed the guided fit profile before cutting. Note: ${reason.trim()}`
 }
 
 export function buildFabricReceivedNote(handoffLabel: string, note?: string | null) {

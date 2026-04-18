@@ -17,12 +17,18 @@ import { getShipStagePreflightError, normalizeTrackingNumberInput, openTrackingP
 import { stripExif } from '@/lib/stripExif'
 import { createConsultationRoom, openConsultationCallUrl } from '@/lib/consultation'
 import {
+  COVERAGE_PREFERENCE_LABELS,
   enrichMeasurementSnapshot,
   FABRIC_HANDOFF_LABELS,
+  FABRIC_STRETCH_LABELS,
   FIT_CONFIDENCE_LABELS,
+  FIT_INTENT_LABELS,
   MATERIAL_ISSUE_REASON_LABELS,
   MATERIAL_ISSUE_RESPONSE_LABELS,
   MEASUREMENT_SOURCE_LABELS,
+  MEASUREMENT_SCAN_STATUS_LABELS,
+  WEAR_DAY_SUPPORT_LABELS,
+  fitProfileNeedsTailorReview,
   hasOpenMaterialIssue,
   parseOrderSupportMeta,
   type MaterialIssueReason,
@@ -199,6 +205,7 @@ export default function TailorOrderDetailScreen() {
   const [showConsultationModal, setShowConsultationModal] = useState(false)
   const [showCodeModal, setShowCodeModal] = useState(false)
   const [showMeasurementRequestModal, setShowMeasurementRequestModal] = useState(false)
+  const [showFitReadinessModal, setShowFitReadinessModal] = useState(false)
   const [showMaterialIssueModal, setShowMaterialIssueModal] = useState(false)
   const [startingCall, setStartingCall] = useState<'audio' | 'video' | null>(null)
   const [confirmingFabricReceived, setConfirmingFabricReceived] = useState(false)
@@ -340,6 +347,8 @@ export default function TailorOrderDetailScreen() {
   const measurementSource = order.measurements?.measurementSource
   const fitConfidence = order.measurements?.fitConfidence
   const measurementConfirmationNeeded = order.measurements?.needsConfirmation === true
+  const fitProfile = order.supportMeta.fitProfile ?? null
+  const fitProfileReviewNeeded = fitProfileNeedsTailorReview(order.supportMeta)
   const fabricHandoffMode = order.supportMeta.fabricHandoffMode ?? null
   const fabricHandoffLabel =
     order.supportMeta.fabricHandoffLabel ??
@@ -361,6 +370,7 @@ export default function TailorOrderDetailScreen() {
     (!order.supportMeta.fabricReceivedAt || materialIssue?.response === 'REPLACE_FABRIC')
   const cuttingBlockedLocally =
     measurementConfirmationNeeded ||
+    fitProfileReviewNeeded ||
     materialIssueOpen ||
     (
       order.fabricSource === 'CUSTOMER_SUPPLIES' &&
@@ -651,6 +661,8 @@ export default function TailorOrderDetailScreen() {
                   <Text style={styles.supportWarningText}>
                     {measurementConfirmationNeeded
                       ? 'The customer still needs to confirm measurements before cutting can start.'
+                      : fitProfileReviewNeeded
+                        ? 'The guided fit intake still needs your review before cutting can start.'
                       : materialIssueOpen
                         ? 'There is an open material issue that needs a customer decision first.'
                         : 'Customer fabric still needs to be received before cutting can start.'}
@@ -700,6 +712,58 @@ export default function TailorOrderDetailScreen() {
                   ) : null}
                 </View>
               )}
+
+              {fitProfile ? (
+                <View style={styles.supportCard}>
+                  <Text style={styles.supportCardTitle}>Guided fit intake</Text>
+                  <View style={styles.supportMetaList}>
+                    {fitProfile.status ? (
+                      <BriefRow label="Status" value={MEASUREMENT_SCAN_STATUS_LABELS[fitProfile.status]} />
+                    ) : null}
+                    {fitProfile.fitIntent ? (
+                      <BriefRow label="Fit direction" value={FIT_INTENT_LABELS[fitProfile.fitIntent]} />
+                    ) : null}
+                    {fitProfile.fabricStretch ? (
+                      <BriefRow label="Stretch" value={FABRIC_STRETCH_LABELS[fitProfile.fabricStretch]} />
+                    ) : null}
+                    {fitProfile.wearDaySupport ? (
+                      <BriefRow label="Support" value={WEAR_DAY_SUPPORT_LABELS[fitProfile.wearDaySupport]} />
+                    ) : null}
+                    {fitProfile.coveragePreference ? (
+                      <BriefRow label="Coverage" value={COVERAGE_PREFERENCE_LABELS[fitProfile.coveragePreference]} />
+                    ) : null}
+                    {typeof fitProfile.heelHeightCm === 'number' ? (
+                      <BriefRow label="Heel height" value={`${fitProfile.heelHeightCm} cm`} />
+                    ) : null}
+                  </View>
+                  {fitProfile.styleEaseNotes ? <Text style={styles.supportHint}>{fitProfile.styleEaseNotes}</Text> : null}
+                  {fitProfile.postureNote ? <Text style={styles.supportHint}>Posture: {fitProfile.postureNote}</Text> : null}
+                  {fitProfile.asymmetryNote ? <Text style={styles.supportHint}>Asymmetry: {fitProfile.asymmetryNote}</Text> : null}
+                  {fitProfile.tailorMeasurementOverrideReason ? (
+                    <Text style={styles.supportHint}>Tailor review note: {fitProfile.tailorMeasurementOverrideReason}</Text>
+                  ) : null}
+                  {fitProfileReviewNeeded ? (
+                    <>
+                      <View style={[styles.supportBadge, styles.supportBadgeWarning]}>
+                        <Text style={[styles.supportBadgeText, styles.supportBadgeTextWarning]}>
+                          Tailor review required before cutting
+                        </Text>
+                      </View>
+                      <Button
+                        label="Confirm fit readiness"
+                        variant="secondary"
+                        onPress={() => setShowFitReadinessModal(true)}
+                      />
+                    </>
+                  ) : fitProfile.tailorMeasurementOverride ? (
+                    <View style={[styles.supportBadge, styles.supportBadgeSuccess]}>
+                      <Text style={[styles.supportBadgeText, styles.supportBadgeTextSuccess]}>
+                        Guided fit intake reviewed
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
 
               {(order.fabricSource === 'CUSTOMER_SUPPLIES' || fabricHandoffLabel || materialIssue) && (
                 <View style={styles.supportCard}>
@@ -977,6 +1041,16 @@ export default function TailorOrderDetailScreen() {
         }}
       />
 
+      <FitReadinessModal
+        visible={showFitReadinessModal}
+        orderId={order.id}
+        onClose={() => setShowFitReadinessModal(false)}
+        onSent={() => {
+          setShowFitReadinessModal(false)
+          void fetchOrder()
+        }}
+      />
+
       <MaterialIssueModal
         visible={showMaterialIssueModal}
         orderId={order.id}
@@ -1200,6 +1274,112 @@ function MeasurementConfirmationRequestModal({ visible, orderId, onClose, onSent
 
             <Button
               label="Send request"
+              onPress={send}
+              loading={sending}
+              disabled={sending || note.trim().length < 10 || !!noteError}
+            />
+          </ScrollView>
+        </SafeAreaView>
+      </KeyboardAvoidingView>
+    </Modal>
+  )
+}
+
+function FitReadinessModal({ visible, orderId, onClose, onSent }: {
+  visible: boolean
+  orderId: string
+  onClose: () => void
+  onSent: () => void
+}) {
+  const [note, setNote] = useState('')
+  const [noteError, setNoteError] = useState('')
+  const [sending, setSending] = useState(false)
+
+  useEffect(() => {
+    if (!visible) return
+    setNote('')
+    setNoteError('')
+    setSending(false)
+  }, [visible, orderId])
+
+  function validateNote(value: string) {
+    if (value.trim().length < 10) {
+      setNoteError('Explain what you reviewed before clearing this blocker.')
+      return false
+    }
+    const placeholder = rejectPlaceholder(value, 'Note')
+    if (placeholder) {
+      setNoteError(placeholder)
+      return false
+    }
+    const result = filterContactInfo(value)
+    if (result.blocked) {
+      setNoteError("Contact details can't be included.")
+      return false
+    }
+    setNoteError('')
+    return true
+  }
+
+  async function send() {
+    if (sending) return
+    if (!validateNote(note)) return
+    setSending(true)
+    const { error } = await invokeFunction('tailor-order-action', {
+      body: { orderId, action: 'confirm-fit-readiness', note: note.trim() },
+    })
+    setSending(false)
+    if (error) {
+      Alert.alert(
+        'Review unavailable',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. Your note stayed here, so retry when the signal improves.'
+          : await readFunctionErrorMessage(error, 'Could not confirm fit readiness right now.'),
+      )
+      return
+    }
+    onSent()
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={onClose} disabled={sending}>
+              <Text style={styles.modalClose}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Confirm fit readiness</Text>
+            <View style={{ width: 60 }} />
+          </View>
+
+          <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
+            <View style={styles.supportWarningCard}>
+              <Text style={styles.supportWarningTitle}>Clear this only after review</Text>
+              <Text style={styles.supportWarningText}>
+                Use this once you have reviewed the guided fit intake and are comfortable moving the order toward cutting.
+              </Text>
+            </View>
+
+            <Input
+              label="What did you verify?"
+              placeholder="e.g. I reviewed the posture and symmetry notes against the garment plan, and I can cut with the current measurements."
+              value={note}
+              onChangeText={(value) => {
+                setNote(value)
+                if (noteError) validateNote(value)
+              }}
+              onBlur={() => validateNote(note)}
+              error={noteError}
+              multiline
+              numberOfLines={4}
+              maxLength={300}
+              filterContact
+              required
+            />
+
+            <Button
+              label="Confirm fit readiness"
               onPress={send}
               loading={sending}
               disabled={sending || note.trim().length < 10 || !!noteError}

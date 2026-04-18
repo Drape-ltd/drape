@@ -132,6 +132,7 @@ export default function CustomerProfileScreen() {
   } = useCustomerProfileOverview(user?.id, lastNotifCheck)
 
   const measurements = (overview?.measurements ?? null) as MeasurementProfile | null
+  const measurementMeta = (overview?.measurements ?? null) as Record<string, unknown> | null
   const recentOrders = (overview?.recentOrders ?? []) as RecentOrder[]
   const reviewCount = overview?.reviewCount ?? 0
   const averageRating = overview?.averageRating ?? null
@@ -170,6 +171,14 @@ export default function CustomerProfileScreen() {
   const filledCount = measurements
     ? MEASUREMENT_KEYS.filter((k) => measurements[k] !== null && measurements[k] !== undefined).length
     : 0
+  const guidedFitStatus =
+    measurementMeta?.latestMeasurementScanStatus === 'TAILOR_REVIEW_REQUIRED'
+      ? 'Tailor review pending'
+      : measurementMeta?.latestMeasurementScanStatus === 'TAILOR_REVIEWED'
+        ? 'Tailor reviewed'
+        : measurementMeta?.latestMeasurementScanStatus === 'CAPTURED'
+          ? 'Ready for orders'
+          : 'Add guided fit notes'
 
   const memberSince = createdAt
     ? new Date(createdAt).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
@@ -393,6 +402,21 @@ export default function CustomerProfileScreen() {
             </TouchableOpacity>
           </View>
 
+          <TouchableOpacity
+            style={styles.workspaceCard}
+            onPress={() => router.push('/(customer)/profile/guided-fit')}
+            activeOpacity={0.8}
+          >
+            <View style={styles.workspaceHeader}>
+              <Text style={styles.workspaceEyebrow}>Guided fit intake</Text>
+              <Feather name="chevron-right" size={16} color={Colors.midGrey} />
+            </View>
+            <Text style={styles.workspaceText}>
+              Save fit intent, stretch, posture, and symmetry cues so the next tailor has a cleaner pre-cutting brief.
+            </Text>
+            <Text style={styles.workspaceStatus}>{guidedFitStatus}</Text>
+          </TouchableOpacity>
+
           {/* ── Become a tailor ── */}
           <TouchableOpacity
             style={styles.becomeCard}
@@ -615,6 +639,12 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     color: Colors.inkLight,
     lineHeight: 21,
+  },
+  workspaceStatus: {
+    marginTop: Spacing.xs,
+    fontSize: FontSize.sm,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
   },
   quickLinksRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.md },
   quickLinkCard: {

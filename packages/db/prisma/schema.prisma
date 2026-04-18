@@ -179,6 +179,27 @@ model CustomerProfile {
   @@map("customer_profiles")
 }
 
+model MeasurementScan {
+  id                   String   @id @default(uuid())
+  userId               String   @map("user_id")
+  captureMethod        String   @map("capture_method")
+  captureVersion       String   @default("guided-fit-v1") @map("capture_version")
+  status               String   @default("CAPTURED")
+  confidenceOverall    String?  @map("confidence_overall")
+  confidenceByField    Json     @default("{}") @map("confidence_by_field")
+  measurementSnapshot  Json     @default("{}") @map("measurement_snapshot")
+  garmentPreferences   Json     @default("{}") @map("garment_preferences")
+  bodyFlags            String[] @default([]) @map("body_flags")
+  symmetryFlags        String[] @default([]) @map("symmetry_flags")
+  requiresTailorReview Boolean  @default(false) @map("requires_tailor_review")
+  sourceDevice         Json?    @map("source_device")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@index([userId, createdAt])
+  @@map("measurement_scans")
+}
+
 // ─────────────────────────────────────────────
 // TAILOR PROFILE
 // ─────────────────────────────────────────────

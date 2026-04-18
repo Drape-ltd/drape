@@ -342,8 +342,6 @@ export function MessageThread({
       body: {
         action: 'send-message',
         orderId,
-        senderRole: currentUserRole,
-        senderName: currentUserRole === 'CUSTOMER' ? customerName : tailorName,
         type: 'TEXT',
         body: text.trim(),
       },
@@ -407,8 +405,6 @@ export function MessageThread({
         body: {
           action: 'send-message',
           orderId,
-          senderRole: currentUserRole,
-          senderName: currentUserRole === 'CUSTOMER' ? customerName : tailorName,
           type: 'PHOTO',
           photoUrl: urlData.publicUrl,
         },
@@ -469,8 +465,6 @@ export function MessageThread({
         body: {
           action: 'send-message',
           orderId,
-          senderRole: currentUserRole,
-          senderName: currentUserRole === 'CUSTOMER' ? customerName : tailorName,
           type: 'VOICE',
           voiceUrl: urlData.publicUrl,
         },
