@@ -86,11 +86,13 @@ function orderStatusGuidance(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MAD
   }
   if (stage === 'PAYMENT_PENDING') {
     return orderKind === 'READY_MADE'
-      ? 'This ready-made purchase is waiting for checkout to be completed.'
+      ? 'Checkout is still open. Fulfillment starts once payment is confirmed.'
       : 'The customer has started payment. Production starts once payment is confirmed.'
   }
   if (stage === 'CONFIRMED') {
-    return 'The customer has accepted your quote. Move this order into the first production stage when work begins.'
+    return orderKind === 'READY_MADE'
+      ? 'Payment is confirmed. Fulfillment can begin.'
+      : 'The customer has accepted your quote. Move this order into the first production stage when work begins.'
   }
   if (stage === 'DESIGNING') {
     return 'Design details and pattern decisions are underway. Advance when you are ready to source or cut.'
@@ -126,6 +128,15 @@ function orderStatusGuidance(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MAD
     return 'This order is paused while the customer concern is being reviewed.'
   }
   return null
+}
+
+function tailorStageLabel(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE') {
+  if (orderKind === 'READY_MADE') {
+    if (stage === 'PENDING_QUOTE') return 'Inquiry open'
+    if (stage === 'PAYMENT_PENDING') return 'Checkout open'
+    if (stage === 'CONFIRMED') return 'Paid order'
+  }
+  return STAGE_LABELS[stage]
 }
 
 function quotedAmountLabel(stage: OrderStage): string {
@@ -462,7 +473,7 @@ export default function TailorOrderDetailScreen() {
                 testID="tailor-order-stage"
               >
                 <Text style={[styles.stageText, { color: stageColor(order.stage).text }]}>
-                  {STAGE_LABELS[order.stage]}
+                  {tailorStageLabel(order.stage, order.orderKind)}
                 </Text>
               </View>
               {order.quotedAmount && (
@@ -595,7 +606,7 @@ export default function TailorOrderDetailScreen() {
             <View style={styles.stageCard}>
               <Text style={styles.stageCardTitle}>Update production stage</Text>
               <Text style={styles.stageCardSub}>
-                Currently: <Text style={{ color: Colors.needleGreen, fontWeight: FontWeight.semibold }}>{STAGE_LABELS[order.stage]}</Text>
+                Currently: <Text style={{ color: Colors.needleGreen, fontWeight: FontWeight.semibold }}>{tailorStageLabel(order.stage, order.orderKind)}</Text>
               </Text>
               <Text style={styles.stageCardHint}>Choose which stage to move to next — tailors often run design and sourcing in parallel.</Text>
               {flexibleNextStages.map((target) => (
@@ -614,7 +625,7 @@ export default function TailorOrderDetailScreen() {
             <View style={styles.stageCard}>
               <Text style={styles.stageCardTitle}>Update production stage</Text>
               <Text style={styles.stageCardSub}>
-                Currently: <Text style={{ color: Colors.needleGreen, fontWeight: FontWeight.semibold }}>{STAGE_LABELS[order.stage]}</Text>
+                Currently: <Text style={{ color: Colors.needleGreen, fontWeight: FontWeight.semibold }}>{tailorStageLabel(order.stage, order.orderKind)}</Text>
               </Text>
               <Button
                 label={`Advance to ${nextProductionStage ? STAGE_LABELS[nextProductionStage] : '…'}`}
@@ -647,7 +658,7 @@ export default function TailorOrderDetailScreen() {
 
           {statusGuidance && (
             <View style={styles.stageCard}>
-              <Text style={styles.stageCardTitle}>{STAGE_LABELS[order.stage]}</Text>
+              <Text style={styles.stageCardTitle}>{tailorStageLabel(order.stage, order.orderKind)}</Text>
               <Text style={styles.stageCardSub}>{statusGuidance}</Text>
             </View>
           )}

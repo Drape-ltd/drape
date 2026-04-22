@@ -75,11 +75,25 @@ function safeNumber(value: string) {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+function isMeasurementScansUnavailable(error: { code?: string | null; message?: string | null; details?: string | null } | null | undefined) {
+  const message = `${error?.message ?? ''} ${error?.details ?? ''}`.toLowerCase()
+  return error?.code === 'PGRST205' ||
+    message.includes('measurement_scans') ||
+    message.includes('schema cache') ||
+    message.includes('does not exist')
+}
+
 export default function GuidedFitScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { returnTo } = useLocalSearchParams<{ returnTo?: string }>()
   const { user } = useAuth()
+  const safeReturnTo =
+    typeof returnTo === 'string' &&
+    returnTo.length > 0 &&
+    returnTo !== '/(customer)/profile/guided-fit'
+      ? returnTo
+      : null
 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -188,12 +202,20 @@ export default function GuidedFitScreen() {
   }, [user?.id])
 
   function goBack() {
-    if (typeof returnTo === 'string' && returnTo.length > 0) {
-      router.replace(returnTo as any)
+    if (safeReturnTo) {
+      router.replace(safeReturnTo as any)
       return
     }
     if (navigation.canGoBack()) router.back()
     else router.replace('/(customer)/profile')
+  }
+
+  function finishAfterSave() {
+    if (safeReturnTo) {
+      router.replace(safeReturnTo as any)
+      return
+    }
+    router.replace('/(customer)/profile')
   }
 
   function validateNotes() {
@@ -290,7 +312,9 @@ export default function GuidedFitScreen() {
         'Could not save guided fit intake',
         isLikelyConnectivityIssue(scanError)
           ? 'Connection looks weak. Retry when the signal improves.'
-          : 'Please try again in a moment.',
+          : isMeasurementScansUnavailable(scanError)
+            ? 'This environment is missing the guided fit database table. Apply the latest Supabase migration, then try again.'
+            : 'Please try again in a moment.',
       )
       return
     }
@@ -348,7 +372,7 @@ export default function GuidedFitScreen() {
       requiresTailorReview
         ? 'Your guided fit intake is saved. A tailor review will still be expected before cutting starts.'
         : 'Your guided fit intake is saved and will carry into your next order.',
-      [{ text: 'Continue', onPress: goBack }],
+      [{ text: 'Continue', onPress: finishAfterSave }],
     )
   }
 

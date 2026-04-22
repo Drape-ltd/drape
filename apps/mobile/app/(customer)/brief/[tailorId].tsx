@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Alert, KeyboardAvoidingView, Platform, Image, Modal, TextInput,
@@ -198,6 +198,7 @@ export default function OrderBriefScreen() {
   const [deliveryAddressSearch, setDeliveryAddressSearch] = useState('')
   const [deliveryAddressSuggestions, setDeliveryAddressSuggestions] = useState<any[]>([])
   const [showDeliverySuggestions, setShowDeliverySuggestions] = useState(false)
+  const suppressNextDeliveryLookup = useRef(false)
   const guidedFitProfile = buildOrderFitProfile(measurements)
 
   useEffect(() => {
@@ -309,6 +310,10 @@ export default function OrderBriefScreen() {
   useEffect(() => {
     const text = deliveryAddressSearch.trim()
     setShowDeliverySuggestions(false)
+    if (suppressNextDeliveryLookup.current) {
+      suppressNextDeliveryLookup.current = false
+      return
+    }
     if (text.length < 5) {
       setDeliveryAddressSuggestions([])
       return
@@ -355,6 +360,7 @@ export default function OrderBriefScreen() {
     const postcode = address.postcode ?? ''
     const country = address.country ?? ''
 
+    suppressNextDeliveryLookup.current = true
     setDeliveryAddressSearch(item.display_name)
     setDeliveryAddressLine1(line1)
     setDeliveryCity(city)

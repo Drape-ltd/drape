@@ -23,6 +23,10 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
+import {
+  paymentConfirmedStageNote,
+  tailorPaymentConfirmedNotification,
+} from '../_shared/payment-copy.ts'
 import { verifyPaystackTransaction } from '../_shared/paystack.ts'
 import {
   cancelStripePaymentIntent,
@@ -69,12 +73,6 @@ function isQuoteStillOpen(quoteExpiresAt: string | null) {
   return !!quoteExpiresAt && new Date(quoteExpiresAt).getTime() > Date.now()
 }
 
-function paymentConfirmedNote(orderKind: OrderRow['order_kind']) {
-  return orderKind === 'READY_MADE'
-    ? 'Background reconciliation confirmed payment for this ready-made order.'
-    : 'Background reconciliation confirmed payment for the accepted quote.'
-}
-
 function customerTimeoutNotification(order: OrderRow, nextStage: 'QUOTE_SENT' | 'EXPIRED') {
   if (order.order_kind === 'CUSTOM') {
     return nextStage === 'QUOTE_SENT'
@@ -92,18 +90,6 @@ function customerTimeoutNotification(order: OrderRow, nextStage: 'QUOTE_SENT' | 
     title: 'Checkout expired',
     body: 'Your ready-made checkout timed out before payment finished. Start checkout again when you are ready.',
   }
-}
-
-function tailorPaymentConfirmedNotification(orderKind: OrderRow['order_kind']) {
-  return orderKind === 'READY_MADE'
-    ? {
-        title: 'New paid order ✅',
-        body: 'A ready-made order was confirmed during payment reconciliation.',
-      }
-    : {
-        title: 'Quote paid ✅',
-        body: 'The customer completed payment for your quote.',
-      }
 }
 
 async function markOrderConfirmed(
@@ -132,7 +118,7 @@ async function markOrderConfirmed(
   await supabase.from('order_stage_updates').insert({
     order_id: order.id,
     stage: 'CONFIRMED',
-    note: paymentConfirmedNote(order.order_kind),
+    note: paymentConfirmedStageNote(order.order_kind),
   })
 
   await audit(supabase, {

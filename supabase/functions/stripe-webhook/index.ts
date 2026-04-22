@@ -3,6 +3,10 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getStripeWebhookSecret, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
+import {
+  paymentConfirmedStageNote,
+  tailorPaymentConfirmedNotification,
+} from '../_shared/payment-copy.ts'
 import { verifyStripeWebhookSignature, type StripePaymentIntent } from '../_shared/stripe.ts'
 
 const FN = 'stripe-webhook'
@@ -27,24 +31,6 @@ type OrderRow = {
   tailor_id?: string | null
   customer_id?: string | null
   payment_intent_id?: string | null
-}
-
-function paymentConfirmedNote(orderKind?: string | null) {
-  return orderKind === 'READY_MADE'
-    ? 'Stripe confirmed payment for this ready-made order.'
-    : 'Stripe confirmed payment for the accepted quote.'
-}
-
-function paymentConfirmedNotification(orderKind?: string | null) {
-  return orderKind === 'READY_MADE'
-    ? {
-        title: 'New paid order ✅',
-        body: 'A ready-made order has been paid and is ready for fulfillment.',
-      }
-    : {
-        title: 'Quote paid ✅',
-        body: 'The customer completed payment for your quote.',
-      }
 }
 
 async function findOrderForPaymentIntent(supabase: any, paymentIntent: StripePaymentIntent) {
@@ -101,13 +87,13 @@ async function markOrderConfirmed(supabase: any, order: OrderRow, paymentIntent:
   await supabase.from('order_stage_updates').insert({
     order_id: order.id,
     stage: 'CONFIRMED',
-    note: paymentConfirmedNote(order.order_kind),
+    note: paymentConfirmedStageNote(order.order_kind),
   })
 
   if (order.tailor_id) {
     EdgeRuntime.waitUntil(
       sendPushToUser(supabase, order.tailor_id.toString(), {
-        ...paymentConfirmedNotification(order.order_kind),
+        ...tailorPaymentConfirmedNotification(order.order_kind),
         data: { orderId: order.id },
       }),
     )

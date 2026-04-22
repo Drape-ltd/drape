@@ -5,6 +5,11 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getPaystackCallbackUrl, getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
+import {
+  paymentConfirmedStageNote,
+  paymentPendingStageNote,
+  tailorPaymentConfirmedNotification,
+} from '../_shared/payment-copy.ts'
 import { initializePaystackTransaction, verifyPaystackTransaction } from '../_shared/paystack.ts'
 import { createStripePaymentIntent, retrieveStripePaymentIntent } from '../_shared/stripe.ts'
 import { parseBody, uuid, z } from '../_shared/validate.ts'
@@ -86,30 +91,6 @@ function paymentDescription(order: {
   return `Drape order #${order.reference ?? 'unknown'} - ${label}`
 }
 
-function paymentPendingNote(orderKind?: string | null) {
-  return orderKind === 'READY_MADE'
-    ? 'Customer started checkout for this ready-made order.'
-    : 'Customer started payment for this quote.'
-}
-
-function paymentConfirmedNote(orderKind?: string | null) {
-  return orderKind === 'READY_MADE'
-    ? 'Customer completed checkout and payment was confirmed.'
-    : 'Customer paid for the accepted quote.'
-}
-
-function paymentConfirmedNotification(orderKind?: string | null) {
-  return orderKind === 'READY_MADE'
-    ? {
-        title: 'New paid order ✅',
-        body: 'A ready-made order has been paid and is ready for fulfillment.',
-      }
-    : {
-        title: 'Quote paid ✅',
-        body: 'The customer completed payment for your quote.',
-      }
-}
-
 function paystackStatusMessage(status: string) {
   if (status === 'pending' || status === 'ongoing') {
     return 'Payment is still open. Finish the Paystack checkout and return to the app.'
@@ -180,7 +161,7 @@ async function finalizeSuccessfulPayment(
   await supabase.from('order_stage_updates').insert({
     order_id: order.id,
     stage: 'CONFIRMED',
-    note: paymentConfirmedNote(order.order_kind),
+    note: paymentConfirmedStageNote(order.order_kind),
   })
 
   await audit(supabase, {
@@ -201,7 +182,7 @@ async function finalizeSuccessfulPayment(
   if (order.tailor_id) {
     EdgeRuntime.waitUntil(
       sendPushToUser(supabase, order.tailor_id.toString(), {
-        ...paymentConfirmedNotification(order.order_kind),
+        ...tailorPaymentConfirmedNotification(order.order_kind),
         data: { orderId: order.id },
       }),
     )
@@ -519,7 +500,7 @@ Deno.serve(async (req) => {
         await supabase.from('order_stage_updates').insert({
           order_id: row.id,
           stage: 'PAYMENT_PENDING',
-          note: paymentPendingNote(orderKind),
+          note: paymentPendingStageNote(orderKind),
         })
       }
 
@@ -633,7 +614,7 @@ Deno.serve(async (req) => {
       await supabase.from('order_stage_updates').insert({
         order_id: row.id,
         stage: 'PAYMENT_PENDING',
-        note: paymentPendingNote(orderKind),
+        note: paymentPendingStageNote(orderKind),
       })
     }
 

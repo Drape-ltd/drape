@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert, TextInput } from 'react-native'
@@ -49,6 +49,7 @@ export default function ReadyMadeCheckoutScreen() {
   const [postcode, setPostcode] = useState('')
   const [country, setCountry] = useState('')
   const [addressError, setAddressError] = useState('')
+  const suppressNextAddressLookup = useRef(false)
   const { data: item, isLoading, isFetching } = useSellerItem(itemId)
   const { startOrderPayment } = useOrderPaymentFlow()
 
@@ -68,6 +69,10 @@ export default function ReadyMadeCheckoutScreen() {
   useEffect(() => {
     const text = addressSearch.trim()
     setShowSuggestions(false)
+    if (suppressNextAddressLookup.current) {
+      suppressNextAddressLookup.current = false
+      return
+    }
     if (text.length < 5) {
       setAddressSuggestions([])
       return
@@ -102,6 +107,7 @@ export default function ReadyMadeCheckoutScreen() {
     const nextPostcode = address.postcode ?? ''
     const nextCountry = address.country ?? ''
 
+    suppressNextAddressLookup.current = true
     setAddressSearch(item.display_name)
     setAddressLine1(line1)
     setCity(nextCity)
@@ -217,7 +223,7 @@ export default function ReadyMadeCheckoutScreen() {
 
       router.replace({
         pathname: '/(customer)/orders/[id]',
-        params: { id: data.orderId, tab: 'active' },
+        params: { id: data.orderId, tab: 'active', placed: '1' },
       })
     } finally {
       setSaving(false)

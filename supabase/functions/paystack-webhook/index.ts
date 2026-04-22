@@ -3,6 +3,10 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
+import {
+  paymentConfirmedStageNote,
+  tailorPaymentConfirmedNotification,
+} from '../_shared/payment-copy.ts'
 import { verifyPaystackWebhookSignature, type PaystackTransaction } from '../_shared/paystack.ts'
 
 const FN = 'paystack-webhook'
@@ -29,24 +33,6 @@ type OrderRow = {
 function metadataOrderId(transaction: PaystackTransaction | null | undefined) {
   const value = transaction?.metadata?.order_id
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : ''
-}
-
-function paymentConfirmedNote(orderKind?: string | null) {
-  return orderKind === 'READY_MADE'
-    ? 'Paystack confirmed payment for this ready-made order.'
-    : 'Paystack confirmed payment for the accepted quote.'
-}
-
-function paymentConfirmedNotification(orderKind?: string | null) {
-  return orderKind === 'READY_MADE'
-    ? {
-        title: 'New paid order ✅',
-        body: 'A ready-made order has been paid and is ready for fulfillment.',
-      }
-    : {
-        title: 'Quote paid ✅',
-        body: 'The customer completed payment for your quote.',
-      }
 }
 
 async function findOrderForReference(supabase: any, reference: string) {
@@ -103,13 +89,13 @@ async function markOrderConfirmed(supabase: any, order: OrderRow, transaction: P
   await supabase.from('order_stage_updates').insert({
     order_id: order.id,
     stage: 'CONFIRMED',
-    note: paymentConfirmedNote(order.order_kind),
+    note: paymentConfirmedStageNote(order.order_kind),
   })
 
   if (order.tailor_id) {
     EdgeRuntime.waitUntil(
       sendPushToUser(supabase, order.tailor_id.toString(), {
-        ...paymentConfirmedNotification(order.order_kind),
+        ...tailorPaymentConfirmedNotification(order.order_kind),
         data: { orderId: order.id },
       }),
     )

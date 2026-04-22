@@ -110,11 +110,13 @@ function stageGuidance(stage: OrderStage, deliveryMethod: string, orderKind: 'CU
   }
   if (stage === 'PAYMENT_PENDING') {
     return orderKind === 'READY_MADE'
-      ? 'Checkout is still pending. Finish payment to place this order.'
+      ? 'Finish checkout to place this order.'
       : 'Your quote is accepted, but production cannot start until payment is completed.'
   }
   if (stage === 'CONFIRMED') {
-    return 'Your order is confirmed.'
+    return orderKind === 'READY_MADE'
+      ? 'Your order has been placed and the seller can now prepare it.'
+      : 'Your order is confirmed.'
   }
   if (stage === 'DESIGNING') {
     return 'Design details are being worked through.'
@@ -152,6 +154,23 @@ function stageGuidance(stage: OrderStage, deliveryMethod: string, orderKind: 'CU
   return null
 }
 
+function customerStageLabel(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE') {
+  if (orderKind === 'READY_MADE') {
+    if (stage === 'PENDING_QUOTE') return 'Inquiry open'
+    if (stage === 'PAYMENT_PENDING') return 'Checkout open'
+    if (stage === 'CONFIRMED') return 'Order placed'
+  }
+  return STAGE_LABELS[stage]
+}
+
+function preProductionLabel(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE') {
+  if (stage === 'CONSULTATION') return 'Consultation in progress'
+  if (stage === 'PAYMENT_PENDING') {
+    return orderKind === 'READY_MADE' ? 'Waiting for payment' : 'Awaiting payment'
+  }
+  return 'Awaiting confirmation'
+}
+
 function baseAmount(order: Pick<OrderDetail, 'orderKind' | 'itemSubtotal' | 'quotedAmount' | 'fulfillmentFee'>) {
   if (order.orderKind === 'READY_MADE') {
     return order.itemSubtotal ?? (order.quotedAmount != null ? Math.max(order.quotedAmount - order.fulfillmentFee, 0) : null)
@@ -167,7 +186,7 @@ function fulfillmentFeeLabel(order: Pick<OrderDetail, 'orderKind' | 'deliveryMet
 }
 
 export default function OrderTrackingScreen() {
-  const { id, sent, tab, returnTo } = useLocalSearchParams<{ id: string; sent?: string; tab?: string; returnTo?: string }>()
+  const { id, sent, placed, tab, returnTo } = useLocalSearchParams<{ id: string; sent?: string; placed?: string; tab?: string; returnTo?: string }>()
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
@@ -182,6 +201,10 @@ export default function OrderTrackingScreen() {
 
   function goBack() {
     if (sent === '1') {
+      router.replace({ pathname: '/(customer)/orders', params: { tab: 'active' } })
+      return
+    }
+    if (placed === '1') {
       router.replace({ pathname: '/(customer)/orders', params: { tab: 'active' } })
       return
     }
@@ -412,6 +435,16 @@ export default function OrderTrackingScreen() {
 
     await fetchOrder()
 
+    if (result.ok) {
+      Alert.alert(
+        order.orderKind === 'READY_MADE' ? 'Order placed' : 'Payment confirmed',
+        order.orderKind === 'READY_MADE'
+          ? 'Payment is confirmed and your seller can now prepare this order.'
+          : 'Payment is confirmed and your order is now ready for production.',
+      )
+      return
+    }
+
     if (!result.ok) {
       if (result.reason === 'cancelled') {
         Alert.alert(
@@ -534,6 +567,7 @@ export default function OrderTrackingScreen() {
     : order.stage
   const currentStageIdx = stageIndex(progressStage)
   const latestUpdate = [...order.stageUpdates].reverse()[0]
+  const justPlacedReadyMade = placed === '1' && order.orderKind === 'READY_MADE'
   const isCollection = order.deliveryMethod === 'LOCAL_COLLECTION'
   const stageHelp = stageGuidance(order.stage, order.deliveryMethod, order.orderKind)
   const measurementSource = order.measurementSnapshot?.measurementSource
@@ -658,11 +692,17 @@ export default function OrderTrackingScreen() {
             ) : null}
           </View>
 
+          {justPlacedReadyMade ? (
+            <View style={styles.sentBanner}>
+              <Text style={styles.sentBannerText}>✓ Order placed · #{order.reference}</Text>
+            </View>
+          ) : null}
+
           {/* Stage progress bar */}
           {PRE_PRODUCTION_STAGES.includes(order.stage) ? (
             <View style={styles.preProductionBar}>
               <View style={styles.preProductionDot} />
-              <Text style={styles.preProductionLabel}>Awaiting confirmation</Text>
+              <Text style={styles.preProductionLabel}>{preProductionLabel(order.stage, order.orderKind)}</Text>
             </View>
           ) : (
           <View style={styles.progressBar}>
@@ -688,7 +728,7 @@ export default function OrderTrackingScreen() {
 
           {/* Current stage status */}
           <View style={styles.statusCard} testID="order-tracking-status">
-            <Text style={styles.statusStage}>{STAGE_LABELS[order.stage]}</Text>
+            <Text style={styles.statusStage}>{customerStageLabel(order.stage, order.orderKind)}</Text>
             {stageHelp && <Text style={styles.statusHelp}>{stageHelp}</Text>}
             {latestUpdate?.note && (
               <Text style={styles.statusNote}>"{latestUpdate.note}"</Text>
@@ -706,15 +746,15 @@ export default function OrderTrackingScreen() {
           {order.stage === 'PAYMENT_PENDING' && (
             <View style={styles.videoCallCard}>
               <Text style={styles.videoCallTitle}>
-                {order.orderKind === 'READY_MADE' ? 'Finish checkout' : 'Finish payment'}
+                {order.orderKind === 'READY_MADE' ? 'Complete checkout' : 'Finish payment'}
               </Text>
               <Text style={styles.videoCallHint}>
                 {order.orderKind === 'READY_MADE'
-                  ? 'Your order is reserved, but it will only move forward once payment succeeds.'
+                  ? 'Your item is held for now. Payment must succeed before this becomes a placed order.'
                   : 'Your tailor will only see this order as confirmed after payment succeeds.'}
               </Text>
               <Button
-                label={order.orderKind === 'READY_MADE' ? 'Continue checkout' : 'Continue payment'}
+                label={order.orderKind === 'READY_MADE' ? 'Complete checkout' : 'Continue payment'}
                 onPress={continuePayment}
                 loading={paying}
                 disabled={paying}
