@@ -71,6 +71,14 @@ function dashboardOrderHint(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE
       return 'Customer needs to finish the order'
     case 'IN_DISPUTE':
       return 'Concern under review'
+    case 'CONFIRMED':
+      return orderKind === 'READY_MADE' ? 'Prepare order' : null
+    case 'DESIGNING':
+    case 'SOURCING':
+    case 'CUTTING':
+    case 'SEWING':
+    case 'FINISHING':
+      return orderKind === 'READY_MADE' ? 'Preparing order' : null
     default:
       return null
   }

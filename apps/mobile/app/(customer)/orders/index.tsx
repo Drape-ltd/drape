@@ -75,15 +75,15 @@ function orderHint(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): strin
     case 'CONFIRMED':
       return orderKind === 'READY_MADE' ? 'Order placed' : 'Confirmed'
     case 'DESIGNING':
-      return 'Designing'
+      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Designing'
     case 'SOURCING':
-      return 'Sourcing materials'
+      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Sourcing materials'
     case 'CUTTING':
-      return 'Cutting'
+      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Cutting'
     case 'SEWING':
-      return 'Sewing'
+      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Sewing'
     case 'FINISHING':
-      return 'Finishing'
+      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Finishing'
     case 'READY_FOR_COLLECTION':
       return 'Ready for collection'
     case 'SHIPPED':

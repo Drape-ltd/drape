@@ -134,6 +134,7 @@ type Action =
 type OrderRow = {
   id: string
   stage: string
+  order_kind?: string | null
   tailor_id?: string | null
   customer_id?: string | null
   deadline?: string | null
@@ -182,6 +183,32 @@ const CUSTOMER_NOTIFICATION: Record<string, { title: string; body: string }> = {
   'confirm-fit-readiness': { title: 'Fit intake reviewed', body: 'Your tailor reviewed the guided fit intake attached to this order.' },
   'confirm-fabric-received': { title: 'Fabric received', body: 'Your tailor confirmed they received your fabric.' },
   'open-material-issue': { title: 'Fabric issue needs your decision', body: 'Your tailor reviewed the fabric and needs your choice before production can continue.' },
+}
+
+function isReadyMadeOrder(order: Pick<OrderRow, 'order_kind'>) {
+  return order.order_kind === 'READY_MADE'
+}
+
+function validAdvanceStages(order: Pick<OrderRow, 'order_kind'>, targetStage: string) {
+  if (!isReadyMadeOrder(order)) {
+    return ADVANCE_VALID_FROM[targetStage] ?? []
+  }
+
+  if (targetStage === 'FINISHING') return ['CONFIRMED']
+  if (targetStage === 'READY_FOR_COLLECTION') return ['FINISHING']
+  if (targetStage === 'SHIPPED') return ['FINISHING']
+  return []
+}
+
+function customerNotificationForStage(targetStage: string, order: Pick<OrderRow, 'order_kind'>) {
+  if (isReadyMadeOrder(order) && targetStage === 'FINISHING') {
+    return {
+      title: 'Order update 📦',
+      body: 'Your seller is preparing your order for dispatch or pickup.',
+    }
+  }
+
+  return CUSTOMER_NOTIFICATION[targetStage]
 }
 
 /** Cryptographically random 4-digit collection code (1000–9999). */
@@ -285,7 +312,7 @@ Deno.serve(async (req) => {
     // Only collection confirmation needs the collection code fields.
     const orderSelect = action === 'confirm-collection'
       ? 'id, stage, tailor_id, customer_id, collection_code, collection_code_attempts, collection_code_last_attempt_at, updated_at'
-      : 'id, stage, tailor_id, customer_id, deadline, fabric_source, special_note, customer_measurements_snapshot, delivery_method, delivery_address, fulfillment_fee'
+      : 'id, stage, order_kind, tailor_id, customer_id, deadline, fabric_source, special_note, customer_measurements_snapshot, delivery_method, delivery_address, fulfillment_fee'
 
     // Fetch order — verify tailor ownership and current stage
     const { data: orderData, error: orderError } = await supabase
@@ -820,7 +847,14 @@ Deno.serve(async (req) => {
         })
       }
 
-      const validFrom = ADVANCE_VALID_FROM[targetStage]
+      if (isReadyMadeOrder(order) && ['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING'].includes(targetStage)) {
+        return new Response(
+          JSON.stringify({ error: 'Ready-made orders skip tailoring production stages. Move this order into preparation instead.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const validFrom = validAdvanceStages(order, targetStage)
       if (!validFrom.includes(order.stage)) {
         return new Response(
           JSON.stringify({ error: `Cannot advance to ${targetStage} from stage ${order.stage}` }),
@@ -962,7 +996,7 @@ Deno.serve(async (req) => {
 
       log('info', FN, 'order.stage_changed', { actor_id: caller.id, order_id: orderId, from_stage: order.stage, to_stage: targetStage })
 
-      const stageNotif = CUSTOMER_NOTIFICATION[targetStage]
+      const stageNotif = customerNotificationForStage(targetStage, order)
       if (stageNotif && order.customer_id) {
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.customer_id.toString(), { ...stageNotif, data: { orderId } })

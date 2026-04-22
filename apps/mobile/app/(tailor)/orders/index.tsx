@@ -43,26 +43,26 @@ function orderPriority(stage: OrderStage): number {
   }
 }
 
-function orderHint(stage: OrderStage): string | null {
+function orderHint(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): string | null {
   switch (stage) {
     case 'PENDING_QUOTE':
-      return 'Quote needed'
+      return orderKind === 'READY_MADE' ? 'Customer inquiry' : 'Quote needed'
     case 'CONSULTATION':
       return 'Consultation in progress'
     case 'QUOTE_SENT':
       return 'Waiting for customer'
     case 'CONFIRMED':
-      return 'Ready to start'
+      return orderKind === 'READY_MADE' ? 'Prepare order' : 'Ready to start'
     case 'DESIGNING':
-      return 'Designing'
+      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Designing'
     case 'SOURCING':
-      return 'Sourcing'
+      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Sourcing'
     case 'CUTTING':
-      return 'Cutting'
+      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Cutting'
     case 'SEWING':
-      return 'Sewing'
+      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Sewing'
     case 'FINISHING':
-      return 'Finishing'
+      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Finishing'
     case 'DELIVERED':
       return 'Waiting for customer finish'
     case 'COLLECTED':
@@ -79,8 +79,7 @@ function orderHint(stage: OrderStage): string | null {
 }
 
 function orderHintForItem(item: { stage: OrderStage; orderKind?: 'CUSTOM' | 'READY_MADE' }): string | null {
-  if (item.stage === 'PENDING_QUOTE' && item.orderKind === 'READY_MADE') return 'Customer inquiry'
-  return orderHint(item.stage)
+  return orderHint(item.stage, item.orderKind ?? 'CUSTOM')
 }
 
 export default function TailorOrdersScreen() {

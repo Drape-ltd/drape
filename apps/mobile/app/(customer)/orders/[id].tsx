@@ -83,25 +83,40 @@ type OrderDetail = {
 const SUPPORT_EMAIL = 'support@drapeon.co'
 
 // The 5 production stages shown in the progress bar
-const PROGRESS_STAGES: OrderStage[] = ['CONFIRMED', 'CUTTING', 'SEWING', 'FINISHING', 'SHIPPED']
+const CUSTOM_PROGRESS_STAGES: OrderStage[] = ['CONFIRMED', 'CUTTING', 'SEWING', 'FINISHING', 'SHIPPED']
+const READY_MADE_PROGRESS_STAGES: OrderStage[] = ['CONFIRMED', 'FINISHING', 'SHIPPED']
 
 // Stages that are before production starts — show a "Waiting" pre-step
 const PRE_PRODUCTION_STAGES: OrderStage[] = ['CONSULTATION', 'PAYMENT_PENDING']
-const PROGRESS_LABELS: Record<string, string> = {
+const CUSTOM_PROGRESS_LABELS: Record<string, string> = {
   CONFIRMED: 'Confirmed', CUTTING: 'Cutting', SEWING: 'Sewing',
   FINISHING: 'Finishing', SHIPPED: 'Shipped',
 }
 
-function stageIndex(stage: OrderStage): number {
+function progressStagesForOrder(orderKind: 'CUSTOM' | 'READY_MADE') {
+  return orderKind === 'READY_MADE' ? READY_MADE_PROGRESS_STAGES : CUSTOM_PROGRESS_STAGES
+}
+
+function progressLabel(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE', isCollection: boolean) {
+  if (orderKind === 'READY_MADE') {
+    if (stage === 'CONFIRMED') return 'Placed'
+    if (stage === 'FINISHING') return 'Preparing'
+    if (stage === 'SHIPPED') return isCollection ? 'Ready' : 'Shipped'
+  }
+  return isCollection && stage === 'SHIPPED' ? 'Ready' : CUSTOM_PROGRESS_LABELS[stage]
+}
+
+function stageIndex(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): number {
   // Map READY_FOR_COLLECTION -> same level as SHIPPED.
   // Map DESIGNING / SOURCING -> CONFIRMED (tailor pre-production stages that customers see as "Confirmed")
   // Map delivered / collected / complete -> final shipped-ready milestone in the progress bar.
   const normalised =
     stage === 'READY_FOR_COLLECTION' ? 'SHIPPED'
+    : (orderKind === 'READY_MADE' && ['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'].includes(stage)) ? 'FINISHING'
     : (stage === 'DESIGNING' || stage === 'SOURCING') ? 'CONFIRMED'
     : (stage === 'DELIVERED' || stage === 'COLLECTED' || stage === 'COMPLETE') ? 'SHIPPED'
     : stage
-  return PROGRESS_STAGES.indexOf(normalised as OrderStage)
+  return progressStagesForOrder(orderKind).indexOf(normalised as OrderStage)
 }
 
 function stageGuidance(stage: OrderStage, deliveryMethod: string, orderKind: 'CUSTOM' | 'READY_MADE'): string | null {
@@ -117,6 +132,9 @@ function stageGuidance(stage: OrderStage, deliveryMethod: string, orderKind: 'CU
     return orderKind === 'READY_MADE'
       ? 'Your order has been placed and the seller can now prepare it.'
       : 'Your order is confirmed.'
+  }
+  if (orderKind === 'READY_MADE' && ['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'].includes(stage)) {
+    return 'Your seller is preparing this order for dispatch or pickup.'
   }
   if (stage === 'DESIGNING') {
     return 'Design details are being worked through.'
@@ -159,6 +177,7 @@ function customerStageLabel(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE
     if (stage === 'PENDING_QUOTE') return 'Inquiry open'
     if (stage === 'PAYMENT_PENDING') return 'Checkout open'
     if (stage === 'CONFIRMED') return 'Order placed'
+    if (['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'].includes(stage)) return 'Preparing order'
   }
   return STAGE_LABELS[stage]
 }
@@ -565,7 +584,8 @@ export default function OrderTrackingScreen() {
   const progressStage = order.stage === 'IN_DISPUTE'
     ? (([...order.stageUpdates].reverse().find((u) => u.stage !== 'IN_DISPUTE')?.stage as OrderStage | undefined) ?? 'CONFIRMED')
     : order.stage
-  const currentStageIdx = stageIndex(progressStage)
+  const progressStages = progressStagesForOrder(order.orderKind)
+  const currentStageIdx = stageIndex(progressStage, order.orderKind)
   const latestUpdate = [...order.stageUpdates].reverse()[0]
   const justPlacedReadyMade = placed === '1' && order.orderKind === 'READY_MADE'
   const isCollection = order.deliveryMethod === 'LOCAL_COLLECTION'
@@ -706,7 +726,7 @@ export default function OrderTrackingScreen() {
             </View>
           ) : (
           <View style={styles.progressBar}>
-            {PROGRESS_STAGES.map((s, i) => {
+            {progressStages.map((s, i) => {
               const done = i <= currentStageIdx
               const active = i === currentStageIdx
               return (
@@ -714,11 +734,11 @@ export default function OrderTrackingScreen() {
                   <View style={[styles.progressDot, done && styles.progressDotDone, active && styles.progressDotActive]}>
                     {done && !active && <Text style={styles.progressCheck}>✓</Text>}
                   </View>
-                  {i < PROGRESS_STAGES.length - 1 && (
+                  {i < progressStages.length - 1 && (
                     <View style={[styles.progressLine, done && i < currentStageIdx && styles.progressLineDone]} />
                   )}
                   <Text style={[styles.progressLabel, done && styles.progressLabelDone]}>
-                    {isCollection && s === 'SHIPPED' ? 'Ready' : PROGRESS_LABELS[s]}
+                    {progressLabel(s, order.orderKind, isCollection)}
                   </Text>
                 </View>
               )
@@ -750,7 +770,7 @@ export default function OrderTrackingScreen() {
               </Text>
               <Text style={styles.videoCallHint}>
                 {order.orderKind === 'READY_MADE'
-                  ? 'Your item is held for now. Payment must succeed before this becomes a placed order.'
+                  ? 'Your checkout is saved for now. Payment must succeed before this becomes a placed order.'
                   : 'Your tailor will only see this order as confirmed after payment succeeds.'}
               </Text>
               <Button

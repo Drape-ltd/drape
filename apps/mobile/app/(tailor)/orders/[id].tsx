@@ -91,8 +91,11 @@ function orderStatusGuidance(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MAD
   }
   if (stage === 'CONFIRMED') {
     return orderKind === 'READY_MADE'
-      ? 'Payment is confirmed. Fulfillment can begin.'
+      ? 'Payment is confirmed. Start preparing this order for dispatch or pickup.'
       : 'The customer has accepted your quote. Move this order into the first production stage when work begins.'
+  }
+  if (orderKind === 'READY_MADE' && ['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'].includes(stage)) {
+    return 'This order is being prepared for dispatch or pickup.'
   }
   if (stage === 'DESIGNING') {
     return 'Design details and pattern decisions are underway. Advance when you are ready to source or cut.'
@@ -135,15 +138,30 @@ function tailorStageLabel(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE')
     if (stage === 'PENDING_QUOTE') return 'Inquiry open'
     if (stage === 'PAYMENT_PENDING') return 'Checkout open'
     if (stage === 'CONFIRMED') return 'Paid order'
+    if (['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'].includes(stage)) return 'Preparing order'
   }
   return STAGE_LABELS[stage]
 }
 
-function quotedAmountLabel(stage: OrderStage): string {
+function quotedAmountLabel(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): string {
+  if (orderKind === 'READY_MADE') {
+    if (stage === 'PAYMENT_PENDING') return 'awaiting payment'
+    if (stage === 'COMPLETE') return 'closed out'
+    return 'paid'
+  }
   if (stage === 'QUOTE_SENT') return 'quoted'
   if (stage === 'DELIVERED' || stage === 'COLLECTED') return 'awaiting finish'
   if (stage === 'COMPLETE') return 'closed out'
   return 'held'
+}
+
+function readyMadePreparationStage(stage: OrderStage) {
+  return ['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'].includes(stage)
+}
+
+function displayStageChoiceLabel(targetStage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE') {
+  if (orderKind === 'READY_MADE' && targetStage === 'FINISHING') return 'Preparing order'
+  return STAGE_LABELS[targetStage]
 }
 
 function baseAmount(order: Pick<OrderDetail, 'orderKind' | 'itemSubtotal' | 'quotedAmount' | 'fulfillmentFee'>) {
@@ -350,8 +368,14 @@ export default function TailorOrderDetailScreen() {
     )
   }
 
-  const nextProductionStage = PRODUCTION_NEXT[order.stage]
-  const flexibleNextStages = FLEXIBLE_NEXT_STAGES[order.stage]
+  const nextProductionStage =
+    order.orderKind === 'READY_MADE'
+      ? undefined
+      : PRODUCTION_NEXT[order.stage]
+  const flexibleNextStages =
+    order.orderKind === 'READY_MADE'
+      ? (order.stage === 'CONFIRMED' ? ['FINISHING'] as OrderStage[] : undefined)
+      : FLEXIBLE_NEXT_STAGES[order.stage]
   const isFlexibleStage = !!flexibleNextStages
   const visibleReferencePhotos = order.referencePhotos.filter((url) => !failedReferencePhotos.includes(url))
   const statusGuidance = orderStatusGuidance(order.stage, order.orderKind)
@@ -483,7 +507,7 @@ export default function TailorOrderDetailScreen() {
                     order.quotedCurrency as CurrencyCode,
                     order.quotedCurrency as CurrencyCode,
                     STATIC_FALLBACK_RATES
-                  )} {quotedAmountLabel(order.stage)}
+                  )} {quotedAmountLabel(order.stage, order.orderKind)}
                 </Text>
               )}
             </View>
@@ -604,15 +628,21 @@ export default function TailorOrderDetailScreen() {
           {/* Flexible stages: CONFIRMED / DESIGNING / SOURCING — tailor picks next stage */}
           {isFlexibleStage && flexibleNextStages && (
             <View style={styles.stageCard}>
-              <Text style={styles.stageCardTitle}>Update production stage</Text>
+              <Text style={styles.stageCardTitle}>
+                {order.orderKind === 'READY_MADE' ? 'Prepare this order' : 'Update production stage'}
+              </Text>
               <Text style={styles.stageCardSub}>
                 Currently: <Text style={{ color: Colors.needleGreen, fontWeight: FontWeight.semibold }}>{tailorStageLabel(order.stage, order.orderKind)}</Text>
               </Text>
-              <Text style={styles.stageCardHint}>Choose which stage to move to next — tailors often run design and sourcing in parallel.</Text>
+              <Text style={styles.stageCardHint}>
+                {order.orderKind === 'READY_MADE'
+                  ? 'Ready-made orders skip tailoring production stages. Move this into preparation, then ship it or mark it ready for collection.'
+                  : 'Choose which stage to move to next — tailors often run design and sourcing in parallel.'}
+              </Text>
               {flexibleNextStages.map((target) => (
                 <Button
                   key={target}
-                  label={STAGE_LABELS[target]}
+                  label={displayStageChoiceLabel(target, order.orderKind)}
                   variant={flexibleNextStages.indexOf(target) === 0 ? 'primary' : 'secondary'}
                   onPress={() => openStageModal(target)}
                 />
@@ -636,8 +666,12 @@ export default function TailorOrderDetailScreen() {
 
           {order.stage === 'FINISHING' && (
             <View style={styles.stageCard}>
-              <Text style={styles.stageCardTitle}>Almost done</Text>
-              <Text style={styles.stageCardSub}>Mark as finished and ready for {order.deliveryMethod === 'LOCAL_COLLECTION' ? 'collection' : 'shipping'}.</Text>
+              <Text style={styles.stageCardTitle}>{order.orderKind === 'READY_MADE' ? 'Ready to dispatch?' : 'Almost done'}</Text>
+              <Text style={styles.stageCardSub}>
+                {order.orderKind === 'READY_MADE'
+                  ? `Mark this order ready for ${order.deliveryMethod === 'LOCAL_COLLECTION' ? 'collection' : 'shipping'} once it is packed and checked.`
+                  : `Mark as finished and ready for ${order.deliveryMethod === 'LOCAL_COLLECTION' ? 'collection' : 'shipping'}.`}
+              </Text>
               <Button
                 label={order.deliveryMethod === 'LOCAL_COLLECTION' ? 'Mark ready for collection' : 'Mark as shipped'}
                 onPress={() => openStageModal(order.deliveryMethod === 'LOCAL_COLLECTION' ? 'READY_FOR_COLLECTION' : 'SHIPPED')}
@@ -666,7 +700,7 @@ export default function TailorOrderDetailScreen() {
           {(measurementSource || fitConfidence || order.fabricSource === 'CUSTOMER_SUPPLIES' || materialIssue) && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Pre-cutting checks</Text>
-              {cuttingBlockedLocally && ['CONFIRMED', 'DESIGNING', 'SOURCING'].includes(order.stage) ? (
+          {cuttingBlockedLocally && order.orderKind === 'CUSTOM' && ['CONFIRMED', 'DESIGNING', 'SOURCING'].includes(order.stage) ? (
                 <View style={styles.supportWarningCard}>
                   <Text style={styles.supportWarningTitle}>Cutting still has a blocker</Text>
                   <Text style={styles.supportWarningText}>
@@ -1903,12 +1937,16 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
           <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
             <View style={styles.nextStageRow}>
               <Text style={styles.nextStageLabel}>Advancing to</Text>
-              <Text style={styles.nextStageValue}>{STAGE_LABELS[nextStage]}</Text>
+              <Text style={styles.nextStageValue}>{displayStageChoiceLabel(nextStage, order.orderKind)}</Text>
             </View>
 
             <Input
               label="Note to customer"
-              placeholder='e.g. "Cutting the fabric — using the navy Ankara as planned."'
+              placeholder={
+                order.orderKind === 'READY_MADE' && nextStage === 'FINISHING'
+                  ? 'e.g. "Packing your order now and checking it before dispatch."'
+                  : 'e.g. "Cutting the fabric — using the navy Ankara as planned."'
+              }
               value={note}
               onChangeText={(v) => { setNote(v); if (noteError) validateNote(v) }}
               onBlur={() => validateNote(note)}
