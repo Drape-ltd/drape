@@ -22,19 +22,23 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constan
 const FAQ: Array<{ q: string; a: string }> = [
   {
     q: "How do I track my order?",
-    a: "Go to the Orders tab — you'll see real-time updates for every stage from cutting through to delivery. You'll also receive a push notification each time your tailor advances your order.",
+    a: "Go to the Orders tab. You'll see real-time updates for every stage from cutting through to delivery. You'll also receive a push notification each time your tailor advances your order.",
   },
   {
     q: "Can I cancel or change my order?",
-    a: "Before accepting a quote you can walk away with no charge. Once you accept, use Messages to discuss changes with your tailor as early as possible. If something goes wrong during production or handoff, raise a concern from the order before you finish it.",
+    a: "Before accepting a custom quote you can walk away with no charge. For ready-made, ask Drape to review cancellation before the seller starts preparing the order. Once preparation, pickup, or dispatch has started, cancellation is no longer automatic and support may need to review the next step.",
   },
   {
     q: "How does payment work?",
-    a: "You pay only after reviewing and accepting your tailor's quote. Payment stays protected while the order is in progress, then releases once the handoff is confirmed and the order is closed out in the app. If something goes wrong before that, raise a concern from the order screen.",
+    a: "For custom, you pay only after reviewing and accepting your tailor's quote. For ready-made, you pay in checkout, including Drape's standard delivery or shipping fee if needed. Payment stays protected while the order is in progress, then releases under Drape's settlement rules once the handoff is confirmed and the order is closed out in the app.",
   },
   {
     q: "What if my garment doesn't fit?",
     a: "Raise a concern from the order screen before marking the order complete. Keep all communication in Drape so the full history stays visible while our team reviews what happened and helps mediate the next step.",
+  },
+  {
+    q: "Can I get a refund or exchange on ready-made?",
+    a: "If the wrong item arrives, the item is damaged, or Drape dispatch fails, raise it in Drape before you finish the order so support can review a refund or exchange. Change-of-mind return is not automatic once the seller has started preparing the order or the handoff has started.",
   },
   {
     q: "How are tailors verified?",
@@ -93,7 +97,7 @@ export default function HelpScreen() {
         <Text style={styles.headerTitle}>Get help</Text>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.xl, paddingBottom: 64, gap: Spacing.xl }}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 40, gap: Spacing.lg }}>
         <View style={styles.heroCard}>
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Customer support</Text>
@@ -286,19 +290,19 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
   },
   backBtn: {
-    width: 38, height: 38, borderRadius: Radius.full,
+    width: 44, height: 44, borderRadius: Radius.full,
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
+  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
   heroCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.sm,
     ...Shadow.sm,
   },
   heroBadge: {
@@ -313,12 +317,12 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
   },
-  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 30 },
-  heroSub: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 22 },
+  heroTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 26 },
+  heroSub: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   supportGuideCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
     gap: Spacing.sm,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -336,20 +340,20 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
   },
   supportGuideTitle: {
-    fontSize: FontSize.lg,
+    fontSize: FontSize.md,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
-    lineHeight: 26,
+    lineHeight: 22,
   },
   supportGuideBody: {
     fontSize: FontSize.sm,
     color: Colors.inkLight,
-    lineHeight: 22,
+    lineHeight: 20,
   },
   networkGuideCard: {
     backgroundColor: Colors.boneDeep,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
     gap: Spacing.sm,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -362,7 +366,7 @@ const styles = StyleSheet.create({
   networkGuideBody: {
     fontSize: FontSize.sm,
     color: Colors.inkLight,
-    lineHeight: 22,
+    lineHeight: 20,
   },
   contactGuideCard: {
     backgroundColor: Colors.white,
@@ -401,7 +405,7 @@ const styles = StyleSheet.create({
   helpCentreSub: { fontSize: FontSize.sm, color: Colors.inkLight, marginTop: 2, lineHeight: 18 },
 
   section: { gap: Spacing.sm },
-  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  sectionTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
 
   card: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.lg },
@@ -409,11 +413,11 @@ const styles = StyleSheet.create({
   // Contact rows
   contactRow: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    padding: Spacing.lg, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.lightGrey,
+    padding: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.lightGrey,
   },
   contactRowLast: { borderBottomWidth: 0 },
   contactIcon: {
-    width: 38, height: 38, borderRadius: Radius.md,
+    width: 36, height: 36, borderRadius: Radius.sm,
     backgroundColor: Colors.needleGreenLight, alignItems: 'center', justifyContent: 'center',
   },
   contactTitle: { fontSize: FontSize.md, fontWeight: FontWeight.medium, color: Colors.ink },
@@ -426,11 +430,11 @@ const styles = StyleSheet.create({
   faqLast: { borderBottomWidth: 0 },
   faqHeader: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    padding: Spacing.lg,
+    padding: 14,
   },
-  faqQuestion: { flex: 1, fontSize: FontSize.md, fontWeight: FontWeight.medium, color: Colors.ink, lineHeight: 22 },
+  faqQuestion: { flex: 1, fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink, lineHeight: 20 },
   faqAnswer: {
-    fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 22,
-    paddingHorizontal: Spacing.lg, paddingBottom: Spacing.lg,
+    fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20,
+    paddingHorizontal: 14, paddingBottom: 14,
   },
 })

@@ -8,9 +8,11 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useAuth } from '@/lib/auth'
 import { Button, FeatureStateCard } from '@/components/ui'
+import { customerOrderHint } from '@/lib/order-flow'
 import { useCustomerOrders, useRefreshOnFocus } from '@/lib/queries'
+import { customerOrderStageLabel } from '@/lib/customer-order-copy'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
+import type { OrderStage } from '@drape/shared/order-machine'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 
 const STAGE_COLOR: Partial<Record<OrderStage, string>> = {
@@ -24,6 +26,7 @@ const STAGE_COLOR: Partial<Record<OrderStage, string>> = {
   CUTTING: Colors.needleGreen,
   SEWING: Colors.needleGreen,
   FINISHING: Colors.needleGreen,
+  OUT_FOR_DELIVERY: Colors.needleGreen,
   SHIPPED: Colors.needleGreen,
   READY_FOR_COLLECTION: Colors.needleGreen,
   IN_DISPUTE: Colors.kanteRust,
@@ -46,6 +49,8 @@ function orderPriority(stage: OrderStage): number {
       return 0
     case 'READY_FOR_COLLECTION':
       return 1
+    case 'OUT_FOR_DELIVERY':
+      return 4
     case 'DELIVERED':
     case 'COLLECTED':
       return 2
@@ -59,43 +64,6 @@ function orderPriority(stage: OrderStage): number {
       return 5
     default:
       return 6
-  }
-}
-
-function orderHint(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): string | null {
-  switch (stage) {
-    case 'QUOTE_SENT':
-      return 'Quote ready'
-    case 'CONSULTATION':
-      return 'Consultation pending'
-    case 'PENDING_QUOTE':
-      return orderKind === 'READY_MADE' ? 'Inquiry open' : 'Waiting for quote'
-    case 'PAYMENT_PENDING':
-      return orderKind === 'READY_MADE' ? 'Finish checkout' : 'Finish payment'
-    case 'CONFIRMED':
-      return orderKind === 'READY_MADE' ? 'Order placed' : 'Confirmed'
-    case 'DESIGNING':
-      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Designing'
-    case 'SOURCING':
-      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Sourcing materials'
-    case 'CUTTING':
-      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Cutting'
-    case 'SEWING':
-      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Sewing'
-    case 'FINISHING':
-      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Finishing'
-    case 'READY_FOR_COLLECTION':
-      return 'Ready for collection'
-    case 'SHIPPED':
-      return 'In transit'
-    case 'DELIVERED':
-      return 'Finish order'
-    case 'COLLECTED':
-      return 'Finish order'
-    case 'IN_DISPUTE':
-      return 'Concern under review'
-    default:
-      return null
   }
 }
 
@@ -222,7 +190,7 @@ export default function OrdersListScreen() {
                 </View>
                 <View style={[styles.stagePill, { backgroundColor: (STAGE_COLOR[item.stage] ?? Colors.midGrey) + '20' }]}>
                   <Text style={[styles.stageText, { color: STAGE_COLOR[item.stage] ?? Colors.midGrey }]}>
-                    {STAGE_LABELS[item.stage]}
+                    {customerOrderStageLabel(item.stage, item.orderKind)}
                   </Text>
                 </View>
               </View>
@@ -247,9 +215,9 @@ export default function OrdersListScreen() {
                   </Text>
                 </View>
               )}
-              {orderHint(item.stage, item.orderKind) && (
+              {customerOrderHint(item.stage, item.orderKind) && (
                 <View style={styles.reviewNudge}>
-                  <Text style={styles.reviewNudgeText}>{orderHint(item.stage, item.orderKind)}</Text>
+                  <Text style={styles.reviewNudgeText}>{customerOrderHint(item.stage, item.orderKind)}</Text>
                 </View>
               )}
             </TouchableOpacity>
@@ -330,25 +298,25 @@ function EmptyOrdersView({
 
 const emptyStyles = StyleSheet.create({
   container: {
-    paddingTop: Spacing.xl,
-    paddingHorizontal: Spacing.xl,
-    paddingBottom: Spacing.xxxl,
+    paddingTop: Spacing.lg,
+    paddingHorizontal: Spacing.lg,
+    paddingBottom: Spacing.xxl,
     alignItems: 'center',
-    gap: Spacing.xl,
+    gap: Spacing.lg,
   },
-  previewStack: { width: '100%', gap: Spacing.md },
+  previewStack: { width: '100%', gap: Spacing.sm },
   ghostCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.md,
+    gap: 12,
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
+    borderRadius: Radius.md,
+    padding: 14,
     ...Shadow.sm,
   },
   ghostImage: {
-    width: 64,
-    height: 64,
+    width: 56,
+    height: 56,
     borderRadius: Radius.md,
     backgroundColor: Colors.boneDeep,
     alignItems: 'center',
@@ -361,15 +329,17 @@ const emptyStyles = StyleSheet.create({
     backgroundColor: Colors.boneDeep,
   },
 
-  textBlock: { alignItems: 'center', gap: Spacing.sm },
+  textBlock: { alignItems: 'center', gap: 6 },
   heading: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
-  sub: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 22 },
+  sub: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
 
   ctaBtn: {
     backgroundColor: Colors.needleGreen,
     borderRadius: Radius.full,
-    paddingVertical: Spacing.md,
+    paddingVertical: 10,
     paddingHorizontal: Spacing.xxxl,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   ctaBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.md },
   primaryCta: {
@@ -386,10 +356,11 @@ const emptyStyles = StyleSheet.create({
     alignItems: 'center',
     width: '100%',
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
+    borderRadius: Radius.md,
     paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
+    paddingVertical: 12,
     ...Shadow.sm,
+    minHeight: 44,
   },
   secondaryText: { fontSize: FontSize.md, fontWeight: FontWeight.medium, color: Colors.ink },
   secondaryChevron: { fontSize: 22, color: Colors.midGrey },
@@ -397,14 +368,14 @@ const emptyStyles = StyleSheet.create({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
-  header: { padding: Spacing.xl, gap: Spacing.md },
-  title: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
+  header: { paddingHorizontal: Spacing.lg, paddingTop: 10, paddingBottom: 8, gap: Spacing.sm },
+  title: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.ink },
   guideCard: {
-    marginHorizontal: Spacing.xl,
-    marginBottom: Spacing.md,
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -419,31 +390,31 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  guideText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
   tabs: {
     flexDirection: 'row', backgroundColor: Colors.boneDeep,
     borderRadius: Radius.full, padding: 3,
   },
-  tabBtn: { flex: 1, paddingVertical: Spacing.sm, borderRadius: Radius.full, alignItems: 'center' },
+  tabBtn: { flex: 1, paddingVertical: 9, borderRadius: Radius.full, alignItems: 'center', minHeight: 44, justifyContent: 'center' },
   tabBtnActive: { backgroundColor: Colors.white, ...Shadow.sm },
   tabLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.midGrey },
   tabLabelActive: { color: Colors.ink, fontWeight: FontWeight.semibold },
 
-  list: { padding: Spacing.xl, gap: Spacing.md, paddingBottom: Spacing.xxxl },
-  card: { backgroundColor: Colors.white, borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.md, ...Shadow.sm },
-  cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md },
-  garment: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  list: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.xxl },
+  card: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: Spacing.sm, ...Shadow.sm },
+  cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  garment: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.ink },
   tailor: { fontSize: FontSize.sm, color: Colors.inkLight, marginTop: 2 },
-  stagePill: { paddingHorizontal: Spacing.md, paddingVertical: 4, borderRadius: Radius.full },
+  stagePill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.full },
   stageText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
-  cardMeta: { flexDirection: 'row', gap: Spacing.lg, alignItems: 'center' },
+  cardMeta: { flexDirection: 'row', gap: 12, alignItems: 'center' },
   reviewNudge: {
     alignSelf: 'flex-start',
-    backgroundColor: '#FEF3C7',
+    backgroundColor: Colors.kanteRust + '15',
     borderRadius: Radius.full,
-    paddingHorizontal: Spacing.md, paddingVertical: 4,
+    paddingHorizontal: 10, paddingVertical: 4,
   },
-  reviewNudgeText: { fontSize: FontSize.xs, color: '#92400E', fontWeight: FontWeight.semibold },
+  reviewNudgeText: { fontSize: FontSize.xs, color: Colors.kanteRust, fontWeight: FontWeight.semibold },
   ref: { fontSize: FontSize.xs, color: Colors.midGrey },
   eta: { fontSize: FontSize.xs, color: Colors.midGrey },
   amount: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginLeft: 'auto' },

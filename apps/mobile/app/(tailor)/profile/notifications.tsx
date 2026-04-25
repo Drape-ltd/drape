@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { useFocusEffect, useNavigation, useRouter } from 'expo-router'
+import { useFocusEffect, useRouter } from 'expo-router'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
 } from 'react-native'
@@ -19,8 +19,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { Button, FeatureStateCard } from '@/components/ui'
+import { tailorOrderHint, tailorOrderStageLabel } from '@/lib/order-flow'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
+import type { OrderStage } from '@drape/shared/order-machine'
 
 const TAILOR_NOTIFICATIONS_GUIDE_KEY = 'drape_tailor_notifications_best_use_dismissed'
 
@@ -29,6 +30,7 @@ type NotifItem = {
   orderId: string
   orderRef: string
   garmentType: string
+  orderKind: 'CUSTOM' | 'READY_MADE'
   customerName: string
   stage: OrderStage
   note: string | null
@@ -71,23 +73,22 @@ function timeAgo(iso: string): string {
   return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 }
 
-function stageDescription(stage: OrderStage): string {
-  if (stage === 'PENDING_QUOTE') return 'New booking — quote requested'
-  if (stage === 'CONFIRMED') return 'Payment confirmed by customer'
-  if (stage === 'DESIGNING') return 'Production moved into design work'
-  if (stage === 'SOURCING') return 'Production moved into material sourcing'
-  if (stage === 'COMPLETE') return 'Customer marked order complete'
-  if (stage === 'COLLECTED') return 'Customer collected their order'
-  if (stage === 'DELIVERED') return 'Order marked as delivered'
-  if (stage === 'IN_DISPUTE') return 'Customer raised a dispute'
-  if (stage === 'CANCELLED') return 'Order was cancelled'
-  if (stage === 'CONSULTATION') return 'Consultation started'
-  return STAGE_LABELS[stage] ?? stage
+function stageDescription(item: Pick<NotifItem, 'stage' | 'orderKind'>): string {
+  if (item.orderKind === 'READY_MADE' && item.stage === 'PENDING_QUOTE') return 'New ready-made inquiry'
+  if (item.stage === 'CONFIRMED') {
+    return item.orderKind === 'READY_MADE' ? 'Paid order placed' : 'Payment confirmed by customer'
+  }
+  if (item.stage === 'COMPLETE') return 'Customer marked order complete'
+  if (item.stage === 'COLLECTED') return 'Customer collected their order'
+  if (item.stage === 'DELIVERED') return 'Order marked as delivered'
+  if (item.stage === 'IN_DISPUTE') return 'Customer raised a concern'
+  if (item.stage === 'CANCELLED') return 'Order was cancelled'
+  if (item.stage === 'CONSULTATION') return 'Consultation started'
+  return tailorOrderHint(item.stage, item.orderKind) ?? tailorOrderStageLabel(item.stage, item.orderKind)
 }
 
 export default function TailorNotificationsScreen() {
   const router = useRouter()
-  const navigation = useNavigation()
   const { user } = useAuth()
   const [items, setItems] = useState<NotifItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -119,7 +120,7 @@ export default function TailorNotificationsScreen() {
           const [newOrdersRes, updatesRes] = await Promise.allSettled([
             supabase
               .from('orders')
-              .select(`id, reference, garment_type, stage, created_at, customer_profiles!customer_id(display_name)`)
+              .select(`id, reference, garment_type, order_kind, stage, created_at, customer_profiles!customer_id(display_name)`)
               .eq('tailor_id', user?.id)
               .eq('stage', 'PENDING_QUOTE')
               .gte('created_at', since)
@@ -129,7 +130,7 @@ export default function TailorNotificationsScreen() {
               .select(`
                 id, stage, note, created_at, order_id,
                 orders!inner(
-                  id, reference, garment_type, tailor_id,
+                  id, reference, garment_type, order_kind, tailor_id,
                   customer_profiles!customer_id(display_name)
                 )
               `)
@@ -149,6 +150,7 @@ export default function TailorNotificationsScreen() {
             orderId: o.id,
             orderRef: o.reference,
             garmentType: o.garment_type,
+            orderKind: o.order_kind ?? 'CUSTOM',
             customerName: o.customer_profiles?.display_name ?? 'Customer',
             stage: o.stage as OrderStage,
             note: null,
@@ -165,6 +167,7 @@ export default function TailorNotificationsScreen() {
             orderId: row.orders?.id ?? row.order_id,
             orderRef: row.orders?.reference ?? '',
             garmentType: row.orders?.garment_type ?? '',
+            orderKind: row.orders?.order_kind ?? 'CUSTOM',
             customerName: row.orders?.customer_profiles?.display_name ?? 'Customer',
             stage: row.stage as OrderStage,
             note: row.note ?? null,
@@ -214,8 +217,7 @@ export default function TailorNotificationsScreen() {
   )
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(tailor)/profile')
+    router.replace('/(tailor)/profile')
   }
 
   return (
@@ -300,11 +302,14 @@ export default function TailorNotificationsScreen() {
               )}
             </View>
           )}
-          contentContainerStyle={{ paddingVertical: Spacing.md, paddingHorizontal: Spacing.xl, gap: Spacing.sm }}
+          contentContainerStyle={{ paddingVertical: Spacing.sm, paddingHorizontal: Spacing.lg, gap: Spacing.xs }}
           renderItem={({ item }) => (
             <TouchableOpacity
               style={[styles.card, item.isNew && styles.cardNew]}
-              onPress={() => router.navigate(`/(tailor)/orders/${item.orderId}` as any)}
+              onPress={() => router.replace({
+                pathname: '/(tailor)/orders/[id]',
+                params: { id: item.orderId, returnTo: '/(tailor)/profile' },
+              })}
               activeOpacity={0.7}
             >
               {item.isNew && <View style={styles.unreadDot} />}
@@ -320,7 +325,7 @@ export default function TailorNotificationsScreen() {
                 </Text>
                 <Text style={styles.stageLine}>
                   <Text style={{ color: stageColor(item.stage), fontWeight: FontWeight.semibold }}>
-                    {stageDescription(item.stage)}
+                    {stageDescription(item)}
                   </Text>
                   {item.customerName ? `  ·  ${item.customerName}` : ''}
                 </Text>
@@ -342,22 +347,22 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.lightGrey,
     backgroundColor: Colors.bone,
   },
   backBtn: {
-    width: 38, height: 38, borderRadius: Radius.full,
+    width: 44, height: 44, borderRadius: Radius.full,
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
+  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
   guideCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
     gap: 4,
-    marginBottom: Spacing.md,
+    marginBottom: Spacing.sm,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
   },
@@ -377,29 +382,29 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
   guideTitle: {
-    fontSize: FontSize.md,
+    fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
-    lineHeight: 22,
+    lineHeight: 20,
   },
   card: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.lg, flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
+    padding: 14, flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm,
     ...Shadow.sm, position: 'relative', overflow: 'hidden',
   },
   cardNew: { borderLeftWidth: 3, borderLeftColor: Colors.needleGreen },
   unreadDot: {
-    position: 'absolute', top: Spacing.md, right: Spacing.md,
+    position: 'absolute', top: 12, right: 12,
     width: 8, height: 8, borderRadius: 4,
     backgroundColor: Colors.needleGreen,
   },
   iconWrap: {
-    width: 40, height: 40, borderRadius: Radius.md,
+    width: 36, height: 36, borderRadius: Radius.sm,
     alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
   itemTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: 2 },
   ref: { fontWeight: FontWeight.regular, color: Colors.midGrey },
-  stageLine: { fontSize: FontSize.sm, color: Colors.inkLight, marginBottom: 2 },
-  note: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18, marginTop: 2 },
-  time: { fontSize: FontSize.xs, color: Colors.midGrey, flexShrink: 0, marginTop: 2 },
+  stageLine: { fontSize: FontSize.xs, color: Colors.inkLight, marginBottom: 2 },
+  note: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 16, marginTop: 2 },
+  time: { fontSize: 11, color: Colors.midGrey, flexShrink: 0, marginTop: 2 },
 })

@@ -1,21 +1,22 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl,
   Alert, TextInput,
 } from 'react-native'
-import { useRouter, useFocusEffect } from 'expo-router'
+import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Feather } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
 import { Button, FeatureStateCard } from '@/components/ui'
 import { openConsultationCallUrl } from '@/lib/consultation'
+import { tailorOrderHint, tailorOrderPriority, tailorOrderStageLabel } from '@/lib/order-flow'
 import { deriveTailorReadiness, type TailorReadinessInput } from '@/lib/tailor-readiness'
 import { supabase } from '@/lib/supabase'
 import { useTailorOrders, useRefreshOnFocus } from '@/lib/queries'
 import { shareTailorProfile } from '@/lib/invite'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
+import type { OrderStage } from '@drape/shared/order-machine'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { stageColor } from '@/lib/stageColors'
 
@@ -23,67 +24,13 @@ type Tab = 'active' | 'completed'
 
 const TAILOR_ORDERS_GUIDE_KEY = 'drape_tailor_orders_best_use_dismissed'
 
-function orderPriority(stage: OrderStage): number {
-  switch (stage) {
-    case 'PENDING_QUOTE':
-      return 0
-    case 'CONSULTATION':
-      return 1
-    case 'IN_DISPUTE':
-      return 2
-    case 'READY_FOR_COLLECTION':
-      return 3
-    case 'DELIVERED':
-    case 'COLLECTED':
-      return 4
-    case 'SHIPPED':
-      return 5
-    default:
-      return 6
-  }
-}
-
-function orderHint(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): string | null {
-  switch (stage) {
-    case 'PENDING_QUOTE':
-      return orderKind === 'READY_MADE' ? 'Customer inquiry' : 'Quote needed'
-    case 'CONSULTATION':
-      return 'Consultation in progress'
-    case 'QUOTE_SENT':
-      return 'Waiting for customer'
-    case 'CONFIRMED':
-      return orderKind === 'READY_MADE' ? 'Prepare order' : 'Ready to start'
-    case 'DESIGNING':
-      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Designing'
-    case 'SOURCING':
-      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Sourcing'
-    case 'CUTTING':
-      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Cutting'
-    case 'SEWING':
-      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Sewing'
-    case 'FINISHING':
-      return orderKind === 'READY_MADE' ? 'Preparing order' : 'Finishing'
-    case 'DELIVERED':
-      return 'Waiting for customer finish'
-    case 'COLLECTED':
-      return 'Waiting for customer finish'
-    case 'READY_FOR_COLLECTION':
-      return 'Ready for collection'
-    case 'SHIPPED':
-      return 'In transit'
-    case 'IN_DISPUTE':
-      return 'Concern under review'
-    default:
-      return null
-  }
-}
-
 function orderHintForItem(item: { stage: OrderStage; orderKind?: 'CUSTOM' | 'READY_MADE' }): string | null {
-  return orderHint(item.stage, item.orderKind ?? 'CUSTOM')
+  return tailorOrderHint(item.stage, item.orderKind ?? 'CUSTOM')
 }
 
 export default function TailorOrdersScreen() {
   const router = useRouter()
+  const params = useLocalSearchParams<{ tab?: string }>()
   const { user } = useAuth()
   const [tab, setTab] = useState<Tab>('active')
   const [completedSearch, setCompletedSearch] = useState('')
@@ -98,6 +45,12 @@ export default function TailorOrdersScreen() {
     paystackAccountId: string | null
   } | null>(null)
   const [showGuide, setShowGuide] = useState(true)
+
+  useEffect(() => {
+    if (params.tab === 'completed' || params.tab === 'active') {
+      setTab(params.tab)
+    }
+  }, [params.tab])
 
   const { data: orders = [], isLoading: loading, isFetching, isError, refetch } = useTailorOrders(user?.id, tab)
 
@@ -153,7 +106,7 @@ export default function TailorOrdersScreen() {
   const sortedOrders = (() => {
     if (tab === 'active') {
       return [...orders].sort((a, b) => {
-        const priorityDiff = orderPriority(a.stage) - orderPriority(b.stage)
+        const priorityDiff = tailorOrderPriority(a.stage) - tailorOrderPriority(b.stage)
         if (priorityDiff !== 0) return priorityDiff
         return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       })
@@ -183,7 +136,10 @@ export default function TailorOrdersScreen() {
       return
     }
 
-    router.push(`/(tailor)/orders/${item.id}`)
+    router.push({
+      pathname: '/(tailor)/orders/[id]',
+      params: { id: item.id, returnTo: '/(tailor)/orders' },
+    })
   }
 
   return (
@@ -294,7 +250,10 @@ export default function TailorOrdersScreen() {
               <TouchableOpacity
                 style={[styles.card, isPending && styles.cardPending, isConsultation && styles.cardConsultation]}
                 testID={`tailor-order-card-${item.stage}`}
-                onPress={() => router.push(`/(tailor)/orders/${item.id}`)}
+                onPress={() => router.push({
+                  pathname: '/(tailor)/orders/[id]',
+                  params: { id: item.id, returnTo: '/(tailor)/orders' },
+                })}
               >
                 <View style={styles.cardTop}>
                   <View style={{ flex: 1 }}>
@@ -303,7 +262,7 @@ export default function TailorOrdersScreen() {
                   </View>
                   <View style={[styles.stagePill, { backgroundColor: stageColor(item.stage).bg }]}>
                     <Text style={[styles.stageText, { color: stageColor(item.stage).text }]}>
-                      {STAGE_LABELS[item.stage]}
+                      {tailorOrderStageLabel(item.stage, item.orderKind ?? 'CUSTOM')}
                     </Text>
                   </View>
                 </View>
@@ -437,17 +396,17 @@ function ActiveEmptyState({
 
 const ghostStyles = StyleSheet.create({
   card: {
-    backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.lg, flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
+    backgroundColor: Colors.white, borderRadius: Radius.md,
+    padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12,
     ...Shadow.sm,
   },
-  iconBox: { width: 48, height: 48, borderRadius: Radius.md, backgroundColor: Colors.lightGrey },
+  iconBox: { width: 42, height: 42, borderRadius: Radius.md, backgroundColor: Colors.lightGrey },
   line: { height: 10, borderRadius: 5, backgroundColor: Colors.lightGrey },
   pill: { height: 24, borderRadius: Radius.full, backgroundColor: Colors.lightGrey },
 })
 
 const emptyStyles = StyleSheet.create({
-  wrap: { paddingTop: Spacing.xxxl, paddingHorizontal: Spacing.xl, alignItems: 'center' },
+  wrap: { paddingTop: Spacing.xl, paddingHorizontal: Spacing.lg, alignItems: 'center' },
   heading: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
   sub: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20, marginTop: 6 },
   cta: {
@@ -455,21 +414,23 @@ const emptyStyles = StyleSheet.create({
     backgroundColor: Colors.needleGreen,
     borderRadius: Radius.full,
     paddingHorizontal: Spacing.xxl,
-    paddingVertical: Spacing.md,
+    paddingVertical: 10,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   ctaText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.white },
 })
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
-  header: { padding: Spacing.xl, gap: Spacing.md },
-  title: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
+  header: { paddingHorizontal: Spacing.lg, paddingTop: 10, paddingBottom: 8, gap: Spacing.sm },
+  title: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.ink },
   guideCard: {
-    marginHorizontal: Spacing.xl,
-    marginBottom: Spacing.md,
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -484,33 +445,34 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  guideText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
   tabs: {
     flexDirection: 'row', backgroundColor: Colors.boneDeep,
     borderRadius: Radius.full, padding: 3,
   },
-  tabBtn: { flex: 1, paddingVertical: Spacing.sm, borderRadius: Radius.full, alignItems: 'center' },
+  tabBtn: { flex: 1, paddingVertical: 9, borderRadius: Radius.full, alignItems: 'center', minHeight: 44, justifyContent: 'center' },
   tabBtnActive: { backgroundColor: Colors.white, ...Shadow.sm },
   tabLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.midGrey },
   tabLabelActive: { color: Colors.ink, fontWeight: FontWeight.semibold },
 
-  searchWrap: { paddingHorizontal: Spacing.xl, paddingBottom: Spacing.md },
+  searchWrap: { paddingHorizontal: Spacing.lg, paddingBottom: Spacing.sm },
   search: {
     backgroundColor: Colors.white, borderRadius: Radius.full,
-    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
+    paddingHorizontal: 14, paddingVertical: 10,
     fontSize: FontSize.sm, color: Colors.ink,
     borderWidth: 1, borderColor: Colors.lightGrey,
+    minHeight: 44,
   },
 
-  list: { padding: Spacing.xl, gap: Spacing.md, paddingBottom: Spacing.xxxl },
-  card: { backgroundColor: Colors.white, borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.md, ...Shadow.sm },
+  list: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.xxl },
+  card: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: Spacing.sm, ...Shadow.sm },
   cardPending: { borderWidth: 1.5, borderColor: Colors.warning },
-  cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md },
-  garment: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  garment: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.ink },
   customer: { fontSize: FontSize.sm, color: Colors.inkLight, marginTop: 2 },
-  stagePill: { paddingHorizontal: Spacing.md, paddingVertical: 4, borderRadius: Radius.full },
+  stagePill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.full },
   stageText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
-  cardMeta: { flexDirection: 'row', gap: Spacing.lg, alignItems: 'center' },
+  cardMeta: { flexDirection: 'row', gap: 12, alignItems: 'center' },
   ref: { fontSize: FontSize.xs, color: Colors.midGrey },
   due: { fontSize: FontSize.xs, color: Colors.midGrey },
   amount: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginLeft: 'auto' },
@@ -518,10 +480,10 @@ const styles = StyleSheet.create({
   statusHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   statusHintDispute: { fontSize: FontSize.xs, color: Colors.kanteRust, lineHeight: 18 },
   cardConsultation: { borderWidth: 1.5, borderColor: Colors.needleGreen },
-  consultationActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
+  consultationActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   callChip: {
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
-    paddingHorizontal: Spacing.md, paddingVertical: 6,
+    paddingHorizontal: 14, paddingVertical: 8, minHeight: 44, justifyContent: 'center',
   },
   callChipText: { fontSize: FontSize.xs, color: Colors.white, fontWeight: FontWeight.semibold },
   consultationHint: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium },

@@ -250,12 +250,29 @@ export default function CustomerMessagesScreen() {
           )}
           <TouchableOpacity
             style={styles.orderBtn}
-            onPress={() => router.push({
-              pathname: '/(customer)/orders/[id]',
-              params: { id: resolvedOrderId, returnTo: `/(customer)/messages/${resolvedOrderId}` },
-            })}
+            onPress={() => {
+              if (orderInfo.orderKind === 'READY_MADE' && orderInfo.stage === 'PENDING_QUOTE' && orderInfo.sellerItemId) {
+                router.push({
+                  pathname: '/(customer)/tailor/item/[itemId]',
+                  params: {
+                    itemId: orderInfo.sellerItemId,
+                    returnTo: `/(customer)/messages/${resolvedOrderId}`,
+                  },
+                })
+                return
+              }
+
+              router.push({
+                pathname: '/(customer)/orders/[id]',
+                params: { id: resolvedOrderId, returnTo: `/(customer)/messages/${resolvedOrderId}` },
+              })
+            }}
           >
-            <Text style={styles.orderBtnText}>View order</Text>
+            <Text style={styles.orderBtnText}>
+              {orderInfo.orderKind === 'READY_MADE' && orderInfo.stage === 'PENDING_QUOTE' && orderInfo.sellerItemId
+                ? 'View item'
+                : 'View order'}
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -325,13 +342,13 @@ const styles = StyleSheet.create({
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg, paddingVertical: 8,
     backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.lightGrey,
   },
-  backText: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium, width: 60 },
+  backText: { color: Colors.needleGreen, fontSize: FontSize.sm, fontWeight: FontWeight.medium, width: 56 },
   headerCenter: { alignItems: 'center' },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
-  headerName: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  headerName: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.ink },
   headerSub: { fontSize: FontSize.xs, color: Colors.midGrey },
   contextBanner: {
     backgroundColor: Colors.white,
@@ -379,25 +396,27 @@ const styles = StyleSheet.create({
   safetyCard: {
     backgroundColor: Colors.white,
     marginHorizontal: Spacing.lg,
-    marginTop: Spacing.md,
+    marginTop: Spacing.sm,
     marginBottom: Spacing.sm,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.lg,
-    borderRadius: Radius.lg,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
-    gap: Spacing.sm,
+    gap: 8,
     ...Shadow.sm,
   },
   safetyTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  safetyText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
-  safetyWarning: { fontSize: FontSize.sm, color: Colors.kanteRust, lineHeight: 20 },
+  safetyText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  safetyWarning: { fontSize: FontSize.xs, color: Colors.kanteRust, lineHeight: 18 },
   safetyBtn: {
     alignSelf: 'flex-start',
     backgroundColor: Colors.kanteRustLight,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderRadius: Radius.full,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   safetyBtnText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.kanteRust },
   safetyMeta: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
@@ -411,8 +430,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     borderRadius: 999,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minHeight: 40,
+    justifyContent: 'center',
   },
   orderBtnText: { fontSize: FontSize.xs, color: Colors.ink, fontWeight: FontWeight.semibold },
   retryBtn: {

@@ -134,7 +134,7 @@ export default function ViewProfileScreen() {
         <Text style={styles.headerTitle}>Your public profile</Text>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.xl, paddingBottom: 64, gap: Spacing.xl }}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 36, gap: Spacing.lg }}>
         <View style={styles.nextCard}>
           <Text style={styles.nextTitle}>This is what tailors see when you place a brief.</Text>
         </View>
@@ -181,7 +181,7 @@ export default function ViewProfileScreen() {
                     <View key={k} style={styles.measureCell}>
                       <Text style={styles.measureLabel}>{LABELS[k]}</Text>
                       <Text style={[styles.measureValue, !val && { color: Colors.lightGrey }]}>
-                        {val ? `${val} ${unit}` : '—'}
+                        {val ? `${val} ${unit}` : 'Not added'}
                       </Text>
                     </View>
                   )
@@ -200,19 +200,19 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
   },
   backBtn: {
-    width: 38, height: 38, borderRadius: Radius.full,
+    width: 44, height: 44, borderRadius: Radius.full,
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
+  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
   nextCard: {
     backgroundColor: Colors.boneDeep,
-    borderRadius: Radius.lg,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
+    borderRadius: Radius.md,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
   nextTitle: {
     fontSize: FontSize.sm,
@@ -221,23 +221,23 @@ const styles = StyleSheet.create({
     lineHeight: 21,
   },
 
-  card: { backgroundColor: Colors.white, borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.md, ...Shadow.sm },
-  identityRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
+  card: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: Spacing.sm, ...Shadow.sm },
+  identityRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   avatar: {
-    width: 52, height: 52, borderRadius: Radius.full,
+    width: 44, height: 44, borderRadius: Radius.full,
     backgroundColor: Colors.needleGreenLight, alignItems: 'center', justifyContent: 'center',
   },
-  avatarText: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.needleGreen },
-  name: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  avatarText: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.needleGreen },
+  name: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   meta: { fontSize: FontSize.sm, color: Colors.midGrey, marginTop: 2 },
   infoNote: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
 
-  section: { gap: Spacing.md },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  section: { gap: Spacing.sm },
+  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
 
   emptyCard: {
-    backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.xl, alignItems: 'center', gap: Spacing.md, ...Shadow.sm,
+    backgroundColor: Colors.white, borderRadius: Radius.md,
+    padding: Spacing.lg, alignItems: 'center', gap: Spacing.sm, ...Shadow.sm,
   },
   emptyBadge: {
     paddingHorizontal: Spacing.md,
@@ -256,14 +256,14 @@ const styles = StyleSheet.create({
   emptyHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 21 },
   emptyLink: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
   secondaryLink: { fontSize: FontSize.sm, color: Colors.midGrey },
-  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: Spacing.md, padding: Spacing.xl },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: Spacing.sm, padding: Spacing.lg },
   stateCard: {
     width: '100%',
     maxWidth: 440,
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.lg,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.md,
     alignItems: 'center',
     ...Shadow.lg,
   },
@@ -274,13 +274,13 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  stateTitle: { fontSize: FontSize.lg, color: Colors.ink, fontWeight: FontWeight.bold, textAlign: 'center' },
-  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
+  stateTitle: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.bold, textAlign: 'center' },
+  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 19 },
 
-  measureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
+  measureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'space-between' },
   measureCell: {
-    width: '47%', backgroundColor: Colors.bone, borderRadius: Radius.sm,
-    padding: Spacing.md, gap: 2,
+    width: '48%', backgroundColor: Colors.bone, borderRadius: Radius.sm,
+    padding: 10, gap: 2,
   },
   measureLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
   measureValue: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
