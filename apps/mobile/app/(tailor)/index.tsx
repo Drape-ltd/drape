@@ -9,12 +9,19 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { inviteCustomerFromTailor, shareTailorProfile } from '@/lib/invite'
+import { tailorOrderHint, tailorOrderStageLabel } from '@/lib/order-flow'
 import { deriveTailorReadiness } from '@/lib/tailor-readiness'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { useRefreshOnFocus, useTailorDashboard } from '@/lib/queries'
+import type { TailorStockAlert } from '@/lib/ready-made-stock'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
+import type { OrderStage } from '@drape/shared/order-machine'
 import { stageColor } from '@/lib/stageColors'
+
+const HOME_BG = '#F9F7F3'
+const PRIMARY_GREEN = '#1D9E75'
+const CHARCOAL = '#2C2C2A'
+const MUTED_GREY = '#8F8D88'
 
 type Availability = 'OPEN' | 'LIMITED' | 'FULLY_BOOKED'
 const AVAIL_OPTIONS: { value: Availability; label: string; desc: string; color: string }[] = [
@@ -27,6 +34,7 @@ const DASHBOARD_GUIDE_KEY = 'drape_tailor_dashboard_best_use_dismissed'
 type DashboardStats = {
   activeOrders: number
   pendingQuotes: number
+  itemInquiries: number
   completedOrders: number
   monthEarnings: number
   avgRating: number
@@ -53,36 +61,7 @@ type ActiveOrderRow = {
   quotedAmount: number | null
 }
 
-function dashboardOrderHint(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): string | null {
-  switch (stage) {
-    case 'PENDING_QUOTE':
-      return orderKind === 'READY_MADE' ? 'Reply to inquiry' : 'Send your quote'
-    case 'CONSULTATION':
-      return 'Run consultation, then quote'
-    case 'QUOTE_SENT':
-      return 'Waiting for customer acceptance'
-    case 'READY_FOR_COLLECTION':
-      return 'Confirm collection code at pickup'
-    case 'SHIPPED':
-      return 'Waiting for delivery confirmation'
-    case 'DELIVERED':
-      return 'Customer needs to finish the order'
-    case 'COLLECTED':
-      return 'Customer needs to finish the order'
-    case 'IN_DISPUTE':
-      return 'Concern under review'
-    case 'CONFIRMED':
-      return orderKind === 'READY_MADE' ? 'Prepare order' : null
-    case 'DESIGNING':
-    case 'SOURCING':
-    case 'CUTTING':
-    case 'SEWING':
-    case 'FINISHING':
-      return orderKind === 'READY_MADE' ? 'Preparing order' : null
-    default:
-      return null
-  }
-}
+type StockAlertRow = TailorStockAlert
 
 
 export default function TailorDashboard() {
@@ -101,6 +80,7 @@ export default function TailorDashboard() {
 
   const stats = (dashboardData?.stats ?? null) as DashboardStats | null
   const orders = (dashboardData?.orders ?? []) as ActiveOrderRow[]
+  const stockAlerts = (dashboardData?.stockAlerts ?? []) as StockAlertRow[]
   const readiness = deriveTailorReadiness(stats)
 
   useEffect(() => {
@@ -325,11 +305,55 @@ export default function TailorDashboard() {
           </TouchableOpacity>
         )}
 
+        {(stats?.itemInquiries ?? 0) > 0 && (
+          <TouchableOpacity
+            style={styles.alertCard}
+            onPress={() => router.navigate('/(tailor)/orders')}
+          >
+            <View style={styles.alertDot} />
+            <Text style={styles.alertText}>
+              {stats!.itemInquiries} ready-made inquir{stats!.itemInquiries > 1 ? 'ies' : 'y'} waiting for your reply
+            </Text>
+            <Text style={styles.alertCta}>Reply →</Text>
+          </TouchableOpacity>
+        )}
+
+        {stockAlerts.length > 0 && (
+          <TouchableOpacity style={styles.stockWatchCard} onPress={() => router.push('/(tailor)/shop')}>
+            <View style={styles.stockWatchHeader}>
+              <Text style={styles.stockWatchEyebrow}>Stock watch</Text>
+              <Text style={styles.stockWatchLink}>Open shop →</Text>
+            </View>
+            {stockAlerts.map((alert) => (
+              <View key={alert.itemId} style={styles.stockWatchRow}>
+                <View
+                  style={[
+                    styles.stockWatchDot,
+                    alert.severity === 'sold_out' ? styles.stockWatchDotCritical : styles.stockWatchDotWarning,
+                  ]}
+                />
+                <View style={styles.stockWatchTextWrap}>
+                  <Text style={styles.stockWatchTitle}>{alert.headline}</Text>
+                  <Text style={styles.stockWatchDetail}>{alert.detail}</Text>
+                </View>
+              </View>
+            ))}
+          </TouchableOpacity>
+        )}
+
         {/* Stats grid */}
         <View style={styles.statsGrid}>
           <View style={styles.statsRow}>
-            <StatCard label="Active orders" value={String(stats?.activeOrders ?? '—')} />
-            <StatCard label="Awaiting quote" value={String(stats?.pendingQuotes ?? '—')} accent={!!stats?.pendingQuotes} />
+            <TouchableOpacity onPress={() => router.push('/(tailor)/orders?tab=active' as never)} style={{ flex: 1 }}>
+              <StatCard label="Active orders" value={String(stats?.activeOrders ?? 0)} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => router.push('/(tailor)/orders?tab=active' as never)} style={{ flex: 1 }}>
+              <StatCard
+                label={(stats?.pendingQuotes ?? 0) > 0 ? 'Awaiting quote' : 'Item inquiries'}
+                value={String((stats?.pendingQuotes ?? 0) > 0 ? (stats?.pendingQuotes ?? 0) : (stats?.itemInquiries ?? 0))}
+                accent={((stats?.pendingQuotes ?? 0) > 0 ? (stats?.pendingQuotes ?? 0) : (stats?.itemInquiries ?? 0)) > 0}
+              />
+            </TouchableOpacity>
           </View>
           <View style={styles.statsRow}>
             <TouchableOpacity onPress={() => router.navigate('/(tailor)/earnings')} style={{ flex: 1 }}>
@@ -343,10 +367,12 @@ export default function TailorDashboard() {
                 )}
               />
             </TouchableOpacity>
-            <StatCard
-              label="Rating"
-              value={stats?.avgRating ? `${stats.avgRating.toFixed(1)} ★` : '—'}
-            />
+            <TouchableOpacity onPress={() => router.push('/(tailor)/profile/reviews' as never)} style={{ flex: 1 }}>
+              <StatCard
+                label="Rating"
+                value={stats?.avgRating ? `${stats.avgRating.toFixed(1)} ★` : 'No rating'}
+              />
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -414,19 +440,22 @@ export default function TailorDashboard() {
               <TouchableOpacity
                 key={order.id}
                 style={styles.orderRow}
-                onPress={() => router.navigate(`/(tailor)/orders/${order.id}`)}
+                onPress={() => router.push({
+                  pathname: '/(tailor)/orders/[id]',
+                  params: { id: order.id, returnTo: '/(tailor)' },
+                })}
               >
                 <View style={styles.orderRowLeft}>
                   <Text style={styles.orderGarment}>{order.garmentType}</Text>
                   <Text style={styles.orderCustomer}>{order.customerName}</Text>
-                  {dashboardOrderHint(order.stage, order.orderKind) && (
-                    <Text style={styles.orderHint}>{dashboardOrderHint(order.stage, order.orderKind)}</Text>
+                  {tailorOrderHint(order.stage, order.orderKind) && (
+                    <Text style={styles.orderHint}>{tailorOrderHint(order.stage, order.orderKind)}</Text>
                   )}
                 </View>
                 <View style={styles.orderRowRight}>
                   <View style={[styles.stagePill, { backgroundColor: stageColor(order.stage).bg }]}>
                     <Text style={[styles.stageText, { color: stageColor(order.stage).text }]}>
-                      {STAGE_LABELS[order.stage]}
+                      {tailorOrderStageLabel(order.stage, order.orderKind)}
                     </Text>
                   </View>
                   {order.estimatedDate && (
@@ -472,50 +501,50 @@ function StatCard({ label, value, accent }: { label: string; value: string; acce
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.bone },
+  safe: { flex: 1, backgroundColor: HOME_BG },
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
   stateCard: {
     width: '100%',
     maxWidth: 440,
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: Spacing.lg,
+    gap: Spacing.md,
     alignItems: 'center',
-    ...Shadow.lg,
+    ...Shadow.sm,
   },
   stateEyebrow: {
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
+    color: PRIMARY_GREEN,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
-  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
+  stateTitle: { fontSize: 20, fontWeight: FontWeight.bold, color: CHARCOAL, textAlign: 'center' },
+  stateHint: { fontSize: 13, color: Colors.inkLight, textAlign: 'center', lineHeight: 20 },
   stateGuideCard: {
     alignSelf: 'stretch',
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    backgroundColor: HOME_BG,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: 4,
   },
   stateGuideTitle: {
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
+    color: PRIMARY_GREEN,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
     textAlign: 'center',
   },
   stateGuideText: {
-    fontSize: FontSize.sm,
+    fontSize: 13,
     color: Colors.inkLight,
     textAlign: 'center',
-    lineHeight: 20,
+    lineHeight: 18,
   },
   scroll: { flex: 1 },
-  content: { padding: Spacing.xl, gap: Spacing.xl, paddingBottom: Spacing.xxxl },
+  content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, gap: Spacing.lg, paddingBottom: 32 },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,
@@ -550,9 +579,9 @@ const styles = StyleSheet.create({
   },
   guideCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: Spacing.xs,
+    borderRadius: Radius.md,
+    padding: 14,
+    gap: 6,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
@@ -561,107 +590,144 @@ const styles = StyleSheet.create({
   guideEyebrow: {
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
+    color: PRIMARY_GREEN,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  guideClose: { fontSize: 20, lineHeight: 20, color: Colors.midGrey, paddingHorizontal: 4 },
-  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  guideClose: { fontSize: 18, lineHeight: 18, color: MUTED_GREY, paddingHorizontal: 4, minWidth: 44, minHeight: 44, textAlign: 'center', textAlignVertical: 'center', includeFontPadding: false },
+  guideTitle: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, lineHeight: 18 },
+  guideText: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
   readinessCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: Spacing.xs,
+    borderRadius: Radius.md,
+    padding: 14,
+    gap: 6,
     ...Shadow.sm,
   },
   readinessCardWarning: { borderWidth: 1, borderColor: Colors.warning + '35' },
   readinessCardSuccess: { borderWidth: 1, borderColor: Colors.success + '30' },
-  readinessTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-  readinessBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
-  readinessMeta: { fontSize: FontSize.xs, color: Colors.midGrey },
+  readinessTitle: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, lineHeight: 18 },
+  readinessBody: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
+  readinessMeta: { fontSize: 11, color: MUTED_GREY, lineHeight: 16 },
   readinessLink: { alignSelf: 'flex-start', paddingTop: 2 },
-  readinessLinkText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  readinessLinkText: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
   readinessSecondaryLink: { alignSelf: 'flex-start' },
-  readinessSecondaryLinkText: { fontSize: FontSize.xs, color: Colors.midGrey, fontWeight: FontWeight.medium },
+  readinessSecondaryLinkText: { fontSize: 11, color: MUTED_GREY, fontWeight: FontWeight.medium },
 
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  headerRight: { alignItems: 'flex-end', gap: Spacing.sm },
-  greeting: { fontSize: FontSize.sm, color: Colors.inkLight },
-  greetingName: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink, letterSpacing: -0.5 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: Spacing.md },
+  headerRight: { alignItems: 'flex-end', gap: 8 },
+  greeting: { fontSize: 13, color: Colors.inkLight },
+  greetingName: { fontSize: 30, fontWeight: FontWeight.bold, color: CHARCOAL, letterSpacing: -0.5, lineHeight: 34 },
 
   availPill: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
     backgroundColor: Colors.white, borderRadius: Radius.full,
-    paddingHorizontal: Spacing.md, paddingVertical: 5, ...Shadow.sm,
+    paddingHorizontal: 14, paddingVertical: 5, minHeight: 44, ...Shadow.sm,
   },
   availDot: { width: 7, height: 7, borderRadius: 4 },
-  availLabel: { fontSize: FontSize.xs, fontWeight: FontWeight.medium, color: Colors.inkLight },
+  availLabel: { fontSize: 12, fontWeight: FontWeight.medium, color: Colors.inkLight },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   modalSheet: {
-    backgroundColor: Colors.white, borderTopLeftRadius: Radius.xl, borderTopRightRadius: Radius.xl,
-    padding: Spacing.xl, gap: Spacing.lg, paddingBottom: Spacing.xxxl,
+    backgroundColor: Colors.white, borderTopLeftRadius: Radius.md, borderTopRightRadius: Radius.md,
+    padding: Spacing.lg, gap: Spacing.md, paddingBottom: Spacing.xxxl,
   },
   modalHandle: {
     width: 36, height: 4, borderRadius: 2, backgroundColor: Colors.lightGrey,
     alignSelf: 'center', marginBottom: Spacing.sm,
   },
-  modalTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
-  modalSub: { fontSize: FontSize.sm, color: Colors.inkLight, marginTop: -Spacing.sm },
+  modalTitle: { fontSize: 20, fontWeight: FontWeight.bold, color: CHARCOAL },
+  modalSub: { fontSize: 13, color: Colors.inkLight, marginTop: -4, lineHeight: 18 },
   availOption: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    padding: Spacing.lg, borderRadius: Radius.lg, borderWidth: 1.5, borderColor: Colors.lightGrey,
+    minHeight: 44,
+    padding: 14, borderRadius: Radius.md, borderWidth: 1.5, borderColor: Colors.lightGrey,
   },
-  availOptionActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
+  availOptionActive: { borderColor: PRIMARY_GREEN, backgroundColor: Colors.needleGreenLight },
   availOptionDot: { width: 10, height: 10, borderRadius: 5 },
-  availOptionLabel: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-  availOptionDesc: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2, lineHeight: 16 },
-  availCheck: { fontSize: FontSize.lg, color: Colors.needleGreen, fontWeight: FontWeight.bold },
+  availOptionLabel: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  availOptionDesc: { fontSize: 11, color: MUTED_GREY, marginTop: 2, lineHeight: 15 },
+  availCheck: { fontSize: 18, color: PRIMARY_GREEN, fontWeight: FontWeight.bold },
 
   alertCard: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
     backgroundColor: Colors.warning + '15',
-    borderRadius: Radius.md, padding: Spacing.lg,
+    borderRadius: Radius.md, padding: 14, minHeight: 44,
     borderWidth: 1, borderColor: Colors.warning + '40',
   },
-  alertDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.warning },
-  alertText: { flex: 1, fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink },
-  alertCta: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.warning },
-  retryBtn: {
-    backgroundColor: Colors.needleGreen,
-    borderRadius: Radius.full,
-    paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.xxxl,
+  alertDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.warning, marginTop: 1 },
+  alertText: { flex: 1, fontSize: 13, fontWeight: FontWeight.medium, color: CHARCOAL, lineHeight: 18 },
+  alertCta: { fontSize: 13, fontWeight: FontWeight.semibold, color: Colors.warning },
+  stockWatchCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    padding: 14,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: Colors.warning + '30',
+    ...Shadow.sm,
   },
-  retryBtnText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  stockWatchHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  stockWatchEyebrow: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.warning,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  stockWatchLink: { fontSize: 13, fontWeight: FontWeight.semibold, color: PRIMARY_GREEN },
+  stockWatchRow: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm },
+  stockWatchDot: { width: 10, height: 10, borderRadius: Radius.full, marginTop: 5 },
+  stockWatchDotWarning: { backgroundColor: Colors.warning },
+  stockWatchDotCritical: { backgroundColor: Colors.error },
+  stockWatchTextWrap: { flex: 1, gap: 2 },
+  stockWatchTitle: { fontSize: 13, fontWeight: FontWeight.semibold, color: CHARCOAL, lineHeight: 17 },
+  stockWatchDetail: { fontSize: 12, color: Colors.inkLight, lineHeight: 17 },
+  retryBtn: {
+    backgroundColor: PRIMARY_GREEN,
+    borderRadius: Radius.full,
+    paddingVertical: 12,
+    paddingHorizontal: Spacing.xxxl,
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  retryBtnText: { color: Colors.white, fontSize: 13, fontWeight: FontWeight.semibold },
   secondaryErrorBtn: {
     borderRadius: Radius.full,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     backgroundColor: Colors.white,
-    paddingVertical: Spacing.md,
+    paddingVertical: 12,
     paddingHorizontal: Spacing.xl,
+    minHeight: 44,
+    justifyContent: 'center',
   },
-  secondaryErrorBtnText: { color: Colors.ink, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
+  secondaryErrorBtnText: { color: CHARCOAL, fontSize: 13, fontWeight: FontWeight.medium },
 
-  statsGrid: { gap: Spacing.sm },
-  statsRow: { flexDirection: 'row', gap: Spacing.sm },
+  statsGrid: { gap: 10 },
+  statsRow: { flexDirection: 'row', gap: 10 },
   statCard: {
     flex: 1, backgroundColor: Colors.white,
-    borderRadius: Radius.lg, padding: Spacing.lg, gap: 4, ...Shadow.sm,
+    borderRadius: Radius.md, padding: 14, gap: 2, ...Shadow.sm,
+    minHeight: 96,
+    justifyContent: 'center',
   },
   statCardAccent: { backgroundColor: Colors.warning + '15', borderWidth: 1, borderColor: Colors.warning + '40' },
-  statValue: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
+  statValue: { fontSize: 22, fontWeight: FontWeight.bold, color: CHARCOAL },
   statValueAccent: { color: Colors.warning },
-  statLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
+  statLabel: { fontSize: 11, color: MUTED_GREY, lineHeight: 15 },
 
-  section: { gap: Spacing.md },
+  section: { gap: 10 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
-  sectionLink: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  sectionTitle: { fontSize: 18, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  sectionLink: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium, minHeight: 44, includeFontPadding: false },
 
-  emptyOrders: { gap: Spacing.sm, alignItems: 'center', paddingVertical: Spacing.xl },
+  emptyOrders: { gap: 8, alignItems: 'center', paddingVertical: Spacing.lg },
   emptyOrdersBadge: {
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.xs,
@@ -671,12 +737,12 @@ const styles = StyleSheet.create({
   emptyOrdersBadgeText: {
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
+    color: PRIMARY_GREEN,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  emptyText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-  emptyHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center' },
+  emptyText: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  emptyHint: { fontSize: 13, color: MUTED_GREY, textAlign: 'center', lineHeight: 18 },
   emptyActions: {
     marginTop: Spacing.sm,
     flexDirection: 'row',
@@ -685,29 +751,31 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   shareBtn: {
-    backgroundColor: Colors.needleGreen,
+    backgroundColor: PRIMARY_GREEN,
     borderRadius: Radius.full,
     paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.md,
+    paddingVertical: 12,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   shareBtnSecondary: {
     backgroundColor: Colors.white,
     borderWidth: 1.5,
-    borderColor: Colors.needleGreen,
+    borderColor: PRIMARY_GREEN,
   },
-  shareBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
-  shareBtnTextSecondary: { color: Colors.needleGreen },
+  shareBtnText: { fontSize: 13, fontWeight: FontWeight.semibold, color: Colors.white },
+  shareBtnTextSecondary: { color: PRIMARY_GREEN },
 
   orderRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    backgroundColor: Colors.white, borderRadius: Radius.md, padding: Spacing.lg, ...Shadow.sm,
+    backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, minHeight: 88, ...Shadow.sm,
   },
   orderRowLeft: { gap: 2 },
-  orderGarment: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-  orderCustomer: { fontSize: FontSize.sm, color: Colors.inkLight },
-  orderHint: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium, marginTop: 4 },
+  orderGarment: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL, lineHeight: 19 },
+  orderCustomer: { fontSize: 13, color: Colors.inkLight, lineHeight: 17 },
+  orderHint: { fontSize: 12, color: PRIMARY_GREEN, fontWeight: FontWeight.medium, marginTop: 4, lineHeight: 16 },
   orderRowRight: { alignItems: 'flex-end', gap: 4 },
-  stagePill: { paddingHorizontal: Spacing.sm, paddingVertical: 3, borderRadius: Radius.full },
-  stageText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
-  orderDue: { fontSize: FontSize.xs, color: Colors.midGrey },
+  stagePill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.full, minHeight: 24, justifyContent: 'center' },
+  stageText: { fontSize: 11, fontWeight: FontWeight.semibold },
+  orderDue: { fontSize: 11, color: MUTED_GREY },
 })

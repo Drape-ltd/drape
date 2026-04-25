@@ -18,6 +18,11 @@ import { Button, Input } from '@/components/ui'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
+const HOME_BG = '#F9F7F3'
+const PRIMARY_GREEN = '#1D9E75'
+const CHARCOAL = '#2C2C2A'
+const MUTED_GREY = '#8F8D88'
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Unit = 'in' | 'cm'
@@ -75,8 +80,8 @@ const STEP_TITLES = [
 ]
 
 const STEP_SUBTITLES = [
-  'Add as many measurements as you can — the more detail, the better your tailor can quote and cut.',
-  'This helps your tailor understand which cuts and shapes to use — this is a fit question, not a personal one.',
+  'Add as many measurements as you can. The more detail you share, the better your tailor can quote and cut.',
+  'This helps your tailor understand which cuts and shapes to use. This is a fit question, not a personal one.',
   'Pick all that apply. This helps your tailor visualise how a garment will fall before they start cutting.',
   'Where do clothes usually fit you badly off the rack? Select all that apply.',
 ]
@@ -458,12 +463,12 @@ async function loadMeasurements() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={back}>
-            <Text style={styles.backText}>← Back</Text>
+          <TouchableOpacity onPress={back} style={styles.backButton}>
+            <Text style={styles.backText}>Back</Text>
           </TouchableOpacity>
           <Text style={styles.stepIndicator}>Step {step + 1} of 4</Text>
           <View style={styles.headerSpacer} />
@@ -476,7 +481,7 @@ async function loadMeasurements() {
           ))}
         </View>
 
-        <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
+        <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
           <View style={styles.content}>
             {showGuide && (
               <View style={styles.guideCard}>
@@ -574,7 +579,7 @@ async function loadMeasurements() {
                 {/* Custom measurements */}
                 <View style={styles.customSection}>
                   <Text style={styles.fieldLabel}>Additional measurements</Text>
-                  <Text style={styles.customHint}>Add any measurement your tailor may need — ankle, wrist, rise, etc.</Text>
+                  <Text style={styles.customHint}>Add any measurement your tailor may need, like ankle, wrist, rise, or more.</Text>
 
                   {customMeasurements.map((m) => (
                     <View key={m.id} style={styles.customRow}>
@@ -683,7 +688,7 @@ async function loadMeasurements() {
 
                 <Input
                   label="Anything else your tailor needs to know?"
-                  placeholder='e.g. "My family has naturally large thighs — every tailor needs to know this"'
+                  placeholder='e.g. "My family has naturally large thighs, so tailors usually need to account for that."'
                   value={bodyNote}
                   onChangeText={(v) => {
                     setBodyNote(v)
@@ -706,6 +711,7 @@ async function loadMeasurements() {
         <View style={styles.cta}>
           <Button
             label={step < 3 ? 'Continue' : 'Save measurements'}
+            size="md"
             onPress={next}
             loading={saving}
             disabled={saving}
@@ -719,43 +725,47 @@ async function loadMeasurements() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.bone },
-  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
+  safe: { flex: 1, backgroundColor: HOME_BG },
+  stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.lg },
   stateCard: {
     width: '100%',
     maxWidth: 440,
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: Spacing.lg,
+    gap: Spacing.md,
     alignItems: 'center',
-    ...Shadow.lg,
+    ...Shadow.sm,
   },
   stateEyebrow: {
-    fontSize: FontSize.xs,
+    fontSize: 11,
     fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
+    color: PRIMARY_GREEN,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
-  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
+  stateTitle: { fontSize: 16, fontWeight: FontWeight.bold, color: CHARCOAL, textAlign: 'center' },
+  stateHint: { fontSize: 13, color: Colors.inkLight, textAlign: 'center', lineHeight: 18 },
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg, paddingVertical: 8,
+    minHeight: 44,
   },
-  backText: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
-  stepIndicator: { fontSize: FontSize.sm, color: Colors.midGrey },
-  headerSpacer: { width: 60 },
+  backButton: { minWidth: 44, minHeight: 44, justifyContent: 'center' },
+  backText: { color: PRIMARY_GREEN, fontSize: 14, fontWeight: FontWeight.medium },
+  stepIndicator: { fontSize: 13, color: MUTED_GREY },
+  headerSpacer: { width: 44, height: 44 },
 
-  progressRow: { flexDirection: 'row', gap: 4, paddingHorizontal: Spacing.xl, marginBottom: Spacing.sm },
+  progressRow: { flexDirection: 'row', gap: 4, paddingHorizontal: Spacing.lg, marginBottom: 6 },
   progressSegment: { flex: 1, height: 3, borderRadius: 2, backgroundColor: Colors.lightGrey },
-  progressSegmentDone: { backgroundColor: Colors.needleGreen },
+  progressSegmentDone: { backgroundColor: PRIMARY_GREEN },
   errorRetry: {
-    backgroundColor: Colors.needleGreen,
+    backgroundColor: PRIMARY_GREEN,
     borderRadius: Radius.full,
-    paddingVertical: Spacing.md,
+    paddingVertical: 10,
     paddingHorizontal: Spacing.xxxl,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   errorRetryText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   errorSecondary: {
@@ -763,122 +773,128 @@ const styles = StyleSheet.create({
     borderColor: Colors.lightGrey,
     borderRadius: Radius.full,
     borderWidth: 1,
-    paddingVertical: Spacing.md,
+    paddingVertical: 10,
     paddingHorizontal: Spacing.xxxl,
+    minHeight: 44,
+    justifyContent: 'center',
   },
-  errorSecondaryText: { color: Colors.ink, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  errorSecondaryText: { color: CHARCOAL, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   errorLink: {
-    marginTop: Spacing.sm,
-    color: Colors.needleGreen,
-    fontSize: FontSize.sm,
+    marginTop: 4,
+    color: PRIMARY_GREEN,
+    fontSize: 13,
     fontWeight: FontWeight.medium,
   },
 
   scroll: { flex: 1 },
-  content: { padding: Spacing.xl, gap: Spacing.xl },
+  scrollContent: { paddingBottom: 88 },
+  content: { paddingHorizontal: Spacing.lg, gap: Spacing.md, paddingBottom: Spacing.md },
   guideCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
   guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  guideClose: { padding: 2 },
+  guideClose: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
   guideCloseText: { fontSize: 18, lineHeight: 18, color: Colors.midGrey },
   guideEyebrow: {
-    fontSize: FontSize.xs,
+    fontSize: 11,
     fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
+    color: PRIMARY_GREEN,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
   },
   guideCopy: {
-    fontSize: FontSize.sm,
+    fontSize: 13,
     color: Colors.inkLight,
-    lineHeight: 21,
+    lineHeight: 18,
   },
 
-  stepHeading: { gap: Spacing.sm },
-  stepTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
-  stepSub: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  stepHeading: { gap: 6 },
+  stepTitle: { fontSize: 22, fontWeight: FontWeight.bold, color: CHARCOAL },
+  stepSub: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
 
   // Layer 1 — measurements
-  fields: { gap: Spacing.xl },
+  fields: { gap: Spacing.md },
   unitToggle: {
     flexDirection: 'row', backgroundColor: Colors.boneDeep,
     borderRadius: Radius.full, padding: 3, alignSelf: 'flex-start',
   },
-  unitBtn: { paddingVertical: Spacing.sm, paddingHorizontal: Spacing.xl, borderRadius: Radius.full },
+  unitBtn: { minHeight: 40, paddingVertical: 8, paddingHorizontal: 18, borderRadius: Radius.full, justifyContent: 'center' },
   unitBtnActive: { backgroundColor: Colors.white, ...Shadow.sm },
-  unitLabel: { fontSize: FontSize.sm, color: Colors.midGrey, fontWeight: FontWeight.medium },
-  unitLabelActive: { color: Colors.ink },
+  unitLabel: { fontSize: 13, color: MUTED_GREY, fontWeight: FontWeight.medium },
+  unitLabelActive: { color: CHARCOAL },
 
-  measureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.md },
-  measureField: { width: '47%' },
+  measureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'space-between' },
+  measureField: { width: '48%' },
   measureInput: { marginBottom: 0 },
-  fieldLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: Spacing.sm },
+  fieldLabel: { fontSize: 13, fontWeight: FontWeight.semibold, color: CHARCOAL, marginBottom: 6 },
 
-  fitStyleSection: { gap: Spacing.sm },
-  fitStyleRow: { flexDirection: 'row', gap: Spacing.sm },
+  fitStyleSection: { gap: 6 },
+  fitStyleRow: { flexDirection: 'row', gap: 8 },
   fitStyleBtn: {
-    flex: 1, paddingVertical: Spacing.md, borderRadius: Radius.md,
+    flex: 1, minHeight: 44, paddingVertical: 10, borderRadius: Radius.md,
     borderWidth: 1.5, borderColor: Colors.lightGrey,
     backgroundColor: Colors.white, alignItems: 'center',
+    justifyContent: 'center',
   },
-  fitStyleBtnActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
-  fitStyleLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.inkLight },
-  fitStyleLabelActive: { color: Colors.needleGreen },
+  fitStyleBtnActive: { borderColor: PRIMARY_GREEN, backgroundColor: Colors.needleGreenLight },
+  fitStyleLabel: { fontSize: 13, fontWeight: FontWeight.medium, color: Colors.inkLight },
+  fitStyleLabelActive: { color: PRIMARY_GREEN },
 
   // Custom measurements
-  customSection: { gap: Spacing.sm },
-  customHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18, marginTop: -4 },
-  customRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  customSection: { gap: 8 },
+  customHint: { fontSize: 12, color: MUTED_GREY, lineHeight: 16, marginTop: -2 },
+  customRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   customNameField: { flex: 2 },
   customValueField: { flex: 1 },
   customRemoveBtn: {
-    width: 32, height: 32, borderRadius: Radius.full,
+    width: 36, height: 36, borderRadius: Radius.full,
     backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center',
     marginTop: 2,
   },
-  customRemoveText: { fontSize: FontSize.sm, color: Colors.midGrey },
+  customRemoveText: { fontSize: 13, color: MUTED_GREY },
   addCustomBtn: {
-    paddingVertical: Spacing.md, paddingHorizontal: Spacing.lg,
+    minHeight: 44,
+    paddingVertical: 10, paddingHorizontal: Spacing.lg,
     borderRadius: Radius.md, borderWidth: 1.5, borderColor: Colors.needleGreen,
     borderStyle: 'dashed', alignItems: 'center', backgroundColor: Colors.white,
+    justifyContent: 'center',
   },
-  addCustomText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  addCustomText: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
 
   // Layers 2 + 3 — option cards
-  optionList: { gap: Spacing.md },
+  optionList: { gap: 8 },
   optionCard: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
-    backgroundColor: Colors.white, borderRadius: Radius.lg, padding: Spacing.lg,
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+    backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12,
     borderWidth: 1.5, borderColor: Colors.lightGrey, ...Shadow.sm,
   },
-  optionCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
+  optionCardActive: { borderColor: PRIMARY_GREEN, backgroundColor: Colors.needleGreenLight },
   optionRadio: {
     width: 20, height: 20, borderRadius: 10, marginTop: 2,
     borderWidth: 2, borderColor: Colors.lightGrey, backgroundColor: Colors.white,
   },
-  optionRadioActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreen },
+  optionRadioActive: { borderColor: PRIMARY_GREEN, backgroundColor: PRIMARY_GREEN },
   optionCheck: {
     width: 22, height: 22, borderRadius: 4, marginTop: 2,
     borderWidth: 2, borderColor: Colors.lightGrey, backgroundColor: Colors.white,
     alignItems: 'center', justifyContent: 'center',
   },
-  optionCheckActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreen },
+  optionCheckActive: { borderColor: PRIMARY_GREEN, backgroundColor: PRIMARY_GREEN },
   optionCheckMark: { color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold },
-  optionLabel: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
-  optionLabelActive: { color: Colors.needleGreen },
-  optionHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2, lineHeight: 18 },
+  optionLabel: { fontSize: 14, fontWeight: FontWeight.semibold, color: Colors.inkLight },
+  optionLabelActive: { color: PRIMARY_GREEN },
+  optionHint: { fontSize: 12, color: MUTED_GREY, marginTop: 2, lineHeight: 16 },
 
   // Layer 4 — fit flags
-  flagGrid: { gap: Spacing.sm },
+  flagGrid: { gap: 8 },
   flagCard: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
     backgroundColor: Colors.white, borderRadius: Radius.md, padding: Spacing.md,
     borderWidth: 1.5, borderColor: Colors.lightGrey,
   },
@@ -890,13 +906,16 @@ const styles = StyleSheet.create({
   },
   flagCheckActive: { borderColor: Colors.kanteRust, backgroundColor: Colors.kanteRust },
   flagCheckMark: { color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold },
-  flagLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.inkLight },
+  flagLabel: { fontSize: 13, fontWeight: FontWeight.semibold, color: Colors.inkLight },
   flagLabelActive: { color: Colors.kanteRust },
-  flagHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
+  flagHint: { fontSize: 12, color: MUTED_GREY, marginTop: 2, lineHeight: 16 },
 
   // CTA
   cta: {
-    padding: Spacing.xl, gap: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: 10,
+    paddingBottom: 8,
+    gap: Spacing.sm,
     backgroundColor: Colors.white, borderTopWidth: 1, borderTopColor: Colors.lightGrey,
   },
 })

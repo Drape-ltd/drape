@@ -4,6 +4,9 @@ import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, Radius } from '@/constants/theme'
 import { useCustomerProfile } from '@/lib/customerProfile'
 
+const PRIMARY_GREEN = '#1D9E75'
+const MUTED_GREY = '#8F8D88'
+
 function ProfileTabIcon({ color, focused }: { color: string; focused: boolean }) {
   const { avatarUrl } = useCustomerProfile()
 
@@ -11,9 +14,9 @@ function ProfileTabIcon({ color, focused }: { color: string; focused: boolean })
     return (
       <View
         style={{
-          width: 28, height: 28, borderRadius: Radius.full,
+          width: 26, height: 26, borderRadius: Radius.full,
           borderWidth: focused ? 2 : 1.5,
-          borderColor: focused ? Colors.needleGreen : color,
+          borderColor: focused ? PRIMARY_GREEN : color,
           overflow: 'hidden',
         }}
       >
@@ -26,7 +29,7 @@ function ProfileTabIcon({ color, focused }: { color: string; focused: boolean })
     )
   }
 
-  return <Feather name="user" size={22} color={color} />
+  return <Feather name="user" size={25} color={color} />
 }
 
 export default function CustomerTabLayout() {
@@ -36,18 +39,27 @@ export default function CustomerTabLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: Colors.needleGreen,
-        tabBarInactiveTintColor: Colors.midGrey,
+        sceneStyle: {
+          backgroundColor: '#F9F7F3',
+        },
+        tabBarActiveTintColor: PRIMARY_GREEN,
+        tabBarInactiveTintColor: MUTED_GREY,
         tabBarStyle: {
           backgroundColor: Colors.white,
           borderTopColor: Colors.lightGrey,
           borderTopWidth: 1,
-          paddingBottom: 8,
-          height: 64,
+          paddingTop: 4,
+        },
+        tabBarItemStyle: {
+          minHeight: 49,
+          paddingVertical: 2,
+        },
+        tabBarIconStyle: {
+          marginTop: 1,
         },
         tabBarLabelStyle: {
-          fontSize: FontSize.xs,
-          marginTop: -2,
+          fontSize: 11,
+          marginTop: -1,
         },
       }}
     >
@@ -55,7 +67,7 @@ export default function CustomerTabLayout() {
         name="index"
         options={{
           title: 'Explore',
-          tabBarIcon: ({ color }) => <Feather name="search" size={22} color={color} />,
+          tabBarIcon: ({ color }) => <Feather name="search" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => (
             <Pressable
@@ -70,7 +82,7 @@ export default function CustomerTabLayout() {
         name="saved"
         options={{
           title: 'Wishlists',
-          tabBarIcon: ({ color }) => <Feather name="heart" size={22} color={color} />,
+          tabBarIcon: ({ color }) => <Feather name="heart" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => (
             <Pressable
@@ -85,7 +97,7 @@ export default function CustomerTabLayout() {
         name="orders"
         options={{
           title: 'Orders',
-          tabBarIcon: ({ color }) => <Feather name="package" size={22} color={color} />,
+          tabBarIcon: ({ color }) => <Feather name="package" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => (
             <Pressable
@@ -100,7 +112,7 @@ export default function CustomerTabLayout() {
         name="messages"
         options={{
           title: 'Messages',
-          tabBarIcon: ({ color }) => <Feather name="message-circle" size={22} color={color} />,
+          tabBarIcon: ({ color }) => <Feather name="message-circle" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => (
             <Pressable

@@ -1,43 +1,24 @@
-import { useEffect, useState } from 'react'
-import { Tabs, useSegments } from 'expo-router'
+import { Tabs, useRouter, useSegments } from 'expo-router'
 import { Image, Pressable, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { MaterialIcons } from '@expo/vector-icons'
 import { Colors, FontSize, Radius } from '@/constants/theme'
 import { useTailorProfile } from '@/lib/tailorProfile'
 import { useAuth } from '@/lib/auth'
-import { supabase } from '@/lib/supabase'
+import { useRefreshOnFocus, useTailorOrders } from '@/lib/queries'
 
-function usePendingQuoteCount() {
+const PRIMARY_GREEN = '#1D9E75'
+const MUTED_GREY = '#8F8D88'
+
+function useActiveOrderCount() {
   const { user } = useAuth()
-  const [count, setCount] = useState(0)
+  const { data: activeOrders = [], refetch } = useTailorOrders(user?.id, 'active')
 
-  useEffect(() => {
-    if (!user?.id) return
+  useRefreshOnFocus(() => {
+    void refetch()
+  }, 15_000)
 
-    function fetch() {
-      supabase
-        .from('orders')
-        .select('id', { count: 'exact', head: true })
-        .eq('tailor_id', user!.id)
-        .eq('stage', 'PENDING_QUOTE')
-        .then(({ count: c }) => setCount(c ?? 0))
-    }
-
-    fetch()
-
-    const channel = supabase
-      .channel(`pending-quotes-${user.id}`)
-      .on('postgres_changes', {
-        event: '*', schema: 'public', table: 'orders',
-        filter: `tailor_id=eq.${user.id}`,
-      }, fetch)
-      .subscribe()
-
-    return () => { supabase.removeChannel(channel) }
-  }, [user?.id])
-
-  return count
+  return activeOrders.length
 }
 
 function ProfileTabIcon({ color, focused }: { color: string; focused: boolean }) {
@@ -47,9 +28,9 @@ function ProfileTabIcon({ color, focused }: { color: string; focused: boolean })
     return (
       <View
         style={{
-          width: 28, height: 28, borderRadius: Radius.full,
+          width: 26, height: 26, borderRadius: Radius.full,
           borderWidth: focused ? 2 : 1.5,
-          borderColor: focused ? Colors.needleGreen : color,
+          borderColor: focused ? PRIMARY_GREEN : color,
           overflow: 'hidden',
         }}
       >
@@ -62,11 +43,12 @@ function ProfileTabIcon({ color, focused }: { color: string; focused: boolean })
     )
   }
 
-  return <Feather name="user" size={22} color={color} />
+  return <Feather name="user" size={25} color={color} />
 }
 
 export default function TailorTabLayout() {
-  const pendingCount = usePendingQuoteCount()
+  const router = useRouter()
+  const pendingCount = useActiveOrderCount()
   const segments = useSegments()
   const hideTabBar = segments[0] === '(tailor)' && segments.length > 2
 
@@ -74,22 +56,26 @@ export default function TailorTabLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: Colors.needleGreen,
-        tabBarInactiveTintColor: Colors.midGrey,
+        tabBarActiveTintColor: PRIMARY_GREEN,
+        tabBarInactiveTintColor: MUTED_GREY,
         tabBarStyle: {
           backgroundColor: Colors.white,
           borderTopColor: Colors.lightGrey,
           borderTopWidth: 1,
           paddingHorizontal: 10,
-          paddingBottom: 8,
-          height: 64,
+          paddingTop: 4,
           display: hideTabBar ? 'none' : 'flex',
         },
         tabBarItemStyle: {
+          minHeight: 49,
           paddingHorizontal: 2,
+          paddingVertical: 2,
+        },
+        tabBarIconStyle: {
+          marginTop: 1,
         },
         tabBarLabelStyle: {
-          fontSize: FontSize.xs,
+          fontSize: 11,
           marginTop: -2,
         },
       }}
@@ -98,7 +84,7 @@ export default function TailorTabLayout() {
         name="index"
         options={{
           title: 'Dashboard',
-          tabBarIcon: ({ color }) => <Feather name="bar-chart-2" size={22} color={color} />,
+          tabBarIcon: ({ color }) => <Feather name="bar-chart-2" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => <Pressable {...props} testID="tab-dashboard" />,
         }}
@@ -107,27 +93,42 @@ export default function TailorTabLayout() {
         name="clients"
         options={{
           title: 'Clients',
-          tabBarIcon: ({ color }) => <Feather name="users" size={22} color={color} />,
+          popToTopOnBlur: true,
+          tabBarIcon: ({ color }) => <Feather name="users" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tabBarButton: (props: any) => <Pressable {...props} testID="tab-clients" />,
+          tabBarButton: (props: any) => (
+            <Pressable
+              {...props}
+              testID="tab-clients"
+              onPress={() => router.replace('/(tailor)/clients')}
+              onLongPress={props.onLongPress}
+            />
+          ),
         }}
       />
       <Tabs.Screen
         name="orders"
         options={{
           title: 'Orders',
-          tabBarIcon: ({ color }) => <Feather name="package" size={22} color={color} />,
+          tabBarIcon: ({ color }) => <Feather name="package" size={25} color={color} />,
           tabBarBadge: pendingCount > 0 ? pendingCount : undefined,
           tabBarBadgeStyle: { backgroundColor: Colors.kanteRust, fontSize: 10, minWidth: 16, height: 16 },
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tabBarButton: (props: any) => <Pressable {...props} testID="tab-tailor-orders" />,
+          tabBarButton: (props: any) => (
+            <Pressable
+              {...props}
+              testID="tab-tailor-orders"
+              onPress={() => router.replace('/(tailor)/orders')}
+              onLongPress={props.onLongPress}
+            />
+          ),
         }}
       />
       <Tabs.Screen
         name="shop"
         options={{
           title: 'Shop',
-          tabBarIcon: ({ color }) => <MaterialIcons name="shopping-cart" size={22} color={color} />,
+          tabBarIcon: ({ color }) => <MaterialIcons name="shopping-cart" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => <Pressable {...props} testID="tab-shop" />,
         }}
