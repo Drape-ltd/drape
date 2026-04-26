@@ -83,7 +83,6 @@ function isMeasurementScansUnavailable(error: { code?: string | null; message?: 
     message.includes('schema cache') ||
     message.includes('does not exist')
 }
-
 export default function GuidedFitScreen() {
   const router = useRouter()
   const navigation = useNavigation()

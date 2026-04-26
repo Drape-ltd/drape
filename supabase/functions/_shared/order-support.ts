@@ -136,7 +136,6 @@ export type DeliveryReviewMeta = {
   requestedFromStage?: string | null
   resolvedAt?: string | null
 }
-
 export type FitProfileMeta = {
   measurementScanId?: string | null
   captureMethod?: MeasurementScanCaptureMethod | null
