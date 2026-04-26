@@ -96,7 +96,7 @@ export function deriveTailorAccessGuidance(input: TailorReadinessInput | null | 
       body: 'This is an operational hold. Identity checks look good, but Drape should not route paid work to a seller whose payout path is not actually ready.',
       reasonCategory: 'Payout readiness',
       blockedCapabilities,
-      nextStep: 'Review payout readiness, connect the missing payout path, and use the payouts inbox if the provider or bank side still looks blocked.',
+      nextStep: 'Open payout setup, submit the payout path Drape should link, and use the payouts inbox only if the in-app path still gets stuck.',
       supportEmail: CONTACTS.payouts,
       supportLabel: 'Payouts',
       supportSubject: 'Drape payout readiness question',

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, KeyboardAvoidingView, Platform,
 } from 'react-native'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
@@ -10,6 +10,7 @@ import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorP
 import { Button, Input } from '@/components/ui'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { goBackOrReturnTo } from '@/lib/navigation'
 
 const REVIEW_TAGS = [
   'Clear communication',
@@ -30,6 +31,7 @@ function reviewWindowClosed(stageUpdatedAt: string | null) {
 export default function TailorCustomerReviewScreen() {
   const { orderId, returnTo } = useLocalSearchParams<{ orderId: string; returnTo?: string }>()
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const [customerName, setCustomerName] = useState('Customer')
   const [customerId, setCustomerId] = useState<string | null>(null)
@@ -43,8 +45,7 @@ export default function TailorCustomerReviewScreen() {
   const [submitError, setSubmitError] = useState('')
 
   function goBack() {
-    if (returnTo) router.replace(returnTo as any)
-    else router.replace('/(tailor)/clients')
+    goBackOrReturnTo(router, navigation, returnTo, '/(tailor)/clients')
   }
 
   function readPayloadString(payload: Record<string, unknown> | null, key: string) {

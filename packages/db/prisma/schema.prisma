@@ -78,6 +78,7 @@ enum FabricSource {
 
 enum DeliveryMethod {
   SHIPPING
+  LOCAL_DELIVERY
   LOCAL_COLLECTION
 
   @@map("delivery_method")
@@ -102,6 +103,8 @@ enum OrderStage {
   CUTTING
   SEWING
   FINISHING
+  READY_FOR_DRAPE_DISPATCH
+  OUT_FOR_DELIVERY
   SHIPPED
   READY_FOR_COLLECTION
   DELIVERED
@@ -123,6 +126,7 @@ enum Currency {
   NGN
   GHS
   KES
+  CAD
 
   @@map("currency")
 }
@@ -257,6 +261,57 @@ model TailorProfile {
   @@map("tailor_profiles")
 }
 
+model TailorPickupDetail {
+  userId             String    @id @map("user_id")
+  pickupAddress      String?   @map("pickup_address")
+  pickupInstructions String?   @map("pickup_instructions")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  @@map("tailor_pickup_details")
+}
+
+model OrderHandoffIssue {
+  id              String   @id @default(uuid())
+  orderId         String   @map("order_id")
+  reporterId      String   @map("reporter_id")
+  reporterRole    String   @map("reporter_role")
+  issueType       String   @map("issue_type")
+  description     String?
+  stageAtReport   String   @map("stage_at_report")
+  deliveryMethod  String?  @map("delivery_method")
+  status          String   @default("OPEN")
+  escalatedAt     DateTime? @map("escalated_at")
+  resolvedAt      DateTime? @map("resolved_at")
+  resolutionNote  String?  @map("resolution_note")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([orderId, createdAt])
+  @@index([status, createdAt])
+  @@map("order_handoff_issues")
+}
+
+model TailorPayoutSetupRequest {
+  id                String    @id @default(uuid())
+  userId            String    @map("user_id")
+  provider          String
+  currency          String
+  country           String
+  accountHolderName String    @map("account_holder_name")
+  businessName      String?   @map("business_name")
+  payoutDetails     String    @map("payout_details")
+  note              String?
+  status            String    @default("PENDING")
+  reviewedAt        DateTime? @map("reviewed_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@map("tailor_payout_setup_requests")
+}
+
 // ─────────────────────────────────────────────
 // PORTFOLIO PHOTOS (admin / CDN record)
 // ─────────────────────────────────────────────
@@ -292,6 +347,9 @@ model SellerItem {
   isReadyMade       Boolean  @default(true) @map("is_ready_made")
   isLive            Boolean  @default(false) @map("is_live")
   stockStatus       String   @default("IN_STOCK") @map("stock_status")
+  inventoryQuantity Int      @default(0) @map("inventory_quantity")
+  sizeInventory     Json     @default("{}") @map("size_inventory")
+  sizeGuide         Json     @default("{}") @map("size_guide")
   pickupAvailable   Boolean  @default(false) @map("pickup_available")
   deliveryAvailable Boolean  @default(false) @map("delivery_available")
   shippingAvailable Boolean  @default(false) @map("shipping_available")
@@ -401,8 +459,17 @@ model Order {
   deadline                     DateTime?
   fabricSource                 FabricSource?   @map("fabric_source")
   deliveryMethod               DeliveryMethod? @map("delivery_method")
+  deliveryAddress              String?         @map("delivery_address")
+  recipientName                String?         @map("recipient_name")
+  recipientPhone               String?         @map("recipient_phone")
+  fulfillmentProvider          String?         @map("fulfillment_provider")
+  fulfillmentReference         String?         @map("fulfillment_reference")
+  fulfillmentContactName       String?         @map("fulfillment_contact_name")
+  fulfillmentContactPhone      String?         @map("fulfillment_contact_phone")
   specialNote                  String?         @map("special_note")
   fabricTracking               String?         @map("fabric_tracking")
+  trackingNumber               String?         @map("tracking_number")
+  carrier                      String?
   referencePhotos              String[]        @default([]) @map("reference_photos")
   customerMeasurementsSnapshot Json?           @map("customer_measurements_snapshot")
   fitNote                      String?         @map("fit_note")
@@ -417,6 +484,12 @@ model Order {
   paymentProvider              PaymentProvider? @map("payment_provider")
   paymentIntentId              String?         @map("payment_intent_id")
   paymentCheckoutUrl           String?         @map("payment_checkout_url")
+  fulfillmentPaymentRequestedAt DateTime?      @map("fulfillment_payment_requested_at")
+  fulfillmentPaymentPaidAt      DateTime?      @map("fulfillment_payment_paid_at")
+  fulfillmentPaymentProvider    PaymentProvider? @map("fulfillment_payment_provider")
+  fulfillmentPaymentIntentId    String?        @map("fulfillment_payment_intent_id")
+  fulfillmentPaymentCheckoutUrl String?        @map("fulfillment_payment_checkout_url")
+  videoCallUrl                 String?         @map("video_call_url")
   escrowReleased               Boolean         @default(false) @map("escrow_released")
   escrowReleasedAt             DateTime?       @map("escrow_released_at")
   autoReleaseAt                DateTime?       @map("auto_release_at")

@@ -15,6 +15,7 @@ export const STAGE_COLORS: Record<string, { bg: string; text: string }> = {
   CUTTING:              { bg: '#FDE8C8', text: '#7C4A03' },
   SEWING:               { bg: '#FDE8C8', text: '#7C4A03' },
   FINISHING:            { bg: '#FDE8C8', text: '#7C4A03' },
+  OUT_FOR_DELIVERY:     { bg: '#C7EFCF', text: '#1A5C2A' },
   SHIPPED:              { bg: '#C7EFCF', text: '#1A5C2A' },
   READY_FOR_COLLECTION: { bg: '#C7EFCF', text: '#1A5C2A' },
   DELIVERED:            { bg: '#C7EFCF', text: '#1A5C2A' },

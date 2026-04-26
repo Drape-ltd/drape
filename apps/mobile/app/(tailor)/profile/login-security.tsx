@@ -20,6 +20,7 @@ import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { signInWithPasswordResilient, useAuth } from '@/lib/auth'
 import { requestAccountDeletion } from '@/lib/account-deletion'
+import { goBackOrFallback } from '@/lib/navigation'
 import {
   isBiometricAvailable, getBiometricLabel,
   isBiometricEnabled, setBiometricEnabled, authenticate,
@@ -196,8 +197,7 @@ export default function LoginSecurityScreen() {
   }
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(tailor)/profile/account-settings')
+    goBackOrFallback(router, navigation, '/(tailor)/profile/account-settings')
   }
 
   return (

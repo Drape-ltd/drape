@@ -3,16 +3,18 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Alert, ActivityIndicator, Linking, TextInput,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
 import { requestDataAccess } from '@/lib/data-access'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { CONTACTS } from '@drape/shared'
+import { goBackOrFallback } from '@/lib/navigation'
 
 export default function DataRequestScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const [note, setNote] = useState('')
   const [submitted, setSubmitted] = useState(false)
@@ -74,7 +76,7 @@ export default function DataRequestScreen() {
   }
 
   function goBack() {
-    router.replace('/(customer)/profile/privacy')
+    goBackOrFallback(router, navigation, '/(customer)/profile/privacy')
   }
 
   if (submitted) {

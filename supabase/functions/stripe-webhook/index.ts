@@ -3,6 +3,14 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getStripeWebhookSecret, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
+import { sendOrderConfirmationEmails } from '../_shared/order-email.ts'
+import { notifyTailorAboutReadyMadeStockChange } from '../_shared/ready-made-stock-alert.ts'
+import {
+  fulfillmentPaymentConfirmedStageNote,
+  paymentConfirmedStageNote,
+  tailorFulfillmentPaymentConfirmedNotification,
+  tailorPaymentConfirmedNotification,
+} from '../_shared/payment-copy.ts'
 import { verifyStripeWebhookSignature, type StripePaymentIntent } from '../_shared/stripe.ts'
 
 const FN = 'stripe-webhook'
@@ -26,26 +34,21 @@ type OrderRow = {
   order_kind?: string | null
   tailor_id?: string | null
   customer_id?: string | null
+  seller_item_id?: string | null
+  item_title?: string | null
+  item_size?: string | null
+  garment_type?: string | null
+  quoted_amount?: number | null
+  quoted_currency?: string | null
+  currency?: string | null
+  fulfillment_fee?: number | null
   payment_intent_id?: string | null
+  delivery_method?: string | null
+  fulfillment_payment_paid_at?: string | null
+  fulfillment_payment_intent_id?: string | null
 }
 
-function paymentConfirmedNote(orderKind?: string | null) {
-  return orderKind === 'READY_MADE'
-    ? 'Stripe confirmed payment for this ready-made order.'
-    : 'Stripe confirmed payment for the accepted quote.'
-}
-
-function paymentConfirmedNotification(orderKind?: string | null) {
-  return orderKind === 'READY_MADE'
-    ? {
-        title: 'New paid order ✅',
-        body: 'A ready-made order has been paid and is ready for fulfillment.',
-      }
-    : {
-        title: 'Quote paid ✅',
-        body: 'The customer completed payment for your quote.',
-      }
-}
+type PaymentPhase = 'INITIAL_ORDER' | 'FULFILLMENT'
 
 async function findOrderForPaymentIntent(supabase: any, paymentIntent: StripePaymentIntent) {
   const metadataOrderId =
@@ -56,7 +59,7 @@ async function findOrderForPaymentIntent(supabase: any, paymentIntent: StripePay
   if (metadataOrderId) {
     const { data, error } = await supabase
       .from('orders')
-      .select('id, reference, stage, order_kind, tailor_id, customer_id, payment_intent_id')
+      .select('id, reference, stage, order_kind, tailor_id, customer_id, seller_item_id, item_title, item_size, garment_type, quoted_amount, quoted_currency, currency, fulfillment_fee, payment_intent_id, delivery_method, fulfillment_payment_paid_at, fulfillment_payment_intent_id')
       .eq('id', metadataOrderId)
       .maybeSingle()
 
@@ -69,7 +72,7 @@ async function findOrderForPaymentIntent(supabase: any, paymentIntent: StripePay
 
   const { data, error } = await supabase
     .from('orders')
-    .select('id, reference, stage, order_kind, tailor_id, customer_id, payment_intent_id')
+    .select('id, reference, stage, order_kind, tailor_id, customer_id, seller_item_id, item_title, item_size, garment_type, quoted_amount, quoted_currency, currency, fulfillment_fee, payment_intent_id, delivery_method, fulfillment_payment_paid_at, fulfillment_payment_intent_id')
     .eq('payment_intent_id', paymentIntent.id)
     .maybeSingle()
 
@@ -77,13 +80,79 @@ async function findOrderForPaymentIntent(supabase: any, paymentIntent: StripePay
     throw new Error(error.message)
   }
 
-  return data as OrderRow | null
+  if (data?.id) return data as OrderRow
+
+  const { data: fulfillmentData, error: fulfillmentError } = await supabase
+    .from('orders')
+    .select('id, reference, stage, order_kind, tailor_id, customer_id, seller_item_id, item_title, item_size, garment_type, quoted_amount, quoted_currency, currency, fulfillment_fee, payment_intent_id, delivery_method, fulfillment_payment_paid_at, fulfillment_payment_intent_id')
+    .eq('fulfillment_payment_intent_id', paymentIntent.id)
+    .maybeSingle()
+
+  if (fulfillmentError) {
+    throw new Error(fulfillmentError.message)
+  }
+
+  return fulfillmentData as OrderRow | null
 }
 
-async function markOrderConfirmed(supabase: any, order: OrderRow, paymentIntent: StripePaymentIntent) {
-  if (order.stage === 'CONFIRMED') return false
+function paymentPhaseForIntent(order: OrderRow, paymentIntent: StripePaymentIntent): PaymentPhase {
+  const metadataPhase =
+    typeof paymentIntent.metadata?.payment_phase === 'string' && paymentIntent.metadata.payment_phase === 'FULFILLMENT'
+      ? 'FULFILLMENT'
+      : typeof paymentIntent.metadata?.payment_phase === 'string' && paymentIntent.metadata.payment_phase === 'INITIAL_ORDER'
+        ? 'INITIAL_ORDER'
+        : null
 
-  const { error: updateError } = await supabase
+  if (metadataPhase) return metadataPhase
+  if (order.fulfillment_payment_intent_id === paymentIntent.id) return 'FULFILLMENT'
+  return 'INITIAL_ORDER'
+}
+
+async function markOrderConfirmed(supabase: any, order: OrderRow, paymentIntent: StripePaymentIntent, phase: PaymentPhase) {
+  if (phase === 'INITIAL_ORDER' && order.stage === 'CONFIRMED') return false
+  if (phase === 'FULFILLMENT' && order.fulfillment_payment_paid_at) return false
+
+  if (phase === 'FULFILLMENT') {
+    const { data: updatedOrder, error: updateError } = await supabase
+      .from('orders')
+      .update({
+        fulfillment_payment_provider: 'STRIPE',
+        fulfillment_payment_intent_id: paymentIntent.id,
+        fulfillment_payment_checkout_url: null,
+        fulfillment_payment_paid_at: new Date().toISOString(),
+      })
+      .eq('id', order.id)
+      .is('fulfillment_payment_paid_at', null)
+      .select('id')
+      .maybeSingle()
+
+    if (updateError) {
+      throw new Error(updateError.message)
+    }
+
+    if (!updatedOrder?.id) return false
+
+    await supabase.from('order_stage_updates').insert({
+      order_id: order.id,
+      stage: order.stage,
+      note: fulfillmentPaymentConfirmedStageNote(order.delivery_method),
+    })
+
+    if (order.tailor_id) {
+      EdgeRuntime.waitUntil(
+        sendPushToUser(supabase, order.tailor_id.toString(), {
+          ...tailorFulfillmentPaymentConfirmedNotification(order.delivery_method),
+          data: { orderId: order.id },
+        }),
+      )
+    }
+
+    EdgeRuntime.waitUntil(sendOrderConfirmationEmails(supabase, order, phase))
+
+    return true
+  }
+
+  const { data: updatedOrder, error: updateError } = await supabase
     .from('orders')
     .update({
       stage: 'CONFIRMED',
@@ -93,31 +162,51 @@ async function markOrderConfirmed(supabase: any, order: OrderRow, paymentIntent:
       payment_checkout_url: null,
     })
     .eq('id', order.id)
+    .eq('stage', order.stage)
+    .select('id')
+    .maybeSingle()
 
   if (updateError) {
     throw new Error(updateError.message)
   }
 
+  if (!updatedOrder?.id) return false
+
   await supabase.from('order_stage_updates').insert({
     order_id: order.id,
     stage: 'CONFIRMED',
-    note: paymentConfirmedNote(order.order_kind),
+    note: paymentConfirmedStageNote(order.order_kind),
   })
 
   if (order.tailor_id) {
     EdgeRuntime.waitUntil(
       sendPushToUser(supabase, order.tailor_id.toString(), {
-        ...paymentConfirmedNotification(order.order_kind),
+        ...tailorPaymentConfirmedNotification(order.order_kind),
         data: { orderId: order.id },
+      }),
+    )
+    EdgeRuntime.waitUntil(
+      notifyTailorAboutReadyMadeStockChange(supabase, {
+        orderKind: order.order_kind,
+        sellerItemId: order.seller_item_id,
+        tailorId: order.tailor_id?.toString() ?? null,
+        itemTitle: order.item_title,
+        itemSize: order.item_size,
       }),
     )
   }
 
+  EdgeRuntime.waitUntil(sendOrderConfirmationEmails(supabase, order, phase))
+
   return true
 }
 
-function isPayableStage(stage: string) {
+function isInitialPaymentStage(stage: string) {
   return ['QUOTE_SENT', 'PAYMENT_PENDING', 'CONFIRMED'].includes(stage)
+}
+
+function isFulfillmentPaymentStage(order: OrderRow) {
+  return order.stage === 'FINISHING' || !!order.fulfillment_payment_paid_at
 }
 
 Deno.serve(async (req) => {
@@ -184,17 +273,25 @@ Deno.serve(async (req) => {
       })
     }
 
+    const phase = paymentPhaseForIntent(order, paymentIntent)
+
     if (event.type === 'payment_intent.succeeded') {
-      if (!isPayableStage(order.stage)) {
+      if (phase === 'INITIAL_ORDER' && !isInitialPaymentStage(order.stage)) {
         return new Response(JSON.stringify({ ok: true, ignored: true, reason: 'stage_not_payable' }), {
           headers: { ...cors, 'Content-Type': 'application/json' },
         })
       }
 
-      const changed = await markOrderConfirmed(supabase, order, paymentIntent)
+      if (phase === 'FULFILLMENT' && !isFulfillmentPaymentStage(order)) {
+        return new Response(JSON.stringify({ ok: true, ignored: true, reason: 'stage_not_payable' }), {
+          headers: { ...cors, 'Content-Type': 'application/json' },
+        })
+      }
+
+      const changed = await markOrderConfirmed(supabase, order, paymentIntent, phase)
 
       await audit(supabase, {
-        event: 'payment.confirmed',
+        event: phase === 'FULFILLMENT' ? 'payment.fulfillment_confirmed' : 'payment.confirmed',
         actor_role: 'SYSTEM',
         order_id: order.id,
         payload: {
@@ -202,8 +299,9 @@ Deno.serve(async (req) => {
           stripe_event_id: event.id,
           stripe_event_type: event.type,
           payment_intent_id: paymentIntent.id,
+          payment_phase: phase,
           from_stage: order.stage,
-          to_stage: 'CONFIRMED',
+          to_stage: phase === 'FULFILLMENT' ? order.stage : 'CONFIRMED',
           changed,
         },
       })

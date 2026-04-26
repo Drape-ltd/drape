@@ -23,6 +23,10 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
+import {
+  paymentConfirmedStageNote,
+  tailorPaymentConfirmedNotification,
+} from '../_shared/payment-copy.ts'
 import { verifyPaystackTransaction } from '../_shared/paystack.ts'
 import {
   cancelStripePaymentIntent,
@@ -58,6 +62,9 @@ type OrderRow = {
   tailor_id: string | null
   garment_type: string | null
   item_title: string | null
+  seller_item_id: string | null
+  item_size: string | null
+  item_quantity: number | null
   payment_intent_id: string | null
   payment_provider: string | null
   payment_checkout_url: string | null
@@ -67,12 +74,6 @@ type OrderRow = {
 
 function isQuoteStillOpen(quoteExpiresAt: string | null) {
   return !!quoteExpiresAt && new Date(quoteExpiresAt).getTime() > Date.now()
-}
-
-function paymentConfirmedNote(orderKind: OrderRow['order_kind']) {
-  return orderKind === 'READY_MADE'
-    ? 'Background reconciliation confirmed payment for this ready-made order.'
-    : 'Background reconciliation confirmed payment for the accepted quote.'
 }
 
 function customerTimeoutNotification(order: OrderRow, nextStage: 'QUOTE_SENT' | 'EXPIRED') {
@@ -92,18 +93,6 @@ function customerTimeoutNotification(order: OrderRow, nextStage: 'QUOTE_SENT' | 
     title: 'Checkout expired',
     body: 'Your ready-made checkout timed out before payment finished. Start checkout again when you are ready.',
   }
-}
-
-function tailorPaymentConfirmedNotification(orderKind: OrderRow['order_kind']) {
-  return orderKind === 'READY_MADE'
-    ? {
-        title: 'New paid order ✅',
-        body: 'A ready-made order was confirmed during payment reconciliation.',
-      }
-    : {
-        title: 'Quote paid ✅',
-        body: 'The customer completed payment for your quote.',
-      }
 }
 
 async function markOrderConfirmed(
@@ -132,7 +121,7 @@ async function markOrderConfirmed(
   await supabase.from('order_stage_updates').insert({
     order_id: order.id,
     stage: 'CONFIRMED',
-    note: paymentConfirmedNote(order.order_kind),
+    note: paymentConfirmedStageNote(order.order_kind),
   })
 
   await audit(supabase, {
@@ -196,6 +185,31 @@ async function expireOrderPayment(supabase: any, order: OrderRow) {
     note,
   })
 
+  if (order.order_kind === 'READY_MADE' && order.seller_item_id) {
+    const releasedQuantity = Math.max(order.item_quantity ?? 1, 1)
+    const { error: releaseError } = await supabase.rpc('release_seller_item_inventory', {
+      target_item_id: order.seller_item_id,
+      released_quantity: releasedQuantity,
+      released_size: order.item_size ?? null,
+    })
+
+    if (releaseError) {
+      await audit(supabase, {
+        event: 'ready_made.stock_release_failed',
+        actor_role: 'SYSTEM',
+        order_id: order.id,
+        severity: 'error',
+        payload: {
+          function: FN,
+          seller_item_id: order.seller_item_id,
+          released_quantity: releasedQuantity,
+          next_stage: nextStage,
+          error: releaseError.message,
+        },
+      })
+    }
+  }
+
   await audit(supabase, {
     event: 'payment.expired',
     actor_role: 'SYSTEM',
@@ -248,6 +262,9 @@ Deno.serve(async (req) => {
         tailor_id,
         garment_type,
         item_title,
+        seller_item_id,
+        item_size,
+        item_quantity,
         payment_intent_id,
         payment_provider,
         payment_checkout_url,

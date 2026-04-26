@@ -13,6 +13,7 @@ import { useAuth } from '@/lib/auth'
 import { createConsultationRoom, openConsultationCallUrl } from '@/lib/consultation'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { MessageThread } from '@/components/ui/MessageThread'
+import { goBackOrReturnTo } from '@/lib/navigation'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { TERMINAL_STAGES, type OrderStage } from '@drape/shared/order-machine'
 
@@ -40,9 +41,7 @@ export default function TailorMessagesScreen() {
   const [loadingConversationAccess, setLoadingConversationAccess] = useState(false)
 
   function goBack() {
-    if (returnTo) router.replace(returnTo as any)
-    else if (navigation.canGoBack()) router.back()
-    else router.replace('/(tailor)/orders')
+    goBackOrReturnTo(router, navigation, returnTo, '/(tailor)/orders')
   }
 
   async function openCallUrl(url: string) {
@@ -407,13 +406,13 @@ const styles = StyleSheet.create({
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg, paddingVertical: 8,
     backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.lightGrey,
   },
-  backText: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium, width: 60 },
+  backText: { color: Colors.needleGreen, fontSize: FontSize.sm, fontWeight: FontWeight.medium, width: 56 },
   headerCenter: { alignItems: 'center' },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
-  headerName: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  headerName: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.ink },
   headerSub: { fontSize: FontSize.xs, color: Colors.midGrey },
   contextBanner: {
     backgroundColor: Colors.white,
@@ -461,25 +460,27 @@ const styles = StyleSheet.create({
   safetyCard: {
     backgroundColor: Colors.white,
     marginHorizontal: Spacing.lg,
-    marginTop: Spacing.md,
+    marginTop: Spacing.sm,
     marginBottom: Spacing.sm,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.lg,
-    borderRadius: Radius.lg,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
-    gap: Spacing.sm,
+    gap: 8,
     ...Shadow.sm,
   },
   safetyTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  safetyText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
-  safetyWarning: { fontSize: FontSize.sm, color: Colors.kanteRust, lineHeight: 20 },
+  safetyText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  safetyWarning: { fontSize: FontSize.xs, color: Colors.kanteRust, lineHeight: 18 },
   safetyBtn: {
     alignSelf: 'flex-start',
     backgroundColor: Colors.kanteRustLight,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderRadius: Radius.full,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   safetyBtnText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.kanteRust },
   safetyMeta: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
@@ -493,8 +494,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     borderRadius: 999,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minHeight: 40,
+    justifyContent: 'center',
   },
   orderBtnText: { fontSize: FontSize.xs, color: Colors.ink, fontWeight: FontWeight.semibold },
   retryBtn: {

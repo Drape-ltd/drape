@@ -1,6 +1,8 @@
 import { Alert, Linking } from 'react-native'
+import { normalizePhoneForStorage, validateDispatchPhoneForProfile, validatePhoneForProfile } from '@drape/shared/phone'
 
 type TrackingAudience = 'customer' | 'tailor'
+type FulfillmentStage = 'SHIPPED' | 'OUT_FOR_DELIVERY'
 
 export function normalizeTrackingNumberInput(value: string) {
   return value.replace(/\s+/g, '').toUpperCase()
@@ -33,6 +35,93 @@ export function getShipStagePreflightError(options: {
   }
 
   return null
+}
+
+export function getFulfillmentStagePreflightError(options: {
+  targetStage: FulfillmentStage
+  deliveryMethod: string | null | undefined
+  deliveryAddress: string | null | undefined
+  recipientName: string | null | undefined
+  recipientPhone: string | null | undefined
+  provider: string
+  reference: string
+  trackingNumber: string
+  contactName: string
+  contactPhone: string
+}) {
+  if (options.targetStage === 'SHIPPED' && options.deliveryMethod === 'LOCAL_COLLECTION') {
+    return 'This order is set for local collection. Mark it ready for collection instead.'
+  }
+
+  if (options.targetStage === 'SHIPPED' && options.deliveryMethod === 'LOCAL_DELIVERY') {
+    return 'This order is set for local delivery. Mark it out for delivery instead.'
+  }
+
+  if (options.targetStage === 'OUT_FOR_DELIVERY' && options.deliveryMethod === 'LOCAL_COLLECTION') {
+    return 'This order is set for local collection. Mark it ready for collection instead.'
+  }
+
+  if (options.targetStage === 'OUT_FOR_DELIVERY' && options.deliveryMethod === 'SHIPPING') {
+    return 'This order is set for shipping. Mark it as shipped once the courier has accepted the parcel.'
+  }
+
+  if (!options.deliveryAddress?.trim()) {
+    return 'Delivery address is missing on this order. Ask the customer to update it before dispatch.'
+  }
+
+  if (!options.recipientName?.trim()) {
+    return 'Recipient name is missing on this order. Ask the customer to update it before dispatch.'
+  }
+
+  if (!options.recipientPhone?.trim()) {
+    return 'Recipient phone is missing on this order. Ask the customer to update it before dispatch.'
+  }
+
+  if (validatePhoneForProfile(options.recipientPhone) != null) {
+    return 'Recipient phone looks incomplete. Ask the customer to update it before dispatch.'
+  }
+
+  if (!options.provider.trim()) {
+    return 'Add the courier, shipper, or delivery partner before marking this handoff as started.'
+  }
+
+  if (options.targetStage === 'SHIPPED' && !options.trackingNumber.trim() && !options.reference.trim()) {
+    return 'Add a tracking number or shipment reference before marking this order as shipped.'
+  }
+
+  if (options.targetStage === 'SHIPPED' && !options.contactName.trim()) {
+    return 'Add the courier or shipping contact name before marking this order as shipped.'
+  }
+
+  if (options.targetStage === 'SHIPPED' && !options.contactPhone.trim()) {
+    return 'Add the courier or shipping contact phone before marking this order as shipped.'
+  }
+
+  if (options.targetStage === 'SHIPPED' && validateDispatchPhoneForProfile(options.contactPhone) != null) {
+    return 'Shipping contact phone looks incomplete. Add a full number with country code before marking this order as shipped.'
+  }
+
+  if (options.targetStage === 'OUT_FOR_DELIVERY' && !options.contactName.trim()) {
+    return 'Add the rider or delivery contact name before marking this order out for delivery.'
+  }
+
+  if (options.targetStage === 'OUT_FOR_DELIVERY' && !options.contactPhone.trim()) {
+    return 'Add the rider or delivery contact phone before marking this order out for delivery.'
+  }
+
+  if (options.targetStage === 'OUT_FOR_DELIVERY' && validateDispatchPhoneForProfile(options.contactPhone) != null) {
+    return 'Delivery contact phone looks incomplete. Add a full number with country code before marking this order out for delivery.'
+  }
+
+  return null
+}
+
+export function normalizeDispatchReferenceInput(value: string) {
+  return value.trim().toUpperCase()
+}
+
+export function normalizeContactPhoneInput(value: string) {
+  return normalizePhoneForStorage(value)
 }
 
 export function buildTrackingUrl(trackingNumber: string, carrier?: string | null) {

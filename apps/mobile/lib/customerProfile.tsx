@@ -42,7 +42,6 @@ export function CustomerProfileProvider({ children }: { children: React.ReactNod
       .then(({ data, error }) => {
         if (cancelled) return
         if (error) {
-          setAvatarUrl(null)
           return
         }
         setAvatarUrl(data?.avatar_url ?? null)

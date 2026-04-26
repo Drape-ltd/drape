@@ -31,14 +31,48 @@ export type TailorReadiness = {
   tone: 'neutral' | 'warning' | 'success'
 }
 
+export type PayoutProviderLabel = 'Stripe' | 'Paystack'
+
 function hasValue(value: string | null | undefined) {
   return typeof value === 'string' && value.trim().length > 0
+}
+
+function isIdentityVerifiedStatus(status: string | null | undefined) {
+  return status === 'VERIFIED' || status === 'APPROVED'
+}
+
+export function suggestedPayoutProvider(currency: string | null | undefined): PayoutProviderLabel {
+  const normalized = (currency ?? '').trim().toUpperCase()
+  if (normalized === 'NGN' || normalized === 'GHS') return 'Paystack'
+  return 'Stripe'
+}
+
+export function payoutSetupCopy(currency: string | null | undefined) {
+  const normalized = (currency ?? '').trim().toUpperCase()
+  const provider = suggestedPayoutProvider(normalized)
+  const currencyLabel = normalized || 'your main selling currency'
+
+  if (provider === 'Paystack') {
+    return {
+      provider,
+      title: `Connect ${provider} for ${currencyLabel}`,
+      body: `${currencyLabel} payouts should use ${provider} first. Use Drape payout setup to send the account details Drape needs to link before paid work goes live.`,
+      emailSubject: `Drape payout setup: ${currencyLabel} via ${provider}`,
+    }
+  }
+
+  return {
+    provider,
+    title: `Connect ${provider} for ${currencyLabel}`,
+    body: `${currencyLabel} payouts should use ${provider} first. Use Drape payout setup to send the account details Drape needs to link before paid work goes live.`,
+    emailSubject: `Drape payout setup: ${currencyLabel} via ${provider}`,
+  }
 }
 
 export function deriveTailorReadiness(input: TailorReadinessInput | null | undefined): TailorReadiness {
   const profileCompleted = input?.profileCompleted === true
   const idVerificationStatus = input?.idVerificationStatus ?? 'NOT_SUBMITTED'
-  const identityVerified = idVerificationStatus === 'APPROVED'
+  const identityVerified = isIdentityVerifiedStatus(idVerificationStatus)
   const providers = [
     hasValue(input?.stripeAccountId) ? 'Stripe' : null,
     hasValue(input?.paystackAccountId) ? 'Paystack' : null,
@@ -116,7 +150,7 @@ export function deriveTailorReadiness(input: TailorReadinessInput | null | undef
       payoutProviderLabel,
       blockers,
       title: 'Connect payout before taking paid orders',
-      body: 'Identity review is complete, but paid quotes and live shop items should stay blocked until a payout account is connected and ready.',
+      body: 'Identity review is complete, but paid quotes and live shop items should stay blocked until a payout account is connected and ready. Open Payments & payouts for the next step.',
       actionLabel: 'Review payout status',
       tone: 'warning',
     }

@@ -15,6 +15,8 @@ export type OrderStage =
   | 'CUTTING'
   | 'SEWING'
   | 'FINISHING'
+  | 'READY_FOR_DRAPE_DISPATCH'
+  | 'OUT_FOR_DELIVERY'
   | 'SHIPPED'
   | 'READY_FOR_COLLECTION'
   | 'DELIVERED'
@@ -68,8 +70,12 @@ export const ORDER_TRANSITIONS: Transition[] = [
   { from: 'CUTTING', to: 'SEWING', actor: 'TAILOR', trigger: 'start_sewing' },
   { from: 'SEWING', to: 'FINISHING', actor: 'TAILOR', trigger: 'start_finishing' },
 
-  // Shipping path
-  { from: 'FINISHING', to: 'SHIPPED', actor: 'TAILOR', trigger: 'mark_shipped' },
+  // Drape-managed dispatch path
+  { from: 'FINISHING', to: 'READY_FOR_DRAPE_DISPATCH', actor: 'TAILOR', trigger: 'mark_ready_for_drape_dispatch' },
+  { from: 'READY_FOR_DRAPE_DISPATCH', to: 'OUT_FOR_DELIVERY', actor: 'PLATFORM', trigger: 'mark_out_for_delivery' },
+  { from: 'OUT_FOR_DELIVERY', to: 'DELIVERED', actor: 'CUSTOMER', trigger: 'confirm_receipt' },
+  { from: 'OUT_FOR_DELIVERY', to: 'DELIVERED', actor: 'SYSTEM', trigger: 'auto_release_14d' },
+  { from: 'READY_FOR_DRAPE_DISPATCH', to: 'SHIPPED', actor: 'PLATFORM', trigger: 'mark_shipped' },
   { from: 'SHIPPED', to: 'DELIVERED', actor: 'CUSTOMER', trigger: 'confirm_receipt' },
   { from: 'SHIPPED', to: 'DELIVERED', actor: 'SYSTEM', trigger: 'auto_release_14d' },
   { from: 'DELIVERED', to: 'COMPLETE', actor: 'CUSTOMER', trigger: 'complete_order' },
@@ -90,8 +96,11 @@ export const ORDER_TRANSITIONS: Transition[] = [
   { from: 'CUTTING', to: 'IN_DISPUTE', actor: 'CUSTOMER', trigger: 'open_dispute' },
   { from: 'SEWING', to: 'IN_DISPUTE', actor: 'CUSTOMER', trigger: 'open_dispute' },
   { from: 'FINISHING', to: 'IN_DISPUTE', actor: 'CUSTOMER', trigger: 'open_dispute' },
+  { from: 'READY_FOR_DRAPE_DISPATCH', to: 'IN_DISPUTE', actor: 'CUSTOMER', trigger: 'open_dispute' },
+  { from: 'OUT_FOR_DELIVERY', to: 'IN_DISPUTE', actor: 'CUSTOMER', trigger: 'open_dispute' },
   { from: 'SHIPPED', to: 'IN_DISPUTE', actor: 'CUSTOMER', trigger: 'open_dispute' },
   { from: 'READY_FOR_COLLECTION', to: 'IN_DISPUTE', actor: 'CUSTOMER', trigger: 'open_dispute' },
+  { from: 'DELIVERED', to: 'IN_DISPUTE', actor: 'CUSTOMER', trigger: 'open_dispute' },
   { from: 'IN_DISPUTE', to: 'REFUNDED', actor: 'PLATFORM', trigger: 'resolve_refund' },
   { from: 'IN_DISPUTE', to: 'COMPLETE', actor: 'PLATFORM', trigger: 'resolve_release' },
 
@@ -145,6 +154,8 @@ export const STAGE_LABELS: Record<OrderStage, string> = {
   CUTTING: 'Cutting',
   SEWING: 'Sewing',
   FINISHING: 'Finishing',
+  READY_FOR_DRAPE_DISPATCH: 'Ready for Drape Dispatch',
+  OUT_FOR_DELIVERY: 'Out for Delivery',
   SHIPPED: 'Shipped',
   READY_FOR_COLLECTION: 'Ready for Collection',
   DELIVERED: 'Delivered',
@@ -165,4 +176,6 @@ export const STAGE_DESCRIPTIONS: Partial<Record<OrderStage, string>> = {
   CUTTING: 'Fabric is being cut to your measurements.',
   SEWING: 'Your garment is being sewn together.',
   FINISHING: 'Final touches, pressing, and quality checks.',
+  READY_FOR_DRAPE_DISPATCH: 'Drape is lining up dispatch after the tailor finishes packing your order.',
+  OUT_FOR_DELIVERY: 'A local delivery partner is bringing your order to you.',
 }

@@ -3,16 +3,18 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Alert, ActivityIndicator, TextInput, Linking,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { requestAccountDeletion } from '@/lib/account-deletion'
 import { useAuth } from '@/lib/auth'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { CONTACTS } from '@drape/shared'
+import { goBackOrFallback } from '@/lib/navigation'
 
 export default function TailorDeleteAccountScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const [reason, setReason] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -52,7 +54,7 @@ export default function TailorDeleteAccountScreen() {
   }
 
   function goBack() {
-    router.replace('/(tailor)/profile/privacy' as never)
+    goBackOrFallback(router, navigation, '/(tailor)/profile/privacy' as never)
   }
 
   if (submitted) {

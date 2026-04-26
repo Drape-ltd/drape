@@ -31,7 +31,7 @@ function ensureValue(value: string, fallbackMessage: string) {
 export async function shareCustomerReferral(userId: string, displayName: string) {
   if (!ensureValue(userId, 'Your referral link is not ready yet. Retry from Profile in a moment.')) return
   const link = `${BASE_URL}/join?ref=${userId}`
-  const message = `Hey! I've been using Drape to get bespoke clothes made — tailored to your measurements, delivered to you. Join me here:\n\n${link}`
+  const message = `Hey! I've been using Drape to get bespoke clothes made, tailored to your measurements and delivered to you. Join me here:\n\n${link}`
   await openShareSheet(message, 'Join me on Drape')
 }
 
@@ -41,7 +41,7 @@ export async function shareCustomerReferral(userId: string, displayName: string)
 export async function shareTailorProfile(tailorProfileId: string, tailorName: string) {
   if (!ensureValue(tailorProfileId, 'This profile is not ready to share yet. Refresh your storefront and try again.')) return
   const link = `${BASE_URL}/tailor/${tailorProfileId}`
-  const message = `Check out ${tailorName} on Drape — a marketplace for bespoke tailoring. Book a custom garment here:\n\n${link}`
+  const message = `Check out ${tailorName} on Drape, a marketplace for bespoke tailoring. Book a custom garment here:\n\n${link}`
   await openShareSheet(message, `${tailorName || 'Tailor'} on Drape`)
 }
 
@@ -63,7 +63,7 @@ export async function referToTailor(tailorProfileId: string, tailorName: string,
 export async function shareDiscoverTailors(userId: string) {
   if (!ensureValue(userId, 'Your referral link is not ready yet. Retry from Profile in a moment.')) return
   const link = `${BASE_URL}/explore?ref=${userId}`
-  const message = `I've been finding amazing tailors on Drape — bespoke garments made to your exact measurements. Check them out:\n\n${link}`
+  const message = `I've been finding amazing tailors on Drape, with bespoke garments made to your exact measurements. Check them out:\n\n${link}`
   await openShareSheet(message, 'Find a tailor on Drape')
 }
 
@@ -73,7 +73,7 @@ export async function shareDiscoverTailors(userId: string) {
 export async function inviteTailorColleague(tailorId: string, tailorName: string) {
   if (!ensureValue(tailorId, 'Your invite link is not ready yet. Retry from Profile in a moment.')) return
   const link = `${BASE_URL}/join/tailor?ref=${tailorId}`
-  const message = `Hey! I've been using Drape for my tailoring business — it connects tailors with customers looking for bespoke pieces. Worth checking out:\n\n${link}`
+  const message = `Hey! I've been using Drape for my tailoring business. It connects tailors with customers looking for bespoke pieces. Worth checking out:\n\n${link}`
   await openShareSheet(message, `Join ${tailorName || 'me'} on Drape`)
 }
 

@@ -14,6 +14,7 @@ import { supabase } from '@/lib/supabase'
 import { signInWithPasswordResilient, useAuth } from '@/lib/auth'
 import { authenticate, getBiometricLabel, isBiometricAvailable, isBiometricEnabled } from '@/lib/biometric'
 import { hasRecentReauth, markRecentReauth, RECENT_REAUTH_WINDOW_MINUTES } from '@/lib/recent-reauth'
+import { goBackOrFallback } from '@/lib/navigation'
 import { syncUserRow } from '@/lib/syncUserRow'
 import { validateDisplayName } from '@drape/shared/contact-filter'
 import { normalizePhoneForStorage, PHONE_STORAGE_HINT, validatePhoneForProfile } from '@drape/shared/phone'
@@ -104,8 +105,7 @@ export default function TailorPersonalInfoScreen() {
   }
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(tailor)/profile')
+    goBackOrFallback(router, navigation, '/(tailor)/profile')
   }
 
   async function persistProfile() {
@@ -228,7 +228,7 @@ export default function TailorPersonalInfoScreen() {
                 if (nameError) validateName(value)
               }}
               onBlur={() => validateName(displayName)}
-              placeholder="Your name"
+              placeholder="John Doe"
               placeholderTextColor={Colors.midGrey}
               maxLength={50}
               autoCorrect={false}
@@ -249,7 +249,7 @@ export default function TailorPersonalInfoScreen() {
                 if (phoneError) validatePhone(value)
               }}
               onBlur={() => validatePhone(phone)}
-              placeholder="+44 7700 000000"
+              placeholder="+234... / +44... / +1..."
               placeholderTextColor={Colors.midGrey}
               keyboardType="phone-pad"
               maxLength={20}

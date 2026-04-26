@@ -64,8 +64,43 @@ export function validatePhoneForProfile(value: string): string | null {
     return 'Enter a valid phone number.'
   }
 
-  return null
+  if (normalized.startsWith('+')) {
+    return null
+  }
+
+  if (looksLikeNigerianLocalMobile(digits)) {
+    return null
+  }
+
+  if (looksLikeNigerianE164Digits(digits)) {
+    return null
+  }
+
+  return 'Add a full phone number with country code, for example +2348012345678. Nigerian mobile numbers starting with 0 also work.'
+}
+
+export function validateDispatchPhoneForProfile(value: string): string | null {
+  const normalized = normalizePhoneForStorage(value)
+  const digits = normalized.startsWith('+') ? normalized.slice(1) : normalized
+
+  if (digits.length < MIN_PHONE_DIGITS || digits.length > MAX_PHONE_DIGITS) {
+    return 'Enter a valid phone number.'
+  }
+
+  if (normalized.startsWith('+')) {
+    return null
+  }
+
+  if (looksLikeNigerianLocalMobile(digits)) {
+    return null
+  }
+
+  if (looksLikeNigerianE164Digits(digits)) {
+    return null
+  }
+
+  return 'Add a full phone number with country code so the customer knows who is contacting them.'
 }
 
 export const PHONE_STORAGE_HINT =
-  'Include your country code when you can, for example +234 or +44.'
+  'Use a full phone number with country code, for example +2348012345678, +447700900123, or +14155550123. Nigerian mobile numbers starting with 0 also work.'

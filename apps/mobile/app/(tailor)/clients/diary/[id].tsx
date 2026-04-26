@@ -16,6 +16,7 @@ import { Feather } from '@expo/vector-icons'
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { goBackOrFallback } from '@/lib/navigation'
 import { sharePassportInvite } from '@/lib/invite'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
@@ -94,7 +95,7 @@ export default function DiaryEntryScreen() {
   const [fetchError, setFetchError] = useState(false)
 
   function goBack() {
-    router.replace('/(tailor)/clients')
+    goBackOrFallback(router, navigation, '/(tailor)/clients')
   }
 
   async function loadEntry() {
@@ -592,7 +593,7 @@ export default function DiaryEntryScreen() {
                       {inviteStatus === 'CLAIMED'
                         ? 'This client has claimed their measurement passport on Drape.'
                         : inviteStatus === 'INVITE_SENT'
-                          ? 'Invite sent — waiting for the client to claim their passport.'
+                          ? 'Invite sent. Waiting for the client to claim their passport.'
                           : 'Send this client a link to claim their measurements on Drape.'}
                     </Text>
                   </View>
@@ -630,7 +631,7 @@ export default function DiaryEntryScreen() {
         />
       )}
       {showDatePicker && Platform.OS === 'ios' && (
-        <Modal transparent animationType="slide" visible={showDatePicker}>
+        <Modal transparent animationType="slide" visible={showDatePicker} onRequestClose={() => setShowDatePicker(false)}>
           <View style={styles.dateModalOverlay}>
             <View style={styles.dateModalCard}>
               <View style={styles.dateModalHeader}>
@@ -688,7 +689,7 @@ function MeasureField({
           style={measureStyles.input}
           value={value}
           onChangeText={onChange}
-          placeholder="—"
+          placeholder="0"
           placeholderTextColor={Colors.midGrey}
           keyboardType="decimal-pad"
         />

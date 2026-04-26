@@ -10,9 +10,10 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { customerOrderStageLabel } from '@/lib/customer-order-copy'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
+import type { OrderStage } from '@drape/shared/order-machine'
 
 type ConversationItem = {
   orderId: string
@@ -61,7 +62,7 @@ function orderPreview(stage: OrderStage, garmentType: string, orderKind: 'CUSTOM
     case 'IN_DISPUTE':
       return `${garmentType} · Concern under review`
     default:
-      return `${garmentType} · ${STAGE_LABELS[stage] ?? stage}`
+      return `${garmentType} · ${customerOrderStageLabel(stage, orderKind)}`
   }
 }
 
@@ -446,21 +447,21 @@ const styles = StyleSheet.create({
   stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
   header: {
-    paddingHorizontal: Spacing.xl,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: 10,
+    paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: Colors.lightGrey,
-    gap: Spacing.md,
+    gap: Spacing.sm,
   },
-  title: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
+  title: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.ink },
   guideCard: {
-    marginHorizontal: Spacing.xl,
-    marginTop: Spacing.md,
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.sm,
     marginBottom: Spacing.sm,
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -476,12 +477,12 @@ const styles = StyleSheet.create({
   guideClose: { fontSize: 22, lineHeight: 22, color: Colors.midGrey },
   guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink, lineHeight: 20 },
   syncNoticeCard: {
-    marginHorizontal: Spacing.xl,
-    marginTop: Spacing.md,
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.sm,
     marginBottom: Spacing.sm,
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -495,15 +496,17 @@ const styles = StyleSheet.create({
   },
   syncNoticeBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
-  filterRow: { flexDirection: 'row', gap: Spacing.sm },
+  filterRow: { flexDirection: 'row', gap: 8 },
   filterChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
     borderRadius: Radius.full,
     backgroundColor: Colors.boneDeep,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   filterChipActive: { backgroundColor: Colors.ink },
   filterLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.inkLight },
@@ -514,19 +517,19 @@ const styles = StyleSheet.create({
   },
   filterBadgeText: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white },
 
-  separator: { height: 1, backgroundColor: Colors.lightGrey, marginLeft: 76 },
+  separator: { height: 1, backgroundColor: Colors.lightGrey, marginLeft: 68 },
   listContent: { paddingBottom: Spacing.xxxl },
 
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 14,
     backgroundColor: Colors.white,
-    gap: Spacing.md,
+    gap: 12,
   },
   avatar: {
-    width: 52, height: 52, borderRadius: 26,
+    width: 46, height: 46, borderRadius: 23,
     backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center',
   },
   avatarActive: { backgroundColor: Colors.needleGreenLight },
@@ -537,7 +540,7 @@ const styles = StyleSheet.create({
   contentTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   contentBottom: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
 
-  name: { fontSize: FontSize.md, fontWeight: FontWeight.medium, color: Colors.ink, flex: 1, marginRight: Spacing.sm },
+  name: { fontSize: 15, fontWeight: FontWeight.medium, color: Colors.ink, flex: 1, marginRight: Spacing.sm },
   nameBold: { fontWeight: FontWeight.bold },
   time: { fontSize: FontSize.xs, color: Colors.midGrey },
   timeActive: { color: Colors.needleGreen, fontWeight: FontWeight.semibold },
@@ -550,13 +553,13 @@ const styles = StyleSheet.create({
   },
   badgeText: { fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white },
 
-  emptyContainer: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: Spacing.xl, paddingBottom: Spacing.xxxl },
+  emptyContainer: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: Spacing.lg, paddingBottom: Spacing.xxl },
   emptyWrap: { flex: 1, justifyContent: 'center' },
   emptyCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
+    borderRadius: Radius.md,
+    padding: 16,
+    gap: Spacing.sm,
     alignItems: 'center',
     ...Shadow.sm,
   },
@@ -564,11 +567,13 @@ const styles = StyleSheet.create({
   emptyHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 22, maxWidth: 280 },
   emptyActions: { alignSelf: 'stretch', gap: Spacing.sm, marginTop: Spacing.xs },
   retryBtn: {
-    marginTop: Spacing.sm,
+    marginTop: Spacing.xs,
     backgroundColor: Colors.needleGreen,
     paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.md,
+    paddingVertical: 10,
     borderRadius: Radius.full,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   retryBtnText: { fontSize: FontSize.sm, color: Colors.white, fontWeight: FontWeight.semibold },
   secondaryBtn: {
@@ -577,7 +582,9 @@ const styles = StyleSheet.create({
     borderRadius: Radius.full,
     borderWidth: 1,
     paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.md,
+    paddingVertical: 10,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   secondaryBtnText: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
 
@@ -585,12 +592,12 @@ const styles = StyleSheet.create({
   supportScroll: { flex: 1 },
   supportContent: { paddingBottom: Spacing.xxxl, gap: Spacing.sm },
   supportHeroCard: {
-    marginHorizontal: Spacing.xl,
-    marginTop: Spacing.xl,
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.lg,
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
+    borderRadius: Radius.md,
+    padding: 16,
+    gap: Spacing.sm,
     ...Shadow.sm,
   },
   supportHeroTitle: {
@@ -605,11 +612,11 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   supportGuideCard: {
-    marginHorizontal: Spacing.xl,
-    marginTop: Spacing.md,
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.sm,
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -632,22 +639,23 @@ const styles = StyleSheet.create({
   },
   supportDivider: {
     height: 1, backgroundColor: Colors.lightGrey,
-    marginHorizontal: Spacing.xl, marginTop: Spacing.sm,
+    marginHorizontal: Spacing.lg, marginTop: Spacing.xs,
   },
   supportSectionLabel: {
     fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.inkLight,
-    paddingHorizontal: Spacing.xl, paddingTop: Spacing.xl, paddingBottom: Spacing.md,
+    paddingHorizontal: Spacing.lg, paddingTop: Spacing.lg, paddingBottom: Spacing.sm,
   },
   helpGrid: {
-    flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.md,
-    paddingHorizontal: Spacing.xl,
+    flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
   },
   helpCard: {
     width: '47%', backgroundColor: Colors.bone,
-    borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.sm,
+    borderRadius: Radius.md, padding: 14, gap: Spacing.xs,
+    minHeight: 96,
   },
   helpIcon: {
-    width: 40, height: 40, borderRadius: Radius.md,
+    width: 36, height: 36, borderRadius: Radius.md,
     backgroundColor: Colors.needleGreenLight, alignItems: 'center', justifyContent: 'center',
   },
   helpLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },

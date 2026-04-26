@@ -76,6 +76,32 @@ export type MaterialIssueStatus =
   | 'CUSTOMER_REQUESTED_CANCEL'
   | 'RESOLVED'
 
+export type CancellationReviewStatus = 'OPEN' | 'RESOLVED'
+
+export type CancellationReviewRequestedBy = 'CUSTOMER' | 'TAILOR'
+
+export type CancellationReviewReason =
+  | 'CUSTOMER_CHANGED_MIND'
+  | 'NEED_FULFILLMENT_CHANGE'
+  | 'ITEM_UNAVAILABLE'
+  | 'ITEM_DAMAGED_BEFORE_DISPATCH'
+  | 'TAILOR_CANNOT_FULFIL'
+  | 'DISPATCH_DELAY'
+  | 'OTHER'
+
+export type DeliveryReviewStatus = 'OPEN' | 'RESOLVED'
+
+export type DeliveryReviewRequestedBy = 'CUSTOMER' | 'TAILOR'
+
+export type DeliveryReviewReason =
+  | 'DISPATCH_DELAY'
+  | 'DELIVERY_FAILED'
+  | 'RETURN_TO_SENDER'
+  | 'MARKED_DELIVERED_NOT_RECEIVED'
+  | 'WRONG_ITEM_RECEIVED'
+  | 'RECIPIENT_UNREACHABLE'
+  | 'OTHER'
+
 export type MaterialIssueMeta = {
   status?: MaterialIssueStatus | null
   reason?: MaterialIssueReason | null
@@ -89,6 +115,27 @@ export type MaterialIssueMeta = {
   respondedAt?: string | null
 }
 
+export type CancellationReviewMeta = {
+  status?: CancellationReviewStatus | null
+  requestedBy?: CancellationReviewRequestedBy | null
+  reason?: CancellationReviewReason | null
+  reasonLabel?: string | null
+  note?: string | null
+  requestedAt?: string | null
+  requestedFromStage?: string | null
+  resolvedAt?: string | null
+}
+
+export type DeliveryReviewMeta = {
+  status?: DeliveryReviewStatus | null
+  requestedBy?: DeliveryReviewRequestedBy | null
+  reason?: DeliveryReviewReason | null
+  reasonLabel?: string | null
+  note?: string | null
+  requestedAt?: string | null
+  requestedFromStage?: string | null
+  resolvedAt?: string | null
+}
 export type FitProfileMeta = {
   measurementScanId?: string | null
   captureMethod?: MeasurementScanCaptureMethod | null
@@ -121,6 +168,8 @@ export type OrderSupportMeta = {
   fabricReceivedNote?: string | null
   fitProfile?: FitProfileMeta | null
   materialIssue?: MaterialIssueMeta | null
+  cancellationReview?: CancellationReviewMeta | null
+  deliveryReview?: DeliveryReviewMeta | null
 }
 
 export const MEASUREMENT_SOURCE_LABELS: Record<MeasurementSource, string> = {
@@ -158,6 +207,26 @@ export const MATERIAL_ISSUE_RESPONSE_LABELS: Record<MaterialIssueResponse, strin
   ASK_TAILOR_TO_SOURCE: 'Ask tailor to source fabric',
   REVISE_DESIGN: 'Revise design',
   CANCEL_ORDER: 'Cancel order',
+}
+
+export const CANCELLATION_REVIEW_REASON_LABELS: Record<CancellationReviewReason, string> = {
+  CUSTOMER_CHANGED_MIND: 'Customer changed their mind',
+  NEED_FULFILLMENT_CHANGE: 'Customer needs a fulfillment change',
+  ITEM_UNAVAILABLE: 'Item is unavailable',
+  ITEM_DAMAGED_BEFORE_DISPATCH: 'Item was damaged before dispatch',
+  TAILOR_CANNOT_FULFIL: 'Tailor cannot fulfil this order',
+  DISPATCH_DELAY: 'Dispatch delay or ops risk',
+  OTHER: 'Other',
+}
+
+export const DELIVERY_REVIEW_REASON_LABELS: Record<DeliveryReviewReason, string> = {
+  DISPATCH_DELAY: 'Dispatch is taking too long',
+  DELIVERY_FAILED: 'Delivery failed',
+  RETURN_TO_SENDER: 'Package was returned to sender',
+  MARKED_DELIVERED_NOT_RECEIVED: 'Marked delivered, but not received',
+  WRONG_ITEM_RECEIVED: 'Wrong item arrived',
+  RECIPIENT_UNREACHABLE: 'Recipient could not be reached',
+  OTHER: 'Other',
 }
 
 export function parseOrderSupportMeta(value: string | null | undefined): OrderSupportMeta {
@@ -226,4 +295,36 @@ export function buildMaterialIssueResponseNote(responseLabel: string, note?: str
   return detail
     ? `Customer responded to the material issue: ${responseLabel}. Note: ${detail}`
     : `Customer responded to the material issue: ${responseLabel}.`
+}
+
+export function buildCancellationReviewNote(
+  requestedBy: CancellationReviewRequestedBy,
+  reasonLabel: string,
+  note?: string | null,
+) {
+  const actor = requestedBy === 'CUSTOMER' ? 'Customer' : 'Tailor'
+  const detail = note?.trim()
+  return detail
+    ? `${actor} requested cancellation review. Reason: ${reasonLabel}. Note: ${detail}`
+    : `${actor} requested cancellation review. Reason: ${reasonLabel}.`
+}
+
+export function buildDeliveryReviewNote(
+  requestedBy: DeliveryReviewRequestedBy,
+  reasonLabel: string,
+  note?: string | null,
+) {
+  const actor = requestedBy === 'CUSTOMER' ? 'Customer' : 'Tailor'
+  const detail = note?.trim()
+  return detail
+    ? `${actor} requested delivery review. Reason: ${reasonLabel}. Note: ${detail}`
+    : `${actor} requested delivery review. Reason: ${reasonLabel}.`
+}
+
+export function hasOpenDeliveryReview(meta: OrderSupportMeta | null | undefined) {
+  return meta?.deliveryReview?.status === 'OPEN'
+}
+
+export function hasOpenCancellationReview(meta: OrderSupportMeta | null | undefined) {
+  return meta?.cancellationReview?.status === 'OPEN'
 }

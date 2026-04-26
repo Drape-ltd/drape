@@ -7,7 +7,9 @@ import {
   type OpsAccountDeletionRequest,
   loadOpsDashboardData,
   type OpsBypassLog,
+  type OpsDispatchItem,
   type OpsDispute,
+  type OpsOrderReviewItem,
   type OpsPayout,
   type OpsReviewQueueItem,
   type OpsTailorApplication,
@@ -36,10 +38,13 @@ const NOTICE_COPY: Record<string, string> = {
   'verification-approved': 'Verification approved and the tailor is now live.',
   'verification-rejected': 'Verification rejected.',
   'deletion-saved': 'Deletion request status updated.',
+  'dispatch-saved': 'Dispatch stage updated.',
   'review-published': 'Review is public now.',
   'review-held': 'Review is held from public view.',
   'conversation-blocked': 'Conversation paused for safety review.',
   'conversation-unblocked': 'Conversation reopened.',
+  'order-review-refunded': 'Order review approved and refund resolution recorded.',
+  'order-review-continued': 'Order review closed and the order was returned to its live stage.',
 }
 
 const ERROR_COPY: Record<string, string> = {
@@ -847,6 +852,240 @@ function ReviewQueueCard({ review }: { review: OpsReviewQueueItem }): JSX.Elemen
   )
 }
 
+function DispatchCard({ item }: { item: OpsDispatchItem }): JSX.Element {
+  const isLocalDelivery = item.deliveryMethod === 'LOCAL_DELIVERY'
+  const targetStage = isLocalDelivery ? 'OUT_FOR_DELIVERY' : 'SHIPPED'
+  const providerLabel = isLocalDelivery ? 'Rider or provider' : 'Courier or provider'
+  const actionLabel = isLocalDelivery ? 'Mark out for delivery' : 'Mark shipped'
+  const description = isLocalDelivery
+    ? 'Drape handles the rider handoff here once the seller says the parcel is packed and ready.'
+    : 'Drape handles the courier handoff here once the seller says the parcel is packed and ready.'
+
+  return (
+    <article className="rounded-[1.5rem] border border-ink/8 bg-[linear-gradient(180deg,#fffdf9_0%,#f5eee3_100%)] p-5 shadow-sm">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-lg text-ink">Order #{item.orderReference}</span>
+            <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(item.stage)}`}>
+              {item.stage.replace(/_/g, ' ')}
+            </span>
+          </div>
+          <p className="mt-2 text-sm leading-7 text-ink/66">
+            {item.itemTitle ?? item.garmentType} · {formatMoney(item.amount, item.currency)}
+          </p>
+          <p className="mt-1 text-sm leading-7 text-ink/64">{description}</p>
+        </div>
+        <a
+          href={sectionMailto(`Dispatch help: ${item.orderReference}`)}
+          className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-bone"
+        >
+          Email ops
+        </a>
+      </div>
+
+      <div className="mt-5">
+        <DetailList
+          items={[
+            { label: 'Customer', value: item.customerEmail ? `${item.customerName} · ${item.customerEmail}` : item.customerName },
+            { label: 'Tailor', value: item.tailorEmail ? `${item.tailorName} · ${item.tailorEmail}` : item.tailorName },
+            { label: 'Tailor location', value: item.tailorLocation ?? '—' },
+            { label: 'Recipient', value: item.recipientName ?? '—' },
+            { label: 'Recipient phone', value: item.recipientPhone ?? '—' },
+            { label: 'Address', value: item.deliveryAddress ?? '—' },
+            { label: 'Ready since', value: formatDateTime(item.stageUpdatedAt) },
+            { label: 'Method', value: item.deliveryMethod?.replace(/_/g, ' ') ?? '—' },
+          ]}
+        />
+      </div>
+
+      <form action="/ops/action" method="post" className="mt-5 grid gap-4 border-t border-ink/6 pt-5">
+        <input type="hidden" name="kind" value="dispatch-stage" />
+        <input type="hidden" name="redirectTo" value="/ops#dispatch" />
+        <input type="hidden" name="orderId" value={item.orderId} />
+        <input type="hidden" name="targetStage" value={targetStage} />
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="grid gap-2 text-sm text-ink/72">
+            {providerLabel}
+            <input
+              required
+              type="text"
+              name="provider"
+              defaultValue={item.provider ?? item.carrier ?? ''}
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+              placeholder={isLocalDelivery ? 'e.g. Gokada, Uber, local rider' : 'e.g. DHL, USPS, UPS'}
+            />
+          </label>
+          <label className="grid gap-2 text-sm text-ink/72">
+            {isLocalDelivery ? 'Trip or dispatch reference' : 'Shipment reference'}
+            <input
+              type="text"
+              name="reference"
+              defaultValue={item.reference ?? ''}
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+              placeholder={isLocalDelivery ? 'Optional internal or rider reference' : 'Optional if tracking is known'}
+            />
+          </label>
+          <label className="grid gap-2 text-sm text-ink/72">
+            Contact name
+            <input
+              required
+              type="text"
+              name="contactName"
+              defaultValue={item.contactName ?? ''}
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+              placeholder={isLocalDelivery ? 'Rider name or ops contact' : 'Courier desk or ops contact'}
+            />
+          </label>
+          <label className="grid gap-2 text-sm text-ink/72">
+            Contact phone
+            <input
+              required
+              type="text"
+              name="contactPhone"
+              defaultValue={item.contactPhone ?? ''}
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+              placeholder="Include country code if known"
+            />
+          </label>
+          {!isLocalDelivery ? (
+            <label className="grid gap-2 text-sm text-ink/72 md:col-span-2">
+              Tracking number
+              <input
+                type="text"
+                name="trackingNumber"
+                defaultValue={item.trackingNumber ?? ''}
+                className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+                placeholder="Tracking number or leave blank if shipment reference is enough"
+              />
+            </label>
+          ) : null}
+        </div>
+        <label className="grid gap-2 text-sm text-ink/72">
+          Customer note
+          <textarea
+            name="note"
+            rows={3}
+            defaultValue=""
+            className="rounded-[1.6rem] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+            placeholder={
+              isLocalDelivery
+                ? 'Optional note like: Your rider has collected the parcel and is on the way.'
+                : 'Optional note like: DHL accepted the parcel and tracking is now active.'
+            }
+          />
+        </label>
+        <div className="flex flex-wrap gap-3">
+          <button
+            type="submit"
+            className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90"
+          >
+            {actionLabel}
+          </button>
+        </div>
+      </form>
+    </article>
+  )
+}
+
+function OrderReviewCard({ review }: { review: OpsOrderReviewItem }): JSX.Element {
+  const reviewTypeLabel = review.reviewType === 'CANCELLATION' ? 'Cancellation review' : 'Delivery review'
+  const continueLabel =
+    review.reviewType === 'CANCELLATION'
+      ? 'Keep order active'
+      : review.requestedFromStage
+        ? `Return to ${review.requestedFromStage.toLowerCase().replace(/_/g, ' ')}`
+        : 'Keep order active'
+  const refundLabel =
+    review.reviewType === 'CANCELLATION'
+      ? 'Approve cancellation'
+      : 'Refund order'
+
+  return (
+    <article className="rounded-[1.5rem] border border-ink/8 bg-[linear-gradient(180deg,#fffdf9_0%,#f6efe5_100%)] p-5 shadow-sm">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-lg text-ink">Order {review.orderReference ? `#${review.orderReference}` : review.orderId}</span>
+            <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass('UNDER_REVIEW')}`}>
+              {reviewTypeLabel}
+            </span>
+          </div>
+          <p className="mt-2 text-sm leading-7 text-ink/66">{review.reasonLabel}</p>
+        </div>
+        <a
+          href={sectionMailto(`${reviewTypeLabel}: ${review.orderReference ?? review.orderId}`)}
+          className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-bone"
+        >
+          Email ops
+        </a>
+      </div>
+
+      <div className="mt-5">
+        <DetailList
+          items={[
+            { label: 'Customer', value: review.customerEmail ? `${review.customerName} · ${review.customerEmail}` : review.customerName },
+            { label: 'Tailor', value: review.tailorEmail ? `${review.tailorName} · ${review.tailorEmail}` : review.tailorName },
+            { label: 'Requested by', value: review.requestedBy },
+            { label: 'Current stage', value: review.orderStage ?? '—' },
+            { label: 'Opened from', value: review.requestedFromStage ?? '—' },
+            { label: 'Opened', value: formatDateTime(review.requestedAt) },
+          ]}
+        />
+      </div>
+
+      {review.note ? (
+        <div className="mt-5 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Note</p>
+          <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-ink/78">{review.note}</p>
+        </div>
+      ) : null}
+
+      <form action="/ops/action" method="post" className="mt-5 grid gap-3 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+        <input type="hidden" name="kind" value="order-review-resolution" />
+        <input type="hidden" name="redirectTo" value="/ops#order-reviews" />
+        <input type="hidden" name="orderId" value={review.orderId} />
+        <input type="hidden" name="reviewType" value={review.reviewType} />
+        <label className="grid gap-2 text-sm text-ink/72">
+          Ops note
+          <textarea
+            name="resolution"
+            rows={3}
+            defaultValue=""
+            className="rounded-[1.6rem] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+            placeholder={
+              review.reviewType === 'CANCELLATION'
+                ? 'Optional note like: We approved the cancellation and refund because the seller cannot fulfil the order.'
+                : 'Optional note like: We reviewed the dispatch issue and returned the order to the live delivery flow.'
+            }
+          />
+        </label>
+        <div className="flex flex-wrap gap-3">
+          <button
+            type="submit"
+            name="outcome"
+            value="REFUND"
+            className="inline-flex items-center justify-center rounded-full bg-rust px-5 py-3 text-sm font-semibold text-white transition hover:bg-rust/90"
+          >
+            {refundLabel}
+          </button>
+          <button
+            type="submit"
+            name="outcome"
+            value="CONTINUE"
+            className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink transition hover:bg-bone"
+          >
+            {continueLabel}
+          </button>
+        </div>
+        <p className="text-xs leading-6 text-ink/58">
+          Both sides will see this result in the order timeline, and the order will either move to <code className="rounded bg-bone px-1 py-0.5 text-[11px]">REFUNDED</code> or return to its previous live stage.
+        </p>
+      </form>
+    </article>
+  )
+}
+
 function LoginView({
   error,
 }: {
@@ -992,10 +1231,12 @@ export default async function OpsPage({
           <nav className="mt-5 flex flex-wrap gap-2 text-sm font-medium text-ink/70">
             {([
               { href: '#disputes', label: 'Disputes' },
+              { href: '#order-reviews', label: 'Order reviews' },
               { href: '#reviews', label: 'Reviews' },
               { href: '#bypass', label: 'Bypass logs' },
               { href: '#applications', label: 'Applications' },
               { href: '#verification', label: 'Verification' },
+              { href: '#dispatch', label: 'Dispatch' },
               { href: '#workflow-issues', label: 'Workflow issues' },
               { href: '#deletions', label: 'Deletion' },
               { href: '#payouts', label: 'Payouts' },
@@ -1034,11 +1275,16 @@ export default async function OpsPage({
           </div>
         ) : null}
 
-        <section className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-7">
+        <section className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-8">
           <SummaryCard
             label="Open disputes"
             value={data.summary.openDisputes}
             hint="Live disputes still waiting for human attention."
+          />
+          <SummaryCard
+            label="Order reviews"
+            value={data.summary.pendingOrderReviews}
+            hint="Cancellation and delivery reviews waiting on Drape ops."
           />
           <SummaryCard
             label="Review holds"
@@ -1066,6 +1312,11 @@ export default async function OpsPage({
             hint="Profiles still waiting on verification review."
           />
           <SummaryCard
+            label="Dispatch"
+            value={data.summary.pendingDispatch}
+            hint="Orders packed and waiting for Drape to hand off delivery or shipping."
+          />
+          <SummaryCard
             label="Deletion queue"
             value={data.summary.pendingDeletionRequests}
             hint="Account deletion requests still waiting on a first response."
@@ -1089,6 +1340,26 @@ export default async function OpsPage({
               <EmptyState
                 title="No disputes are open right now."
                 body="That is the state we want. If a customer raises a concern later, it will land here with order context."
+              />
+            )}
+          </SectionFrame>
+
+          <SectionFrame
+            id="order-reviews"
+            eyebrow="Order reviews"
+            title="Cancellation and delivery reviews should become visible the moment either side asks Drape to step in."
+            description="These reviews come straight from the order timeline before handoff finishes cleanly. Use them to spot cancellation and delivery trouble early, not after it becomes a full dispute."
+          >
+            {data.orderReviews.length > 0 ? (
+              <div className="grid gap-5">
+                {data.orderReviews.map((review) => (
+                  <OrderReviewCard key={review.id} review={review} />
+                ))}
+              </div>
+            ) : (
+              <EmptyState
+                title="No order reviews are open right now."
+                body="If a customer or tailor asks Drape to review a cancellation or dispatch issue, it will appear here with full order context."
               />
             )}
           </SectionFrame>
@@ -1169,6 +1440,26 @@ export default async function OpsPage({
               <EmptyState
                 title="No pending verification requests right now."
                 body="When a tailor submits ID verification, the profile will appear here until it is handled."
+              />
+            )}
+          </SectionFrame>
+
+          <SectionFrame
+            id="dispatch"
+            eyebrow="Dispatch queue"
+            title="Standard delivery and shipping handoff should happen from one ops queue."
+            description="These orders already collected the flat Drape-managed fulfillment fee at checkout. Once the seller has packed the parcel, ops owns the actual rider or courier handoff from here."
+          >
+            {data.dispatchQueue.length > 0 ? (
+              <div className="grid gap-5">
+                {data.dispatchQueue.map((item) => (
+                  <DispatchCard key={item.orderId} item={item} />
+                ))}
+              </div>
+            ) : (
+              <EmptyState
+                title="Nothing is waiting for Drape dispatch right now."
+                body="When a seller marks a delivery or shipping order ready for Drape dispatch, it will land here with the recipient details ops needs."
               />
             )}
           </SectionFrame>

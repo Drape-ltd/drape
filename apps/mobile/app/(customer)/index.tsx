@@ -9,10 +9,11 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Feather } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
+import { customerOrderStageLabel } from '@/lib/customer-order-copy'
 import { supabase } from '@/lib/supabase'
 import { TierBadgeChip, StarRating } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
+import type { OrderStage } from '@drape/shared/order-machine'
 
 const RECENTLY_VIEWED_KEY  = 'drape_recently_viewed_tailors'
 const RECENT_SEARCHES_KEY  = 'drape_recent_searches'
@@ -21,6 +22,10 @@ const DISCOVER_GUIDE_KEY   = 'drape_customer_discover_best_use_dismissed'
 const MAX_RECENTLY_VIEWED  = 10
 const MAX_RECENT_SEARCHES  = 5
 const PAGE_SIZE            = 20
+const HOME_BG              = '#F9F7F3'
+const PRIMARY_GREEN        = '#1D9E75'
+const CHARCOAL             = '#2C2C2A'
+const MUTED_GREY           = '#8F8D88'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -44,6 +49,7 @@ type ActiveOrder = {
   id: string
   reference: string
   garmentType: string
+  orderKind: 'CUSTOM' | 'READY_MADE'
   stage: OrderStage
   tailorName: string
   estimatedDate: string | null
@@ -315,7 +321,7 @@ export default function CustomerHomeScreen() {
         supabase
           .from('orders')
           .select(`
-            id, reference, garment_type, stage,
+            id, reference, garment_type, order_kind, stage,
             tailor_profiles!tailor_profile_id(display_name),
             quoted_completion_date
           `)
@@ -369,6 +375,7 @@ export default function CustomerHomeScreen() {
             id: o.id,
             reference: o.reference,
             garmentType: o.garment_type,
+            orderKind: o.order_kind ?? 'CUSTOM',
             stage: o.stage,
             tailorName: o.tailor_profiles?.display_name ?? '',
             estimatedDate: o.quoted_completion_date,
@@ -538,7 +545,7 @@ export default function CustomerHomeScreen() {
         {/* Search row */}
         <View style={styles.searchRow}>
           <View style={styles.searchBar}>
-            <Text style={styles.searchIcon}>🔍</Text>
+            <Feather name="search" size={16} color={MUTED_GREY} />
             <TextInput
               ref={inputRef}
               style={styles.searchInput}
@@ -556,8 +563,12 @@ export default function CustomerHomeScreen() {
               autoCapitalize="none"
             />
             {query.length > 0 && (
-              <TouchableOpacity onPress={() => setQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <Text style={styles.clearBtn}>✕</Text>
+              <TouchableOpacity
+                onPress={() => setQuery('')}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={styles.clearBtn}
+              >
+                <Feather name="x" size={14} color={MUTED_GREY} />
               </TouchableOpacity>
             )}
           </View>
@@ -791,11 +802,14 @@ export default function CustomerHomeScreen() {
                       <TouchableOpacity
                         key={order.id}
                         style={styles.orderCard}
-                        onPress={() => router.navigate(`/(customer)/orders/${order.id}`)}
+                        onPress={() => router.push({
+                          pathname: '/(customer)/orders/[id]',
+                          params: { id: order.id, returnTo: '/(customer)' },
+                        })}
                       >
                         <View style={[styles.orderStagePill, { backgroundColor: c?.bg ?? Colors.needleGreenLight }]}>
                           <Text style={[styles.orderStageText, { color: c?.text ?? Colors.needleGreen }]}>
-                            {STAGE_LABELS[order.stage as OrderStage] ?? order.stage}
+                            {customerOrderStageLabel(order.stage as OrderStage, order.orderKind)}
                           </Text>
                         </View>
                         <Text style={styles.orderGarment} numberOfLines={1}>{order.garmentType}</Text>
@@ -1033,53 +1047,52 @@ function RecentCard({ tailor, onPress }: { tailor: TailorCard; onPress: () => vo
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.bone },
+  safe: { flex: 1, backgroundColor: HOME_BG },
 
   // Sticky header
   stickyHeader: {
-    backgroundColor: Colors.bone,
-    paddingHorizontal: Spacing.xl,
-    paddingTop: Spacing.sm,
-    paddingBottom: Spacing.sm,
+    backgroundColor: HOME_BG,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: 6,
+    paddingBottom: 6,
     borderBottomWidth: 1,
     borderBottomColor: Colors.lightGrey,
   },
-  searchRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
+  searchRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   searchBar: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
+    flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
     backgroundColor: Colors.white, borderRadius: Radius.full,
-    paddingVertical: Spacing.md, paddingHorizontal: Spacing.lg, ...Shadow.md,
+    paddingVertical: 10, paddingHorizontal: 14, ...Shadow.sm,
   },
-  searchIcon: { fontSize: 16 },
-  searchInput: { flex: 1, fontSize: FontSize.sm, color: Colors.ink, padding: 0 },
-  clearBtn: { fontSize: 14, color: Colors.midGrey },
-  cancelBtn: { paddingVertical: Spacing.sm },
-  cancelText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  searchInput: { flex: 1, fontSize: 14, color: CHARCOAL, padding: 0 },
+  clearBtn: { minWidth: 24, minHeight: 24, alignItems: 'center', justifyContent: 'center' },
+  cancelBtn: { paddingVertical: 8, minHeight: 44, justifyContent: 'center' },
+  cancelText: { fontSize: 14, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
 
   // Scroll areas
   scroll: { flex: 1 },
-  content: { paddingBottom: 100 },
+  content: { paddingBottom: 32 },
   heroBadge: {
     alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     borderRadius: Radius.full,
     backgroundColor: Colors.needleGreenLight,
   },
   heroBadgeText: {
-    fontSize: FontSize.xs,
+    fontSize: 11,
     fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
+    color: PRIMARY_GREEN,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
   guideCard: {
-    marginHorizontal: Spacing.xl,
-    marginTop: Spacing.lg,
-    marginBottom: Spacing.lg,
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.md,
+    marginBottom: Spacing.md,
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -1093,73 +1106,77 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideTitle: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, lineHeight: 18 },
   errorBanner: {
-    marginHorizontal: Spacing.xl, marginTop: Spacing.lg,
+    marginHorizontal: Spacing.lg, marginTop: Spacing.md,
     backgroundColor: Colors.kanteRustLight, borderRadius: Radius.md,
-    padding: Spacing.md, borderLeftWidth: 3, borderLeftColor: Colors.kanteRust,
+    padding: 12, borderLeftWidth: 3, borderLeftColor: Colors.kanteRust,
   },
-  errorBannerText: { fontSize: FontSize.sm, color: Colors.kanteRust },
+  errorBannerText: { fontSize: 13, color: Colors.kanteRust, lineHeight: 18 },
 
   // Suggestions panel
-  suggestionsContent: { padding: Spacing.xl, gap: Spacing.xl, paddingBottom: 60 },
-  suggestSection: { gap: Spacing.md },
+  suggestionsContent: { padding: Spacing.lg, gap: Spacing.lg, paddingBottom: 28 },
+  suggestSection: { gap: Spacing.sm },
   suggestHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  suggestTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-  suggestClear: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  suggestTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  suggestClear: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
   recentSearchRow: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    paddingVertical: Spacing.md, borderBottomWidth: 1, borderBottomColor: Colors.lightGrey,
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.lightGrey,
   },
   recentSearchIcon: { fontSize: 16 },
-  recentSearchText: { flex: 1, fontSize: FontSize.sm, color: Colors.ink },
+  recentSearchText: { flex: 1, fontSize: 14, color: CHARCOAL },
   recentSearchRemove: { fontSize: 13, color: Colors.midGrey },
   suggestChips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   suggestChip: {
-    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
+    paddingHorizontal: 12, paddingVertical: 8,
     borderRadius: Radius.full, backgroundColor: Colors.white,
     borderWidth: 1, borderColor: Colors.lightGrey,
   },
-  suggestChipText: { fontSize: FontSize.sm, color: Colors.ink },
+  suggestChipText: { fontSize: 13, color: CHARCOAL },
 
   // Search results (FlatList)
-  resultsList: { padding: Spacing.xl, gap: Spacing.md, paddingBottom: 100 },
-  resultsHeader: { gap: Spacing.md, marginBottom: Spacing.sm },
-  resultsCount: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  resultsList: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: 28 },
+  resultsHeader: { gap: Spacing.sm, marginBottom: 6 },
+  resultsCount: { fontSize: 16, fontWeight: FontWeight.semibold, color: CHARCOAL },
   availRow: { flexDirection: 'row', gap: Spacing.sm },
   availChip: {
-    paddingHorizontal: Spacing.md, paddingVertical: 6,
+    minHeight: 44,
+    paddingHorizontal: 12, paddingVertical: 6,
     borderRadius: Radius.full, backgroundColor: Colors.white,
     borderWidth: 1, borderColor: Colors.lightGrey,
+    justifyContent: 'center',
   },
-  availChipActive: { backgroundColor: Colors.ink, borderColor: Colors.ink },
-  availLabel: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
+  availChipActive: { backgroundColor: CHARCOAL, borderColor: CHARCOAL },
+  availLabel: { fontSize: 12, color: MUTED_GREY, fontWeight: FontWeight.medium },
   availLabelActive: { color: Colors.white },
   loadMoreSpinner: { marginVertical: Spacing.lg },
 
   // Result card
   resultCard: {
-    flexDirection: 'row', gap: Spacing.md,
-    backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.md, ...Shadow.sm,
+    flexDirection: 'row', gap: Spacing.sm,
+    backgroundColor: Colors.white, borderRadius: Radius.md,
+    padding: 12, ...Shadow.sm,
   },
-  resultThumb: { width: 88, height: 96, borderRadius: Radius.md, overflow: 'hidden' },
+  resultThumb: { width: 76, height: 86, borderRadius: Radius.md, overflow: 'hidden' },
   resultThumbImg: { width: '100%', height: '100%' },
   resultThumbPlaceholder: { backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center' },
   resultInfo: { flex: 1, gap: 3, justifyContent: 'center' },
   resultNameRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  resultName: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, flex: 1, marginRight: 4 },
-  resultLocation: { fontSize: FontSize.xs, color: Colors.midGrey },
-  resultTags: { fontSize: FontSize.xs, color: Colors.inkLight },
-  resultHint: { fontSize: FontSize.xs, color: Colors.needleGreen, marginTop: 4, fontWeight: FontWeight.medium },
+  resultName: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, flex: 1, marginRight: 4 },
+  resultLocation: { fontSize: 12, color: MUTED_GREY },
+  resultTags: { fontSize: 12, color: Colors.inkLight },
+  resultHint: { fontSize: 12, color: PRIMARY_GREEN, marginTop: 3, fontWeight: FontWeight.medium },
   capabilityRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs, marginTop: 2 },
   capabilityChip: {
-    backgroundColor: Colors.bone,
+    backgroundColor: HOME_BG,
     borderRadius: Radius.full,
     paddingHorizontal: Spacing.sm,
     paddingVertical: 4,
+    minHeight: 24,
+    justifyContent: 'center',
   },
-  capabilityText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
+  capabilityText: { fontSize: 11, color: Colors.inkLight, fontWeight: FontWeight.medium },
   limitedBadge: {
     backgroundColor: '#FEF3C7', paddingHorizontal: Spacing.sm,
     paddingVertical: 2, borderRadius: Radius.full, alignSelf: 'flex-start', marginTop: 2,
@@ -1167,86 +1184,89 @@ const styles = StyleSheet.create({
   limitedText: { fontSize: 10, color: '#92400E', fontWeight: FontWeight.medium },
 
   // Section
-  section: { paddingTop: Spacing.lg },
+  section: { paddingTop: Spacing.md },
   sectionHeader: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: Spacing.xl, marginBottom: Spacing.md,
+    paddingHorizontal: Spacing.lg, marginBottom: Spacing.sm,
   },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
-  sectionLink: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  sectionTitle: { fontSize: 16, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  sectionLink: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
 
   // Continue searching card
   continueCard: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    marginHorizontal: Spacing.xl, backgroundColor: Colors.white,
-    borderRadius: Radius.lg, padding: Spacing.lg, ...Shadow.sm,
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+    marginHorizontal: Spacing.lg, backgroundColor: Colors.white,
+    borderRadius: Radius.md, padding: 12, ...Shadow.sm,
   },
-  continueLabel: { fontSize: FontSize.xs, color: Colors.midGrey, fontWeight: FontWeight.medium },
-  continueQuery: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-  continueMeta: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
-  continueThumbnail: { width: 64, height: 64, borderRadius: Radius.md, overflow: 'hidden' },
+  continueLabel: { fontSize: 11, color: MUTED_GREY, fontWeight: FontWeight.medium },
+  continueQuery: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  continueMeta: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
+  continueThumbnail: { width: 52, height: 52, borderRadius: Radius.md, overflow: 'hidden' },
   continueThumbnailPlaceholder: { backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center' },
 
   // Recently viewed
-  recentScroll: { marginLeft: Spacing.xl },
-  recentRow: { flexDirection: 'row', gap: Spacing.md, paddingRight: Spacing.xl },
-  recentCard: { width: 100, gap: 4 },
-  recentImageWrap: { width: 100, height: 110, borderRadius: Radius.md, overflow: 'hidden' },
+  recentScroll: { marginLeft: Spacing.lg },
+  recentRow: { flexDirection: 'row', gap: Spacing.sm, paddingRight: Spacing.lg },
+  recentCard: { width: 88, gap: 4 },
+  recentImageWrap: { width: 88, height: 98, borderRadius: Radius.md, overflow: 'hidden' },
   recentImage: { width: '100%', height: '100%' },
   recentImagePlaceholder: { backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center' },
-  recentName: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.ink },
+  recentName: { fontSize: 12, fontWeight: FontWeight.semibold, color: CHARCOAL },
   recentLocation: { fontSize: 10, color: Colors.midGrey },
 
   // Orders
-  ordersScroll: { marginLeft: Spacing.xl },
-  ordersRow: { flexDirection: 'row', gap: Spacing.md, paddingRight: Spacing.xl },
+  ordersScroll: { marginLeft: Spacing.lg },
+  ordersRow: { flexDirection: 'row', gap: Spacing.sm, paddingRight: Spacing.lg },
   orderCard: {
-    width: 140, backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.lg, gap: Spacing.xs, ...Shadow.sm,
+    width: 126, backgroundColor: Colors.white, borderRadius: Radius.md,
+    padding: 12, gap: 4, ...Shadow.sm,
   },
   orderStagePill: {
     alignSelf: 'flex-start', paddingHorizontal: Spacing.sm,
     paddingVertical: 3, borderRadius: Radius.full, marginBottom: Spacing.xs,
   },
   orderStageText: { fontSize: 10, fontWeight: FontWeight.bold },
-  orderGarment: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  orderTailor: { fontSize: FontSize.xs, color: Colors.midGrey },
-  orderEta: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  orderGarment: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  orderTailor: { fontSize: 12, color: MUTED_GREY },
+  orderEta: { fontSize: 12, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
   firstOrderCard: {
-    marginHorizontal: Spacing.xl,
+    marginHorizontal: Spacing.lg,
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.md,
+    gap: Spacing.sm,
     ...Shadow.sm,
+    minHeight: 88,
   },
   firstOrderIcon: {
-    width: 48,
-    height: 48,
+    width: 44,
+    height: 44,
     borderRadius: Radius.md,
     backgroundColor: Colors.needleGreenLight,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  firstOrderIconText: { fontSize: 22 },
-  firstOrderTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-  firstOrderHint: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20, marginTop: 2 },
+  firstOrderIconText: { fontSize: 20 },
+  firstOrderTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  firstOrderHint: { fontSize: 13, color: MUTED_GREY, lineHeight: 18, marginTop: 2 },
 
   // Browse styles
-  trendingScroll: { marginLeft: Spacing.xl },
-  trendingRow: { flexDirection: 'row', gap: Spacing.sm, paddingRight: Spacing.xl },
+  trendingScroll: { marginLeft: Spacing.lg },
+  trendingRow: { flexDirection: 'row', gap: Spacing.sm, paddingRight: Spacing.lg },
   trendingChip: {
-    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md,
+    paddingHorizontal: 14, paddingVertical: 10,
     borderRadius: Radius.full, backgroundColor: Colors.white,
     borderWidth: 1, borderColor: Colors.lightGrey, ...Shadow.sm,
+    minHeight: 44,
+    justifyContent: 'center',
   },
-  trendingLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink },
+  trendingLabel: { fontSize: 13, fontWeight: FontWeight.medium, color: CHARCOAL },
 
   // Tailor grid
-  cardsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.md, paddingHorizontal: Spacing.xl },
-  gridCard: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
+  cardsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingHorizontal: Spacing.lg },
+  gridCard: { backgroundColor: Colors.white, borderRadius: Radius.md, overflow: 'hidden', ...Shadow.sm },
   gridImageWrap: { width: '100%', aspectRatio: 0.9, position: 'relative' },
   gridImage: { width: '100%', height: '100%' },
   gridImagePlaceholder: { backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center' },
@@ -1260,37 +1280,39 @@ const styles = StyleSheet.create({
   availDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: Colors.success },
   availText: { fontSize: 10, fontWeight: FontWeight.semibold, color: Colors.ink },
   availTextFull: { color: Colors.white },
-  gridInfo: { padding: Spacing.md, gap: 4 },
+  gridInfo: { padding: 12, gap: 4 },
   gridTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  gridName: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, flex: 1, marginRight: 4 },
-  gridLocation: { fontSize: FontSize.xs, color: Colors.midGrey },
-  gridTags: { fontSize: FontSize.xs, color: Colors.inkLight, marginTop: 2 },
-  gridHint: { fontSize: FontSize.xs, color: Colors.needleGreen, marginTop: 4, fontWeight: FontWeight.medium },
+  gridName: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, flex: 1, marginRight: 4 },
+  gridLocation: { fontSize: 12, color: MUTED_GREY },
+  gridTags: { fontSize: 12, color: Colors.inkLight, marginTop: 2 },
+  gridHint: { fontSize: 12, color: PRIMARY_GREEN, marginTop: 3, fontWeight: FontWeight.medium },
 
   // Empty state
-  emptyState: { alignItems: 'center', gap: Spacing.sm, paddingVertical: 60, paddingHorizontal: Spacing.xl },
+  emptyState: { alignItems: 'center', gap: Spacing.sm, paddingVertical: 48, paddingHorizontal: Spacing.lg },
   emptyStateBadge: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     borderRadius: Radius.full,
     backgroundColor: Colors.needleGreenLight,
   },
   emptyStateBadgeText: {
-    fontSize: FontSize.xs,
+    fontSize: 11,
     fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
+    color: PRIMARY_GREEN,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
   emptyStateEmoji: { fontSize: 40 },
-  emptyStateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
-  emptyStateHint: { fontSize: FontSize.sm, color: Colors.midGrey },
+  emptyStateTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.inkLight },
+  emptyStateHint: { fontSize: 13, color: MUTED_GREY, textAlign: 'center' },
   searchRetryBtn: {
     marginTop: Spacing.md,
-    backgroundColor: Colors.needleGreen,
+    backgroundColor: PRIMARY_GREEN,
     borderRadius: Radius.full,
     paddingHorizontal: Spacing.xl,
     paddingVertical: Spacing.sm,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   searchRetryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
   searchSecondaryBtn: {
@@ -1301,32 +1323,34 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: Spacing.xl,
     paddingVertical: Spacing.sm,
+    minHeight: 44,
+    justifyContent: 'center',
   },
-  searchSecondaryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  searchSecondaryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: CHARCOAL },
   emptyBrowseCard: {
-    marginHorizontal: Spacing.xl,
+    marginHorizontal: Spacing.lg,
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.xl,
+    borderRadius: Radius.md,
+    padding: Spacing.lg,
     gap: Spacing.sm,
     ...Shadow.sm,
   },
   emptyBrowseBadge: {
     alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     borderRadius: Radius.full,
     backgroundColor: Colors.needleGreenLight,
   },
   emptyBrowseBadgeText: {
-    fontSize: FontSize.xs,
+    fontSize: 11,
     fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
+    color: PRIMARY_GREEN,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  emptyBrowseTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-  emptyBrowseHint: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20 },
+  emptyBrowseTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  emptyBrowseHint: { fontSize: 13, color: MUTED_GREY, lineHeight: 18 },
   emptyBrowseCta: {
     alignSelf: 'flex-start',
     marginTop: Spacing.sm,
@@ -1334,6 +1358,8 @@ const styles = StyleSheet.create({
     borderRadius: Radius.full,
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.sm,
+    minHeight: 44,
+    justifyContent: 'center',
   },
-  emptyBrowseCtaText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+  emptyBrowseCtaText: { fontSize: FontSize.sm, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
 })

@@ -8,7 +8,7 @@
  *   send-quote            PENDING_QUOTE|CONSULTATION → QUOTE_SENT  (sets amount, currency, completion_date)
  *   decline-order         PENDING_QUOTE|CONSULTATION → DECLINED
  *   request-consultation  PENDING_QUOTE → CONSULTATION  (sets optional consultation_fee)
- *   advance-stage         CONFIRMED → DESIGNING|SOURCING|CUTTING → SEWING → FINISHING → READY_FOR_COLLECTION|SHIPPED
+ *   advance-stage         CONFIRMED → DESIGNING|SOURCING|CUTTING → SEWING → FINISHING → READY_FOR_COLLECTION|READY_FOR_DRAPE_DISPATCH
  *                         When advancing to READY_FOR_COLLECTION: generates collection_code server-side
  *
  * Required env vars:
@@ -29,10 +29,19 @@ import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import {
+  customerFulfillmentPaymentRequestedNotification,
+  fulfillmentPaymentRequestedStageNote,
+} from '../_shared/payment-copy.ts'
+import { normalizeStoredPhone, validateDispatchPhone, validateRecipientPhone } from '../_shared/phone.ts'
+import {
+  buildCancellationReviewNote,
+  buildDeliveryReviewNote,
   buildFabricReceivedNote,
   buildFitProfileReviewedNote,
   buildMaterialIssueNote,
   buildMeasurementConfirmationRequestNote,
+  CANCELLATION_REVIEW_REASON_LABELS,
+  DELIVERY_REVIEW_REASON_LABELS,
   FABRIC_HANDOFF_LABELS,
   fitProfileNeedsTailorReview,
   MATERIAL_ISSUE_REASON_LABELS,
@@ -46,6 +55,7 @@ import { deriveTailorReadiness } from '../_shared/tailor-readiness.ts'
 import { z, parseBody, uuid, isoDate } from '../_shared/validate.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
+import { resolveDrapeManagedFulfillmentFee } from '../../../packages/shared/src/fulfillment-fees.ts'
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
@@ -69,13 +79,23 @@ const BodySchema = z.discriminatedUnion('action', [
     note:            z.string().trim().max(300).optional(),
   }),
   z.object({
+    orderId: uuid,
+    action: z.literal('request-fulfillment-payment'),
+    amount: z.number().int().positive().max(100_000_00),
+    note: z.string().trim().max(300).optional(),
+  }),
+  z.object({
     orderId:        uuid,
     action:         z.literal('advance-stage'),
-    targetStage:    z.enum(['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_COLLECTION', 'SHIPPED']),
+    targetStage:    z.enum(['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_COLLECTION', 'READY_FOR_DRAPE_DISPATCH']),
     note:           z.string().trim().min(10).max(300),
     photoUrl:       z.string().url().optional(),
     trackingNumber: z.string().trim().max(50).optional(),
     carrier:        z.string().trim().max(50).optional(),
+    fulfillmentProvider: z.string().trim().max(80).optional(),
+    fulfillmentReference: z.string().trim().max(120).optional(),
+    fulfillmentContactName: z.string().trim().max(120).optional(),
+    fulfillmentContactPhone: z.string().trim().max(40).optional(),
   }),
   z.object({
     orderId: uuid,
@@ -111,6 +131,30 @@ const BodySchema = z.discriminatedUnion('action', [
     ]),
     note:    z.string().trim().min(10).max(300),
   }),
+  z.object({
+    orderId: uuid,
+    action: z.literal('request-cancellation-review'),
+    reason: z.enum([
+      'ITEM_UNAVAILABLE',
+      'ITEM_DAMAGED_BEFORE_DISPATCH',
+      'TAILOR_CANNOT_FULFIL',
+      'DISPATCH_DELAY',
+      'OTHER',
+    ]),
+    note: z.string().trim().max(300).optional(),
+  }),
+  z.object({
+    orderId: uuid,
+    action: z.literal('request-delivery-review'),
+    reason: z.enum([
+      'DISPATCH_DELAY',
+      'DELIVERY_FAILED',
+      'RETURN_TO_SENDER',
+      'RECIPIENT_UNREACHABLE',
+      'OTHER',
+    ]),
+    note: z.string().trim().max(300).optional(),
+  }),
 ])
 
 const FN = 'tailor-order-action'
@@ -125,15 +169,19 @@ type Action =
   | 'send-quote'
   | 'decline-order'
   | 'request-consultation'
+  | 'request-fulfillment-payment'
   | 'advance-stage'
   | 'confirm-collection'
   | 'request-measurement-confirmation'
   | 'confirm-fit-readiness'
   | 'confirm-fabric-received'
   | 'open-material-issue'
+  | 'request-cancellation-review'
+  | 'request-delivery-review'
 type OrderRow = {
   id: string
   stage: string
+  order_kind?: string | null
   tailor_id?: string | null
   customer_id?: string | null
   deadline?: string | null
@@ -142,7 +190,19 @@ type OrderRow = {
   customer_measurements_snapshot?: unknown
   delivery_method?: string | null
   delivery_address?: string | null
+  recipient_name?: string | null
+  recipient_phone?: string | null
+  quoted_amount?: number | null
+  quoted_currency?: string | null
   fulfillment_fee?: number | null
+  fulfillment_payment_requested_at?: string | null
+  fulfillment_payment_paid_at?: string | null
+  fulfillment_provider?: string | null
+  fulfillment_reference?: string | null
+  fulfillment_contact_name?: string | null
+  fulfillment_contact_phone?: string | null
+  tracking_number?: string | null
+  carrier?: string | null
   collection_code?: string | null
   collection_code_attempts?: number | null
   collection_code_last_attempt_at?: string | null
@@ -161,7 +221,7 @@ const ADVANCE_VALID_FROM: Record<string, string[]> = {
   SEWING:               ['CUTTING'],
   FINISHING:            ['SEWING'],
   READY_FOR_COLLECTION: ['FINISHING'],
-  SHIPPED:              ['FINISHING'],
+  READY_FOR_DRAPE_DISPATCH: ['FINISHING'],
 }
 
 const PRE_CUTTING_STAGES = ['PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING', 'CONFIRMED', 'DESIGNING', 'SOURCING']
@@ -177,11 +237,39 @@ const CUSTOMER_NOTIFICATION: Record<string, { title: string; body: string }> = {
   SEWING:                  { title: 'Order update 🧵',          body: 'Your tailor is now sewing your garment.' },
   FINISHING:               { title: 'Almost ready ✨',          body: 'Your tailor is putting the finishing touches on your order.' },
   READY_FOR_COLLECTION:    { title: 'Ready to collect! 📦',    body: 'Your order is ready. Show your collection code at pickup.' },
-  SHIPPED:                 { title: 'On the way 🚚',            body: 'Your order has been shipped.' },
+  READY_FOR_DRAPE_DISPATCH:{ title: 'Ready for Drape dispatch 📦', body: 'Your order is packed and ready for Drape dispatch.' },
   'request-measurement-confirmation': { title: 'Measurement check needed', body: 'Your tailor wants you to confirm your measurements before cutting starts.' },
   'confirm-fit-readiness': { title: 'Fit intake reviewed', body: 'Your tailor reviewed the guided fit intake attached to this order.' },
   'confirm-fabric-received': { title: 'Fabric received', body: 'Your tailor confirmed they received your fabric.' },
   'open-material-issue': { title: 'Fabric issue needs your decision', body: 'Your tailor reviewed the fabric and needs your choice before production can continue.' },
+  'request-cancellation-review': { title: 'Cancellation review requested', body: 'Your tailor asked Drape to review cancelling this order before handoff.' },
+  'request-delivery-review': { title: 'Delivery review requested', body: 'Your tailor asked Drape to review a dispatch or delivery issue.' },
+}
+
+function isReadyMadeOrder(order: Pick<OrderRow, 'order_kind'>) {
+  return order.order_kind === 'READY_MADE'
+}
+
+function validAdvanceStages(order: Pick<OrderRow, 'order_kind'>, targetStage: string) {
+  if (!isReadyMadeOrder(order)) {
+    return ADVANCE_VALID_FROM[targetStage] ?? []
+  }
+
+  if (targetStage === 'FINISHING') return ['CONFIRMED']
+  if (targetStage === 'READY_FOR_COLLECTION') return ['FINISHING']
+  if (targetStage === 'READY_FOR_DRAPE_DISPATCH') return ['FINISHING']
+  return []
+}
+
+function customerNotificationForStage(targetStage: string, order: Pick<OrderRow, 'order_kind'>) {
+  if (isReadyMadeOrder(order) && targetStage === 'FINISHING') {
+    return {
+      title: 'Order update 📦',
+      body: 'Your seller is preparing your order for dispatch or pickup.',
+    }
+  }
+
+  return CUSTOMER_NOTIFICATION[targetStage]
 }
 
 /** Cryptographically random 4-digit collection code (1000–9999). */
@@ -191,7 +279,12 @@ function generateCollectionCode(): string {
   return String(1000 + (arr[0] % 9000))
 }
 
-async function auditShippingHandoffBlocked(
+function formatMoneyForNote(amountMinorUnits: number, currency: string | null | undefined) {
+  const normalizedCurrency = (currency ?? 'USD').trim().toUpperCase() || 'USD'
+  return `${normalizedCurrency} ${(amountMinorUnits / 100).toFixed(2)}`
+}
+
+async function auditFulfillmentHandoffBlocked(
   supabase: any,
   callerId: string,
   order: Pick<OrderRow, 'id' | 'stage' | 'delivery_method'>,
@@ -199,7 +292,7 @@ async function auditShippingHandoffBlocked(
   payload?: Record<string, unknown>,
 ) {
   await audit(supabase, {
-    event: 'shipping.handoff_blocked',
+    event: 'fulfillment.handoff_blocked',
     actor_id: callerId,
     actor_role: 'TAILOR',
     order_id: order.id,
@@ -233,6 +326,7 @@ Deno.serve(async (req) => {
 
     const body = parsed.data
     const { orderId, action } = body
+    let sellerProfileLocation: string | null = null
 
     const supabase = createClient(
       getSupabaseUrl(),
@@ -256,7 +350,7 @@ Deno.serve(async (req) => {
     if (action === 'send-quote') {
       const { data: profile, error: profileError } = await supabase
         .from('tailor_profiles')
-        .select('profile_completed, id_verification_status, stripe_account_id, paystack_account_id')
+        .select('profile_completed, id_verification_status, stripe_account_id, paystack_account_id, location')
         .eq('user_id', caller.id)
         .maybeSingle()
 
@@ -266,6 +360,7 @@ Deno.serve(async (req) => {
       }
 
       const readiness = deriveTailorReadiness(profile)
+      sellerProfileLocation = profile?.location ?? null
       if (!readiness.canAcceptPaidOrders) {
         await audit(supabase, {
           event: 'seller.paid_work_blocked',
@@ -285,7 +380,7 @@ Deno.serve(async (req) => {
     // Only collection confirmation needs the collection code fields.
     const orderSelect = action === 'confirm-collection'
       ? 'id, stage, tailor_id, customer_id, collection_code, collection_code_attempts, collection_code_last_attempt_at, updated_at'
-      : 'id, stage, tailor_id, customer_id, deadline, fabric_source, special_note, customer_measurements_snapshot, delivery_method, delivery_address, fulfillment_fee'
+      : 'id, stage, order_kind, tailor_id, customer_id, deadline, fabric_source, special_note, customer_measurements_snapshot, delivery_method, delivery_address, recipient_name, recipient_phone, quoted_amount, quoted_currency, fulfillment_fee, fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone, tracking_number, carrier'
 
     // Fetch order — verify tailor ownership and current stage
     const { data: orderData, error: orderError } = await supabase
@@ -607,6 +702,152 @@ Deno.serve(async (req) => {
       })
     }
 
+    if (action === 'request-cancellation-review') {
+      const meta = parseOrderSupportMeta(order.special_note)
+      if (meta.cancellationReview?.status === 'OPEN') {
+        return new Response(
+          JSON.stringify({ error: 'A cancellation review is already open on this order.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (!['PAYMENT_PENDING', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH'].includes(order.stage)) {
+        return new Response(
+          JSON.stringify({ error: `Cannot request cancellation review from stage ${order.stage}` }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const reasonLabel = CANCELLATION_REVIEW_REASON_LABELS[body.reason]
+      const nextMeta = {
+        ...meta,
+        cancellationReview: {
+          status: 'OPEN' as const,
+          requestedBy: 'TAILOR' as const,
+          reason: body.reason,
+          reasonLabel,
+          note: body.note?.trim() || null,
+          requestedAt: new Date().toISOString(),
+          requestedFromStage: order.stage,
+        },
+      }
+
+      const { error } = await supabase
+        .from('orders')
+        .update({
+          stage: 'IN_DISPUTE',
+          stage_updated_at: new Date().toISOString(),
+          special_note: serializeOrderSupportMeta(nextMeta),
+        })
+        .eq('id', orderId)
+
+      if (error) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
+        return new Response('Database error', { status: 500, headers: cors })
+      }
+
+      await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: 'IN_DISPUTE',
+        note: buildCancellationReviewNote('TAILOR', reasonLabel, body.note ?? null),
+      })
+
+      await audit(supabase, {
+        event: 'order.cancellation_review_requested',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        order_id: orderId,
+        severity: 'warn',
+        payload: { reason: body.reason, from_stage: order.stage },
+      })
+
+      if (order.customer_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.customer_id.toString(), {
+            ...CUSTOMER_NOTIFICATION['request-cancellation-review'],
+            data: { orderId },
+          })
+        )
+      }
+
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (action === 'request-delivery-review') {
+      const meta = parseOrderSupportMeta(order.special_note)
+      if (meta.deliveryReview?.status === 'OPEN') {
+        return new Response(
+          JSON.stringify({ error: 'A delivery review is already open on this order.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (!['READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED'].includes(order.stage)) {
+        return new Response(
+          JSON.stringify({ error: `Cannot request delivery review from stage ${order.stage}` }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const reasonLabel = DELIVERY_REVIEW_REASON_LABELS[body.reason]
+      const nextMeta = {
+        ...meta,
+        deliveryReview: {
+          status: 'OPEN' as const,
+          requestedBy: 'TAILOR' as const,
+          reason: body.reason,
+          reasonLabel,
+          note: body.note?.trim() || null,
+          requestedAt: new Date().toISOString(),
+          requestedFromStage: order.stage,
+        },
+      }
+
+      const { error } = await supabase
+        .from('orders')
+        .update({
+          stage: 'IN_DISPUTE',
+          stage_updated_at: new Date().toISOString(),
+          special_note: serializeOrderSupportMeta(nextMeta),
+        })
+        .eq('id', orderId)
+
+      if (error) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
+        return new Response('Database error', { status: 500, headers: cors })
+      }
+
+      await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: 'IN_DISPUTE',
+        note: buildDeliveryReviewNote('TAILOR', reasonLabel, body.note ?? null),
+      })
+
+      await audit(supabase, {
+        event: 'order.delivery_review_requested',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        order_id: orderId,
+        severity: 'warn',
+        payload: { reason: body.reason, from_stage: order.stage },
+      })
+
+      if (order.customer_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.customer_id.toString(), {
+            ...CUSTOMER_NOTIFICATION['request-delivery-review'],
+            data: { orderId },
+          })
+        )
+      }
+
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      })
+    }
+
     // ── send-quote ────────────────────────────────────────────────────────────
     if (action === 'send-quote') {
       // Idempotent: if already QUOTE_SENT, the previous request succeeded — return ok
@@ -628,7 +869,15 @@ Deno.serve(async (req) => {
       const customerDeadline = order.deadline ? new Date(order.deadline) : null
       const fulfillmentFee = order.delivery_method === 'LOCAL_COLLECTION'
         ? 0
-        : Math.max(body.fulfillmentFee ?? order.fulfillment_fee ?? 0, 0)
+        : resolveDrapeManagedFulfillmentFee({
+            fulfillment:
+              order.delivery_method === 'LOCAL_DELIVERY'
+                ? 'DELIVERY'
+                : 'SHIPPING',
+            orderCurrency: currency.trim().toUpperCase() as 'USD' | 'GBP' | 'EUR' | 'NGN' | 'GHS' | 'KES' | 'CAD',
+            sellerLocation: sellerProfileLocation,
+            destinationAddress: order.delivery_address ?? null,
+          }).feeMinorUnits
 
       if (customerDeadline && parsedDate.getTime() > customerDeadline.getTime()) {
         return new Response(
@@ -643,6 +892,11 @@ Deno.serve(async (req) => {
           stage: 'QUOTE_SENT',
           quoted_amount: amount + fulfillmentFee,
           fulfillment_fee: fulfillmentFee,
+          fulfillment_payment_requested_at: null,
+          fulfillment_payment_paid_at: null,
+          fulfillment_payment_provider: null,
+          fulfillment_payment_intent_id: null,
+          fulfillment_payment_checkout_url: null,
           quoted_currency: currency,
           quoted_completion_date: parsedDate.toISOString(),
           quote_note: body.note?.trim() || null,
@@ -684,6 +938,16 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ ok: true }), {
         headers: { ...cors, 'Content-Type': 'application/json' },
       })
+    }
+
+    if (action === 'request-fulfillment-payment') {
+      return new Response(
+        JSON.stringify({
+          error:
+            'Standard delivery and shipping are now Drape-managed with a flat fee paid at checkout. Finish packing the order, then mark it ready for Drape dispatch.',
+        }),
+        { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+      )
     }
 
     // ── decline-order ─────────────────────────────────────────────────────────
@@ -804,7 +1068,21 @@ Deno.serve(async (req) => {
     // ── advance-stage ─────────────────────────────────────────────────────────
     if (action === 'advance-stage') {
       // Zod already validated targetStage against the enum
-      const { targetStage, photoUrl, trackingNumber, carrier } = body as Extract<typeof body, { action: 'advance-stage' }>
+      const {
+        targetStage,
+        photoUrl,
+        trackingNumber,
+        carrier,
+        fulfillmentProvider,
+        fulfillmentReference,
+        fulfillmentContactName,
+        fulfillmentContactPhone,
+      } = body as Extract<typeof body, { action: 'advance-stage' }>
+      const normalizedTrackingNumber = trackingNumber?.trim().toUpperCase() ?? ''
+      const normalizedProvider = fulfillmentProvider?.trim() || carrier?.trim() || ''
+      const normalizedReference = fulfillmentReference?.trim() ?? ''
+      const normalizedContactName = fulfillmentContactName?.trim() ?? ''
+      const normalizedContactPhone = normalizeStoredPhone(fulfillmentContactPhone)
 
       // Idempotent: if already in the target stage, the previous request succeeded
       if (order.stage === targetStage) {
@@ -820,7 +1098,14 @@ Deno.serve(async (req) => {
         })
       }
 
-      const validFrom = ADVANCE_VALID_FROM[targetStage]
+      if (isReadyMadeOrder(order) && ['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING'].includes(targetStage)) {
+        return new Response(
+          JSON.stringify({ error: 'Ready-made orders skip tailoring production stages. Move this order into preparation instead.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const validFrom = validAdvanceStages(order, targetStage)
       if (!validFrom.includes(order.stage)) {
         return new Response(
           JSON.stringify({ error: `Cannot advance to ${targetStage} from stage ${order.stage}` }),
@@ -829,49 +1114,83 @@ Deno.serve(async (req) => {
       }
 
       if (targetStage === 'READY_FOR_COLLECTION' && order.delivery_method !== 'LOCAL_COLLECTION') {
-        await auditShippingHandoffBlocked(supabase, caller.id, order, 'requires_shipping_flow')
+        await auditFulfillmentHandoffBlocked(supabase, caller.id, order, 'requires_shipping_flow')
         return new Response(
-          JSON.stringify({ error: 'This order is set for shipping. Mark it as shipped instead.' }),
+          JSON.stringify({ error: 'This order is not set for pickup. Use the matching delivery handoff instead.' }),
           { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
 
-      if (targetStage === 'SHIPPED' && order.delivery_method === 'LOCAL_COLLECTION') {
-        await auditShippingHandoffBlocked(supabase, caller.id, order, 'requires_collection_flow')
+      if (targetStage === 'READY_FOR_COLLECTION') {
+        const { data: pickupDetails, error: pickupDetailsError } = await supabase
+          .from('tailor_pickup_details')
+          .select('pickup_address')
+          .eq('user_id', caller.id)
+          .maybeSingle()
+
+        if (pickupDetailsError) {
+          log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: pickupDetailsError.message })
+          return new Response('Database error', { status: 500, headers: cors })
+        }
+
+        if (!pickupDetails?.pickup_address?.trim()) {
+          return new Response(
+            JSON.stringify({ error: 'Add your private pickup address in Profile before marking this order ready for collection.' }),
+            { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+          )
+        }
+      }
+
+      if (targetStage === 'READY_FOR_DRAPE_DISPATCH' && order.delivery_method === 'LOCAL_COLLECTION') {
+        await auditFulfillmentHandoffBlocked(supabase, caller.id, order, 'requires_collection_flow')
         return new Response(
-          JSON.stringify({ error: 'This order is set for local collection. Mark it ready for collection instead.' }),
+          JSON.stringify({
+            error:
+              'This order is set for local collection. Mark it ready for collection instead.',
+          }),
           { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
 
-      if (targetStage === 'SHIPPED' && !trackingNumber?.trim()) {
-        await auditShippingHandoffBlocked(supabase, caller.id, order, 'tracking_number_missing')
+      if (targetStage === 'READY_FOR_DRAPE_DISPATCH' && !order.delivery_address?.trim()) {
+        await auditFulfillmentHandoffBlocked(supabase, caller.id, order, 'delivery_address_missing')
         return new Response(
-          JSON.stringify({ error: 'Tracking number is required when marking an order as shipped.' }),
-          { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
-        )
-      }
-
-      if (targetStage === 'SHIPPED' && !carrier?.trim()) {
-        await auditShippingHandoffBlocked(supabase, caller.id, order, 'carrier_missing')
-        return new Response(
-          JSON.stringify({ error: 'Carrier is required when marking an order as shipped.' }),
-          { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
-        )
-      }
-
-      if (targetStage === 'SHIPPED' && !order.delivery_address?.trim()) {
-        await auditShippingHandoffBlocked(supabase, caller.id, order, 'delivery_address_missing')
-        return new Response(
-          JSON.stringify({ error: 'Shipping address is missing on this order. Ask the customer to update it before shipping.' }),
+          JSON.stringify({ error: 'Delivery address is missing on this order. Ask the customer to update it before Drape dispatch.' }),
           { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
 
-      if (targetStage === 'SHIPPED' && !photoUrl?.trim()) {
-        await auditShippingHandoffBlocked(supabase, caller.id, order, 'shipment_proof_missing')
+      if (targetStage === 'READY_FOR_DRAPE_DISPATCH' && !order.recipient_name?.trim()) {
+        await auditFulfillmentHandoffBlocked(supabase, caller.id, order, 'recipient_name_missing')
         return new Response(
-          JSON.stringify({ error: 'Add a shipment photo or dispatch proof before marking this order as shipped.' }),
+          JSON.stringify({ error: 'Recipient name is missing on this order. Ask the customer to update it before Drape dispatch.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (targetStage === 'READY_FOR_DRAPE_DISPATCH' && !order.recipient_phone?.trim()) {
+        await auditFulfillmentHandoffBlocked(supabase, caller.id, order, 'recipient_phone_missing')
+        return new Response(
+          JSON.stringify({ error: 'Recipient phone is missing on this order. Ask the customer to update it before Drape dispatch.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (targetStage === 'READY_FOR_DRAPE_DISPATCH') {
+        const recipientPhoneError = validateRecipientPhone(order.recipient_phone)
+        if (recipientPhoneError) {
+          await auditFulfillmentHandoffBlocked(supabase, caller.id, order, 'recipient_phone_invalid')
+          return new Response(
+            JSON.stringify({ error: recipientPhoneError }),
+            { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+          )
+        }
+      }
+
+      if (targetStage === 'READY_FOR_DRAPE_DISPATCH' && !photoUrl?.trim()) {
+        await auditFulfillmentHandoffBlocked(supabase, caller.id, order, 'dispatch_proof_missing')
+        return new Response(
+          JSON.stringify({ error: 'Add a packed-order photo before marking this order ready for Drape dispatch.' }),
           { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
@@ -923,11 +1242,6 @@ Deno.serve(async (req) => {
         updates.collection_code_last_attempt_at = null
       }
 
-      if (targetStage === 'SHIPPED' && trackingNumber?.trim()) {
-        updates.tracking_number = trackingNumber.trim().toUpperCase()
-        updates.carrier = carrier?.trim() ?? null
-      }
-
       const { error } = await supabase
         .from('orders')
         .update(updates)
@@ -955,14 +1269,12 @@ Deno.serve(async (req) => {
           from_stage: order.stage,
           to_stage: targetStage,
           delivery_method: order.delivery_method ?? null,
-          tracking_number: targetStage === 'SHIPPED' ? updates.tracking_number ?? null : null,
-          carrier: targetStage === 'SHIPPED' ? updates.carrier ?? null : null,
         },
       })
 
       log('info', FN, 'order.stage_changed', { actor_id: caller.id, order_id: orderId, from_stage: order.stage, to_stage: targetStage })
 
-      const stageNotif = CUSTOMER_NOTIFICATION[targetStage]
+      const stageNotif = customerNotificationForStage(targetStage, order)
       if (stageNotif && order.customer_id) {
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.customer_id.toString(), { ...stageNotif, data: { orderId } })

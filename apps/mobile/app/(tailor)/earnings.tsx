@@ -17,7 +17,8 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { deriveTailorReadiness, type TailorReadinessInput } from '@/lib/tailor-readiness'
+import { goBackOrFallback } from '@/lib/navigation'
+import { deriveTailorReadiness, payoutSetupCopy, type TailorReadinessInput } from '@/lib/tailor-readiness'
 import { formatAmount, fetchRates } from '@/lib/currency'
 import type { CurrencyCode, Rates } from '@/lib/currency'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -210,6 +211,7 @@ export default function EarningsScreen() {
 
   const fmt = (minor: number) => formatAmount(minor, currency, currency, rates)
   const readiness = deriveTailorReadiness(readinessInput)
+  const payoutNextStep = payoutSetupCopy(currency)
 
   if (loading) {
     return (
@@ -262,7 +264,7 @@ export default function EarningsScreen() {
   const maxBucket = Math.max(...(data?.monthBuckets.map((b) => b.amount) ?? [1]), 1)
 
   function goBack() {
-    router.replace('/(tailor)/profile')
+    goBackOrFallback(router, navigation, '/(tailor)')
   }
 
   return (
@@ -316,6 +318,30 @@ export default function EarningsScreen() {
           </View>
         ) : null}
 
+        {!readiness.payoutReady ? (
+          <View style={styles.nextStepCard}>
+            <Text style={styles.nextStepTitle}>{payoutNextStep.title}</Text>
+            <Text style={styles.nextStepBody}>{payoutNextStep.body}</Text>
+            <Text style={styles.nextStepHint}>
+              Use the in-app payout setup so Drape has a structured request tied to this seller profile. That keeps the blocker visible and trackable instead of leaving it in email only.
+            </Text>
+            <View style={styles.nextStepActions}>
+              <TouchableOpacity
+                style={styles.primaryActionBtn}
+                onPress={() => router.push('/(tailor)/profile/payout-setup' as never)}
+              >
+                <Text style={styles.primaryActionBtnText}>Start payout setup</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.secondaryActionBtn}
+                onPress={() => router.push('/(tailor)/profile/trust-access' as never)}
+              >
+                <Text style={styles.secondaryActionBtnText}>Open trust & access</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
+
         {/* Hero stat */}
         <View style={styles.heroCard}>
           <Text style={styles.heroLabel}>Total earnings</Text>
@@ -343,7 +369,7 @@ export default function EarningsScreen() {
           <Text style={styles.sectionTitle}>This month</Text>
           <View style={styles.analyticsRow}>
             <AnalyticCard label="Orders completed" value={String(data?.ordersThisMonth ?? 0)} />
-            <AnalyticCard label="Avg rating" value={data?.avgRating ? `${data.avgRating.toFixed(1)} ★` : '—'} />
+            <AnalyticCard label="Avg rating" value={data?.avgRating ? `${data.avgRating.toFixed(1)} ★` : 'No rating'} />
             <AnalyticCard label="Earned" value={fmt(data?.thisMonth ?? 0)} highlight />
           </View>
         </View>
@@ -466,31 +492,31 @@ const styles = StyleSheet.create({
   stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
   scroll: { flex: 1 },
-  content: { paddingBottom: Spacing.xxxl },
+  content: { paddingBottom: 36 },
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
   },
-  back: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium, width: 60 },
-  title: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
+  back: { color: Colors.needleGreen, fontSize: FontSize.sm, fontWeight: FontWeight.medium, width: 60 },
+  title: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
 
   heroCard: {
-    margin: Spacing.xl, backgroundColor: Colors.needleGreen,
-    borderRadius: Radius.xl, padding: Spacing.xl, gap: Spacing.md,
+    marginHorizontal: Spacing.lg, marginTop: Spacing.sm, backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.sm,
   },
   heroLabel: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.7)' },
-  heroValue: { fontSize: 44, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: -1 },
-  heroRow: { flexDirection: 'row', gap: Spacing.lg, marginTop: Spacing.sm },
+  heroValue: { fontSize: 36, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: -1 },
+  heroRow: { flexDirection: 'row', gap: Spacing.md, marginTop: 4 },
   heroSub: { gap: 2 },
   heroSubLabel: { fontSize: FontSize.xs, color: 'rgba(255,255,255,0.6)' },
   heroSubValue: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.white },
   heroDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.2)' },
   guideCard: {
-    marginHorizontal: Spacing.xl,
+    marginHorizontal: Spacing.lg,
     marginBottom: Spacing.md,
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -508,11 +534,11 @@ const styles = StyleSheet.create({
   },
   guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   readinessCard: {
-    marginHorizontal: Spacing.xl,
+    marginHorizontal: Spacing.lg,
     marginBottom: Spacing.md,
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: Spacing.xs,
     ...Shadow.sm,
   },
@@ -523,31 +549,62 @@ const styles = StyleSheet.create({
   readinessMeta: { fontSize: FontSize.xs, color: Colors.midGrey },
   readinessLink: { alignSelf: 'flex-start' },
   readinessLinkText: { fontSize: FontSize.xs, color: Colors.midGrey, fontWeight: FontWeight.medium },
+  nextStepCard: {
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    padding: 14,
+    gap: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  nextStepTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  nextStepBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  nextStepHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
+  nextStepActions: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginTop: Spacing.xs },
+  primaryActionBtn: {
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+  },
+  primaryActionBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  secondaryActionBtn: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  secondaryActionBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink },
 
   escrowCard: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    marginHorizontal: Spacing.xl, backgroundColor: Colors.warning + '15',
-    borderRadius: Radius.md, padding: Spacing.lg,
+    marginHorizontal: Spacing.lg, backgroundColor: Colors.warning + '15',
+    borderRadius: Radius.md, padding: 14,
     borderWidth: 1, borderColor: Colors.warning + '40',
   },
   escrowDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.warning },
   escrowLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
   escrowValue: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
 
-  section: { paddingHorizontal: Spacing.xl, gap: Spacing.md, marginTop: Spacing.xl },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  section: { paddingHorizontal: Spacing.lg, gap: Spacing.sm, marginTop: Spacing.lg },
+  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
 
   analyticsRow: { flexDirection: 'row', gap: Spacing.sm },
   analyticCard: {
-    flex: 1, backgroundColor: Colors.white, borderRadius: Radius.md,
-    padding: Spacing.md, alignItems: 'center', gap: 4, ...Shadow.sm,
+    flex: 1, backgroundColor: Colors.white, borderRadius: Radius.sm,
+    padding: 12, alignItems: 'center', gap: 4, ...Shadow.sm,
   },
   analyticCardHighlight: { backgroundColor: Colors.needleGreen },
-  analyticValue: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
+  analyticValue: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink },
   analyticValueHighlight: { color: Colors.white },
   analyticLabel: { fontSize: 10, color: Colors.midGrey, textAlign: 'center' },
 
-  chartCard: { backgroundColor: Colors.white, borderRadius: Radius.lg, padding: Spacing.lg, ...Shadow.sm },
+  chartCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, ...Shadow.sm },
   chartArea: {
     flexDirection: 'row', alignItems: 'flex-end',
     height: CHART_HEIGHT + 40, gap: 0,
@@ -557,7 +614,7 @@ const styles = StyleSheet.create({
   chartBar: { width: '60%', backgroundColor: Colors.needleGreen, borderRadius: 3, minHeight: 4 },
   chartBarLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
 
-  historyList: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
+  historyList: { backgroundColor: Colors.white, borderRadius: Radius.md, overflow: 'hidden', ...Shadow.sm },
   historyRow: {
     flexDirection: 'row', alignItems: 'center', padding: Spacing.lg,
     borderBottomWidth: 1, borderBottomColor: Colors.lightGrey,
@@ -567,8 +624,8 @@ const styles = StyleSheet.create({
   historyAmount: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.needleGreen },
 
   payoutInfoCard: {
-    margin: Spacing.xl, backgroundColor: Colors.boneDeep,
-    borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.sm,
+    margin: Spacing.lg, backgroundColor: Colors.boneDeep,
+    borderRadius: Radius.md, padding: 14, gap: Spacing.sm,
   },
   payoutInfoTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   payoutInfoText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },

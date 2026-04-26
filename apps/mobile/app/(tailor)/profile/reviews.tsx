@@ -1,9 +1,9 @@
 import { useCallback, useState } from 'react'
 import {
   View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView,
-  TextInput, KeyboardAvoidingView, Platform, Image, ActivityIndicator,
+  TextInput, KeyboardAvoidingView, Platform, ActivityIndicator,
 } from 'react-native'
-import { useRouter, useFocusEffect } from 'expo-router'
+import { useNavigation, useRouter, useFocusEffect } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
@@ -11,6 +11,8 @@ import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { AvatarImage } from '@/components/ui/AvatarImage'
+import { goBackOrFallback } from '@/lib/navigation'
 
 type ReviewRow = {
   id: string
@@ -57,6 +59,7 @@ function reviewVisibilityMeta(review: ReviewRow) {
 
 export default function TailorReviewsScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const [reviews, setReviews] = useState<ReviewRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -72,7 +75,7 @@ export default function TailorReviewsScreen() {
       setFetchError(false)
       const { data, error } = await supabase
         .from('reviews')
-        .select('id, rating, tags, body, reviewer_name, created_at, tailor_response, published_at, flagged, orders!order_id(customer_profiles!customer_id(avatar_url))')
+        .select('id, rating, tags, body, reviewer_name, created_at, tailor_response, published_at, flagged, orders!order_id(customer_profiles!customer_id(display_name, avatar_url))')
         .eq('tailor_id', user?.id)
         .order('created_at', { ascending: false })
 
@@ -89,7 +92,7 @@ export default function TailorReviewsScreen() {
           rating: r.rating,
           tags: asStringList(r.tags),
           body: r.body,
-          reviewerName: r.reviewer_name ?? 'Customer',
+          reviewerName: r.orders?.customer_profiles?.display_name ?? r.reviewer_name ?? 'Customer',
           reviewerAvatarUrl: r.orders?.customer_profiles?.avatar_url ?? null,
           createdAt: r.created_at,
           response: r.tailor_response ?? null,
@@ -139,10 +142,14 @@ export default function TailorReviewsScreen() {
     setReplyOpen(null)
   }
 
+  function goBack() {
+    goBackOrFallback(router, navigation, '/(tailor)/profile')
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.replace('/(tailor)/profile')} style={styles.backBtn}>
+        <TouchableOpacity onPress={goBack} style={styles.backBtn}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Reviews</Text>
@@ -169,7 +176,12 @@ export default function TailorReviewsScreen() {
               <View key={review.id} style={styles.reviewCard}>
                 <View style={styles.reviewHeader}>
                   {review.reviewerAvatarUrl ? (
-                    <Image source={{ uri: review.reviewerAvatarUrl }} style={styles.reviewAvatarImage} />
+                    <AvatarImage
+                      uri={review.reviewerAvatarUrl}
+                      initials={review.reviewerName}
+                      size={40}
+                      style={styles.reviewAvatarImage}
+                    />
                   ) : (
                     <View style={styles.reviewAvatar}>
                       <Text style={styles.reviewInitial}>

@@ -3,11 +3,12 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { useRouter, useFocusEffect } from 'expo-router'
+import { useNavigation, useRouter, useFocusEffect } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { goBackOrFallback } from '@/lib/navigation'
 
 type CustomerReviewRow = {
   id: string
@@ -26,6 +27,7 @@ function asStringList(value: unknown): string[] {
 
 export default function CustomerReviewsScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const [reviews, setReviews] = useState<CustomerReviewRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -68,10 +70,14 @@ export default function CustomerReviewsScreen() {
     ? reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length
     : null
 
+  function goBack() {
+    goBackOrFallback(router, navigation, '/(customer)/profile')
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.replace('/(customer)/profile')} style={styles.backBtn}>
+        <TouchableOpacity onPress={goBack} style={styles.backBtn}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Your reviews</Text>
@@ -89,7 +95,7 @@ export default function CustomerReviewsScreen() {
       ) : (
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.summaryCard}>
-            <Text style={styles.summaryValue}>{averageRating ? averageRating.toFixed(1) : '—'}</Text>
+            <Text style={styles.summaryValue}>{averageRating ? averageRating.toFixed(1) : 'No rating'}</Text>
             <Text style={styles.summaryLabel}>
               {reviews.length > 0 ? `${reviews.length} review${reviews.length === 1 ? '' : 's'}` : 'No reviews yet'}
             </Text>
@@ -141,54 +147,54 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: Spacing.xl,
+    paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
     backgroundColor: Colors.white,
     borderBottomWidth: 1,
     borderBottomColor: Colors.lightGrey,
   },
-  backBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
-  content: { padding: Spacing.xl, gap: Spacing.md },
+  backBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  content: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: 36 },
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
   stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   summaryCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.xl,
+    borderRadius: Radius.md,
+    padding: Spacing.lg,
     alignItems: 'center',
     gap: 4,
     ...Shadow.sm,
   },
-  summaryValue: { fontSize: 36, fontWeight: FontWeight.bold, color: Colors.ink },
+  summaryValue: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.ink },
   summaryLabel: { fontSize: FontSize.sm, color: Colors.midGrey },
   reviewCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: Spacing.sm,
+    borderRadius: Radius.md,
+    padding: 14,
+    gap: Spacing.xs,
     ...Shadow.sm,
   },
-  reviewHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
+  reviewHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   avatar: {
-    width: 40,
-    height: 40,
+    width: 36,
+    height: 36,
     borderRadius: 20,
     backgroundColor: Colors.needleGreenLight,
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.needleGreen },
-  reviewerName: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  reviewerName: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   reviewDate: { fontSize: FontSize.xs, color: Colors.midGrey },
   reviewStars: { fontSize: FontSize.sm, color: Colors.warning },
   tags: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   tag: {
     backgroundColor: Colors.bone,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: Radius.full,
   },
   tagText: { fontSize: FontSize.xs, color: Colors.inkLight },
-  reviewBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  reviewBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
 })

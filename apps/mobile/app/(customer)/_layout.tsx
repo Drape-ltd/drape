@@ -1,32 +1,28 @@
 import { Tabs, useRouter } from 'expo-router'
-import { Image, Pressable, View } from 'react-native'
+import { Pressable } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, Radius } from '@/constants/theme'
 import { useCustomerProfile } from '@/lib/customerProfile'
+import { AvatarImage } from '@/components/ui/AvatarImage'
+
+const PRIMARY_GREEN = '#1D9E75'
+const MUTED_GREY = '#8F8D88'
 
 function ProfileTabIcon({ color, focused }: { color: string; focused: boolean }) {
   const { avatarUrl } = useCustomerProfile()
 
   if (avatarUrl) {
     return (
-      <View
-        style={{
-          width: 28, height: 28, borderRadius: Radius.full,
-          borderWidth: focused ? 2 : 1.5,
-          borderColor: focused ? Colors.needleGreen : color,
-          overflow: 'hidden',
-        }}
-      >
-        <Image
-          source={{ uri: avatarUrl }}
-          style={{ width: '100%', height: '100%' }}
-          resizeMode="cover"
-        />
-      </View>
+      <AvatarImage
+        uri={avatarUrl}
+        size={26}
+        borderWidth={focused ? 2 : 1.5}
+        borderColor={focused ? PRIMARY_GREEN : color}
+      />
     )
   }
 
-  return <Feather name="user" size={22} color={color} />
+  return <Feather name="user" size={25} color={color} />
 }
 
 export default function CustomerTabLayout() {
@@ -36,18 +32,27 @@ export default function CustomerTabLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: Colors.needleGreen,
-        tabBarInactiveTintColor: Colors.midGrey,
+        sceneStyle: {
+          backgroundColor: '#F9F7F3',
+        },
+        tabBarActiveTintColor: PRIMARY_GREEN,
+        tabBarInactiveTintColor: MUTED_GREY,
         tabBarStyle: {
           backgroundColor: Colors.white,
           borderTopColor: Colors.lightGrey,
           borderTopWidth: 1,
-          paddingBottom: 8,
-          height: 64,
+          paddingTop: 4,
+        },
+        tabBarItemStyle: {
+          minHeight: 49,
+          paddingVertical: 2,
+        },
+        tabBarIconStyle: {
+          marginTop: 1,
         },
         tabBarLabelStyle: {
-          fontSize: FontSize.xs,
-          marginTop: -2,
+          fontSize: 11,
+          marginTop: -1,
         },
       }}
     >
@@ -55,7 +60,8 @@ export default function CustomerTabLayout() {
         name="index"
         options={{
           title: 'Explore',
-          tabBarIcon: ({ color }) => <Feather name="search" size={22} color={color} />,
+          popToTopOnBlur: true,
+          tabBarIcon: ({ color }) => <Feather name="search" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => (
             <Pressable
@@ -70,7 +76,8 @@ export default function CustomerTabLayout() {
         name="saved"
         options={{
           title: 'Wishlists',
-          tabBarIcon: ({ color }) => <Feather name="heart" size={22} color={color} />,
+          popToTopOnBlur: true,
+          tabBarIcon: ({ color }) => <Feather name="heart" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => (
             <Pressable
@@ -85,7 +92,8 @@ export default function CustomerTabLayout() {
         name="orders"
         options={{
           title: 'Orders',
-          tabBarIcon: ({ color }) => <Feather name="package" size={22} color={color} />,
+          popToTopOnBlur: true,
+          tabBarIcon: ({ color }) => <Feather name="package" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => (
             <Pressable
@@ -100,7 +108,8 @@ export default function CustomerTabLayout() {
         name="messages"
         options={{
           title: 'Messages',
-          tabBarIcon: ({ color }) => <Feather name="message-circle" size={22} color={color} />,
+          popToTopOnBlur: true,
+          tabBarIcon: ({ color }) => <Feather name="message-circle" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => (
             <Pressable
@@ -115,6 +124,7 @@ export default function CustomerTabLayout() {
         name="profile"
         options={{
           title: 'Profile',
+          popToTopOnBlur: true,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarIcon: ({ color, focused }: any) => <ProfileTabIcon color={color} focused={focused} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any

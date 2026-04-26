@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
-  TouchableOpacity, ActivityIndicator, Alert, Image,
+  TouchableOpacity, ActivityIndicator, Alert,
 } from 'react-native'
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -16,9 +16,10 @@ import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { useTailorProfile } from '@/lib/tailorProfile'
-import { minorUnitsFromInput, moneyInputFromMinorUnits } from '@/lib/money-input'
-import { TagSelector } from '@/components/ui'
+import { goBackOrFallback } from '@/lib/navigation'
+import { AddressAutocompleteInput, TagSelector } from '@/components/ui'
 import type { TagGroup } from '@/components/ui'
+import { AvatarImage } from '@/components/ui/AvatarImage'
 import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { Availability } from '@/lib/shared-types'
@@ -42,7 +43,7 @@ const BIO_TEMPLATES = [
 ] as const
 
 type VerificationStatus = 'NOT_SUBMITTED' | 'PENDING' | 'VERIFIED' | 'REJECTED'
-type Currency = 'GBP' | 'USD' | 'EUR' | 'NGN' | 'GHS' | 'KES'
+type Currency = 'GBP' | 'USD' | 'EUR' | 'NGN' | 'GHS' | 'KES' | 'CAD'
 type SellerType = 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP'
 
 function asStringList(value: unknown): string[] {
@@ -55,6 +56,7 @@ const CURRENCY_OPTIONS: { value: Currency; label: string }[] = [
   { value: 'GBP', label: '£ GBP' },
   { value: 'USD', label: '$ USD' },
   { value: 'EUR', label: '€ EUR' },
+  { value: 'CAD', label: 'C$ CAD' },
   { value: 'NGN', label: '₦ NGN' },
   { value: 'GHS', label: '₵ GHS' },
   { value: 'KES', label: 'KSh KES' },
@@ -68,9 +70,9 @@ const AVAIL_OPTIONS: { value: Availability; label: string; hint: string }[] = [
 
 const VERIFY_LABEL: Record<VerificationStatus, string> = {
   NOT_SUBMITTED: 'Verification not submitted',
-  PENDING:       'ID under review — verified within 24 hours',
+  PENDING:       'ID under review. Verified within 24 hours.',
   VERIFIED:      'Identity verified',
-  REJECTED:      'Verification failed — please re-submit',
+  REJECTED:      'Verification failed. Please re-submit.',
 }
 const VERIFY_COLOR: Record<VerificationStatus, string> = {
   NOT_SUBMITTED: Colors.midGrey,
@@ -88,7 +90,7 @@ export default function EditProfileScreen() {
   const { avatarUrl, setAvatarUrl } = useTailorProfile()
 
   function goBack() {
-    router.replace('/(tailor)/profile')
+    goBackOrFallback(router, navigation, '/(tailor)/profile')
   }
 
   // ── Form state ──────────────────────────────────────────────────────────────
@@ -101,10 +103,10 @@ export default function EditProfileScreen() {
   const [supportsCustomOrders, setSupportsCustomOrders] = useState(true)
   const [supportsReadyMade, setSupportsReadyMade] = useState(false)
   const [pickupAvailable, setPickupAvailable] = useState(true)
+  const [pickupAddress, setPickupAddress] = useState('')
+  const [pickupInstructions, setPickupInstructions] = useState('')
   const [deliveryAvailable, setDeliveryAvailable] = useState(false)
   const [shippingAvailable, setShippingAvailable] = useState(false)
-  const [deliveryFee, setDeliveryFee] = useState('')
-  const [shippingFee, setShippingFee] = useState('')
   const [verifyStatus, setVerifyStatus]   = useState<VerificationStatus>('NOT_SUBMITTED')
   const [portfolioCount, setPortfolioCount] = useState(0)
 
@@ -116,10 +118,10 @@ export default function EditProfileScreen() {
     supportsCustomOrders: boolean
     supportsReadyMade: boolean
     pickupAvailable: boolean
+    pickupAddress: string
+    pickupInstructions: string
     deliveryAvailable: boolean
     shippingAvailable: boolean
-    deliveryFee: string
-    shippingFee: string
   } | null>(null)
 
   const [currency, setCurrency]           = useState<Currency>('GBP')
@@ -151,10 +153,10 @@ export default function EditProfileScreen() {
     supportsCustomOrders !== base.supportsCustomOrders ||
     supportsReadyMade !== base.supportsReadyMade ||
     pickupAvailable !== base.pickupAvailable ||
+    pickupAddress !== base.pickupAddress ||
+    pickupInstructions !== base.pickupInstructions ||
     deliveryAvailable !== base.deliveryAvailable ||
     shippingAvailable !== base.shippingAvailable ||
-    deliveryFee !== base.deliveryFee ||
-    shippingFee !== base.shippingFee ||
     JSON.stringify(specialties) !== JSON.stringify(base.specialties)
   )
 
@@ -166,16 +168,24 @@ export default function EditProfileScreen() {
     if (!user?.id) return
     setFetchError(false)
     try {
-      const { data, error } = await supabase
-        .from('tailor_profiles')
-        .select('id, display_name, location, bio, specialty_tags, availability, currency, id_verification_status, seller_type, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, delivery_fee, shipping_fee')
-        .eq('user_id', user.id)
-        .maybeSingle()
+      const [{ data, error }, { data: pickupData }] = await Promise.all([
+        supabase
+          .from('tailor_profiles')
+          .select('id, display_name, location, bio, specialty_tags, availability, currency, id_verification_status, seller_type, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, delivery_fee, shipping_fee')
+          .eq('user_id', user.id)
+          .maybeSingle(),
+        supabase
+          .from('tailor_pickup_details')
+          .select('pickup_address, pickup_instructions')
+          .eq('user_id', user.id)
+          .maybeSingle(),
+      ])
 
       if (error) throw error
 
       if (data) {
         const d = data as any
+        const pickup = (pickupData ?? {}) as any
         const snap = {
           displayName:  d.display_name    ?? '',
           location:     d.location        ?? '',
@@ -187,10 +197,10 @@ export default function EditProfileScreen() {
           supportsCustomOrders: d.supports_custom_orders ?? true,
           supportsReadyMade: d.supports_ready_made ?? false,
           pickupAvailable: d.pickup_available ?? true,
+          pickupAddress: pickup.pickup_address ?? '',
+          pickupInstructions: pickup.pickup_instructions ?? '',
           deliveryAvailable: d.delivery_available ?? false,
           shippingAvailable: d.shipping_available ?? false,
-          deliveryFee: moneyInputFromMinorUnits(d.delivery_fee),
-          shippingFee: moneyInputFromMinorUnits(d.shipping_fee),
         }
         setBase(snap)
         setDisplayName(snap.displayName)
@@ -203,10 +213,10 @@ export default function EditProfileScreen() {
         setSupportsCustomOrders(snap.supportsCustomOrders)
         setSupportsReadyMade(snap.supportsReadyMade)
         setPickupAvailable(snap.pickupAvailable)
+        setPickupAddress(snap.pickupAddress)
+        setPickupInstructions(snap.pickupInstructions)
         setDeliveryAvailable(snap.deliveryAvailable)
         setShippingAvailable(snap.shippingAvailable)
-        setDeliveryFee(snap.deliveryFee)
-        setShippingFee(snap.shippingFee)
         setVerifyStatus((d.id_verification_status ?? 'NOT_SUBMITTED') as VerificationStatus)
 
         const { count, error: countError } = await supabase
@@ -230,10 +240,10 @@ export default function EditProfileScreen() {
           supportsCustomOrders: true,
           supportsReadyMade: false,
           pickupAvailable: true,
+          pickupAddress: '',
+          pickupInstructions: '',
           deliveryAvailable: false,
           shippingAvailable: false,
-          deliveryFee: '',
-          shippingFee: '',
         }
         setBase(snap)
         setDisplayName(snap.displayName)
@@ -246,10 +256,10 @@ export default function EditProfileScreen() {
         setSupportsCustomOrders(snap.supportsCustomOrders)
         setSupportsReadyMade(snap.supportsReadyMade)
         setPickupAvailable(snap.pickupAvailable)
+        setPickupAddress(snap.pickupAddress)
+        setPickupInstructions(snap.pickupInstructions)
         setDeliveryAvailable(snap.deliveryAvailable)
         setShippingAvailable(snap.shippingAvailable)
-        setDeliveryFee(snap.deliveryFee)
-        setShippingFee(snap.shippingFee)
         setVerifyStatus('NOT_SUBMITTED')
         setPortfolioCount(0)
       }
@@ -356,12 +366,8 @@ export default function EditProfileScreen() {
   async function handleSave() {
     if (!validate() || !user?.id) return
     if (!validateBio(bio)) return
-
-    const deliveryFeeMinor = minorUnitsFromInput(deliveryFee)
-    const shippingFeeMinor = minorUnitsFromInput(shippingFee)
-
-    if (deliveryFeeMinor == null || shippingFeeMinor == null) {
-      Alert.alert('Invalid fee', 'Enter delivery and shipping fees as whole numbers or decimals with up to two places.')
+    if (pickupAvailable && pickupAddress.trim().length < 8) {
+      Alert.alert('Pickup address needed', 'Add a fuller private pickup address before offering pickup.')
       return
     }
 
@@ -381,10 +387,12 @@ export default function EditProfileScreen() {
           supportsCustomOrders,
           supportsReadyMade,
           pickupAvailable,
+          pickupAddress: pickupAddress.trim() || null,
+          pickupInstructions: pickupInstructions.trim() || null,
           deliveryAvailable,
           shippingAvailable,
-          deliveryFee: deliveryAvailable ? deliveryFeeMinor : 0,
-          shippingFee: shippingAvailable ? shippingFeeMinor : 0,
+          deliveryFee: 0,
+          shippingFee: 0,
           priceRangeMin: null,
           priceRangeMax: null,
         },
@@ -409,10 +417,10 @@ export default function EditProfileScreen() {
       supportsCustomOrders,
       supportsReadyMade,
       pickupAvailable,
+      pickupAddress: pickupAddress.trim(),
+      pickupInstructions: pickupInstructions.trim(),
       deliveryAvailable,
       shippingAvailable,
-      deliveryFee: deliveryAvailable ? deliveryFee : '',
-      shippingFee: shippingAvailable ? shippingFee : '',
     })
     goBack()
   }
@@ -515,12 +523,14 @@ export default function EditProfileScreen() {
               <View style={[styles.avatar, styles.avatarLoading]}>
                 <ActivityIndicator color={Colors.white} />
               </View>
-            ) : avatarUrl ? (
-              <Image source={{ uri: avatarUrl }} style={styles.avatarImage} resizeMode="cover" />
             ) : (
-              <View style={styles.avatar}>
-                <Text style={styles.avatarInitials}>{initials}</Text>
-              </View>
+              <AvatarImage
+                uri={avatarUrl}
+                initials={initials}
+                size={88}
+                style={styles.avatarImage}
+                shadow
+              />
             )}
             <View style={styles.cameraBadge}>
               <Feather name="camera" size={12} color={Colors.white} />
@@ -712,33 +722,41 @@ export default function EditProfileScreen() {
                 <Text style={styles.choiceHint}>Courier or shipping partner handles it.</Text>
               </TouchableOpacity>
             </View>
+            {pickupAvailable ? (
+              <View style={styles.fulfillmentFeeBlock}>
+                <Text style={styles.fieldHint}>
+                  Double-check this exact address before you save. Customers only see it after an order is marked ready for collection.
+                </Text>
+                <AddressAutocompleteInput
+                  label="Pickup address"
+                  value={pickupAddress}
+                  onChangeText={setPickupAddress}
+                  placeholder="e.g. 12 Marina Road, Victoria Island"
+                  hint="Search and tap a suggestion to autofill, or type the full address manually. Include street or building, district or city, state or region, postal code if used, and country."
+                  multiline
+                />
+                <Field label="Pickup instructions (optional)">
+                  <TextInput
+                    style={styles.input}
+                    value={pickupInstructions}
+                    onChangeText={setPickupInstructions}
+                    placeholder="e.g. Ask for the front desk and bring your collection code."
+                    placeholderTextColor={Colors.midGrey}
+                  />
+                </Field>
+                {pickupAddress.trim().length === 0 ? (
+                  <Text style={styles.helperError}>Add your exact pickup address to keep pickup turned on.</Text>
+                ) : pickupAddress.trim().length < 8 ? (
+                  <Text style={styles.helperError}>Add a fuller pickup address before offering pickup.</Text>
+                ) : null}
+              </View>
+            ) : null}
             {deliveryAvailable || shippingAvailable ? (
               <View style={styles.fulfillmentFeeBlock}>
-                <Text style={styles.fieldHint}>Show customers the cost before payment. Leave blank if it is free or included.</Text>
-                {deliveryAvailable ? (
-                  <Field label={`Delivery fee (${currency})`}>
-                    <TextInput
-                      style={styles.input}
-                      value={deliveryFee}
-                      onChangeText={setDeliveryFee}
-                      placeholder="e.g. 15"
-                      placeholderTextColor={Colors.midGrey}
-                      keyboardType="decimal-pad"
-                    />
-                  </Field>
-                ) : null}
-                {shippingAvailable ? (
-                  <Field label={`Shipping fee (${currency})`}>
-                    <TextInput
-                      style={styles.input}
-                      value={shippingFee}
-                      onChangeText={setShippingFee}
-                      placeholder="e.g. 25"
-                      placeholderTextColor={Colors.midGrey}
-                      keyboardType="decimal-pad"
-                    />
-                  </Field>
-                ) : null}
+                <Text style={styles.fieldLabel}>Standard Drape dispatch fees</Text>
+                <Text style={styles.fieldHint}>
+                  Drape now collects the standard delivery or shipping fee at checkout based on the buyer address and your location. You only need to keep your location and fulfillment options accurate here.
+                </Text>
               </View>
             ) : null}
           </Field>
@@ -748,7 +766,10 @@ export default function EditProfileScreen() {
         <Section title="Portfolio">
           <TouchableOpacity
             style={styles.portfolioLink}
-            onPress={() => router.push('/(tailor)/profile/portfolio')}
+            onPress={() => router.push({
+              pathname: '/(tailor)/profile/portfolio',
+              params: { returnTo: '/(tailor)/profile/edit' },
+            })}
             activeOpacity={0.75}
           >
             <View style={styles.portfolioLinkLeft}>
@@ -756,7 +777,7 @@ export default function EditProfileScreen() {
               <View>
                 <Text style={styles.portfolioLinkTitle}>Manage portfolio</Text>
                 <Text style={styles.portfolioLinkSub}>
-                  {portfolioCount > 0 ? `${portfolioCount} item${portfolioCount !== 1 ? 's' : ''}` : 'No items yet — add your work'}
+                  {portfolioCount > 0 ? `${portfolioCount} item${portfolioCount !== 1 ? 's' : ''}` : 'No items yet. Add your work'}
                 </Text>
               </View>
             </View>
@@ -920,7 +941,9 @@ const styles = StyleSheet.create({
   inputError: { borderColor: Colors.error },
   multiline: { minHeight: 100, textAlignVertical: 'top' },
   charCount: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'right', marginTop: 4 },
+  fieldLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: Spacing.sm },
   fieldHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
+  helperError: { fontSize: FontSize.xs, color: Colors.kanteRust, lineHeight: 18 },
   helperRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginTop: Spacing.sm },
   helperChip: {
     paddingHorizontal: Spacing.md,

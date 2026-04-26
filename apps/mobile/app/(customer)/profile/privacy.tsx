@@ -14,7 +14,7 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Switch, Alert, ActivityIndicator, Linking,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
@@ -22,6 +22,7 @@ import { setAnalyticsConsent } from '@/lib/analytics'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { goBackOrFallback } from '@/lib/navigation'
 
 type PrivacyPrefs = {
   marketingEmails: boolean
@@ -37,6 +38,7 @@ const DEFAULT_PREFS: PrivacyPrefs = {
 
 export default function PrivacyScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const [prefs, setPrefs] = useState<PrivacyPrefs>(DEFAULT_PREFS)
   const [saving, setSaving] = useState(false)
@@ -87,7 +89,7 @@ export default function PrivacyScreen() {
   }
 
   function goBack() {
-    router.replace('/(customer)/profile')
+    goBackOrFallback(router, navigation, '/(customer)/profile')
   }
 
   return (

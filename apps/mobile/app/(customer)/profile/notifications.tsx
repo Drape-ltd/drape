@@ -17,9 +17,11 @@ import { Feather } from '@expo/vector-icons'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { customerOrderStageLabel } from '@/lib/customer-order-copy'
 import { Button, FeatureStateCard } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
+import type { OrderStage } from '@drape/shared/order-machine'
+import { goBackOrFallback } from '@/lib/navigation'
 
 const CUSTOMER_NOTIFICATIONS_GUIDE_KEY = 'drape_customer_notifications_best_use_dismissed'
 
@@ -29,6 +31,7 @@ type NotifItem = {
   orderRef: string
   garmentType: string
   tailorName: string
+  orderKind: 'CUSTOM' | 'READY_MADE'
   stage: OrderStage
   note: string | null
   createdAt: string
@@ -110,7 +113,7 @@ export default function NotificationsScreen() {
             .select(`
               id, stage, note, created_at, order_id,
               orders!inner(
-                id, reference, garment_type, customer_id,
+                id, reference, garment_type, order_kind, customer_id,
                 tailor_profiles!tailor_profile_id(display_name)
               )
             `)
@@ -128,6 +131,7 @@ export default function NotificationsScreen() {
               orderRef: row.orders?.reference ?? '',
               garmentType: row.orders?.garment_type ?? '',
               tailorName: row.orders?.tailor_profiles?.display_name ?? 'Tailor',
+              orderKind: row.orders?.order_kind ?? 'CUSTOM',
               stage: row.stage as OrderStage,
               note: row.note ?? null,
               createdAt: row.created_at,
@@ -154,8 +158,7 @@ export default function NotificationsScreen() {
   )
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(customer)/profile')
+    goBackOrFallback(router, navigation, '/(customer)/profile')
   }
 
   return (
@@ -200,7 +203,7 @@ export default function NotificationsScreen() {
           <Button
             label="Open profile"
             variant="ghost"
-            onPress={() => router.replace('/(customer)/profile')}
+            onPress={goBack}
           />
         </FeatureStateCard>
       ) : items.length === 0 ? (
@@ -241,11 +244,14 @@ export default function NotificationsScreen() {
               )}
             </View>
           )}
-          contentContainerStyle={{ paddingVertical: Spacing.md, paddingHorizontal: Spacing.xl, gap: Spacing.sm }}
+          contentContainerStyle={{ paddingVertical: Spacing.sm, paddingHorizontal: Spacing.lg, gap: Spacing.xs }}
           renderItem={({ item }) => (
             <TouchableOpacity
               style={[styles.card, item.isNew && styles.cardNew]}
-              onPress={() => router.navigate(`/(customer)/orders/${item.orderId}` as any)}
+              onPress={() => router.replace({
+                pathname: '/(customer)/orders/[id]',
+                params: { id: item.orderId, returnTo: '/(customer)/profile' },
+              })}
               activeOpacity={0.7}
             >
               {/* Unread dot */}
@@ -264,7 +270,7 @@ export default function NotificationsScreen() {
                 </Text>
                 <Text style={styles.stageLine}>
                   <Text style={{ color: stageColor(item.stage), fontWeight: FontWeight.semibold }}>
-                    {STAGE_LABELS[item.stage] ?? item.stage}
+                    {customerOrderStageLabel(item.stage, item.orderKind)}
                   </Text>
                   {item.tailorName ? `  ·  ${item.tailorName}` : ''}
                 </Text>
@@ -287,22 +293,22 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.lightGrey,
     backgroundColor: Colors.bone,
   },
   backBtn: {
-    width: 38, height: 38, borderRadius: Radius.full,
+    width: 44, height: 44, borderRadius: Radius.full,
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
+  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
   guideCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
     gap: 4,
-    marginBottom: Spacing.md,
+    marginBottom: Spacing.sm,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
   },
@@ -322,35 +328,35 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
   guideTitle: {
-    fontSize: FontSize.md,
+    fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
-    lineHeight: 22,
+    lineHeight: 20,
   },
 
   card: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.lg, flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
+    padding: 14, flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm,
     ...Shadow.sm, position: 'relative', overflow: 'hidden',
   },
   cardNew: {
     borderLeftWidth: 3, borderLeftColor: Colors.needleGreen,
   },
   unreadDot: {
-    position: 'absolute', top: Spacing.md, right: Spacing.md,
+    position: 'absolute', top: 12, right: 12,
     width: 8, height: 8, borderRadius: 4,
     backgroundColor: Colors.needleGreen,
   },
 
   iconWrap: {
-    width: 40, height: 40, borderRadius: Radius.md,
+    width: 36, height: 36, borderRadius: Radius.sm,
     alignItems: 'center', justifyContent: 'center',
     flexShrink: 0,
   },
 
   title: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: 2 },
   ref: { fontWeight: FontWeight.regular, color: Colors.midGrey },
-  stageLine: { fontSize: FontSize.sm, color: Colors.inkLight, marginBottom: 2 },
-  note: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18, marginTop: 2 },
-  time: { fontSize: FontSize.xs, color: Colors.midGrey, flexShrink: 0, marginTop: 2 },
+  stageLine: { fontSize: FontSize.xs, color: Colors.inkLight, marginBottom: 2 },
+  note: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 16, marginTop: 2 },
+  time: { fontSize: 11, color: Colors.midGrey, flexShrink: 0, marginTop: 2 },
 })

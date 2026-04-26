@@ -9,8 +9,9 @@ import { CONTACTS } from '@drape/shared'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
+import { goBackOrFallback } from '@/lib/navigation'
 import { deriveTailorAccessGuidance } from '@/lib/tailor-access'
-import type { TailorReadinessInput } from '@/lib/tailor-readiness'
+import { payoutSetupCopy, type TailorReadinessInput } from '@/lib/tailor-readiness'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 export default function TailorTrustAccessScreen() {
@@ -20,10 +21,10 @@ export default function TailorTrustAccessScreen() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [input, setInput] = useState<TailorReadinessInput | null>(null)
+  const [workingCurrency, setWorkingCurrency] = useState<string | null>(null)
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(tailor)/profile/account-settings')
+    goBackOrFallback(router, navigation, '/(tailor)/profile/account-settings')
   }
 
   async function openEmail(email: string, subject: string) {
@@ -55,7 +56,7 @@ export default function TailorTrustAccessScreen() {
     try {
       const { data, error } = await supabase
         .from('tailor_profiles')
-        .select('profile_completed, id_verification_status, is_live, stripe_account_id, paystack_account_id, ships_internationally')
+        .select('profile_completed, id_verification_status, is_live, stripe_account_id, paystack_account_id, ships_internationally, currency')
         .eq('user_id', user.id)
         .maybeSingle()
 
@@ -75,6 +76,7 @@ export default function TailorTrustAccessScreen() {
         paystackAccountId: (data as any).paystack_account_id ?? null,
         shipsInternationally: (data as any).ships_internationally ?? false,
       })
+      setWorkingCurrency((data as any).currency ?? null)
     } catch (error) {
       setLoadError(
         isLikelyConnectivityIssue(error)
@@ -91,6 +93,7 @@ export default function TailorTrustAccessScreen() {
   }, [user?.id])
 
   const guidance = deriveTailorAccessGuidance(input)
+  const payoutNextStep = payoutSetupCopy(workingCurrency)
   const badgeStyle =
     guidance.state === 'CLEAR'
       ? styles.badgeClear
@@ -178,6 +181,23 @@ export default function TailorTrustAccessScreen() {
           <Text style={styles.sectionTitle}>{guidance.reasonCategory}</Text>
           <Text style={styles.sectionBody}>{guidance.nextStep}</Text>
         </View>
+
+        {guidance.reasonCategory === 'Payout readiness' ? (
+          <View style={styles.infoCard}>
+            <Text style={styles.sectionEyebrow}>What to do next</Text>
+            <Text style={styles.sectionTitle}>{payoutNextStep.title}</Text>
+            <Text style={styles.sectionBody}>{payoutNextStep.body}</Text>
+            <Text style={styles.noteText}>
+              Submit the payout setup inside Drape so this blocker is durable and visible. Email is still there if the app path fails, but it should not be your first stop anymore.
+            </Text>
+            <TouchableOpacity
+              style={styles.reviewBtn}
+              onPress={() => router.push('/(tailor)/profile/payout-setup' as never)}
+            >
+              <Text style={styles.reviewBtnText}>Start payout setup</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
 
         <View style={styles.infoCard}>
           <Text style={styles.sectionEyebrow}>What is currently blocked</Text>

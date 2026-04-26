@@ -1,5 +1,6 @@
 import {
   PHONE_STORAGE_HINT,
+  validateDispatchPhoneForProfile,
   normalizePhoneForStorage,
   validatePhoneForProfile,
 } from '../src/phone'
@@ -35,13 +36,27 @@ describe('validatePhoneForProfile', () => {
     expect(validatePhoneForProfile('+447700900123')).toBeNull()
   })
 
+  it('rejects ambiguous numbers without a country code', () => {
+    expect(validatePhoneForProfile('6159642154')).toContain('country code')
+  })
+
   it('rejects very short values', () => {
     expect(validatePhoneForProfile('123')).toBe('Enter a valid phone number.')
   })
 })
 
+describe('validateDispatchPhoneForProfile', () => {
+  it('accepts a valid international dispatch number', () => {
+    expect(validateDispatchPhoneForProfile('+254712345678')).toBeNull()
+  })
+
+  it('rejects ambiguous dispatch numbers without a country code', () => {
+    expect(validateDispatchPhoneForProfile('712345678')).toContain('country code')
+  })
+})
+
 describe('PHONE_STORAGE_HINT', () => {
   it('nudges users toward a country code', () => {
-    expect(PHONE_STORAGE_HINT).toContain('+234')
+    expect(PHONE_STORAGE_HINT).toContain('+2348012345678')
   })
 })

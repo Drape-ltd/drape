@@ -101,6 +101,14 @@ async function resolvePaymentErrorMessage(
     return 'This checkout is no longer ready for payment. Reopen the item and try again.'
   }
 
+  if (normalized.includes('not awaiting a delivery or shipping payment')) {
+    return 'This order is not awaiting a delivery or shipping payment right now. Refresh the order first.'
+  }
+
+  if (normalized.includes('not awaiting fulfillment payment confirmation')) {
+    return 'This delivery or shipping payment is no longer awaiting confirmation. Pull to refresh in a moment.'
+  }
+
   if (normalized.includes('missing payment details')) {
     return 'This order is missing payment details right now. Refresh first, then try again.'
   }

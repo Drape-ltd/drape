@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
   View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView,
-  KeyboardAvoidingView, Platform, Image, ActivityIndicator, Linking,
+  KeyboardAvoidingView, Platform, ActivityIndicator, Linking,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -17,6 +17,7 @@ import { deriveTailorReadiness } from '@/lib/tailor-readiness'
 import { useTailorProfile } from '@/lib/tailorProfile'
 import { shareTailorProfile, inviteTailorColleague, inviteCustomerFromTailor } from '@/lib/invite'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { AvatarImage } from '@/components/ui/AvatarImage'
 
 type TailorProfile = {
   id: string
@@ -57,18 +58,21 @@ const AVAIL_COLOR: Record<string, string> = { OPEN: Colors.success, LIMITED: Col
 const ID_STATUS_LABEL: Record<string, string> = {
   NOT_SUBMITTED: 'Verification Required',
   PENDING: 'ID Verification In Review',
+  VERIFIED: 'Identity Verified',
   APPROVED: 'Identity Verified',
-  REJECTED: 'Verification Failed — Action Required',
+  REJECTED: 'Verification Failed. Action Required',
 }
 const ID_STATUS_COLOR: Record<string, string> = {
   NOT_SUBMITTED: Colors.midGrey,
   PENDING: Colors.warning,
+  VERIFIED: Colors.success,
   APPROVED: Colors.success,
   REJECTED: Colors.error,
 }
 const ID_STATUS_BG: Record<string, string> = {
   NOT_SUBMITTED: Colors.bone,
   PENDING: '#FFFBEB',
+  VERIFIED: '#F0FDF4',
   APPROVED: '#F0FDF4',
   REJECTED: Colors.errorLight,
 }
@@ -410,17 +414,14 @@ export default function TailorProfileScreen() {
               <View style={[styles.avatar, styles.avatarLoading]}>
                 <ActivityIndicator color={Colors.white} />
               </View>
-            ) : avatarUrl ? (
-              <Image
-                source={{ uri: avatarUrl }}
-                style={styles.avatarImage}
-                resizeMode="cover"
-                onError={() => setAvatarUrl(null)}
-              />
             ) : (
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{initials}</Text>
-              </View>
+              <AvatarImage
+                uri={avatarUrl}
+                initials={initials}
+                size={96}
+                style={styles.avatarImage}
+                shadow
+              />
             )}
             {/* Camera badge */}
             <View style={styles.cameraBadge}>
@@ -546,7 +547,7 @@ export default function TailorProfileScreen() {
               {idStatus === 'PENDING' && (
                 <Text style={styles.statusSub}>Your profile is under review. You'll be verified within 24 hours.</Text>
               )}
-              {!profile.isLive && idStatus === 'APPROVED' && (
+              {!profile.isLive && (idStatus === 'APPROVED' || idStatus === 'VERIFIED') && (
                 <Text style={styles.statusSub}>Profile under final review before going live.</Text>
               )}
               {(idStatus === 'NOT_SUBMITTED' || idStatus === 'REJECTED') && (
@@ -568,12 +569,16 @@ export default function TailorProfileScreen() {
             <View style={styles.statsRow}>
               <StatPill
                 label="Rating"
-                value={profile.avgRating > 0 ? profile.avgRating.toFixed(1) : '—'}
+                value={profile.avgRating > 0 ? profile.avgRating.toFixed(1) : 'No rating'}
                 sub={profile.avgRating > 0 ? '★' : undefined}
                 onPress={() => router.push('/(tailor)/profile/reviews')}
               />
               <StatPill label="Reviews" value={String(profile.totalReviews)} onPress={() => router.push('/(tailor)/profile/reviews')} />
-              <StatPill label="Orders" value={String(profile.totalOrders)} onPress={() => router.push('/(tailor)/orders')} />
+              <StatPill
+                label="Orders"
+                value={String(profile.totalOrders)}
+                onPress={() => router.push({ pathname: '/(tailor)/orders', params: { tab: 'completed' } })}
+              />
             </View>
           )}
 
@@ -754,7 +759,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.lightGrey,
     backgroundColor: Colors.white,
     paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.xl,
+    paddingHorizontal: Spacing.lg,
   },
   stateSecondaryBtnText: { color: Colors.ink, fontWeight: FontWeight.medium, fontSize: FontSize.sm },
 
@@ -766,9 +771,9 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.xs,
     backgroundColor: Colors.needleGreen,
   },
-  profileHeaderTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.white },
+  profileHeaderTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.white },
   bellBtn: {
-    width: 38, height: 38, borderRadius: Radius.full,
+    width: 44, height: 44, borderRadius: Radius.full,
     backgroundColor: 'rgba(255,255,255,0.2)',
     alignItems: 'center', justifyContent: 'center',
     marginTop: Spacing.sm,
@@ -787,25 +792,25 @@ const styles = StyleSheet.create({
   hero: {
     backgroundColor: Colors.needleGreen,
     paddingTop: Spacing.md,
-    paddingBottom: Spacing.xxl,
-    paddingHorizontal: Spacing.xl,
+    paddingBottom: Spacing.xl,
+    paddingHorizontal: Spacing.lg,
     alignItems: 'center',
-    gap: 6,
+    gap: 4,
   },
   avatarWrap: { position: 'relative', marginBottom: 2 },
   avatar: {
-    width: 72, height: 72, borderRadius: 36,
+    width: 64, height: 64, borderRadius: 32,
     backgroundColor: 'rgba(255,255,255,0.2)',
     borderWidth: 2.5, borderColor: 'rgba(255,255,255,0.45)',
     alignItems: 'center', justifyContent: 'center',
   },
   avatarLoading: { opacity: 0.6 },
   avatarImage: {
-    width: 72, height: 72, borderRadius: 36,
+    width: 64, height: 64, borderRadius: 32,
     borderWidth: 2.5, borderColor: 'rgba(255,255,255,0.45)',
     overflow: 'hidden',
   },
-  avatarText: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.white },
+  avatarText: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.white },
   cameraBadge: {
     position: 'absolute', bottom: 0, right: 0,
     width: 22, height: 22, borderRadius: Radius.full,
@@ -818,39 +823,39 @@ const styles = StyleSheet.create({
     width: 12, height: 12, borderRadius: 6,
     borderWidth: 2, borderColor: Colors.needleGreen,
   },
-  heroName: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.white },
+  heroName: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.white },
   heroLocationRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   heroLocation: { fontSize: FontSize.xs, color: 'rgba(255,255,255,0.7)' },
   pillRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginTop: 2 },
   availPill: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
     backgroundColor: 'rgba(255,255,255,0.15)',
-    paddingHorizontal: Spacing.md, paddingVertical: 4,
+    paddingHorizontal: 10, paddingVertical: 4,
     borderRadius: Radius.full,
   },
   availDot: { width: 6, height: 6, borderRadius: 3 },
   availText: { fontSize: FontSize.xs, color: Colors.white, fontWeight: FontWeight.medium },
   liveBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: Spacing.md, paddingVertical: 4,
+    paddingHorizontal: 10, paddingVertical: 4,
     borderRadius: Radius.full,
   },
   liveDot: { width: 6, height: 6, borderRadius: 3 },
   liveBadgeText: { fontSize: FontSize.xs, color: Colors.white, fontWeight: FontWeight.medium },
 
   body: {
-    marginTop: -(Spacing.xl + 4),
+    marginTop: -(Spacing.lg + 2),
     borderTopLeftRadius: Radius.xl,
     borderTopRightRadius: Radius.xl,
     backgroundColor: Colors.bone,
-    paddingTop: Spacing.xl,
-    paddingHorizontal: Spacing.xl,
-    gap: Spacing.xl,
+    paddingTop: Spacing.lg,
+    paddingHorizontal: Spacing.lg,
+    gap: Spacing.lg,
   },
   workspaceCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    padding: 14,
     gap: Spacing.xs,
     ...Shadow.sm,
   },
@@ -872,12 +877,12 @@ const styles = StyleSheet.create({
   workspaceText: {
     fontSize: FontSize.sm,
     color: Colors.inkLight,
-    lineHeight: 21,
+    lineHeight: 19,
   },
   capabilityCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    padding: 14,
     gap: Spacing.sm,
     ...Shadow.sm,
   },
@@ -893,7 +898,7 @@ const styles = StyleSheet.create({
   readinessCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    padding: 14,
     gap: Spacing.sm,
     ...Shadow.sm,
   },
@@ -905,7 +910,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.success + '30',
   },
-  readinessTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  readinessTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   readinessBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   readinessMeta: { fontSize: FontSize.xs, color: Colors.midGrey },
   readinessCta: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start' },
@@ -955,21 +960,21 @@ const styles = StyleSheet.create({
   statusCtaText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
 
   // Stats
-  statsRow: { flexDirection: 'row', gap: Spacing.md },
+  statsRow: { flexDirection: 'row', gap: Spacing.sm },
   statPill: {
     flex: 1, backgroundColor: Colors.white, borderRadius: Radius.md,
-    padding: Spacing.lg, alignItems: 'center', gap: 4, ...Shadow.sm,
+    padding: 12, alignItems: 'center', gap: 4, ...Shadow.sm,
   },
   statValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 2 },
-  statValue: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
+  statValue: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
   statSub: { fontSize: FontSize.sm, color: Colors.warning, fontWeight: FontWeight.bold },
   statLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
 
   // Sections
-  section: { gap: Spacing.md },
+  section: { gap: Spacing.sm },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   sectionHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   ratingSummary: { fontSize: FontSize.md, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   sectionLink: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
 
@@ -978,7 +983,7 @@ const styles = StyleSheet.create({
   emptySectionCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    padding: 14,
     gap: Spacing.sm,
     ...Shadow.sm,
   },
@@ -1009,14 +1014,14 @@ const styles = StyleSheet.create({
   emptySectionCtaText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
   reviewCard: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.lg, gap: Spacing.sm, ...Shadow.sm,
+    padding: 14, gap: Spacing.xs, ...Shadow.sm,
   },
-  reviewHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
+  reviewHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   reviewAvatar: {
-    width: 38, height: 38, borderRadius: Radius.full,
+    width: 36, height: 36, borderRadius: Radius.full,
     backgroundColor: Colors.needleGreenLight, alignItems: 'center', justifyContent: 'center',
   },
-  reviewAvatarImage: { width: 38, height: 38, borderRadius: Radius.full, backgroundColor: Colors.lightGrey },
+  reviewAvatarImage: { width: 36, height: 36, borderRadius: Radius.full, backgroundColor: Colors.lightGrey },
   reviewInitial: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.needleGreen },
   reviewerName: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   reviewDate: { fontSize: FontSize.xs, color: Colors.midGrey },
@@ -1027,7 +1032,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md, paddingVertical: 3,
   },
   reviewTagText: { fontSize: 11, color: Colors.inkLight },
-  reviewBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  reviewBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
 
   responseWrap: {
     backgroundColor: Colors.needleGreenLight, borderRadius: Radius.md,
@@ -1063,11 +1068,11 @@ const styles = StyleSheet.create({
   flatList: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
   flatRow: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.lg,
-    paddingHorizontal: Spacing.lg, paddingVertical: 18,
+    paddingHorizontal: 14, paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.lightGrey,
   },
   rowLast: { borderBottomWidth: 0 },
-  flatRowLabel: { flex: 1, fontSize: FontSize.md, color: Colors.ink },
+  flatRowLabel: { flex: 1, fontSize: FontSize.sm, color: Colors.ink },
 
   // Log out
   logOutRow: {

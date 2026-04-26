@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Image, FlatList, ActivityIndicator, Alert, Dimensions, NativeSyntheticEvent, NativeScrollEvent, Modal,
+  FlatList, ActivityIndicator, Alert, Dimensions, NativeSyntheticEvent, NativeScrollEvent, Modal,
 } from 'react-native'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { Image as ExpoImage } from 'expo-image'
+import { Feather } from '@expo/vector-icons'
 import { useRefreshOnFocus, useTailorPublic } from '@/lib/queries'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
@@ -12,11 +14,13 @@ import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/funct
 import { useCurrency, formatAmount } from '@/lib/currency'
 import { TierBadgeChip, StarRating, Tag, Button } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { AvatarImage } from '@/components/ui/AvatarImage'
+import { goBackOrFallback } from '@/lib/navigation'
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
-const HERO_HEIGHT = 320
+const HERO_HEIGHT = 264
 const PORTFOLIO_COLS = 3
-const PORTFOLIO_SIZE = (SCREEN_WIDTH - Spacing.xl * 2 - Spacing.sm * 2) / PORTFOLIO_COLS
+const PORTFOLIO_SIZE = (SCREEN_WIDTH - Spacing.lg * 2 - Spacing.sm * 2) / PORTFOLIO_COLS
 
 type TailorProfile = {
   id: string
@@ -73,13 +77,16 @@ const AVAILABILITY_COLOR: Record<string, string> = {
 export default function TailorProfileScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const scrollRef = useRef<ScrollView | null>(null)
+  const portfolioPreviewRef = useRef<FlatList<string> | null>(null)
   const [savedOverride, setSavedOverride] = useState<boolean | null>(null)
   const [savingHeart, setSavingHeart] = useState(false)
   const [carouselIndex, setCarouselIndex] = useState(0)
   const [failedHeroImages, setFailedHeroImages] = useState<string[]>([])
-  const [portfolioPreviewUrl, setPortfolioPreviewUrl] = useState<string | null>(null)
+  const [portfolioPreviewIndex, setPortfolioPreviewIndex] = useState<number | null>(null)
+  const [portfolioViewerIndex, setPortfolioViewerIndex] = useState(0)
   const [showPortfolioModal, setShowPortfolioModal] = useState(false)
   const [showReviewsModal, setShowReviewsModal] = useState(false)
   const [showStylesModal, setShowStylesModal] = useState(false)
@@ -138,15 +145,17 @@ export default function TailorProfileScreen() {
   }
 
   function goBack() {
-    if (router.canGoBack()) {
-      router.back()
-      return
-    }
-    router.replace('/(customer)')
+    goBackOrFallback(router, navigation, '/(customer)')
   }
 
   function openPortfolio() {
     setShowPortfolioModal(true)
+  }
+
+  function openPortfolioPreview(index: number) {
+    setShowPortfolioModal(false)
+    setPortfolioViewerIndex(index)
+    setTimeout(() => setPortfolioPreviewIndex(index), 150)
   }
 
   if (isLoading && !data) {
@@ -215,12 +224,13 @@ export default function TailorProfileScreen() {
     )
   }
 
-  const heroImages = profile.portfolioPhotos.filter((url) => !failedHeroImages.includes(url))
+  const portfolioImages = Array.from(new Set(profile.portfolioPhotos.filter((url) => typeof url === 'string' && url.length > 0)))
+  const heroImages = portfolioImages.filter((url) => !failedHeroImages.includes(url))
   const priceLabel = (profile.priceRangeMin && profile.priceRangeMax)
-    ? `${formatAmount(profile.priceRangeMin, 'USD', currency, rates)} – ${formatAmount(profile.priceRangeMax, 'USD', currency, rates)}`
+    ? `${formatAmount(profile.priceRangeMin, 'USD', currency, rates)} to ${formatAmount(profile.priceRangeMax, 'USD', currency, rates)}`
     : null
   const isFullyBooked = profile.availability === 'FULLY_BOOKED'
-  const portfolioCount = heroImages.length
+  const portfolioCount = profile.portfolioPhotos.length
   const reviewSummary: ReviewSummary = {
     average: reviews.length > 0 ? reviews.reduce((sum, row) => sum + row.rating, 0) / reviews.length : profile.avgRating,
     count: reviews.length > 0 ? reviews.length : profile.totalReviews,
@@ -244,10 +254,11 @@ export default function TailorProfileScreen() {
                 onScroll={onCarouselScroll}
                 scrollEventThrottle={16}
                 renderItem={({ item }) => (
-                  <Image
-                    source={{ uri: item }}
+                  <ExpoImage
+                    source={item}
                     style={styles.heroImage}
-                    resizeMode="cover"
+                    contentFit="cover"
+                    transition={150}
                     onError={() => {
                       setFailedHeroImages((prev) => (prev.includes(item) ? prev : [...prev, item]))
                     }}
@@ -322,7 +333,7 @@ export default function TailorProfileScreen() {
           <View style={styles.statsRow}>
             <StatPill
               label={reviewSummary.count > 0 ? `${reviewSummary.count} review${reviewSummary.count === 1 ? '' : 's'}` : 'No reviews yet'}
-              value={reviewSummary.count > 0 ? reviewSummary.average.toFixed(1) : '—'}
+              value={reviewSummary.count > 0 ? reviewSummary.average.toFixed(1) : 'No rating'}
               subvalue={reviewSummary.count > 0 ? '★'.repeat(Math.round(reviewSummary.average)).padEnd(5, '☆') : '☆☆☆☆☆'}
               onPress={() => setShowReviewsModal(true)}
             />
@@ -470,13 +481,45 @@ export default function TailorProfileScreen() {
         ) : null}
       </View>
 
-      <Modal visible={!!portfolioPreviewUrl} transparent animationType="fade" onRequestClose={() => setPortfolioPreviewUrl(null)}>
+      <Modal
+        visible={portfolioPreviewIndex !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPortfolioPreviewIndex(null)}
+      >
         <View style={styles.previewBackdrop}>
-          <TouchableOpacity style={styles.previewClose} onPress={() => setPortfolioPreviewUrl(null)}>
+          <TouchableOpacity style={styles.previewClose} onPress={() => setPortfolioPreviewIndex(null)}>
             <Text style={styles.previewCloseText}>Close</Text>
           </TouchableOpacity>
-          {portfolioPreviewUrl ? (
-            <Image source={{ uri: portfolioPreviewUrl }} style={styles.previewImage} resizeMode="contain" />
+          {portfolioPreviewIndex !== null && portfolioImages.length > 0 ? (
+            <>
+              <FlatList
+                ref={portfolioPreviewRef}
+                key={`portfolio-preview-${portfolioPreviewIndex}`}
+                data={portfolioImages}
+                horizontal
+                pagingEnabled
+                initialScrollIndex={Math.min(portfolioPreviewIndex, Math.max(portfolioImages.length - 1, 0))}
+                getItemLayout={(_, index) => ({ length: SCREEN_WIDTH, offset: SCREEN_WIDTH * index, index })}
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={(event) => {
+                  const nextIndex = Math.round(event.nativeEvent.contentOffset.x / SCREEN_WIDTH)
+                  setPortfolioViewerIndex(nextIndex)
+                }}
+                renderItem={({ item }) => (
+                  <View style={styles.previewSlide}>
+                    <ExpoImage source={item} style={styles.previewImage} contentFit="contain" transition={150} />
+                  </View>
+                )}
+              />
+              {portfolioImages.length > 1 ? (
+                <View style={styles.previewCount}>
+                  <Text style={styles.previewCountText}>
+                    {portfolioViewerIndex + 1} / {portfolioImages.length}
+                  </Text>
+                </View>
+              ) : null}
+            </>
           ) : null}
         </View>
       </Modal>
@@ -491,24 +534,22 @@ export default function TailorProfileScreen() {
             <View style={{ width: 48 }} />
           </View>
           <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
-            {heroImages.length > 0 ? (
+            {portfolioImages.length > 0 ? (
               <View style={styles.portfolioGrid}>
-                {heroImages.map((url) => (
+                {portfolioImages.map((url) => (
                   <TouchableOpacity
-                    key={url}
+                    key={`${url}`}
                     style={styles.portfolioTile}
                     activeOpacity={0.9}
-                    onPress={() => {
-                      setShowPortfolioModal(false)
-                      setTimeout(() => setPortfolioPreviewUrl(url), 150)
-                    }}
+                    onPress={() => openPortfolioPreview(portfolioImages.indexOf(url))}
                   >
-                    <Image source={{ uri: url }} style={styles.portfolioTileImage} resizeMode="cover" />
+                    <ExpoImage source={url} style={styles.portfolioTileImage} contentFit="cover" transition={120} />
                   </TouchableOpacity>
                 ))}
               </View>
             ) : (
               <View style={styles.emptyReviewCard}>
+                <Feather name="image" size={34} color={Colors.lightGrey} style={styles.emptyPortfolioIcon} />
                 <Text style={styles.emptyReviewTitle}>No portfolio yet</Text>
                 <Text style={styles.emptyReviewHint}>
                   This seller has not uploaded work samples yet. Check styles, reviews, and ways to order before deciding.
@@ -604,7 +645,12 @@ function ReviewCard({ review }: { review: Review }) {
     <View style={styles.reviewCard}>
       <View style={styles.reviewHeader}>
         {review.reviewerAvatarUrl ? (
-          <Image source={{ uri: review.reviewerAvatarUrl }} style={styles.reviewAvatarImage} />
+          <AvatarImage
+            uri={review.reviewerAvatarUrl}
+            initials={initial}
+            size={40}
+            style={styles.reviewAvatarImage}
+          />
         ) : (
           <View style={styles.reviewAvatar}>
             <Text style={styles.reviewInitial}>{initial}</Text>
@@ -639,9 +685,9 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 440,
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: Spacing.lg,
+    gap: Spacing.md,
     alignItems: 'center',
     ...Shadow.lg,
   },
@@ -657,8 +703,8 @@ const styles = StyleSheet.create({
   stateGuideCard: {
     alignSelf: 'stretch',
     backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: 4,
   },
   stateGuideTitle: {
@@ -681,8 +727,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
     backgroundColor: Colors.white,
     borderBottomWidth: 1,
     borderBottomColor: Colors.lightGrey,
@@ -690,7 +736,7 @@ const styles = StyleSheet.create({
   modalClose: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   modalTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
   modalScroll: { flex: 1 },
-  modalContent: { padding: Spacing.xl, gap: Spacing.md, paddingBottom: Spacing.xxxl },
+  modalContent: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.xxl },
   portfolioGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   portfolioTile: {
     width: PORTFOLIO_SIZE,
@@ -702,8 +748,8 @@ const styles = StyleSheet.create({
   portfolioTileImage: { width: '100%', height: '100%' },
   decisionGuideCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: 4,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -730,7 +776,7 @@ const styles = StyleSheet.create({
   heroOverlay: {
     position: 'absolute', top: 0, left: 0, right: 0,
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start',
-    paddingTop: 52, paddingHorizontal: Spacing.xl,
+    paddingTop: 52, paddingHorizontal: Spacing.lg,
   },
   backBtn: {
     width: 40, height: 40, borderRadius: 20,
@@ -751,25 +797,25 @@ const styles = StyleSheet.create({
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.5)' },
   dotActive: { backgroundColor: Colors.white, width: 18 },
   photoCount: {
-    position: 'absolute', bottom: 12, right: Spacing.xl,
+    position: 'absolute', bottom: 12, right: Spacing.lg,
     backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: Radius.full,
     paddingHorizontal: 10, paddingVertical: 4,
   },
   photoCountText: { fontSize: FontSize.xs, color: Colors.white, fontWeight: FontWeight.semibold },
 
-  body: { padding: Spacing.xl, gap: Spacing.xl, marginTop: -Spacing.xl },
+  body: { padding: Spacing.lg, gap: Spacing.lg, marginTop: -Spacing.lg },
   identityRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: Spacing.md,
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
+    borderRadius: Radius.md,
+    padding: 16,
     ...Shadow.md,
   },
-  name: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
+  name: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
   location: { fontSize: FontSize.sm, color: Colors.midGrey, marginTop: 2 },
-  identityMetaRow: { marginTop: Spacing.md, flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  identityMetaRow: { marginTop: Spacing.sm, flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   availRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginTop: -Spacing.md, marginBottom: -Spacing.sm },
   availDot: { width: 8, height: 8, borderRadius: 4 },
   availText: { fontSize: FontSize.sm, color: Colors.inkLight },
@@ -784,25 +830,25 @@ const styles = StyleSheet.create({
   },
   availabilityPillText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
 
-  statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   statPill: {
     width: '48%',
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    paddingVertical: Spacing.lg,
-    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.md,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
     alignItems: 'center',
-    gap: 4,
+    gap: 2,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
   statContent: {
     width: '100%',
-    minHeight: 84,
+    minHeight: 72,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    gap: 2,
   },
   statPillInteractive: {
     borderColor: Colors.needleGreen,
@@ -827,27 +873,27 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.4,
   },
-  statValue: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
-  statSubvalue: { fontSize: FontSize.sm, color: Colors.warning, fontWeight: FontWeight.semibold, textAlign: 'center' },
+  statValue: { fontSize: 15, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  statSubvalue: { fontSize: FontSize.xs, color: Colors.warning, fontWeight: FontWeight.semibold, textAlign: 'center' },
   statLabel: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'center' },
 
-  section: { gap: Spacing.md },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  section: { gap: Spacing.sm },
+  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   styleGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: Spacing.sm,
+    gap: Spacing.xs,
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: 14,
     ...Shadow.sm,
   },
-  detailGrid: { gap: Spacing.md },
+  detailGrid: { gap: Spacing.sm },
   detailCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: Spacing.sm,
+    borderRadius: Radius.md,
+    padding: 14,
+    gap: Spacing.xs,
     ...Shadow.sm,
   },
   detailLabel: {
@@ -867,12 +913,12 @@ const styles = StyleSheet.create({
   },
   languageChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
 
-  bio: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 24 },
+  bio: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   aboutCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.sm,
+    borderRadius: Radius.md,
+    padding: 16,
+    gap: Spacing.xs,
     ...Shadow.sm,
   },
   aboutLabel: {
@@ -884,10 +930,10 @@ const styles = StyleSheet.create({
   },
 
   reviewCard: {
-    backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.lg, gap: Spacing.md, ...Shadow.sm,
+    backgroundColor: Colors.white, borderRadius: Radius.md,
+    padding: 14, gap: Spacing.sm, ...Shadow.sm,
   },
-  reviewHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
+  reviewHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   reviewAvatar: {
     width: 40, height: 40, borderRadius: Radius.full,
     backgroundColor: Colors.needleGreenLight, alignItems: 'center', justifyContent: 'center',
@@ -896,12 +942,12 @@ const styles = StyleSheet.create({
   reviewInitial: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.needleGreen },
   reviewerName: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   reviewDate: { fontSize: FontSize.xs, color: Colors.midGrey },
-  reviewBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
-  reviewTags: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
+  reviewBody: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  reviewTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   responseWrap: {
     backgroundColor: Colors.needleGreenLight,
     borderRadius: Radius.md,
-    padding: Spacing.md,
+    padding: 12,
     borderLeftWidth: 3,
     borderLeftColor: Colors.needleGreen,
     gap: 4,
@@ -910,9 +956,9 @@ const styles = StyleSheet.create({
   responseText: { fontSize: FontSize.sm, color: Colors.ink, lineHeight: 20 },
   emptyReviewCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: Spacing.sm,
+    borderRadius: Radius.md,
+    padding: 14,
+    gap: Spacing.xs,
     ...Shadow.sm,
   },
   emptyReviewBadge: {
@@ -929,29 +975,35 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
+  emptyPortfolioIcon: { marginBottom: Spacing.sm },
   emptyReviewTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   emptyReviewHint: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20 },
 
   cta: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
-    flexDirection: 'row', gap: Spacing.md,
-    backgroundColor: Colors.white, padding: Spacing.xl,
+    flexDirection: 'row', gap: 8,
+    backgroundColor: Colors.white, paddingHorizontal: Spacing.lg, paddingTop: 12,
     borderTopWidth: 1, borderTopColor: Colors.lightGrey,
-    paddingBottom: Spacing.lg,
+    paddingBottom: 8,
   },
   previewBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.92)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: Spacing.xl,
   },
-  previewImage: { width: '100%', height: '82%' },
+  previewSlide: {
+    width: SCREEN_WIDTH,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.lg,
+  },
+  previewImage: { width: SCREEN_WIDTH - Spacing.lg * 2, height: '82%' },
   refreshingText: { fontSize: FontSize.xs, color: Colors.midGrey, paddingHorizontal: Spacing.xl, marginBottom: Spacing.sm },
   previewClose: {
     position: 'absolute',
     top: 56,
-    right: Spacing.xl,
+    right: Spacing.lg,
     zIndex: 2,
     backgroundColor: 'rgba(255,255,255,0.14)',
     borderRadius: Radius.full,
@@ -959,4 +1011,14 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
   },
   previewCloseText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  previewCount: {
+    position: 'absolute',
+    bottom: 48,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: Radius.full,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  previewCountText: { color: Colors.white, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
 })

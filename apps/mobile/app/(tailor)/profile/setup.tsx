@@ -16,10 +16,9 @@ import * as ImagePicker from 'expo-image-picker'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
-import { minorUnitsFromInput, moneyInputFromMinorUnits } from '@/lib/money-input'
 import { syncUserRow } from '@/lib/syncUserRow'
 import { stripExif } from '@/lib/stripExif'
-import { Button, Input, TagSelector, ProgressStepper } from '@/components/ui'
+import { AddressAutocompleteInput, Button, Input, TagSelector, ProgressStepper } from '@/components/ui'
 import type { TagGroup } from '@/components/ui'
 import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -29,7 +28,7 @@ type SellerType = 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP'
 
 const STEP_TITLES = ['Your identity', 'What you make', 'Portfolio', 'Selling setup']
 const STEP_SUBS = [
-  'This is your public seller profile. No contact details here — buyers find you through Drape.',
+  'This is your public seller profile. No contact details here. Buyers find you through Drape.',
   'Tell people what you make and what to expect on price.',
   'Upload at least 4 photos of your work. This is what buyers notice first.',
   'Choose what you sell, how people receive orders, and verify your identity to go live.',
@@ -106,7 +105,7 @@ const BIO_TEMPLATES = [
   'I run a boutique and tailor studio, offering custom work and ready-made pieces.',
   'I focus on crochet and handmade pieces made to order with careful finishing and fit.',
 ] as const
-const PRICE_PRESETS: Array<{ label: string; currency: 'GBP' | 'USD' | 'EUR' | 'NGN' | 'GHS' | 'KES'; min: string; max: string }> = [
+const PRICE_PRESETS: Array<{ label: string; currency: 'GBP' | 'USD' | 'EUR' | 'NGN' | 'GHS' | 'KES' | 'CAD'; min: string; max: string }> = [
   { label: 'Budget', currency: 'NGN', min: '50', max: '120' },
   { label: 'Mid-range', currency: 'NGN', min: '120', max: '300' },
   { label: 'Premium', currency: 'NGN', min: '300', max: '800' },
@@ -180,7 +179,7 @@ export default function TailorSetupScreen() {
   const [specialties, setSpecialties] = useState<string[]>([])
   const [priceMin, setPriceMin] = useState('')
   const [priceMax, setPriceMax] = useState('')
-  const [currency, setCurrency] = useState<'GBP' | 'USD' | 'EUR' | 'NGN' | 'GHS' | 'KES'>('GBP')
+  const [currency, setCurrency] = useState<'GBP' | 'USD' | 'EUR' | 'NGN' | 'GHS' | 'KES' | 'CAD'>('GBP')
 
   // Step 2
   const [portfolioItems, setPortfolioItems] = useState<Array<{ type: 'photo' | 'video'; url: string }>>([])
@@ -193,10 +192,10 @@ export default function TailorSetupScreen() {
   const [supportsCustomOrders, setSupportsCustomOrders] = useState(true)
   const [supportsReadyMade, setSupportsReadyMade] = useState(false)
   const [pickupAvailable, setPickupAvailable] = useState(true)
+  const [pickupAddress, setPickupAddress] = useState('')
+  const [pickupInstructions, setPickupInstructions] = useState('')
   const [deliveryAvailable, setDeliveryAvailable] = useState(false)
   const [shippingAvailable, setShippingAvailable] = useState(false)
-  const [deliveryFee, setDeliveryFee] = useState('')
-  const [shippingFee, setShippingFee] = useState('')
   const [idPhotoUri, setIdPhotoUri] = useState<string | null>(null)
   const [uploadingId, setUploadingId] = useState(false)
 
@@ -254,7 +253,7 @@ export default function TailorSetupScreen() {
         if (typeof row.price_range_max === 'number' && row.price_range_max > 0) {
           setPriceMax(String(row.price_range_max / 100))
         }
-        if (typeof row.currency === 'string' && ['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES'].includes(row.currency)) {
+        if (typeof row.currency === 'string' && ['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES', 'CAD'].includes(row.currency)) {
           setCurrency(row.currency)
         }
         if (nextPhotos.length > 0 || nextVideos.length > 0) {
@@ -271,9 +270,22 @@ export default function TailorSetupScreen() {
         if (typeof row.pickup_available === 'boolean') setPickupAvailable(row.pickup_available)
         if (typeof row.delivery_available === 'boolean') setDeliveryAvailable(row.delivery_available)
         if (typeof row.shipping_available === 'boolean') setShippingAvailable(row.shipping_available)
-        setDeliveryFee(moneyInputFromMinorUnits(row.delivery_fee))
-        setShippingFee(moneyInputFromMinorUnits(row.shipping_fee))
       })
+
+    supabase
+      .from('tailor_pickup_details')
+      .select('pickup_address, pickup_instructions')
+      .eq('user_id', user.id)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelled) return
+        if (error || !data) return
+
+        const row = data as any
+        if (typeof row.pickup_address === 'string') setPickupAddress(row.pickup_address)
+        if (typeof row.pickup_instructions === 'string') setPickupInstructions(row.pickup_instructions)
+      })
+
     return () => {
       cancelled = true
     }
@@ -467,15 +479,6 @@ export default function TailorSetupScreen() {
       return
     }
 
-    const deliveryFeeMinor = minorUnitsFromInput(deliveryFee)
-    const shippingFeeMinor = minorUnitsFromInput(shippingFee)
-
-    if (deliveryFeeMinor == null || shippingFeeMinor == null) {
-      setSaving(false)
-      Alert.alert('Invalid fee', 'Enter delivery and shipping fees as whole numbers or decimals with up to two places.')
-      return
-    }
-
     const { error } = await invokeFunction('tailor-profile-action', {
       body: {
         action: 'upsert-setup',
@@ -495,10 +498,12 @@ export default function TailorSetupScreen() {
           supportsCustomOrders,
           supportsReadyMade,
           pickupAvailable,
+          pickupAddress: pickupAddress.trim() || null,
+          pickupInstructions: pickupInstructions.trim() || null,
           deliveryAvailable,
           shippingAvailable,
-          deliveryFee: deliveryAvailable ? deliveryFeeMinor : 0,
-          shippingFee: shippingAvailable ? shippingFeeMinor : 0,
+          deliveryFee: 0,
+          shippingFee: 0,
           idDocumentUrl: idUrl,
         },
       },
@@ -570,7 +575,8 @@ export default function TailorSetupScreen() {
     if (step === 3) {
       const hasOrderMode = supportsCustomOrders || supportsReadyMade
       const hasFulfillment = pickupAvailable || deliveryAvailable || shippingAvailable
-      return hasOrderMode && hasFulfillment
+      const pickupReady = !pickupAvailable || pickupAddress.trim().length >= 8
+      return hasOrderMode && hasFulfillment && pickupReady
     }
     return false
   }
@@ -719,7 +725,7 @@ export default function TailorSetupScreen() {
                 <TagSelector
                   label="What do you make?"
                   required
-                  hint="Select all that apply — these appear on your public profile."
+                  hint="Select all that apply. These appear on your public profile."
                   options={SPECIALTY_GROUPS}
                   selected={specialties}
                   onChange={setSpecialties}
@@ -745,7 +751,7 @@ export default function TailorSetupScreen() {
                     ))}
                   </View>
                   <View style={styles.currencyRow}>
-                    {(['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES'] as const).map((c) => (
+                    {(['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES', 'CAD'] as const).map((c) => (
                       <TouchableOpacity
                         key={c}
                         style={[styles.currencyChip, currency === c && styles.currencyChipActive]}
@@ -795,7 +801,7 @@ export default function TailorSetupScreen() {
                   <Text style={styles.portfolioCount}>
                     {portfolioItems.length >= 4
                       ? `${portfolioItems.length}/12 ✓ minimum met`
-                      : `${portfolioItems.length}/4 needed — ${4 - portfolioItems.length} more to continue`}
+                      : `${portfolioItems.length}/4 needed. ${4 - portfolioItems.length} more to continue`}
                     {' · '}{portfolioItems.filter((i) => i.type === 'video').length}/2 videos
                   </Text>
                 </View>
@@ -921,28 +927,39 @@ export default function TailorSetupScreen() {
                       <Text style={styles.choiceHint}>Courier or shipping partner handles it.</Text>
                     </TouchableOpacity>
                   </View>
+                  {pickupAvailable ? (
+                    <View style={styles.fulfillmentFeeBlock}>
+                      <Text style={styles.fieldLabel}>Private pickup details</Text>
+                      <Text style={styles.fieldHint}>
+                        Double-check this exact address before you save. Customers only see it after an order is marked ready for collection.
+                      </Text>
+                      <AddressAutocompleteInput
+                        label="Pickup address"
+                        placeholder="e.g. 12 Marina Road, Victoria Island"
+                        value={pickupAddress}
+                        onChangeText={setPickupAddress}
+                        hint="Search and tap a suggestion to autofill, or type the full address manually. Include street or building, district or city, state or region, postal code if used, and country."
+                        multiline
+                      />
+                      <Input
+                        label="Pickup instructions (optional)"
+                        placeholder="e.g. Ask for the front desk and bring your collection code."
+                        value={pickupInstructions}
+                        onChangeText={setPickupInstructions}
+                      />
+                      {pickupAddress.trim().length === 0 ? (
+                        <Text style={styles.helperError}>Add your exact pickup address to keep pickup turned on.</Text>
+                      ) : pickupAddress.trim().length < 8 ? (
+                        <Text style={styles.helperError}>Add a fuller pickup address before offering pickup.</Text>
+                      ) : null}
+                    </View>
+                  ) : null}
                   {deliveryAvailable || shippingAvailable ? (
                     <View style={styles.fulfillmentFeeBlock}>
-                      <Text style={styles.fieldLabel}>Default fulfillment fees</Text>
-                      <Text style={styles.fieldHint}>Show buyers the cost before payment. Leave blank if it is free or included.</Text>
-                      {deliveryAvailable ? (
-                        <Input
-                          label={`Delivery fee (${currency})`}
-                          placeholder="e.g. 15"
-                          value={deliveryFee}
-                          onChangeText={setDeliveryFee}
-                          keyboardType="decimal-pad"
-                        />
-                      ) : null}
-                      {shippingAvailable ? (
-                        <Input
-                          label={`Shipping fee (${currency})`}
-                          placeholder="e.g. 25"
-                          value={shippingFee}
-                          onChangeText={setShippingFee}
-                          keyboardType="decimal-pad"
-                        />
-                      ) : null}
+                      <Text style={styles.fieldLabel}>Standard Drape dispatch fees</Text>
+                      <Text style={styles.fieldHint}>
+                        Drape now collects the standard delivery or shipping fee at checkout based on the buyer address and your location. You only need to choose whether you offer delivery or shipping here.
+                      </Text>
                     </View>
                   ) : null}
                 </View>
@@ -950,7 +967,7 @@ export default function TailorSetupScreen() {
                 <View>
                   <Text style={styles.fieldLabel}>Identity verification</Text>
                   <Text style={styles.fieldHint}>
-                    Upload a government-issued photo ID (passport, national ID, or driver's licence). You can submit your profile now — your profile goes live once we've reviewed your ID within 24 hours. You can also add this later from your profile.
+                    Upload a government-issued photo ID (passport, national ID, or driver's licence). You can submit your profile now. Your profile goes live once we've reviewed your ID within 24 hours. You can also add this later from your profile.
                   </Text>
                   {idPhotoUri ? (
                     <View style={styles.idPreviewWrap}>
@@ -1071,6 +1088,7 @@ const styles = StyleSheet.create({
   fields: { gap: Spacing.xl },
   fieldLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: Spacing.sm },
   fieldHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18, marginBottom: Spacing.md },
+  helperError: { fontSize: FontSize.xs, color: Colors.kanteRust, lineHeight: 18, marginTop: Spacing.sm },
   required: { color: Colors.error },
   templateRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginTop: Spacing.sm, marginBottom: Spacing.sm },
   helperChip: {
