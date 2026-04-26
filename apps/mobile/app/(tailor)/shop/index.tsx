@@ -264,8 +264,6 @@ export default function TailorShopScreen() {
   }
 
   function confirmItemAction(item: SellerItem, action: 'publish-item' | 'hide-item' | 'mark-sold' | 'relist-item' | 'delete-item') {
-    const status = effectiveStockStatus(item)
-
     if (action === 'publish-item') {
       Alert.alert(
         'Go live now?',
