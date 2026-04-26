@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Image, FlatList, ActivityIndicator, Alert, Dimensions, NativeSyntheticEvent, NativeScrollEvent, Modal,
+  FlatList, ActivityIndicator, Alert, Dimensions, NativeSyntheticEvent, NativeScrollEvent, Modal,
 } from 'react-native'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { Image as ExpoImage } from 'expo-image'
+import { Feather } from '@expo/vector-icons'
 import { useRefreshOnFocus, useTailorPublic } from '@/lib/queries'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
@@ -12,6 +14,8 @@ import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/funct
 import { useCurrency, formatAmount } from '@/lib/currency'
 import { TierBadgeChip, StarRating, Tag, Button } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { AvatarImage } from '@/components/ui/AvatarImage'
+import { goBackOrFallback } from '@/lib/navigation'
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
 const HERO_HEIGHT = 264
@@ -73,13 +77,16 @@ const AVAILABILITY_COLOR: Record<string, string> = {
 export default function TailorProfileScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const scrollRef = useRef<ScrollView | null>(null)
+  const portfolioPreviewRef = useRef<FlatList<string> | null>(null)
   const [savedOverride, setSavedOverride] = useState<boolean | null>(null)
   const [savingHeart, setSavingHeart] = useState(false)
   const [carouselIndex, setCarouselIndex] = useState(0)
   const [failedHeroImages, setFailedHeroImages] = useState<string[]>([])
-  const [portfolioPreviewUrl, setPortfolioPreviewUrl] = useState<string | null>(null)
+  const [portfolioPreviewIndex, setPortfolioPreviewIndex] = useState<number | null>(null)
+  const [portfolioViewerIndex, setPortfolioViewerIndex] = useState(0)
   const [showPortfolioModal, setShowPortfolioModal] = useState(false)
   const [showReviewsModal, setShowReviewsModal] = useState(false)
   const [showStylesModal, setShowStylesModal] = useState(false)
@@ -138,15 +145,17 @@ export default function TailorProfileScreen() {
   }
 
   function goBack() {
-    if (router.canGoBack()) {
-      router.back()
-      return
-    }
-    router.replace('/(customer)')
+    goBackOrFallback(router, navigation, '/(customer)')
   }
 
   function openPortfolio() {
     setShowPortfolioModal(true)
+  }
+
+  function openPortfolioPreview(index: number) {
+    setShowPortfolioModal(false)
+    setPortfolioViewerIndex(index)
+    setTimeout(() => setPortfolioPreviewIndex(index), 150)
   }
 
   if (isLoading && !data) {
@@ -215,8 +224,8 @@ export default function TailorProfileScreen() {
     )
   }
 
-  const heroImages = profile.portfolioPhotos.filter((url) => !failedHeroImages.includes(url))
-  const portfolioImages = profile.portfolioPhotos
+  const portfolioImages = Array.from(new Set(profile.portfolioPhotos.filter((url) => typeof url === 'string' && url.length > 0)))
+  const heroImages = portfolioImages.filter((url) => !failedHeroImages.includes(url))
   const priceLabel = (profile.priceRangeMin && profile.priceRangeMax)
     ? `${formatAmount(profile.priceRangeMin, 'USD', currency, rates)} to ${formatAmount(profile.priceRangeMax, 'USD', currency, rates)}`
     : null
@@ -245,10 +254,11 @@ export default function TailorProfileScreen() {
                 onScroll={onCarouselScroll}
                 scrollEventThrottle={16}
                 renderItem={({ item }) => (
-                  <Image
-                    source={{ uri: item }}
+                  <ExpoImage
+                    source={item}
                     style={styles.heroImage}
-                    resizeMode="cover"
+                    contentFit="cover"
+                    transition={150}
                     onError={() => {
                       setFailedHeroImages((prev) => (prev.includes(item) ? prev : [...prev, item]))
                     }}
@@ -471,13 +481,45 @@ export default function TailorProfileScreen() {
         ) : null}
       </View>
 
-      <Modal visible={!!portfolioPreviewUrl} transparent animationType="fade" onRequestClose={() => setPortfolioPreviewUrl(null)}>
+      <Modal
+        visible={portfolioPreviewIndex !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPortfolioPreviewIndex(null)}
+      >
         <View style={styles.previewBackdrop}>
-          <TouchableOpacity style={styles.previewClose} onPress={() => setPortfolioPreviewUrl(null)}>
+          <TouchableOpacity style={styles.previewClose} onPress={() => setPortfolioPreviewIndex(null)}>
             <Text style={styles.previewCloseText}>Close</Text>
           </TouchableOpacity>
-          {portfolioPreviewUrl ? (
-            <Image source={{ uri: portfolioPreviewUrl }} style={styles.previewImage} resizeMode="contain" />
+          {portfolioPreviewIndex !== null && portfolioImages.length > 0 ? (
+            <>
+              <FlatList
+                ref={portfolioPreviewRef}
+                key={`portfolio-preview-${portfolioPreviewIndex}`}
+                data={portfolioImages}
+                horizontal
+                pagingEnabled
+                initialScrollIndex={Math.min(portfolioPreviewIndex, Math.max(portfolioImages.length - 1, 0))}
+                getItemLayout={(_, index) => ({ length: SCREEN_WIDTH, offset: SCREEN_WIDTH * index, index })}
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={(event) => {
+                  const nextIndex = Math.round(event.nativeEvent.contentOffset.x / SCREEN_WIDTH)
+                  setPortfolioViewerIndex(nextIndex)
+                }}
+                renderItem={({ item }) => (
+                  <View style={styles.previewSlide}>
+                    <ExpoImage source={item} style={styles.previewImage} contentFit="contain" transition={150} />
+                  </View>
+                )}
+              />
+              {portfolioImages.length > 1 ? (
+                <View style={styles.previewCount}>
+                  <Text style={styles.previewCountText}>
+                    {portfolioViewerIndex + 1} / {portfolioImages.length}
+                  </Text>
+                </View>
+              ) : null}
+            </>
           ) : null}
         </View>
       </Modal>
@@ -496,20 +538,18 @@ export default function TailorProfileScreen() {
               <View style={styles.portfolioGrid}>
                 {portfolioImages.map((url) => (
                   <TouchableOpacity
-                    key={url}
+                    key={`${url}`}
                     style={styles.portfolioTile}
                     activeOpacity={0.9}
-                    onPress={() => {
-                      setShowPortfolioModal(false)
-                      setTimeout(() => setPortfolioPreviewUrl(url), 150)
-                    }}
+                    onPress={() => openPortfolioPreview(portfolioImages.indexOf(url))}
                   >
-                    <Image source={{ uri: url }} style={styles.portfolioTileImage} resizeMode="cover" />
+                    <ExpoImage source={url} style={styles.portfolioTileImage} contentFit="cover" transition={120} />
                   </TouchableOpacity>
                 ))}
               </View>
             ) : (
               <View style={styles.emptyReviewCard}>
+                <Feather name="image" size={34} color={Colors.lightGrey} style={styles.emptyPortfolioIcon} />
                 <Text style={styles.emptyReviewTitle}>No portfolio yet</Text>
                 <Text style={styles.emptyReviewHint}>
                   This seller has not uploaded work samples yet. Check styles, reviews, and ways to order before deciding.
@@ -605,7 +645,12 @@ function ReviewCard({ review }: { review: Review }) {
     <View style={styles.reviewCard}>
       <View style={styles.reviewHeader}>
         {review.reviewerAvatarUrl ? (
-          <Image source={{ uri: review.reviewerAvatarUrl }} style={styles.reviewAvatarImage} />
+          <AvatarImage
+            uri={review.reviewerAvatarUrl}
+            initials={initial}
+            size={40}
+            style={styles.reviewAvatarImage}
+          />
         ) : (
           <View style={styles.reviewAvatar}>
             <Text style={styles.reviewInitial}>{initial}</Text>
@@ -930,6 +975,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
+  emptyPortfolioIcon: { marginBottom: Spacing.sm },
   emptyReviewTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   emptyReviewHint: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20 },
 
@@ -945,9 +991,14 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.92)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: Spacing.xl,
   },
-  previewImage: { width: '100%', height: '82%' },
+  previewSlide: {
+    width: SCREEN_WIDTH,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.lg,
+  },
+  previewImage: { width: SCREEN_WIDTH - Spacing.lg * 2, height: '82%' },
   refreshingText: { fontSize: FontSize.xs, color: Colors.midGrey, paddingHorizontal: Spacing.xl, marginBottom: Spacing.sm },
   previewClose: {
     position: 'absolute',
@@ -960,4 +1011,14 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
   },
   previewCloseText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  previewCount: {
+    position: 'absolute',
+    bottom: 48,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: Radius.full,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  previewCountText: { color: Colors.white, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
 })

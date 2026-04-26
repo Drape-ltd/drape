@@ -125,7 +125,7 @@ async function registerAndStore(userId: string) {
       finalStatus = status
     }
 
-    if (finalStatus !== 'granted') return // User declined — don't store
+    if (finalStatus !== 'granted') return // User declined, don't store
 
     const tokenData = await Notifications.getExpoPushTokenAsync({
       projectId: process.env.EXPO_PUBLIC_PROJECT_ID,

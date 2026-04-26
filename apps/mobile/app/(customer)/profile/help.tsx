@@ -16,6 +16,7 @@ import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { goBackOrFallback } from '@/lib/navigation'
 
 // ─── FAQ data ─────────────────────────────────────────────────────────────────
 
@@ -66,7 +67,7 @@ export default function HelpScreen() {
   const [openIndex, setOpenIndex] = useState<number | null>(null)
 
   function goBack() {
-    router.replace('/(customer)/profile')
+    goBackOrFallback(router, navigation, '/(customer)/profile')
   }
 
   function toggleFaq(i: number) {

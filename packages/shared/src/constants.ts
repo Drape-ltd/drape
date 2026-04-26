@@ -76,7 +76,7 @@ export const REVIEW_TAGS = [
 ] as const
 
 // ─── Supported currencies ─────────────────────────────────────────────────────
-export const CURRENCIES = ['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES'] as const
+export const CURRENCIES = ['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES', 'CAD'] as const
 export type SupportedCurrency = (typeof CURRENCIES)[number]
 
 // ─── Escalation thresholds ────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
+import { goBackOrReturnTo } from '@/lib/navigation'
 import {
   deriveMeasurementFitConfidence,
   MEASUREMENT_SOURCE_LABELS,
@@ -411,9 +412,7 @@ async function loadMeasurements() {
       )
     } else {
       capture('measurements_saved', { unit, measurement_source: measurementSource })
-      if (typeof returnTo === 'string' && returnTo.length > 0) router.replace(returnTo as any)
-      else if (navigation.canGoBack()) router.back()
-      else router.replace('/(customer)/profile')
+      goBackOrReturnTo(router, navigation, returnTo, '/(customer)/profile')
     }
   }
 
@@ -429,9 +428,7 @@ async function loadMeasurements() {
 
   function back() {
     if (step > 0) setStep(step - 1)
-    else if (typeof returnTo === 'string' && returnTo.length > 0) router.replace(returnTo as any)
-    else if (navigation.canGoBack()) router.back()
-    else router.replace('/(customer)/profile')
+    else goBackOrReturnTo(router, navigation, returnTo, '/(customer)/profile')
   }
 
   if (fetchError) {

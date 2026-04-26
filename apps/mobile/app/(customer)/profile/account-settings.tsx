@@ -10,6 +10,7 @@ import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { goBackOrFallback } from '@/lib/navigation'
 
 function NavRow({
   icon, label, sublabel, last, onPress, pending,
@@ -50,7 +51,7 @@ export default function AccountSettingsScreen() {
   const version = '1.0.0'
 
   function goBack() {
-    router.replace('/(customer)/profile')
+    goBackOrFallback(router, navigation, '/(customer)/profile')
   }
 
   return (

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert,
-  Animated, Image, ActivityIndicator, Linking, Platform,
+  Animated, ActivityIndicator, Linking, Platform,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -17,6 +17,7 @@ import { useCustomerProfileOverview, useRefreshOnFocus } from '@/lib/queries'
 import { shareCustomerReferral, shareDiscoverTailors } from '@/lib/invite'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
+import { AvatarImage } from '@/components/ui/AvatarImage'
 
 const CUSTOMER_PROFILE_GUIDE_KEY = 'drape_customer_profile_best_use_dismissed'
 
@@ -334,17 +335,14 @@ export default function CustomerProfileScreen() {
               <View style={[styles.avatar, styles.avatarLoading]}>
                 <ActivityIndicator color={Colors.white} />
               </View>
-            ) : avatarUrl ? (
-              <Image
-                source={{ uri: avatarUrl }}
-                style={styles.avatarImage}
-                resizeMode="cover"
-                onError={() => setAvatarUrl(null)}
-              />
             ) : (
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{initials}</Text>
-              </View>
+              <AvatarImage
+                uri={avatarUrl}
+                initials={initials}
+                size={96}
+                style={styles.avatarImage}
+                shadow
+              />
             )}
             {/* Camera badge */}
             <View style={styles.cameraBadge}>
@@ -366,7 +364,7 @@ export default function CustomerProfileScreen() {
                 </TouchableOpacity>
               </View>
               <Text style={styles.workspaceText}>
-                Keep your measurements current and use this page to jump back into active orders fast.
+                Keep your measurements current and use this page to revisit finished orders and keep your fit profile sharp.
               </Text>
             </View>
           )}
@@ -386,7 +384,7 @@ export default function CustomerProfileScreen() {
               activeOpacity={0.75}
             >
               <Text style={styles.quickLinkValue}>
-                {averageRating ? averageRating.toFixed(1) : '—'}
+                {averageRating ? averageRating.toFixed(1) : 'No rating'}
               </Text>
               <Text style={styles.quickLinkLabel}>
                 {reviewCount > 0 ? `${reviewCount} review${reviewCount === 1 ? '' : 's'}` : 'Ratings'}
@@ -394,11 +392,11 @@ export default function CustomerProfileScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.quickLinkCard}
-              onPress={() => router.navigate('/(customer)/orders')}
+              onPress={() => router.navigate({ pathname: '/(customer)/orders', params: { tab: 'completed' } })}
               activeOpacity={0.75}
             >
               <Text style={styles.quickLinkValue}>{recentOrders.length}</Text>
-              <Text style={styles.quickLinkLabel}>Recent orders</Text>
+              <Text style={styles.quickLinkLabel}>Order history</Text>
             </TouchableOpacity>
           </View>
 

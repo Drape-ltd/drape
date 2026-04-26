@@ -82,7 +82,7 @@ export function WaitlistForm({ role, title, description }: WaitlistFormProps): J
           }}
           autoComplete="name"
           className="rounded-2xl border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white"
-          placeholder="Your name"
+          placeholder="John Doe"
         />
         </label>
 

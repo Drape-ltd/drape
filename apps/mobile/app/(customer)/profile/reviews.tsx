@@ -3,11 +3,12 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { useRouter, useFocusEffect } from 'expo-router'
+import { useNavigation, useRouter, useFocusEffect } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { goBackOrFallback } from '@/lib/navigation'
 
 type CustomerReviewRow = {
   id: string
@@ -26,6 +27,7 @@ function asStringList(value: unknown): string[] {
 
 export default function CustomerReviewsScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const [reviews, setReviews] = useState<CustomerReviewRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -68,10 +70,14 @@ export default function CustomerReviewsScreen() {
     ? reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length
     : null
 
+  function goBack() {
+    goBackOrFallback(router, navigation, '/(customer)/profile')
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.replace('/(customer)/profile')} style={styles.backBtn}>
+        <TouchableOpacity onPress={goBack} style={styles.backBtn}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Your reviews</Text>

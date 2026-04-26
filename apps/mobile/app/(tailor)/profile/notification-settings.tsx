@@ -16,6 +16,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { goBackOrFallback } from '@/lib/navigation'
 
 type NotifPrefs = {
   newOrders: boolean
@@ -90,7 +91,7 @@ export default function TailorNotificationSettingsScreen() {
   }
 
   function goBack() {
-    router.replace('/(tailor)/profile/account-settings')
+    goBackOrFallback(router, navigation, '/(tailor)/profile/account-settings')
   }
 
   return (

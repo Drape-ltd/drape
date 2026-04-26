@@ -13,6 +13,7 @@ import { useAuth } from '@/lib/auth'
 import { createConsultationRoom, openConsultationCallUrl } from '@/lib/consultation'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { MessageThread } from '@/components/ui/MessageThread'
+import { goBackOrReturnTo } from '@/lib/navigation'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { TERMINAL_STAGES, type OrderStage } from '@drape/shared/order-machine'
 
@@ -40,9 +41,7 @@ export default function TailorMessagesScreen() {
   const [loadingConversationAccess, setLoadingConversationAccess] = useState(false)
 
   function goBack() {
-    if (returnTo) router.replace(returnTo as any)
-    else if (navigation.canGoBack()) router.back()
-    else router.replace('/(tailor)/orders')
+    goBackOrReturnTo(router, navigation, returnTo, '/(tailor)/orders')
   }
 
   async function openCallUrl(url: string) {

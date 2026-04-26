@@ -14,6 +14,7 @@ import { invokeFunction } from '@/lib/supabase'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { useCustomerMessageOrderInfo, useRefreshOnFocus } from '@/lib/queries'
 import { MessageThread } from '@/components/ui/MessageThread'
+import { goBackOrReturnTo } from '@/lib/navigation'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { TERMINAL_STAGES } from '@drape/shared/order-machine'
 
@@ -65,9 +66,7 @@ export default function CustomerMessagesScreen() {
   }, [resolvedOrderId])
 
   function goBack() {
-    if (returnTo) router.replace(returnTo as any)
-    else if (navigation.canGoBack()) router.back()
-    else router.replace('/(customer)/messages')
+    goBackOrReturnTo(router, navigation, returnTo, '/(customer)/messages')
   }
 
   async function openCallUrl(url: string) {

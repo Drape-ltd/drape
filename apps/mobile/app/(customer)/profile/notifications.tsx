@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { useFocusEffect, useRouter } from 'expo-router'
+import { useFocusEffect, useNavigation, useRouter } from 'expo-router'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
 } from 'react-native'
@@ -21,6 +21,7 @@ import { customerOrderStageLabel } from '@/lib/customer-order-copy'
 import { Button, FeatureStateCard } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
+import { goBackOrFallback } from '@/lib/navigation'
 
 const CUSTOMER_NOTIFICATIONS_GUIDE_KEY = 'drape_customer_notifications_best_use_dismissed'
 
@@ -76,6 +77,7 @@ function timeAgo(iso: string): string {
 
 export default function NotificationsScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const [items, setItems] = useState<NotifItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -156,7 +158,7 @@ export default function NotificationsScreen() {
   )
 
   function goBack() {
-    router.replace('/(customer)/profile')
+    goBackOrFallback(router, navigation, '/(customer)/profile')
   }
 
   return (
@@ -201,7 +203,7 @@ export default function NotificationsScreen() {
           <Button
             label="Open profile"
             variant="ghost"
-            onPress={() => router.replace('/(customer)/profile')}
+            onPress={goBack}
           />
         </FeatureStateCard>
       ) : items.length === 0 ? (

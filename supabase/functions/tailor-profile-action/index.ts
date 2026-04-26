@@ -8,9 +8,16 @@ import { parseBody, z } from '../_shared/validate.ts'
 
 const FN = 'tailor-profile-action'
 
-const CURRENCY = z.enum(['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES'])
+const CURRENCY = z.enum(['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES', 'CAD'])
 const SELLER_TYPE = z.enum(['TAILOR', 'BOUTIQUE', 'TAILOR_SHOP'])
-const AVAILABILITY = z.enum(['AVAILABLE', 'LIMITED', 'BOOKED'])
+const AVAILABILITY = z.enum(['OPEN', 'LIMITED', 'FULLY_BOOKED', 'AVAILABLE', 'BOOKED'])
+
+function normalizeAvailability(value: z.infer<typeof AVAILABILITY> | undefined) {
+  if (!value) return 'OPEN'
+  if (value === 'AVAILABLE') return 'OPEN'
+  if (value === 'BOOKED') return 'FULLY_BOOKED'
+  return value
+}
 
 const BaseProfileSchema = z.object({
   displayName: z.string().trim().min(2).max(80),
@@ -21,11 +28,13 @@ const BaseProfileSchema = z.object({
   priceRangeMin: z.number().int().nonnegative().max(100_000_00).optional().nullable(),
   priceRangeMax: z.number().int().nonnegative().max(100_000_00).optional().nullable(),
   currency: CURRENCY.default('USD'),
-  availability: AVAILABILITY.default('AVAILABLE'),
+  availability: AVAILABILITY.default('OPEN'),
   sellerType: SELLER_TYPE.default('TAILOR'),
   supportsCustomOrders: z.boolean().default(true),
   supportsReadyMade: z.boolean().default(false),
   pickupAvailable: z.boolean().default(false),
+  pickupAddress: z.string().trim().max(240).optional().nullable(),
+  pickupInstructions: z.string().trim().max(400).optional().nullable(),
   deliveryAvailable: z.boolean().default(false),
   shippingAvailable: z.boolean().default(false),
   deliveryFee: z.number().int().nonnegative().max(100_000_00).default(0),
@@ -114,6 +123,9 @@ Deno.serve(async (req) => {
     if (!(profile.pickupAvailable || profile.deliveryAvailable || profile.shippingAvailable)) {
       return new Response('Choose at least one fulfillment option.', { status: 400, headers: cors })
     }
+    if (profile.pickupAvailable && !profile.pickupAddress?.trim()) {
+      return new Response('Add your private pickup address before offering pickup.', { status: 400, headers: cors })
+    }
 
     const existingValues = existingProfile?.id
       ? await supabase
@@ -140,15 +152,15 @@ Deno.serve(async (req) => {
       price_range_min: profile.priceRangeMin ?? existingRow.price_range_min ?? null,
       price_range_max: profile.priceRangeMax ?? existingRow.price_range_max ?? null,
       currency: profile.currency,
-      availability: profile.availability,
+      availability: normalizeAvailability(profile.availability),
       seller_type: profile.sellerType,
       supports_custom_orders: profile.supportsCustomOrders,
       supports_ready_made: profile.supportsReadyMade,
       pickup_available: profile.pickupAvailable,
       delivery_available: profile.deliveryAvailable,
       shipping_available: profile.shippingAvailable,
-      delivery_fee: profile.deliveryFee,
-      shipping_fee: profile.shippingFee,
+      delivery_fee: 0,
+      shipping_fee: 0,
       updated_at: new Date().toISOString(),
     }
 
@@ -168,6 +180,22 @@ Deno.serve(async (req) => {
     if (error) {
       log('error', FN, 'profile.write_failed', { actor_id: caller.id, action: body.action, error: error.message })
       return new Response('Could not save profile', { status: 500, headers: cors })
+    }
+
+    const pickupAddress = profile.pickupAddress?.trim() || null
+    const pickupInstructions = profile.pickupInstructions?.trim() || null
+    const { error: pickupDetailsError } = await supabase
+      .from('tailor_pickup_details')
+      .upsert({
+        user_id: caller.id,
+        pickup_address: pickupAddress,
+        pickup_instructions: pickupInstructions,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'user_id' })
+
+    if (pickupDetailsError) {
+      log('error', FN, 'pickup_details.write_failed', { actor_id: caller.id, action: body.action, error: pickupDetailsError.message })
+      return new Response('Could not save private pickup details', { status: 500, headers: cors })
     }
 
     await audit(supabase, {

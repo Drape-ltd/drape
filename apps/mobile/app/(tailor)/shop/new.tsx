@@ -7,6 +7,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
+import { goBackOrFallback } from '@/lib/navigation'
 import {
   draftToSizeInventory,
   formatSizeInventorySummary,
@@ -193,8 +194,7 @@ export default function NewShopItemScreen() {
   const isDraftEditor = isEditing && returnFilter !== 'SOLD' && !isRestockIntent
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace({
+    goBackOrFallback(router, navigation, {
       pathname: '/(tailor)/shop',
       params: returnFilter ? { filter: returnFilter } : undefined,
     })

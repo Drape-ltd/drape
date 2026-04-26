@@ -9,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as ImagePicker from 'expo-image-picker'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import { isLikelyConnectivityIssue, readFunctionErrorPayload } from '@/lib/function-errors'
+import { goBackOrReturnTo } from '@/lib/navigation'
 import {
   buildOrderFitProfile,
   COVERAGE_PREFERENCE_LABELS,
@@ -24,9 +25,12 @@ import {
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
+import { composeStructuredAddress, parseNominatimSuggestion } from '@/lib/address'
 import { stripExif } from '@/lib/stripExif'
 import { Button, Input } from '@/components/ui'
 import { filterContactInfo, rejectPlaceholder, filterStyleReference } from '@drape/shared/contact-filter'
+import { normalizePhoneForStorage, validatePhoneForProfile } from '@drape/shared/phone'
+import { phoneHintForContext } from '@/lib/phone-context'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 const MEAS_PROMPT_KEY = 'drape_meas_prompt_shown'
@@ -34,7 +38,8 @@ const MEAS_PROMPT_KEY = 'drape_meas_prompt_shown'
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type FabricSource = 'CUSTOMER_SUPPLIES' | 'TAILOR_SOURCES'
-type DeliveryMethod = 'SHIPPING' | 'LOCAL_COLLECTION'
+type DeliveryMethod = 'SHIPPING' | 'LOCAL_DELIVERY' | 'LOCAL_COLLECTION'
+type RecipientMode = 'SELF' | 'OTHER'
 
 const FABRIC_HANDOFF_OPTIONS: Array<{ value: FabricHandoffMode; title: string; hint: string }> = [
   {
@@ -121,6 +126,14 @@ async function resolveOrderSubmitErrorMessage(error: Error | null) {
     return 'Add your full delivery address before submitting this order.'
   }
 
+  if (normalized.includes('recipient name is required')) {
+    return 'Add the recipient name before submitting this order.'
+  }
+
+  if (normalized.includes('recipient phone is required')) {
+    return 'Add the recipient phone before submitting this order.'
+  }
+
   if (normalized.includes('seller not found')) {
     return 'This tailor profile is no longer available. Go back and choose another seller.'
   }
@@ -149,10 +162,11 @@ async function resolveOrderSubmitErrorMessage(error: Error | null) {
 export default function OrderBriefScreen() {
   const { tailorId, returnTo } = useLocalSearchParams<{ tailorId: string; returnTo?: string }>()
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
 
   function goBack() {
-    router.replace((returnTo && typeof returnTo === 'string' ? returnTo : `/(customer)/tailor/${tailorId}`) as any)
+    goBackOrReturnTo(router, navigation, returnTo, `/(customer)/tailor/${tailorId}`)
   }
 
   const [step, setStep] = useState(0)
@@ -194,12 +208,17 @@ export default function OrderBriefScreen() {
   const [deliveryStateRegion, setDeliveryStateRegion] = useState('')
   const [deliveryPostalCode, setDeliveryPostalCode] = useState('')
   const [deliveryCountry, setDeliveryCountry] = useState('')
+  const [recipientMode, setRecipientMode] = useState<RecipientMode>('SELF')
+  const [recipientName, setRecipientName] = useState('')
+  const [recipientPhone, setRecipientPhone] = useState('')
+  const [recipientContactError, setRecipientContactError] = useState('')
   const [deliveryAddressError, setDeliveryAddressError] = useState('')
   const [deliveryAddressSearch, setDeliveryAddressSearch] = useState('')
   const [deliveryAddressSuggestions, setDeliveryAddressSuggestions] = useState<any[]>([])
   const [showDeliverySuggestions, setShowDeliverySuggestions] = useState(false)
   const suppressNextDeliveryLookup = useRef(false)
   const guidedFitProfile = buildOrderFitProfile(measurements)
+  const recipientPhoneHint = phoneHintForContext(deliveryCountry)
 
   useEffect(() => {
     setStep(0)
@@ -231,11 +250,21 @@ export default function OrderBriefScreen() {
     setDeliveryStateRegion('')
     setDeliveryPostalCode('')
     setDeliveryCountry('')
+    setRecipientMode('SELF')
+    setRecipientName('')
+    setRecipientPhone('')
+    setRecipientContactError('')
     setDeliveryAddressError('')
     setDeliveryAddressSearch('')
     setDeliveryAddressSuggestions([])
     setShowDeliverySuggestions(false)
   }, [tailorId])
+
+  useEffect(() => {
+    if (!user || recipientMode !== 'SELF') return
+    setRecipientName((current) => current || String(user.user_metadata?.display_name ?? '').trim())
+    setRecipientPhone((current) => current || normalizePhoneForStorage(String(user.user_metadata?.phone ?? '')))
+  }, [user, recipientMode])
 
   async function loadInitialData() {
     setFetchError(false)
@@ -298,13 +327,14 @@ export default function OrderBriefScreen() {
   }
 
   function composeDeliveryAddress() {
-    return [
-      deliveryAddressLine1.trim(),
-      deliveryAddressLine2.trim() || null,
-      [deliveryCity.trim(), deliveryStateRegion.trim()].filter(Boolean).join(', '),
-      deliveryPostalCode.trim(),
-      deliveryCountry.trim(),
-    ].filter(Boolean).join('\n')
+    return composeStructuredAddress({
+      line1: deliveryAddressLine1,
+      line2: deliveryAddressLine2,
+      city: deliveryCity,
+      stateRegion: deliveryStateRegion,
+      postcode: deliveryPostalCode,
+      country: deliveryCountry,
+    })
   }
 
   useEffect(() => {
@@ -339,34 +369,16 @@ export default function OrderBriefScreen() {
   }, [deliveryAddressSearch])
 
   function selectDeliverySuggestion(item: any) {
-    const address = item.address ?? {}
-    const houseNumber = typeof address.house_number === 'string' ? address.house_number.trim() : ''
-    const road =
-      address.road ??
-      address.pedestrian ??
-      address.footway ??
-      address.residential ??
-      address.street ??
-      ''
-    const line1 = [houseNumber, road].filter(Boolean).join(' ').trim() || item.display_name.split(',')[0]?.trim() || ''
-    const city =
-      address.city ??
-      address.town ??
-      address.village ??
-      address.hamlet ??
-      address.county ??
-      ''
-    const stateRegion = address.state ?? address.region ?? address.state_district ?? ''
-    const postcode = address.postcode ?? ''
-    const country = address.country ?? ''
+    const parsed = parseNominatimSuggestion(item)
 
     suppressNextDeliveryLookup.current = true
-    setDeliveryAddressSearch(item.display_name)
-    setDeliveryAddressLine1(line1)
-    setDeliveryCity(city)
-    setDeliveryStateRegion(stateRegion)
-    setDeliveryPostalCode(postcode)
-    setDeliveryCountry(country)
+    setDeliveryAddressSearch(parsed.displayValue)
+    setDeliveryAddressLine1(parsed.line1)
+    setDeliveryAddressLine2(parsed.line2)
+    setDeliveryCity(parsed.city)
+    setDeliveryStateRegion(parsed.stateRegion)
+    setDeliveryPostalCode(parsed.postcode)
+    setDeliveryCountry(parsed.country)
     setDeliveryAddressError('')
     setDeliveryAddressSuggestions([])
     setShowDeliverySuggestions(false)
@@ -379,15 +391,26 @@ export default function OrderBriefScreen() {
     if (!deliveryAddressLine1.trim()) { setDeliveryAddressError('Please enter the first line of your address.'); return false }
     if (!deliveryCity.trim()) { setDeliveryAddressError('Please enter your city.'); return false }
     if (!deliveryStateRegion.trim()) { setDeliveryAddressError('Please enter your state, region, or county.'); return false }
-    if (!deliveryPostalCode.trim()) { setDeliveryAddressError('Please enter your postcode or ZIP code.'); return false }
     if (!deliveryCountry.trim()) { setDeliveryAddressError('Please enter your country.'); return false }
     setDeliveryAddressError('')
     return true
   }
 
+  function validateRecipientContact() {
+    const trimmedName = recipientName.trim()
+    const normalizedPhone = normalizePhoneForStorage(recipientPhone)
+    const namePlaceholder = rejectPlaceholder(trimmedName, 'Recipient name')
+    if (namePlaceholder) { setRecipientContactError(namePlaceholder); return false }
+    if (!trimmedName) { setRecipientContactError('Please enter the recipient name.'); return false }
+    const phoneError = validatePhoneForProfile(normalizedPhone)
+    if (phoneError) { setRecipientContactError(phoneError); return false }
+    setRecipientContactError('')
+    return true
+  }
+
   function validateFitNote(text: string) {
     if (text.trim().length < 20) {
-      setFitNoteError('Tell your tailor about your deadline and any key fit details — at least 20 characters.')
+      setFitNoteError('Tell your tailor about your deadline and any key fit details. Use at least 20 characters.')
       return false
     }
     const placeholder = rejectPlaceholder(text, 'Note')
@@ -417,7 +440,13 @@ export default function OrderBriefScreen() {
     if (step === 3) {
       if (!fabricSource || !deliveryMethod) return false
       if (fabricSource === 'CUSTOMER_SUPPLIES' && !fabricHandoffMode) return false
-      if (deliveryMethod === 'SHIPPING' && (!composeDeliveryAddress().trim() || !!deliveryAddressError)) return false
+      if (deliveryMethod !== 'LOCAL_COLLECTION') {
+        const normalizedRecipientPhone = normalizePhoneForStorage(recipientPhone)
+        const hasCoreAddress = !!deliveryAddressLine1.trim() && !!deliveryCity.trim() && !!deliveryStateRegion.trim() && !!deliveryCountry.trim()
+        if (!hasCoreAddress || !!deliveryAddressError || !!recipientContactError || !recipientName.trim() || !normalizedRecipientPhone || !!validatePhoneForProfile(normalizedRecipientPhone)) {
+          return false
+        }
+      }
       return true
     }
     return false
@@ -453,7 +482,8 @@ export default function OrderBriefScreen() {
     // Final guard — catches any placeholder values that bypassed per-field validation
     if (!validateDescription(description)) return
     if (!validateFitNote(fitNote)) return
-    if (deliveryMethod === 'SHIPPING' && !validateDeliveryAddress()) return
+    if (deliveryMethod !== 'LOCAL_COLLECTION' && !validateDeliveryAddress()) return
+    if (deliveryMethod !== 'LOCAL_COLLECTION' && !validateRecipientContact()) return
     setSubmitting(true)
 
     // Upload reference photos to Supabase Storage (EXIF stripped before upload)
@@ -514,7 +544,9 @@ export default function OrderBriefScreen() {
         fabricSource,
         supportMeta,
         deliveryMethod,
-        deliveryAddress: deliveryMethod === 'SHIPPING' ? composeDeliveryAddress() : null,
+        deliveryAddress: deliveryMethod !== 'LOCAL_COLLECTION' ? composeDeliveryAddress() : null,
+        recipientName: deliveryMethod !== 'LOCAL_COLLECTION' ? recipientName.trim() : null,
+        recipientPhone: deliveryMethod !== 'LOCAL_COLLECTION' ? normalizePhoneForStorage(recipientPhone) : null,
       },
     })
 
@@ -692,7 +724,7 @@ export default function OrderBriefScreen() {
 
                 <Input
                   label="Description"
-                  placeholder="Describe your garment — style, details, fabric preferences..."
+                  placeholder="Describe your garment: style, details, fabric preferences..."
                   value={description}
                   onChangeText={(v) => { setDescription(v); if (descriptionError) validateDescription(v) }}
                   onBlur={() => validateDescription(description)}
@@ -876,7 +908,7 @@ export default function OrderBriefScreen() {
                         >
                           <Text style={styles.measureSummaryLabel}>{label}</Text>
                           <Text style={[styles.measureSummaryValue, !value && { color: Colors.lightGrey }]}>
-                            {value ? `${value} ${measurements.unit}` : '—'}
+                            {value ? `${value} ${measurements.unit}` : 'Not added'}
                           </Text>
                         </TouchableOpacity>
                       ))}
@@ -1013,7 +1045,7 @@ export default function OrderBriefScreen() {
                     />
                     <OptionCard
                       title="Tailor to source"
-                      hint="Tailor buys the fabric — cost included in their quote."
+                      hint="Tailor buys the fabric. Cost is included in their quote."
                       active={fabricSource === 'TAILOR_SOURCES'}
                       onPress={() => setFabricSource('TAILOR_SOURCES')}
                     />
@@ -1041,6 +1073,12 @@ export default function OrderBriefScreen() {
                   <Text style={styles.fieldLabel}>Delivery <Text style={styles.required}>*</Text></Text>
                   <View style={styles.optionCards}>
                     <OptionCard
+                      title="Local delivery"
+                      hint="A local rider or delivery partner brings the finished garment to you."
+                      active={deliveryMethod === 'LOCAL_DELIVERY'}
+                      onPress={() => setDeliveryMethod('LOCAL_DELIVERY')}
+                    />
+                    <OptionCard
                       title="Ship to me"
                       hint="Tailor ships your finished garment directly to you."
                       active={deliveryMethod === 'SHIPPING'}
@@ -1055,11 +1093,58 @@ export default function OrderBriefScreen() {
                   </View>
                 </View>
 
-                {deliveryMethod === 'SHIPPING' && (
+                {deliveryMethod !== 'LOCAL_COLLECTION' && (
                   <View style={styles.addressFields}>
+                    <View>
+                      <Text style={styles.fieldLabel}>Who should receive this order? <Text style={styles.required}>*</Text></Text>
+                      <View style={styles.optionCards}>
+                        <OptionCard
+                          title="I will receive it"
+                          hint="Use your own name and phone number for delivery updates."
+                          active={recipientMode === 'SELF'}
+                          onPress={() => setRecipientMode('SELF')}
+                        />
+                        <OptionCard
+                          title="Someone else will receive it"
+                          hint="Use their name and phone number so the courier or rider can reach the right person."
+                          active={recipientMode === 'OTHER'}
+                          onPress={() => setRecipientMode('OTHER')}
+                        />
+                      </View>
+                    </View>
+                    <Input
+                      label="Recipient name"
+                      placeholder={recipientMode === 'SELF' ? 'Your name' : 'Recipient name'}
+                      value={recipientName}
+                      onChangeText={(v) => {
+                        setRecipientName(v)
+                        if (recipientContactError) setRecipientContactError('')
+                      }}
+                      onBlur={validateRecipientContact}
+                      hint={recipientMode === 'SELF' ? 'This is the name the courier or rider should ask for.' : 'Use the name of the person collecting this on your behalf.'}
+                      required
+                    />
+                    <Input
+                      label="Recipient phone"
+                      placeholder="e.g. +2348012345678 or +447700900123"
+                      value={recipientPhone}
+                      onChangeText={(v) => {
+                        setRecipientPhone(normalizePhoneForStorage(v))
+                        if (recipientContactError) setRecipientContactError('')
+                      }}
+                      onBlur={validateRecipientContact}
+                      keyboardType="phone-pad"
+                      autoCapitalize="none"
+                      hint={
+                        recipientMode === 'SELF'
+                          ? recipientPhoneHint
+                          : `Use the actual recipient phone number so the courier or rider can reach them. ${recipientPhoneHint}`
+                      }
+                      required
+                    />
                     <Input
                       label="Search address"
-                      placeholder="Start typing your address"
+                      placeholder="Search address, area, or landmark"
                       value={deliveryAddressSearch}
                       onChangeText={(v) => {
                         setDeliveryAddressSearch(v)
@@ -1087,7 +1172,7 @@ export default function OrderBriefScreen() {
                       placeholder="Street address"
                       value={deliveryAddressLine1}
                       onChangeText={(v) => { setDeliveryAddressLine1(v); if (deliveryAddressError) setDeliveryAddressError('') }}
-                      onBlur={() => { if (deliveryMethod === 'SHIPPING') validateDeliveryAddress() }}
+                      onBlur={validateDeliveryAddress}
                       required
                     />
                     <Input
@@ -1103,7 +1188,7 @@ export default function OrderBriefScreen() {
                           placeholder="City"
                           value={deliveryCity}
                           onChangeText={(v) => { setDeliveryCity(v); if (deliveryAddressError) setDeliveryAddressError('') }}
-                          onBlur={() => { if (deliveryMethod === 'SHIPPING') validateDeliveryAddress() }}
+                          onBlur={validateDeliveryAddress}
                           required
                         />
                       </View>
@@ -1113,7 +1198,7 @@ export default function OrderBriefScreen() {
                           placeholder="State"
                           value={deliveryStateRegion}
                           onChangeText={(v) => { setDeliveryStateRegion(v); if (deliveryAddressError) setDeliveryAddressError('') }}
-                          onBlur={() => { if (deliveryMethod === 'SHIPPING') validateDeliveryAddress() }}
+                          onBlur={validateDeliveryAddress}
                           required
                         />
                       </View>
@@ -1122,11 +1207,10 @@ export default function OrderBriefScreen() {
                       <View style={styles.addressHalf}>
                         <Input
                           label="Postcode / ZIP"
-                          placeholder="Postcode"
+                          placeholder="Postcode / ZIP (optional)"
                           value={deliveryPostalCode}
                           onChangeText={(v) => { setDeliveryPostalCode(v); if (deliveryAddressError) setDeliveryAddressError('') }}
-                          onBlur={() => { if (deliveryMethod === 'SHIPPING') validateDeliveryAddress() }}
-                          required
+                          onBlur={validateDeliveryAddress}
                         />
                       </View>
                       <View style={styles.addressHalf}>
@@ -1135,12 +1219,17 @@ export default function OrderBriefScreen() {
                           placeholder="Country"
                           value={deliveryCountry}
                           onChangeText={(v) => { setDeliveryCountry(v); if (deliveryAddressError) setDeliveryAddressError('') }}
-                          onBlur={() => { if (deliveryMethod === 'SHIPPING') validateDeliveryAddress() }}
+                          onBlur={validateDeliveryAddress}
                           required
                         />
                       </View>
                     </View>
-                    <Text style={styles.fieldHint}>Your tailor ships the finished garment here.</Text>
+                    <Text style={styles.fieldHint}>
+                      {deliveryMethod === 'LOCAL_DELIVERY'
+                        ? 'Your tailor or a local rider will use these details to deliver the finished garment. If search misses your area, you can still enter the address manually in full.'
+                        : 'Your tailor ships the finished garment here. If search misses your area, you can still enter the address manually in full.'}
+                    </Text>
+                    {recipientContactError ? <Text style={styles.linkError}>{recipientContactError}</Text> : null}
                     {deliveryAddressError ? <Text style={styles.linkError}>{deliveryAddressError}</Text> : null}
                   </View>
                 )}
@@ -1170,10 +1259,25 @@ export default function OrderBriefScreen() {
                       <SummaryRow label="Fabric handoff" value={FABRIC_HANDOFF_LABELS[fabricHandoffMode]} />
                     ) : null}
                     {deliveryMethod && (
-                      <SummaryRow label="Delivery" value={deliveryMethod === 'SHIPPING' ? 'Shipping' : 'Local collection'} />
+                      <SummaryRow
+                        label="Delivery"
+                        value={
+                          deliveryMethod === 'SHIPPING'
+                            ? 'Shipping'
+                            : deliveryMethod === 'LOCAL_DELIVERY'
+                              ? 'Local delivery'
+                              : 'Local collection'
+                        }
+                      />
                     )}
-                    {deliveryMethod === 'SHIPPING' && composeDeliveryAddress().trim() && (
-                      <SummaryRow label="Ship to" value={composeDeliveryAddress()} />
+                    {deliveryMethod !== 'LOCAL_COLLECTION' && recipientName.trim() && (
+                      <SummaryRow label={recipientMode === 'SELF' ? 'Receiving contact' : 'Recipient'} value={recipientName.trim()} />
+                    )}
+                    {deliveryMethod !== 'LOCAL_COLLECTION' && recipientPhone.trim() && (
+                      <SummaryRow label="Recipient phone" value={normalizePhoneForStorage(recipientPhone)} />
+                    )}
+                    {deliveryMethod !== 'LOCAL_COLLECTION' && composeDeliveryAddress().trim() && (
+                      <SummaryRow label={deliveryMethod === 'SHIPPING' ? 'Ship to' : 'Deliver to'} value={composeDeliveryAddress()} />
                     )}
                   </View>
                 )}
@@ -1207,7 +1311,7 @@ export default function OrderBriefScreen() {
       </KeyboardAvoidingView>
 
       {/* Inline measurement edit modal */}
-      <Modal visible={!!editingField} transparent animationType="slide">
+      <Modal visible={!!editingField} transparent animationType="slide" onRequestClose={() => setEditingField(null)}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <TouchableOpacity style={styles.editOverlay} activeOpacity={1} onPress={() => setEditingField(null)} />
           <View style={styles.editSheet}>
@@ -1284,7 +1388,7 @@ export default function OrderBriefScreen() {
       </Modal>
 
       {/* Profile completeness prompt — one-time modal */}
-      <Modal visible={showMeasPrompt} transparent animationType="fade">
+      <Modal visible={showMeasPrompt} transparent animationType="fade" onRequestClose={() => dismissMeasPrompt(false)}>
         <View style={styles.promptOverlay}>
           <View style={styles.promptCard}>
             <Text style={styles.promptEmoji}>📐</Text>
@@ -1341,8 +1445,8 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 440,
     backgroundColor: Colors.white,
-    borderRadius: 28,
-    padding: Spacing.xl,
+    borderRadius: Radius.md,
+    padding: Spacing.lg,
     gap: Spacing.md,
     alignItems: 'center',
     ...Shadow.lg,
@@ -1361,8 +1465,8 @@ const styles = StyleSheet.create({
   stateGuideCard: {
     width: '100%',
     backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: Spacing.xs,
   },
   stateGuideTitle: {
@@ -1378,8 +1482,9 @@ const styles = StyleSheet.create({
   errorBtn: {
     backgroundColor: Colors.needleGreen,
     borderRadius: Radius.full,
-    paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.md,
+    minHeight: 44,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 10,
   },
   errorBtnSecondary: {
     backgroundColor: Colors.white,
@@ -1390,21 +1495,21 @@ const styles = StyleSheet.create({
   errorBtnTextSecondary: { color: Colors.ink },
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg, paddingVertical: 10,
   },
-  backText: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
+  backText: { color: Colors.needleGreen, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
   stepLabel: { fontSize: FontSize.sm, color: Colors.midGrey },
-  progressRow: { flexDirection: 'row', gap: 4, paddingHorizontal: Spacing.xl, marginBottom: Spacing.sm },
+  progressRow: { flexDirection: 'row', gap: 4, paddingHorizontal: Spacing.lg, marginBottom: 6 },
   progressSeg: { flex: 1, height: 3, borderRadius: 2, backgroundColor: Colors.lightGrey },
   progressSegDone: { backgroundColor: Colors.needleGreen },
 
   scroll: { flex: 1 },
-  content: { padding: Spacing.xl, gap: Spacing.xl },
-  stepTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
+  content: { padding: Spacing.lg, gap: Spacing.lg },
+  stepTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
   stepIntroCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: Spacing.xs,
     ...Shadow.sm,
   },
@@ -1422,8 +1527,8 @@ const styles = StyleSheet.create({
   },
   guideCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -1440,64 +1545,68 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
 
-  fields: { gap: Spacing.xl },
-  fieldLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: Spacing.sm },
+  fields: { gap: Spacing.lg },
+  fieldLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: 6 },
   required: { color: Colors.error },
-  fieldHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
-  inlineChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginTop: Spacing.sm },
+  fieldHint: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  inlineChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
   inlineChip: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
+    minHeight: 38,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: Radius.full,
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
+    justifyContent: 'center',
   },
   inlineChipActive: { backgroundColor: Colors.needleGreenLight, borderColor: Colors.needleGreen },
-  inlineChipText: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.medium },
+  inlineChipText: { fontSize: FontSize.xs, color: Colors.ink, fontWeight: FontWeight.medium },
   inlineChipTextActive: { color: Colors.needleGreen },
-  addressFields: { gap: Spacing.sm },
+  addressFields: { gap: 8 },
   suggestionsBox: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
+    borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     overflow: 'hidden',
   },
   suggestionRow: {
     paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.md,
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: Colors.lightGrey,
   },
   suggestionRowLast: { borderBottomWidth: 0 },
-  suggestionText: { fontSize: FontSize.sm, color: Colors.ink, lineHeight: 20 },
-  addressRow: { flexDirection: 'row', gap: Spacing.md },
+  suggestionText: { fontSize: FontSize.xs, color: Colors.ink, lineHeight: 18 },
+  addressRow: { flexDirection: 'row', gap: 8 },
   addressHalf: { flex: 1 },
 
   // Garment type chips
-  garmentRow: { flexDirection: 'row', gap: Spacing.sm, paddingBottom: Spacing.xs },
+  garmentRow: { flexDirection: 'row', gap: 8, paddingBottom: Spacing.xs },
   garmentChip: {
-    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
+    minHeight: 38,
+    paddingHorizontal: 14, paddingVertical: 8,
     borderRadius: Radius.full, borderWidth: 1.5, borderColor: Colors.lightGrey,
     backgroundColor: Colors.white,
+    justifyContent: 'center',
   },
   garmentChipActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
-  garmentChipText: { fontSize: FontSize.sm, color: Colors.inkLight, fontWeight: FontWeight.medium },
+  garmentChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
   garmentChipTextActive: { color: Colors.needleGreen },
 
   // Date picker
   dateButton: {
     backgroundColor: Colors.white, borderRadius: Radius.md, borderWidth: 1,
-    borderColor: Colors.lightGrey, padding: Spacing.lg, marginTop: Spacing.sm,
+    borderColor: Colors.lightGrey, padding: 14, marginTop: 6, minHeight: 44,
   },
   dateButtonRequired: { borderColor: Colors.error + '60' },
-  dateText: { fontSize: FontSize.md, color: Colors.ink },
+  dateText: { fontSize: FontSize.sm, color: Colors.ink },
   datePlaceholder: { color: Colors.midGrey },
 
   // Photos
-  photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.md },
-  photoThumb: { width: 100, height: 100, borderRadius: Radius.md, overflow: 'hidden', position: 'relative' },
+  photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  photoThumb: { width: 84, height: 84, borderRadius: Radius.md, overflow: 'hidden', position: 'relative' },
   photoImage: { width: '100%', height: '100%' },
   photoRemove: {
     position: 'absolute', top: 4, right: 4,
@@ -1506,7 +1615,7 @@ const styles = StyleSheet.create({
   },
   photoRemoveText: { color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold },
   photoAdd: {
-    width: 100, height: 100, borderRadius: Radius.md,
+    width: 84, height: 84, borderRadius: Radius.md,
     borderWidth: 1.5, borderColor: Colors.lightGrey, borderStyle: 'dashed',
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center', gap: 4,
   },
@@ -1515,21 +1624,21 @@ const styles = StyleSheet.create({
   photoCount: { fontSize: FontSize.xs, color: Colors.midGrey },
 
   // Measurements summary
-  measureSummaryCard: { backgroundColor: Colors.white, borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.md, ...Shadow.sm },
+  measureSummaryCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: Spacing.sm, ...Shadow.sm },
   measureSummaryTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   measureSourceRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: Spacing.md,
-    paddingVertical: Spacing.sm,
+    paddingVertical: 10,
     paddingHorizontal: Spacing.md,
     borderRadius: Radius.md,
     backgroundColor: Colors.bone,
   },
   measureSourceLabel: { fontSize: FontSize.sm, color: Colors.midGrey },
   measureSourceValue: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  measureSummaryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  measureSummaryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   measureSummaryItem: { width: '47%', gap: 2 },
   measureSummaryLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
   measureSummaryValue: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
@@ -1540,8 +1649,8 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
-    padding: Spacing.md,
-    gap: Spacing.sm,
+    padding: 12,
+    gap: Spacing.xs,
     backgroundColor: Colors.white,
   },
   measureSubcardHint: {
@@ -1553,8 +1662,10 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     borderRadius: Radius.full,
     backgroundColor: Colors.needleGreen,
+    minHeight: 44,
     paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
+    paddingVertical: 10,
+    justifyContent: 'center',
   },
   measureActionBtnText: {
     color: Colors.white,
@@ -1578,40 +1689,43 @@ const styles = StyleSheet.create({
   },
 
   noMeasureCard: {
-    backgroundColor: Colors.boneDeep, borderRadius: Radius.lg,
-    padding: Spacing.lg, gap: Spacing.sm, alignItems: 'center',
+    backgroundColor: Colors.boneDeep, borderRadius: Radius.md,
+    padding: 14, gap: Spacing.xs, alignItems: 'center',
   },
   noMeasureTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
   noMeasureHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
   noMeasureBtn: {
     marginTop: Spacing.sm, backgroundColor: Colors.needleGreen,
-    borderRadius: Radius.md, paddingVertical: Spacing.md, paddingHorizontal: Spacing.xl,
+    borderRadius: Radius.md, minHeight: 44, paddingVertical: 10, paddingHorizontal: Spacing.xl,
   },
   noMeasureBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
 
   // Style inspiration
-  inspirationSection: { gap: Spacing.md },
+  inspirationSection: { gap: Spacing.sm },
   handlesScroll: { marginTop: Spacing.sm },
-  handlesRow: { flexDirection: 'row', gap: Spacing.sm, paddingBottom: Spacing.xs },
+  handlesRow: { flexDirection: 'row', gap: 8, paddingBottom: Spacing.xs },
   handleChip: {
-    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
+    minHeight: 38,
+    paddingHorizontal: 12, paddingVertical: 8,
     borderRadius: Radius.full, borderWidth: 1.5, borderColor: Colors.lightGrey,
     backgroundColor: Colors.white,
+    justifyContent: 'center',
   },
   handleChipActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
   handleChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
   handleChipTextActive: { color: Colors.needleGreen },
-  inspirationInputRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  inspirationInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   inspirationAddBtn: {
     backgroundColor: Colors.needleGreen, borderRadius: Radius.md,
-    paddingVertical: 12, paddingHorizontal: Spacing.lg,
+    minHeight: 44, paddingVertical: 10, paddingHorizontal: Spacing.lg, justifyContent: 'center',
   },
   inspirationAddText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
-  selectedLinks: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  selectedLinks: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   selectedLinkBadge: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.xs,
     backgroundColor: Colors.needleGreenLight, borderRadius: Radius.full,
-    paddingHorizontal: Spacing.md, paddingVertical: Spacing.xs,
+    minHeight: 34,
+    paddingHorizontal: Spacing.md, paddingVertical: 6,
     borderWidth: 1, borderColor: Colors.needleGreen, maxWidth: 200,
   },
   selectedLinkText: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium, flexShrink: 1 },
@@ -1619,10 +1733,10 @@ const styles = StyleSheet.create({
   linkError: { fontSize: FontSize.xs, color: Colors.error, marginTop: Spacing.xs, lineHeight: 18 },
 
   // Fabric & delivery options
-  optionCards: { gap: Spacing.md },
+  optionCards: { gap: Spacing.sm },
   optionCard: {
     flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
-    backgroundColor: Colors.white, borderRadius: Radius.lg, padding: Spacing.lg,
+    backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14,
     borderWidth: 1.5, borderColor: Colors.lightGrey, ...Shadow.sm,
   },
   optionCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
@@ -1636,7 +1750,7 @@ const styles = StyleSheet.create({
   optionHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2, lineHeight: 18 },
 
   // Summary card
-  summaryCard: { backgroundColor: Colors.white, borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.md, ...Shadow.sm },
+  summaryCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: Spacing.sm, ...Shadow.sm },
   summaryTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   summaryLabel: { fontSize: FontSize.sm, color: Colors.inkLight },
@@ -1644,15 +1758,18 @@ const styles = StyleSheet.create({
 
   // CTA
   cta: {
-    padding: Spacing.xl, backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: 12,
+    paddingBottom: 8,
+    backgroundColor: Colors.white,
     borderTopWidth: 1, borderTopColor: Colors.lightGrey,
   },
   ctaGuideCard: {
     backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: 4,
-    marginBottom: Spacing.md,
+    marginBottom: 8,
   },
   ctaGuideTitle: {
     fontSize: FontSize.xs,
@@ -1673,15 +1790,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center', padding: Spacing.xl,
   },
   promptCard: {
-    backgroundColor: Colors.white, borderRadius: Radius.xl,
-    padding: Spacing.xl, gap: Spacing.lg, alignItems: 'center', ...Shadow.lg,
+    backgroundColor: Colors.white, borderRadius: Radius.md,
+    padding: Spacing.lg, gap: Spacing.md, alignItems: 'center', ...Shadow.lg,
   },
   promptEmoji: { fontSize: 40 },
   promptTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
   promptBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 22, textAlign: 'center' },
   promptPrimary: {
     backgroundColor: Colors.needleGreen, borderRadius: Radius.md,
-    paddingVertical: Spacing.md, paddingHorizontal: Spacing.xxl, alignSelf: 'stretch', alignItems: 'center',
+    minHeight: 44,
+    paddingVertical: 10, paddingHorizontal: Spacing.xxl, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center',
   },
   promptPrimaryText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.md },
   promptSecondary: { fontSize: FontSize.sm, color: Colors.midGrey, textDecorationLine: 'underline' },

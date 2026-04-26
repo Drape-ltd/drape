@@ -39,7 +39,6 @@ export function TailorProfileProvider({ children }: { children: React.ReactNode 
       .then(({ data, error }) => {
         if (cancelled) return
         if (error) {
-          setAvatarUrl(null)
           return
         }
         setAvatarUrl((data as any)?.avatar_url ?? null)

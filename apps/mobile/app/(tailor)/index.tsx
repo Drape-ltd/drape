@@ -261,7 +261,7 @@ export default function TailorDashboard() {
         ) : null}
 
         {/* Availability modal */}
-        <Modal visible={availModal} transparent animationType="slide">
+        <Modal visible={availModal} transparent animationType="slide" onRequestClose={() => setAvailModal(false)}>
           <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setAvailModal(false)}>
             <View style={styles.modalSheet}>
               <View style={styles.modalHandle} />

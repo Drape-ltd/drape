@@ -75,7 +75,7 @@ function BiometricGate() {
   }, [locked])
 
   return (
-    <Modal visible={locked} transparent animationType="fade">
+    <Modal visible={locked} transparent animationType="fade" onRequestClose={() => {}}>
       <View style={gateStyles.overlay}>
         <ActivityIndicator size="large" color={Colors.needleGreen} />
       </View>

@@ -11,13 +11,21 @@ import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
-import { minorUnitsFromInput, moneyInputFromMinorUnits } from '@/lib/money-input'
 import { Sentry } from '@/lib/sentry'
-import { getShipStagePreflightError, normalizeTrackingNumberInput, openTrackingPage } from '@/lib/shipping'
+import {
+  getFulfillmentStagePreflightError,
+  normalizeContactPhoneInput,
+  normalizeDispatchReferenceInput,
+  normalizeTrackingNumberInput,
+  openTrackingPage,
+} from '@/lib/shipping'
 import { stripExif } from '@/lib/stripExif'
 import { createConsultationRoom, openConsultationCallUrl } from '@/lib/consultation'
+import { createOrderCallRoom, openDrapeCallUrl } from '@/lib/order-call'
 import {
+  CANCELLATION_REVIEW_REASON_LABELS,
   COVERAGE_PREFERENCE_LABELS,
+  DELIVERY_REVIEW_REASON_LABELS,
   enrichMeasurementSnapshot,
   FABRIC_HANDOFF_LABELS,
   FABRIC_STRETCH_LABELS,
@@ -29,13 +37,30 @@ import {
   MEASUREMENT_SCAN_STATUS_LABELS,
   WEAR_DAY_SUPPORT_LABELS,
   fitProfileNeedsTailorReview,
+  hasOpenCancellationReview,
+  hasOpenDeliveryReview,
   hasOpenMaterialIssue,
   parseOrderSupportMeta,
+  type CancellationReviewReason,
+  type DeliveryReviewReason,
   type MaterialIssueReason,
   type MeasurementSnapshotMeta,
   type OrderSupportMeta,
 } from '@/lib/order-support'
-import { Button, Input } from '@/components/ui'
+import {
+  isReadyMadePreparationStage,
+  tailorOrderStageLabel,
+} from '@/lib/order-flow'
+import {
+  fetchOpenHandoffIssue,
+  handoffHelpCardBody,
+  handoffHelpCardTitle,
+  handoffIssueLabel,
+  handoffIssueStatusLabel,
+  resolveHandoffIssue,
+  type HandoffIssue,
+} from '@/lib/handoff-support'
+import { Button, HandoffSupportModal, Input } from '@/components/ui'
 import { filterContactInfo, rejectPlaceholder } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
@@ -60,8 +85,18 @@ type OrderDetail = {
   garmentDescription: string | null; stage: OrderStage
   customerId: string; customerName: string
   quotedAmount: number | null; quotedCurrency: string; quotedCompletionDate: string | null
+  fulfillmentPaymentRequestedAt: string | null
+  fulfillmentPaymentPaidAt: string | null
+  fulfillmentPaymentProvider: string | null
+  fulfillmentPaymentIntentId: string | null
+  fulfillmentPaymentCheckoutUrl: string | null
   fabricSource: string; deliveryMethod: string; deliveryAddress: string | null
+  recipientName: string | null; recipientPhone: string | null
   trackingNumber: string | null; carrier: string | null
+  fulfillmentProvider: string | null
+  fulfillmentReference: string | null
+  fulfillmentContactName: string | null
+  fulfillmentContactPhone: string | null
   referencePhotos: string[]; fitNote: string | null
   measurements: Measurement | null
   supportMeta: OrderSupportMeta
@@ -79,50 +114,58 @@ function asStringList(value: unknown): string[] {
 
 function orderStatusGuidance(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): string | null {
   if (stage === 'CONSULTATION') {
-    return 'Use the consultation to clarify fit, fabric, and expectations before you send a quote.'
+    return 'Use the consultation to clarify fit, fabric, and expectations before you send a quote. You and the customer are next to align on the brief.'
   }
   if (stage === 'QUOTE_SENT') {
-    return 'Your quote is with the customer. Production starts once they accept it.'
+    return 'Your quote is with the customer. They are next to accept, decline, or let it expire.'
   }
   if (stage === 'PAYMENT_PENDING') {
     return orderKind === 'READY_MADE'
-      ? 'Checkout is still open. Fulfillment starts once payment is confirmed.'
-      : 'The customer has started payment. Production starts once payment is confirmed.'
+      ? 'Checkout is still open. The customer is next to finish payment before fulfilment can start.'
+      : 'The customer has started payment. They are next to finish payment before production can start.'
   }
   if (stage === 'CONFIRMED') {
     return orderKind === 'READY_MADE'
-      ? 'Payment is confirmed. Start preparing this order for dispatch or pickup.'
-      : 'The customer has accepted your quote. Move this order into the first production stage when work begins.'
+      ? 'Payment is confirmed. You are next to start preparing this order for dispatch or pickup.'
+      : 'The customer has accepted your quote. You are next to move this order into the first real production stage when work begins.'
   }
-  if (orderKind === 'READY_MADE' && ['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'].includes(stage)) {
-    return 'This order is being prepared for dispatch or pickup.'
+  if (orderKind === 'READY_MADE' && isReadyMadePreparationStage(stage)) {
+    return 'You are still next. Keep packing and checking this order until it is truly ready for Drape dispatch or pickup.'
+  }
+  if (stage === 'READY_FOR_DRAPE_DISPATCH') {
+    return 'This order is packed and waiting for Drape ops. Drape is next to arrange dispatch from here.'
   }
   if (stage === 'DESIGNING') {
-    return 'Design details and pattern decisions are underway. Advance when you are ready to source or cut.'
+    return 'Design details and pattern decisions are underway. You are next to advance when the design is stable enough to source or cut.'
   }
   if (stage === 'SOURCING') {
-    return 'Fabric and materials are being sourced for this order. Advance when you are ready to cut.'
+    return 'Fabric and materials are being sourced for this order. You are next to advance when cutting can begin.'
   }
   if (stage === 'CUTTING') {
-    return 'Cutting is underway. Advance when you are ready to begin sewing.'
+    return 'Cutting is underway. You are next to advance when sewing can begin.'
   }
   if (stage === 'SEWING') {
-    return 'Sewing is underway. Advance when you are ready for finishing.'
+    return 'Sewing is underway. You are next to advance when the garment is ready for finishing.'
   }
   if (stage === 'FINISHING') {
-    return 'Final touches and quality checks are underway. Mark the order ready once everything is complete.'
+    return orderKind === 'READY_MADE'
+      ? 'Final packing and quality checks are underway. When the order is truly handoff-ready, mark it for Drape dispatch or collection.'
+      : 'Final touches and quality checks are underway. When the order is truly handoff-ready, mark it for Drape dispatch or collection.'
+  }
+  if (stage === 'OUT_FOR_DELIVERY') {
+    return 'This order is with a local delivery partner. Drape and the customer are next until the handoff is confirmed.'
   }
   if (stage === 'SHIPPED') {
-    return 'This order is on its way to the customer. They can confirm receipt once it arrives.'
+    return 'This order is on its way to the customer. The customer is next once it arrives, unless a delivery issue opens first.'
   }
   if (stage === 'READY_FOR_COLLECTION') {
-    return 'The order is ready to hand over. Confirm the customer\'s collection code when they arrive.'
+    return 'The order is ready to hand over. The customer is next at pickup, and you should confirm the collection code when they arrive.'
   }
   if (stage === 'DELIVERED') {
-    return 'Delivery is confirmed. The customer can now review the finished order and close it out in the app.'
+    return 'Delivery is confirmed. The customer is next to finish the order or raise a concern. You can leave an internal review now.'
   }
   if (stage === 'COLLECTED') {
-    return 'Collection is confirmed. This order will move to complete once the customer finishes the order in the app.'
+    return 'Collection is confirmed. The customer is next to finish the order or raise a concern. You can leave an internal review now.'
   }
   if (stage === 'COMPLETE') {
     return 'This order is complete. You can still revisit the full brief, measurements, and timeline here any time.'
@@ -133,35 +176,123 @@ function orderStatusGuidance(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MAD
   return null
 }
 
-function tailorStageLabel(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE') {
-  if (orderKind === 'READY_MADE') {
-    if (stage === 'PENDING_QUOTE') return 'Inquiry open'
-    if (stage === 'PAYMENT_PENDING') return 'Checkout open'
-    if (stage === 'CONFIRMED') return 'Paid order'
-    if (['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'].includes(stage)) return 'Preparing order'
-  }
-  return STAGE_LABELS[stage]
-}
-
-function quotedAmountLabel(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): string {
+function quotedAmountLabel(
+  stage: OrderStage,
+  orderKind: 'CUSTOM' | 'READY_MADE',
+  fulfillmentPaymentPending = false,
+): string {
   if (orderKind === 'READY_MADE') {
     if (stage === 'PAYMENT_PENDING') return 'awaiting payment'
+    if (fulfillmentPaymentPending) return 'item paid'
     if (stage === 'COMPLETE') return 'closed out'
     return 'paid'
   }
+  if (fulfillmentPaymentPending) return 'base quote paid'
   if (stage === 'QUOTE_SENT') return 'quoted'
   if (stage === 'DELIVERED' || stage === 'COLLECTED') return 'awaiting finish'
   if (stage === 'COMPLETE') return 'closed out'
   return 'held'
 }
 
-function readyMadePreparationStage(stage: OrderStage) {
-  return ['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'].includes(stage)
-}
-
 function displayStageChoiceLabel(targetStage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE') {
   if (orderKind === 'READY_MADE' && targetStage === 'FINISHING') return 'Preparing order'
+  if (targetStage === 'READY_FOR_DRAPE_DISPATCH') return 'Ready for Drape dispatch'
   return STAGE_LABELS[targetStage]
+}
+
+function stageUpdateNotePlaceholder(order: Pick<OrderDetail, 'orderKind' | 'deliveryMethod'>, targetStage: OrderStage) {
+  if (order.orderKind === 'READY_MADE') {
+    if (targetStage === 'FINISHING') {
+      return order.deliveryMethod === 'LOCAL_COLLECTION'
+        ? 'e.g. "Packing your order now and setting it aside for pickup."'
+        : 'e.g. "Packing your order now and checking it before dispatch."'
+    }
+    if (targetStage === 'READY_FOR_COLLECTION') {
+      return 'e.g. "Your order is packed and ready for pickup. Please bring your collection code when you come."'
+    }
+    if (targetStage === 'READY_FOR_DRAPE_DISPATCH') {
+      return 'e.g. "Your order is packed and ready for Drape dispatch. We will hand it to Drape ops next."'
+    }
+    if (targetStage === 'OUT_FOR_DELIVERY') {
+      return 'e.g. "Your order is packed and a local rider is bringing it to you now."'
+    }
+    if (targetStage === 'SHIPPED') {
+      return 'e.g. "Your order has been packed and handed to the courier today."'
+    }
+  }
+
+  if (targetStage === 'DESIGNING') {
+    return 'e.g. "Finalising the pattern and design details for your order now."'
+  }
+  if (targetStage === 'SOURCING') {
+    return 'e.g. "Sourcing the agreed fabric and materials for your order now."'
+  }
+  if (targetStage === 'CUTTING') {
+    return 'e.g. "Cutting the fabric now using the approved measurements and plan."'
+  }
+  if (targetStage === 'SEWING') {
+    return 'e.g. "The garment is now in sewing and construction."'
+  }
+  if (targetStage === 'FINISHING') {
+    return 'e.g. "Doing final pressing, finishing, and quality checks now."'
+  }
+  if (targetStage === 'READY_FOR_COLLECTION') {
+    return 'e.g. "Your order is finished and ready for pickup. Please bring your collection code when you come."'
+  }
+  if (targetStage === 'READY_FOR_DRAPE_DISPATCH') {
+    return 'e.g. "Your order is finished, packed, and ready for Drape dispatch."'
+  }
+  if (targetStage === 'OUT_FOR_DELIVERY') {
+    return 'e.g. "A local delivery partner now has your order and is on the way."'
+  }
+  if (targetStage === 'SHIPPED') {
+    return 'e.g. "Your order has been finished, packed, and handed to the courier today."'
+  }
+
+  return 'e.g. "Sharing a quick update on your order here."'
+}
+
+function stageUpdatePhotoHint(order: Pick<OrderDetail, 'orderKind'>, targetStage: OrderStage) {
+  if (order.orderKind === 'READY_MADE' && targetStage === 'READY_FOR_COLLECTION') {
+    return 'Show the packed order so the customer knows pickup is truly ready.'
+  }
+  if (targetStage === 'READY_FOR_DRAPE_DISPATCH') {
+    return 'Show the packed order so Drape ops and the customer can trust that dispatch can begin.'
+  }
+  if (targetStage === 'OUT_FOR_DELIVERY') {
+    return 'Show the packed order or rider handoff so the customer can trust this delivery update.'
+  }
+  if (targetStage === 'SHIPPED') {
+    return 'Show the packed handoff or dispatch proof so the customer can trust the shipment update.'
+  }
+  return 'A photo at this stage builds trust with your customer.'
+}
+
+function stageUpdatePhotoLabel(order: Pick<OrderDetail, 'orderKind'>, targetStage: OrderStage) {
+  if (order.orderKind === 'READY_MADE') {
+    if (targetStage === 'FINISHING') return 'Packing photo'
+    if (targetStage === 'READY_FOR_COLLECTION') return 'Pickup-ready photo'
+    if (targetStage === 'READY_FOR_DRAPE_DISPATCH') return 'Packed-order photo'
+  }
+  if (targetStage === 'OUT_FOR_DELIVERY') return 'Delivery handoff photo'
+  if (targetStage === 'SHIPPED') return 'Dispatch photo'
+  return 'Progress photo'
+}
+
+function stageUpdatePhotoRequiredMessage(order: Pick<OrderDetail, 'orderKind'>, targetStage: OrderStage) {
+  if (order.orderKind === 'READY_MADE' && targetStage === 'READY_FOR_COLLECTION') {
+    return 'Add a pickup-ready photo so the customer can see the packed order before collection.'
+  }
+  if (targetStage === 'READY_FOR_DRAPE_DISPATCH') {
+    return 'Add a packed-order photo so Drape can take over dispatch cleanly.'
+  }
+  if (targetStage === 'OUT_FOR_DELIVERY') {
+    return 'Add a delivery handoff photo so the customer can trust that the order is really on the way.'
+  }
+  if (targetStage === 'SHIPPED') {
+    return 'Add a dispatch photo so the customer can trust this shipment update.'
+  }
+  return 'A photo at this stage builds trust. Please add at least one image before updating.'
 }
 
 function baseAmount(order: Pick<OrderDetail, 'orderKind' | 'itemSubtotal' | 'quotedAmount' | 'fulfillmentFee'>) {
@@ -170,12 +301,6 @@ function baseAmount(order: Pick<OrderDetail, 'orderKind' | 'itemSubtotal' | 'quo
   }
   if (order.quotedAmount == null) return null
   return Math.max(order.quotedAmount - order.fulfillmentFee, 0)
-}
-
-function fulfillmentFeeLabel(order: Pick<OrderDetail, 'orderKind' | 'deliveryMethod' | 'fulfillmentOption'>) {
-  if (order.orderKind === 'READY_MADE' && order.fulfillmentOption === 'DELIVERY') return 'Delivery fee'
-  if (order.deliveryMethod === 'LOCAL_COLLECTION' || order.fulfillmentOption === 'PICKUP') return 'Fulfillment fee'
-  return 'Shipping fee'
 }
 
 // Linear next stages (one option only)
@@ -236,14 +361,22 @@ export default function TailorOrderDetailScreen() {
   const [showMeasurementRequestModal, setShowMeasurementRequestModal] = useState(false)
   const [showFitReadinessModal, setShowFitReadinessModal] = useState(false)
   const [showMaterialIssueModal, setShowMaterialIssueModal] = useState(false)
+  const [showCancellationReviewModal, setShowCancellationReviewModal] = useState(false)
+  const [showDeliveryReviewModal, setShowDeliveryReviewModal] = useState(false)
+  const [showHandoffSupport, setShowHandoffSupport] = useState(false)
   const [startingCall, setStartingCall] = useState<'audio' | 'video' | null>(null)
+  const [startingOrderCall, setStartingOrderCall] = useState<'audio' | 'video' | null>(null)
   const [confirmingFabricReceived, setConfirmingFabricReceived] = useState(false)
   const [failedReferencePhotos, setFailedReferencePhotos] = useState<string[]>([])
+  const [hasCustomerReview, setHasCustomerReview] = useState(false)
+  const [handoffIssue, setHandoffIssue] = useState<HandoffIssue | null>(null)
+  const [resolvingHandoffIssue, setResolvingHandoffIssue] = useState(false)
 
   async function fetchOrder() {
     setLoading(true)
     setFetchErrorMessage('')
     setOrder(null)
+    setHasCustomerReview(false)
     setFailedReferencePhotos([])
     try {
       const { data, error } = await supabase
@@ -251,7 +384,9 @@ export default function TailorOrderDetailScreen() {
       .select(`
         id, reference, order_kind, fulfillment_option, garment_type, garment_description, item_title, item_size, item_quantity, item_subtotal, stage,
         customer_id, quoted_amount, quoted_currency, fulfillment_fee, quoted_completion_date,
-        fabric_source, delivery_method, delivery_address, tracking_number, carrier, reference_photos, fit_note,
+        fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_payment_provider, fulfillment_payment_intent_id, fulfillment_payment_checkout_url,
+        fabric_source, delivery_method, delivery_address, recipient_name, recipient_phone, tracking_number, carrier,
+        fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone, reference_photos, fit_note,
         customer_measurements_snapshot, special_note, collection_code, video_call_url,
         occasion, deadline, created_at,
         customer_profiles!customer_id(display_name)
@@ -264,6 +399,7 @@ export default function TailorOrderDetailScreen() {
 
       if (data) {
         const d = data as any
+        const openHandoffIssue = await fetchOpenHandoffIssue(d.id)
         setOrder({
           id: d.id, reference: d.reference, garmentType: d.garment_type,
           orderKind: d.order_kind ?? 'CUSTOM', fulfillmentOption: d.fulfillment_option ?? null,
@@ -272,16 +408,36 @@ export default function TailorOrderDetailScreen() {
           customerId: d.customer_id,
           customerName: d.customer_profiles?.display_name ?? 'Customer',
           quotedAmount: d.quoted_amount, quotedCurrency: d.quoted_currency ?? 'USD', quotedCompletionDate: d.quoted_completion_date,
+          fulfillmentPaymentRequestedAt: d.fulfillment_payment_requested_at ?? null,
+          fulfillmentPaymentPaidAt: d.fulfillment_payment_paid_at ?? null,
+          fulfillmentPaymentProvider: d.fulfillment_payment_provider ?? null,
+          fulfillmentPaymentIntentId: d.fulfillment_payment_intent_id ?? null,
+          fulfillmentPaymentCheckoutUrl: d.fulfillment_payment_checkout_url ?? null,
           fabricSource: d.fabric_source, deliveryMethod: d.delivery_method, deliveryAddress: d.delivery_address ?? null,
+          recipientName: d.recipient_name ?? null, recipientPhone: d.recipient_phone ?? null,
           trackingNumber: d.tracking_number ?? null, carrier: d.carrier ?? null,
+          fulfillmentProvider: d.fulfillment_provider ?? null,
+          fulfillmentReference: d.fulfillment_reference ?? null,
+          fulfillmentContactName: d.fulfillment_contact_name ?? null,
+          fulfillmentContactPhone: d.fulfillment_contact_phone ?? null,
           referencePhotos: asStringList(d.reference_photos),
           fitNote: d.fit_note, measurements: enrichMeasurementSnapshot(d.customer_measurements_snapshot ?? null) as Measurement | null,
           supportMeta: parseOrderSupportMeta(d.special_note),
           collectionCode: d.collection_code, videoCallUrl: d.video_call_url ?? null,
           occasion: d.occasion, deadline: d.deadline, createdAt: d.created_at,
         })
+        setHandoffIssue(openHandoffIssue)
+
+        const { count: customerReviewCount } = await supabase
+          .from('customer_reviews')
+          .select('id', { count: 'exact', head: true })
+          .eq('order_id', d.id)
+
+        setHasCustomerReview((customerReviewCount ?? 0) > 0)
       } else {
+        setHandoffIssue(null)
         setOrder(null)
+        setHasCustomerReview(false)
       }
     } catch (error) {
       setFetchErrorMessage(
@@ -289,7 +445,9 @@ export default function TailorOrderDetailScreen() {
           ? 'Connection is weak. We could not load this order yet. Retry when the signal improves, or reopen it from Orders later.'
           : 'We could not load this order right now. Retry, or reopen it from your Orders list.'
       )
+      setHandoffIssue(null)
       setOrder(null)
+      setHasCustomerReview(false)
     }
     setLoading(false)
   }
@@ -303,7 +461,7 @@ export default function TailorOrderDetailScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Order detail</Text>
             <ActivityIndicator color={Colors.needleGreen} size="large" />
-            <Text style={styles.stateTitle}>Loading this order…</Text>
+            <Text style={styles.stateTitle}>Loading this order...</Text>
             <Text style={styles.stateHint}>
               We’re pulling together the brief, measurements, quote context, and current production state.
             </Text>
@@ -392,12 +550,30 @@ export default function TailorOrderDetailScreen() {
   const materialIssueOpen = hasOpenMaterialIssue(order.supportMeta)
   const materialIssueNeedsCustomerDecision = materialIssue?.status === 'OPEN'
   const materialIssueCancellationRequested = materialIssue?.status === 'CUSTOMER_REQUESTED_CANCEL'
+  const handoffHelpAvailable = ['READY_FOR_COLLECTION', 'READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED', 'COLLECTED', 'IN_DISPUTE'].includes(order.stage)
   const materialIssueReasonLabel =
     materialIssue?.reasonLabel ??
     (materialIssue?.reason ? MATERIAL_ISSUE_REASON_LABELS[materialIssue.reason] : null)
   const materialIssueResponseLabel =
     materialIssue?.responseLabel ??
     (materialIssue?.response ? MATERIAL_ISSUE_RESPONSE_LABELS[materialIssue.response] : null)
+  const cancellationReview = order.supportMeta.cancellationReview ?? null
+  const cancellationReviewOpen = hasOpenCancellationReview(order.supportMeta)
+  const cancellationReasonLabel =
+    cancellationReview?.reasonLabel ??
+    (cancellationReview?.reason ? CANCELLATION_REVIEW_REASON_LABELS[cancellationReview.reason] : null)
+  const canRequestCancellationReview =
+    !cancellationReviewOpen &&
+    ['PAYMENT_PENDING', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH'].includes(order.stage)
+  const deliveryReview = order.supportMeta.deliveryReview ?? null
+  const deliveryReviewOpen = hasOpenDeliveryReview(order.supportMeta)
+  const deliveryReasonLabel =
+    deliveryReview?.reasonLabel ??
+    (deliveryReview?.reason ? DELIVERY_REVIEW_REASON_LABELS[deliveryReview.reason] : null)
+  const canRequestDeliveryReview =
+    !cancellationReviewOpen &&
+    !deliveryReviewOpen &&
+    ['READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED'].includes(order.stage)
   const waitingOnTailorSourcing = materialIssue?.status === 'CUSTOMER_RESPONDED' && materialIssue?.response === 'ASK_TAILOR_TO_SOURCE'
   const canConfirmFabricReceived =
     order.fabricSource === 'CUSTOMER_SUPPLIES' &&
@@ -412,6 +588,8 @@ export default function TailorOrderDetailScreen() {
       !order.supportMeta.fabricReceivedAt &&
       !waitingOnTailorSourcing
     )
+
+  const quotedHeadlineAmount = baseAmount(order)
 
   async function confirmFabricReceived() {
     const currentOrderId = order?.id
@@ -473,6 +651,69 @@ export default function TailorOrderDetailScreen() {
     }
   }
 
+  async function startOrderCall(callType: 'audio' | 'video') {
+    if (!order) return
+    if (startingOrderCall) return
+    setStartingOrderCall(callType)
+    try {
+      const room = await createOrderCallRoom(order.id, callType)
+      if (!room?.url) return
+      await fetchOrder()
+      await openDrapeCallUrl(room.url)
+    } finally {
+      setStartingOrderCall(null)
+    }
+  }
+
+  function openOrderCallOptions() {
+    if (!order || startingOrderCall) return
+    if (order.videoCallUrl) {
+      Alert.alert(
+        'Join Drape call',
+        `Open the current Drape call with ${order.customerName}.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Video', onPress: () => { void openDrapeCallUrl(order.videoCallUrl!) } },
+          { text: 'Audio only', onPress: () => { void openDrapeCallUrl(order.videoCallUrl!) } },
+        ]
+      )
+      return
+    }
+
+    Alert.alert(
+      'Start Drape call',
+      `Start a Drape call with ${order.customerName} without exposing personal phone numbers.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Video', onPress: () => { void startOrderCall('video') } },
+        { text: 'Audio only', onPress: () => { void startOrderCall('audio') } },
+      ]
+    )
+  }
+
+  async function markHandoffIssueResolved() {
+    if (!handoffIssue || resolvingHandoffIssue) return
+    setResolvingHandoffIssue(true)
+    const result = await resolveHandoffIssue(handoffIssue.id, 'Resolved from tailor order screen.')
+    setResolvingHandoffIssue(false)
+    if (result.error) {
+      Alert.alert('Could not close help thread', result.error)
+      return
+    }
+    await fetchOrder()
+  }
+
+  function openCustomerReview() {
+    if (!order) return
+    router.push({
+      pathname: '/(tailor)/clients/review/[orderId]',
+      params: {
+        orderId: order.id,
+        returnTo: '/(tailor)/orders',
+      },
+    })
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TouchableOpacity style={styles.back} onPress={goBack}>
@@ -497,17 +738,17 @@ export default function TailorOrderDetailScreen() {
                 testID="tailor-order-stage"
               >
                 <Text style={[styles.stageText, { color: stageColor(order.stage).text }]}>
-                  {tailorStageLabel(order.stage, order.orderKind)}
+                  {tailorOrderStageLabel(order.stage, order.orderKind)}
                 </Text>
               </View>
-              {order.quotedAmount && (
+              {quotedHeadlineAmount != null && (
                 <Text style={styles.amount}>
                   {formatAmount(
-                    order.quotedAmount,
+                    quotedHeadlineAmount,
                     order.quotedCurrency as CurrencyCode,
                     order.quotedCurrency as CurrencyCode,
                     STATIC_FALLBACK_RATES
-                  )} {quotedAmountLabel(order.stage, order.orderKind)}
+                  )} {quotedAmountLabel(order.stage, order.orderKind, false)}
                 </Text>
               )}
             </View>
@@ -534,7 +775,7 @@ export default function TailorOrderDetailScreen() {
                 </>
               ) : (
                 <>
-                  <Text style={styles.alertTitle}>New order — your quote is needed</Text>
+                  <Text style={styles.alertTitle}>New order. Your quote is needed</Text>
                   <Text style={styles.alertSub}>
                     Review the order details below and send your quote. You can also request a consultation first.
                   </Text>
@@ -632,12 +873,12 @@ export default function TailorOrderDetailScreen() {
                 {order.orderKind === 'READY_MADE' ? 'Prepare this order' : 'Update production stage'}
               </Text>
               <Text style={styles.stageCardSub}>
-                Currently: <Text style={{ color: Colors.needleGreen, fontWeight: FontWeight.semibold }}>{tailorStageLabel(order.stage, order.orderKind)}</Text>
+                Currently: <Text style={{ color: Colors.needleGreen, fontWeight: FontWeight.semibold }}>{tailorOrderStageLabel(order.stage, order.orderKind)}</Text>
               </Text>
               <Text style={styles.stageCardHint}>
                 {order.orderKind === 'READY_MADE'
                   ? 'Ready-made orders skip tailoring production stages. Move this into preparation, then ship it or mark it ready for collection.'
-                  : 'Choose which stage to move to next — tailors often run design and sourcing in parallel.'}
+                  : 'Choose which stage to move to next. Tailors often run design and sourcing in parallel.'}
               </Text>
               {flexibleNextStages.map((target) => (
                 <Button
@@ -655,10 +896,10 @@ export default function TailorOrderDetailScreen() {
             <View style={styles.stageCard}>
               <Text style={styles.stageCardTitle}>Update production stage</Text>
               <Text style={styles.stageCardSub}>
-                Currently: <Text style={{ color: Colors.needleGreen, fontWeight: FontWeight.semibold }}>{tailorStageLabel(order.stage, order.orderKind)}</Text>
+                Currently: <Text style={{ color: Colors.needleGreen, fontWeight: FontWeight.semibold }}>{tailorOrderStageLabel(order.stage, order.orderKind)}</Text>
               </Text>
               <Button
-                label={`Advance to ${nextProductionStage ? STAGE_LABELS[nextProductionStage] : '…'}`}
+                label={`Advance to ${nextProductionStage ? STAGE_LABELS[nextProductionStage] : '...'}`}
                 onPress={() => openStageModal(nextProductionStage!)}
               />
             </View>
@@ -666,16 +907,35 @@ export default function TailorOrderDetailScreen() {
 
           {order.stage === 'FINISHING' && (
             <View style={styles.stageCard}>
-              <Text style={styles.stageCardTitle}>{order.orderKind === 'READY_MADE' ? 'Ready to dispatch?' : 'Almost done'}</Text>
+              <Text style={styles.stageCardTitle}>{order.orderKind === 'READY_MADE' ? 'Preparing order' : 'Almost done'}</Text>
               <Text style={styles.stageCardSub}>
-                {order.orderKind === 'READY_MADE'
-                  ? `Mark this order ready for ${order.deliveryMethod === 'LOCAL_COLLECTION' ? 'collection' : 'shipping'} once it is packed and checked.`
-                  : `Mark as finished and ready for ${order.deliveryMethod === 'LOCAL_COLLECTION' ? 'collection' : 'shipping'}.`}
+                {order.deliveryMethod === 'LOCAL_COLLECTION'
+                  ? (order.orderKind === 'READY_MADE'
+                      ? 'Mark this order ready for collection once it is packed and checked.'
+                      : 'Mark as finished and ready for collection.')
+                  : (order.orderKind === 'READY_MADE'
+                      ? `Keep packing and checking this order. When it is ready, hand it to Drape for dispatch.`
+                      : `Mark this order ready for Drape dispatch once it is packed and checked.`)}
               </Text>
-              <Button
-                label={order.deliveryMethod === 'LOCAL_COLLECTION' ? 'Mark ready for collection' : 'Mark as shipped'}
-                onPress={() => openStageModal(order.deliveryMethod === 'LOCAL_COLLECTION' ? 'READY_FOR_COLLECTION' : 'SHIPPED')}
-              />
+              {order.deliveryMethod !== 'LOCAL_COLLECTION' ? (
+                <View style={styles.supportCard}>
+                  <Text style={styles.supportCardTitle}>Drape-managed dispatch</Text>
+                  <Text style={styles.supportHint}>
+                    Drape will manage the actual dispatch from ops once you mark this packed order ready. You only need to finish packing, quality-check the order, and hand it over cleanly.
+                  </Text>
+                </View>
+              ) : null}
+              {order.deliveryMethod === 'LOCAL_COLLECTION' ? (
+                <Button
+                  label="Mark ready for collection"
+                  onPress={() => openStageModal('READY_FOR_COLLECTION')}
+                />
+              ) : (
+                <Button
+                  label="Mark ready for Drape dispatch"
+                  onPress={() => openStageModal('READY_FOR_DRAPE_DISPATCH')}
+                />
+              )}
             </View>
           )}
 
@@ -692,8 +952,74 @@ export default function TailorOrderDetailScreen() {
 
           {statusGuidance && (
             <View style={styles.stageCard}>
-              <Text style={styles.stageCardTitle}>{tailorStageLabel(order.stage, order.orderKind)}</Text>
+              <Text style={styles.stageCardTitle}>{tailorOrderStageLabel(order.stage, order.orderKind)}</Text>
               <Text style={styles.stageCardSub}>{statusGuidance}</Text>
+            </View>
+          )}
+
+          {(cancellationReviewOpen || canRequestCancellationReview) && (
+            <View style={styles.supportCard}>
+              <Text style={styles.supportCardTitle}>Cancellation and refund review</Text>
+              {cancellationReviewOpen ? (
+                <>
+                  <View style={[styles.supportBadge, styles.supportBadgeWarning]}>
+                    <Text style={[styles.supportBadgeText, styles.supportBadgeTextWarning]}>Review open</Text>
+                  </View>
+                  <Text style={styles.supportHint}>
+                    Drape is reviewing whether this order should be cancelled before handoff. Keep all updates inside the order timeline.
+                  </Text>
+                  {cancellationReasonLabel ? (
+                    <Text style={styles.supportBodyText}>Reason: {cancellationReasonLabel}</Text>
+                  ) : null}
+                  {cancellationReview?.note ? (
+                    <Text style={styles.supportHint}>{cancellationReview.note}</Text>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <Text style={styles.supportHint}>
+                    If this order cannot move forward cleanly, ask Drape to review cancellation before pickup or dispatch starts.
+                  </Text>
+                  <Button
+                    label="Request cancellation review"
+                    variant="secondary"
+                    onPress={() => setShowCancellationReviewModal(true)}
+                  />
+                </>
+              )}
+            </View>
+          )}
+
+          {(deliveryReviewOpen || canRequestDeliveryReview) && (
+            <View style={styles.supportCard}>
+              <Text style={styles.supportCardTitle}>Dispatch and delivery review</Text>
+              {deliveryReviewOpen ? (
+                <>
+                  <View style={[styles.supportBadge, styles.supportBadgeWarning]}>
+                    <Text style={[styles.supportBadgeText, styles.supportBadgeTextWarning]}>Review open</Text>
+                  </View>
+                  <Text style={styles.supportHint}>
+                    Drape is reviewing a dispatch or delivery issue on this order. Keep ops and customer updates inside this timeline while the handoff is paused.
+                  </Text>
+                  {deliveryReasonLabel ? (
+                    <Text style={styles.supportBodyText}>Reason: {deliveryReasonLabel}</Text>
+                  ) : null}
+                  {deliveryReview?.note ? (
+                    <Text style={styles.supportHint}>{deliveryReview.note}</Text>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <Text style={styles.supportHint}>
+                    Use this if dispatch is delayed, the recipient could not be reached, delivery failed, or the parcel is heading back instead of finishing cleanly.
+                  </Text>
+                  <Button
+                    label="Report dispatch or delivery issue"
+                    variant="secondary"
+                    onPress={() => setShowDeliveryReviewModal(true)}
+                  />
+                </>
+              )}
             </View>
           )}
 
@@ -912,22 +1238,17 @@ export default function TailorOrderDetailScreen() {
               {order.orderKind === 'READY_MADE' && order.itemTitle ? <BriefRow label="Item" value={order.itemTitle} /> : null}
               {order.orderKind === 'READY_MADE' && order.itemSize ? <BriefRow label="Size" value={order.itemSize} /> : null}
               {order.orderKind === 'READY_MADE' ? <BriefRow label="Quantity" value={`${order.itemQuantity}`} /> : null}
-              {order.orderKind === 'READY_MADE' && order.itemSubtotal != null ? (
-                <BriefRow label="Subtotal" value={formatAmount(order.itemSubtotal, order.quotedCurrency as CurrencyCode, order.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)} />
+              {baseAmount(order) != null && order.orderKind === 'READY_MADE' ? (
+                <BriefRow
+                  label="Item price"
+                  value={formatAmount(baseAmount(order) ?? 0, order.quotedCurrency as CurrencyCode, order.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)}
+                />
               ) : null}
               {baseAmount(order) != null && order.orderKind !== 'READY_MADE' ? (
-                <BriefRow label="Quote amount" value={formatAmount(baseAmount(order) ?? 0, order.quotedCurrency as CurrencyCode, order.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)} />
-              ) : null}
-              <BriefRow
-                label={fulfillmentFeeLabel(order)}
-                value={
-                  order.fulfillmentFee > 0
-                    ? formatAmount(order.fulfillmentFee, order.quotedCurrency as CurrencyCode, order.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)
-                    : 'Free'
-                }
-              />
-              {order.quotedAmount != null ? (
-                <BriefRow label="Total" value={formatAmount(order.quotedAmount, order.quotedCurrency as CurrencyCode, order.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)} />
+                <BriefRow
+                  label="Quote amount"
+                  value={formatAmount(baseAmount(order) ?? 0, order.quotedCurrency as CurrencyCode, order.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)}
+                />
               ) : null}
               {order.orderKind === 'READY_MADE' && order.fulfillmentOption ? (
                 <BriefRow
@@ -943,15 +1264,42 @@ export default function TailorOrderDetailScreen() {
                 />
               )}
               <BriefRow label="Fabric" value={order.fabricSource === 'CUSTOMER_SUPPLIES' ? 'Customer supplies' : 'You source'} />
-              <BriefRow label="Delivery" value={order.deliveryMethod === 'LOCAL_COLLECTION' ? 'Local collection' : 'Shipping'} />
-              {order.deliveryMethod === 'SHIPPING' && order.deliveryAddress && (
-                <BriefRow label="Ship to" value={order.deliveryAddress} />
-              )}
+              <BriefRow
+                label="Delivery"
+                value={
+                  order.deliveryMethod === 'LOCAL_COLLECTION'
+                    ? 'Local collection'
+                    : order.deliveryMethod === 'LOCAL_DELIVERY'
+                      ? 'Local delivery'
+                      : 'Shipping'
+                }
+              />
+              {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.recipientName ? (
+                <BriefRow label="Recipient" value={order.recipientName} />
+              ) : null}
+              {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.recipientPhone ? (
+                <BriefRow label="Recipient phone" value={order.recipientPhone} />
+              ) : null}
+              {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.deliveryAddress ? (
+                <BriefRow label={order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Deliver to' : 'Ship to'} value={order.deliveryAddress} />
+              ) : null}
+              {order.deliveryMethod !== 'LOCAL_COLLECTION' && (order.fulfillmentProvider || order.carrier) ? (
+                <BriefRow label="Partner" value={order.fulfillmentProvider ?? order.carrier ?? ''} />
+              ) : null}
+              {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.fulfillmentReference ? (
+                <BriefRow label="Reference" value={order.fulfillmentReference} />
+              ) : null}
+              {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.fulfillmentContactName ? (
+                <BriefRow label={order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Delivery contact' : 'Shipping contact'} value={order.fulfillmentContactName} />
+              ) : null}
+              {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.fulfillmentContactPhone ? (
+                <BriefRow label={order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Delivery phone' : 'Shipping phone'} value={order.fulfillmentContactPhone} />
+              ) : null}
               {order.deliveryMethod === 'SHIPPING' && order.trackingNumber && (
                 <>
                   <BriefRow
                     label="Tracking"
-                    value={order.carrier ? `${order.trackingNumber} · ${order.carrier}` : order.trackingNumber}
+                    value={order.fulfillmentProvider ? `${order.trackingNumber} · ${order.fulfillmentProvider}` : order.carrier ? `${order.trackingNumber} · ${order.carrier}` : order.trackingNumber}
                   />
                   <Button
                     label="Open tracking page"
@@ -959,7 +1307,7 @@ export default function TailorOrderDetailScreen() {
                     onPress={() => {
                       void openTrackingPage({
                         trackingNumber: order.trackingNumber!,
-                        carrier: order.carrier,
+                        carrier: order.fulfillmentProvider ?? order.carrier,
                         audience: 'tailor',
                       })
                     }}
@@ -967,13 +1315,15 @@ export default function TailorOrderDetailScreen() {
                 </>
               )}
             </View>
-            {order.deliveryMethod === 'SHIPPING' ? (
+            {order.deliveryMethod !== 'LOCAL_COLLECTION' ? (
               <View style={styles.supportCard}>
-                <Text style={styles.supportCardTitle}>Shipping proof</Text>
+                <Text style={styles.supportCardTitle}>
+                  {order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Delivery proof' : 'Shipping proof'}
+                </Text>
                 <Text style={styles.supportHint}>
-                  Only mark this order as shipped after the parcel has been accepted for dispatch. Keep the tracking number,
-                  dispatch proof, and any customs or duties updates inside Drape so support can follow the same timeline if
-                  the shipment stalls.
+                  {order.deliveryMethod === 'LOCAL_DELIVERY'
+                    ? 'Only mark this order out for delivery after a rider or local delivery partner has accepted it. Keep the delivery partner, contact, and dispatch proof inside Drape so support can follow the same timeline if the handoff stalls.'
+                    : 'Only mark this order as shipped after the parcel has been accepted for dispatch. Keep the tracking or shipment reference, dispatch proof, and any customs or duties updates inside Drape so support can follow the same timeline if the shipment stalls.'}
                 </Text>
               </View>
             ) : null}
@@ -983,6 +1333,54 @@ export default function TailorOrderDetailScreen() {
                 <Text style={styles.fitNoteText}>"{order.fitNote}"</Text>
               </View>
             )}
+
+            {handoffHelpAvailable ? (
+              <View style={styles.supportCard}>
+                <Text style={styles.supportCardTitle}>{handoffHelpCardTitle('TAILOR', order.deliveryMethod)}</Text>
+                <Text style={styles.supportHint}>{handoffHelpCardBody('TAILOR', order.deliveryMethod)}</Text>
+                {handoffIssue ? (
+                  <View style={styles.handoffIssueCard}>
+                    <View style={styles.handoffIssueHeader}>
+                      <Text style={styles.handoffIssueTitle}>{handoffIssueLabel(handoffIssue.issueType)}</Text>
+                      <View
+                        style={[
+                          styles.handoffStatusPill,
+                          handoffIssue.status === 'ESCALATED' && styles.handoffStatusPillEscalated,
+                        ]}
+                      >
+                        <Text style={styles.handoffStatusText}>{handoffIssueStatusLabel(handoffIssue.status)}</Text>
+                      </View>
+                    </View>
+                    {handoffIssue.description ? <Text style={styles.supportHint}>{handoffIssue.description}</Text> : null}
+                    <Text style={styles.supportHint}>
+                      {handoffIssue.status === 'ESCALATED'
+                        ? 'Drape support has been flagged for follow-up. Keep all updates in this order thread.'
+                        : 'This handoff help thread is open inside Drape. Keep all updates here so the timeline stays clear.'}
+                    </Text>
+                    <Button
+                      label="Mark help resolved"
+                      variant="secondary"
+                      onPress={() => { void markHandoffIssueResolved() }}
+                      loading={resolvingHandoffIssue}
+                      disabled={resolvingHandoffIssue}
+                    />
+                  </View>
+                ) : null}
+                <View style={{ gap: Spacing.md }}>
+                  <Button
+                    label={startingOrderCall ? 'Starting Drape call...' : order.videoCallUrl ? 'Join Drape call' : 'Start Drape call'}
+                    variant="secondary"
+                    onPress={openOrderCallOptions}
+                    disabled={!!startingOrderCall}
+                  />
+                  <Button
+                    label={handoffIssue ? 'Log another help issue' : 'Log handoff help'}
+                    variant="secondary"
+                    onPress={() => setShowHandoffSupport(true)}
+                  />
+                </View>
+              </View>
+            ) : null}
           </View>
 
           {/* Reference photos */}
@@ -1026,6 +1424,33 @@ export default function TailorOrderDetailScreen() {
             </View>
           )}
 
+          {['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(order.stage) && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Next step</Text>
+              <View style={styles.supportCard}>
+                <Text style={styles.supportCardTitle}>
+                  {hasCustomerReview ? 'Customer review saved' : 'Review this customer'}
+                </Text>
+                <Text style={styles.supportHint}>
+                  {hasCustomerReview
+                    ? 'Your internal customer review is already saved. You can head back to Orders or keep this record for future reference.'
+                    : 'Leave an internal customer review so future work has better context. This stays inside Drape and is not public.'}
+                </Text>
+                {!hasCustomerReview ? (
+                  <Button
+                    label="Review customer"
+                    onPress={openCustomerReview}
+                  />
+                ) : null}
+                <Button
+                  label="Back to orders"
+                  variant="secondary"
+                  onPress={() => router.replace('/(tailor)/orders')}
+                />
+              </View>
+            </View>
+          )}
+
         </View>
       </ScrollView>
 
@@ -1043,13 +1468,24 @@ export default function TailorOrderDetailScreen() {
         />
       </View>
 
+      <HandoffSupportModal
+        visible={showHandoffSupport}
+        orderId={order.id}
+        role="TAILOR"
+        deliveryMethod={order.deliveryMethod}
+        onClose={() => setShowHandoffSupport(false)}
+        onSubmitted={() => {
+          setShowHandoffSupport(false)
+          void fetchOrder()
+        }}
+      />
+
       {/* Quote modal */}
       <QuoteModal
         visible={showQuoteModal}
         orderId={order.id}
         defaultCurrency={(order.quotedCurrency as CurrencyCode) ?? 'USD'}
         deliveryMethod={order.deliveryMethod}
-        defaultFulfillmentFee={order.fulfillmentFee}
         customerDeadline={order.deadline}
         onClose={() => setShowQuoteModal(false)}
         onSent={() => { setShowQuoteModal(false); fetchOrder() }}
@@ -1062,7 +1498,16 @@ export default function TailorOrderDetailScreen() {
           order={order}
           targetStage={stageModalTarget}
           onClose={() => setShowStageModal(false)}
-          onUpdated={() => { setShowStageModal(false); fetchOrder() }}
+          onUpdated={async (updatedStage) => {
+            setShowStageModal(false)
+            await fetchOrder()
+            if (updatedStage === 'FINISHING' && order.deliveryMethod !== 'LOCAL_COLLECTION') {
+              Alert.alert(
+                'Preparing order',
+                'Keep packing and checking this order. When it is truly ready, come back here and mark it ready for Drape dispatch.',
+              )
+            }
+          }}
           userId={user?.id ?? ''}
         />
       )}
@@ -1106,13 +1551,51 @@ export default function TailorOrderDetailScreen() {
         }}
       />
 
+      <CancellationReviewRequestModal
+        visible={showCancellationReviewModal}
+        orderId={order.id}
+        onClose={() => setShowCancellationReviewModal(false)}
+        onSent={() => {
+          setShowCancellationReviewModal(false)
+          void fetchOrder()
+        }}
+      />
+
+      <DeliveryReviewRequestModal
+        visible={showDeliveryReviewModal}
+        orderId={order.id}
+        onClose={() => setShowDeliveryReviewModal(false)}
+        onSent={() => {
+          setShowDeliveryReviewModal(false)
+          void fetchOrder()
+        }}
+      />
+
       {/* Collection code modal */}
       <CollectionCodeModal
         visible={showCodeModal}
         orderId={order.id}
         expectedCode={order.collectionCode ?? ''}
         onClose={() => setShowCodeModal(false)}
-        onConfirmed={() => { setShowCodeModal(false); fetchOrder() }}
+        onConfirmed={async () => {
+          setShowCodeModal(false)
+          await fetchOrder()
+          Alert.alert(
+            'Collection confirmed',
+            hasCustomerReview
+              ? 'Pickup is complete. The customer can finish the order in Drape now.'
+              : 'Pickup is complete. You can review this customer next or head back to Orders.',
+            hasCustomerReview
+              ? [
+                  { text: 'Stay here', style: 'cancel' },
+                  { text: 'Back to orders', onPress: () => router.replace('/(tailor)/orders') },
+                ]
+              : [
+                  { text: 'Back to orders', style: 'cancel', onPress: () => router.replace('/(tailor)/orders') },
+                  { text: 'Review customer', onPress: openCustomerReview },
+                ],
+          )
+        }}
       />
     </SafeAreaView>
   )
@@ -1182,7 +1665,7 @@ function MeasurementsSection({ measurements: m }: { measurements: Measurement })
           <View key={label} style={styles.measureItem}>
             <Text style={styles.measureLabel}>{label}</Text>
             <Text style={[styles.measureValue, !value && { color: Colors.lightGrey }]}>
-              {value ? `${value} ${m.unit}` : '—'}
+              {value ? `${value} ${m.unit}` : 'Not added'}
             </Text>
           </View>
         ))}
@@ -1565,20 +2048,322 @@ function MaterialIssueModal({ visible, orderId, onClose, onSent }: {
   )
 }
 
+const TAILOR_CANCELLATION_REVIEW_OPTIONS: CancellationReviewReason[] = [
+  'ITEM_UNAVAILABLE',
+  'ITEM_DAMAGED_BEFORE_DISPATCH',
+  'TAILOR_CANNOT_FULFIL',
+  'DISPATCH_DELAY',
+  'OTHER',
+]
+
+const TAILOR_DELIVERY_REVIEW_OPTIONS: DeliveryReviewReason[] = [
+  'DISPATCH_DELAY',
+  'DELIVERY_FAILED',
+  'RETURN_TO_SENDER',
+  'RECIPIENT_UNREACHABLE',
+  'OTHER',
+]
+
+function CancellationReviewRequestModal({ visible, orderId, onClose, onSent }: {
+  visible: boolean
+  orderId: string
+  onClose: () => void
+  onSent: () => void
+}) {
+  const [reason, setReason] = useState<CancellationReviewReason | null>(null)
+  const [note, setNote] = useState('')
+  const [noteError, setNoteError] = useState('')
+  const [sending, setSending] = useState(false)
+  const [submitError, setSubmitError] = useState('')
+
+  useEffect(() => {
+    if (!visible) return
+    setReason(null)
+    setNote('')
+    setNoteError('')
+    setSubmitError('')
+    setSending(false)
+  }, [visible, orderId])
+
+  function validateNote(value: string) {
+    if (!value.trim()) {
+      setNoteError('')
+      return true
+    }
+    const placeholder = rejectPlaceholder(value, 'Note')
+    if (placeholder) {
+      setNoteError(placeholder)
+      return false
+    }
+    const result = filterContactInfo(value)
+    if (result.blocked) {
+      setNoteError("Contact details can't be included.")
+      return false
+    }
+    setNoteError('')
+    return true
+  }
+
+  async function send() {
+    if (sending) return
+    if (!reason) {
+      Alert.alert('Choose a reason', 'Tell Drape why this order needs cancellation review before handoff.')
+      return
+    }
+    if (!validateNote(note)) return
+
+    setSending(true)
+    setSubmitError('')
+
+    const { error } = await invokeFunction('tailor-order-action', {
+      body: {
+        orderId,
+        action: 'request-cancellation-review',
+        reason,
+        note: note.trim() || undefined,
+      },
+    })
+
+    setSending(false)
+    if (error) {
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. Your review request stayed here, so retry when the signal improves.'
+        : await readFunctionErrorMessage(error, 'Could not open cancellation review right now.')
+      setSubmitError(message)
+      return
+    }
+
+    onSent()
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={onClose} disabled={sending}>
+              <Text style={styles.modalClose}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Cancellation review</Text>
+            <View style={{ width: 60 }} />
+          </View>
+
+          <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
+            <View style={styles.supportWarningCard}>
+              <Text style={styles.supportWarningTitle}>Pause handoff until reviewed</Text>
+              <Text style={styles.supportWarningText}>
+                Use this when the order cannot move forward cleanly before pickup or dispatch starts. Drape will review the remedy with you and the customer.
+              </Text>
+            </View>
+
+            <View style={styles.reasonList}>
+              <Text style={styles.fieldLabel}>Reason <Text style={styles.required}>*</Text></Text>
+              {TAILOR_CANCELLATION_REVIEW_OPTIONS.map((option) => (
+                <TouchableOpacity
+                  key={option}
+                  style={[styles.reasonRow, reason === option && styles.reasonRowActive]}
+                  disabled={sending}
+                  onPress={() => setReason(option)}
+                >
+                  <View style={[styles.reasonRadio, reason === option && styles.reasonRadioActive]} />
+                  <Text style={[styles.reasonText, reason === option && styles.reasonTextActive]}>
+                    {CANCELLATION_REVIEW_REASON_LABELS[option]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Input
+              label="Note (optional)"
+              placeholder="Add context for Drape. e.g. The item was damaged during final checks before dispatch."
+              value={note}
+              onChangeText={(value) => {
+                setNote(value)
+                if (noteError) validateNote(value)
+              }}
+              onBlur={() => validateNote(note)}
+              error={noteError}
+              multiline
+              numberOfLines={4}
+              maxLength={300}
+              filterContact
+            />
+
+            {submitError ? (
+              <View style={styles.supportWarningCard}>
+                <Text style={styles.supportWarningText}>{submitError}</Text>
+              </View>
+            ) : null}
+
+            <Button
+              label="Request review"
+              onPress={send}
+              loading={sending}
+              disabled={sending || !reason}
+            />
+          </ScrollView>
+        </SafeAreaView>
+      </KeyboardAvoidingView>
+    </Modal>
+  )
+}
+
+function DeliveryReviewRequestModal({ visible, orderId, onClose, onSent }: {
+  visible: boolean
+  orderId: string
+  onClose: () => void
+  onSent: () => void
+}) {
+  const [reason, setReason] = useState<DeliveryReviewReason | null>(null)
+  const [note, setNote] = useState('')
+  const [noteError, setNoteError] = useState('')
+  const [sending, setSending] = useState(false)
+  const [submitError, setSubmitError] = useState('')
+
+  useEffect(() => {
+    if (!visible) return
+    setReason(null)
+    setNote('')
+    setNoteError('')
+    setSubmitError('')
+    setSending(false)
+  }, [visible, orderId])
+
+  function validateNote(value: string) {
+    if (!value.trim()) {
+      setNoteError('')
+      return true
+    }
+    const placeholder = rejectPlaceholder(value, 'Note')
+    if (placeholder) {
+      setNoteError(placeholder)
+      return false
+    }
+    const result = filterContactInfo(value)
+    if (result.blocked) {
+      setNoteError("Contact details can't be included.")
+      return false
+    }
+    setNoteError('')
+    return true
+  }
+
+  async function send() {
+    if (sending) return
+    if (!reason) {
+      Alert.alert('Choose a reason', 'Tell Drape what went wrong with dispatch or delivery.')
+      return
+    }
+    if (!validateNote(note)) return
+
+    setSending(true)
+    setSubmitError('')
+
+    const { error } = await invokeFunction('tailor-order-action', {
+      body: {
+        orderId,
+        action: 'request-delivery-review',
+        reason,
+        note: note.trim() || undefined,
+      },
+    })
+
+    setSending(false)
+    if (error) {
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. Your review request stayed here, so retry when the signal improves.'
+        : await readFunctionErrorMessage(error, 'Could not open delivery review right now.')
+      setSubmitError(message)
+      return
+    }
+
+    onSent()
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={onClose} disabled={sending}>
+              <Text style={styles.modalClose}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Delivery review</Text>
+            <View style={{ width: 60 }} />
+          </View>
+
+          <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
+            <View style={styles.supportWarningCard}>
+              <Text style={styles.supportWarningTitle}>Pause dispatch until reviewed</Text>
+              <Text style={styles.supportWarningText}>
+                Use this when Drape dispatch is slipping, the recipient could not be reached, or the parcel is not reaching the customer cleanly.
+              </Text>
+            </View>
+
+            <View style={styles.reasonList}>
+              <Text style={styles.fieldLabel}>Reason <Text style={styles.required}>*</Text></Text>
+              {TAILOR_DELIVERY_REVIEW_OPTIONS.map((option) => (
+                <TouchableOpacity
+                  key={option}
+                  style={[styles.reasonRow, reason === option && styles.reasonRowActive]}
+                  disabled={sending}
+                  onPress={() => setReason(option)}
+                >
+                  <View style={[styles.reasonRadio, reason === option && styles.reasonRadioActive]} />
+                  <Text style={[styles.reasonText, reason === option && styles.reasonTextActive]}>
+                    {DELIVERY_REVIEW_REASON_LABELS[option]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Input
+              label="Note (optional)"
+              placeholder="Add context for Drape. e.g. The rider could not reach the recipient after multiple attempts."
+              value={note}
+              onChangeText={(value) => {
+                setNote(value)
+                if (noteError) validateNote(value)
+              }}
+              onBlur={() => validateNote(note)}
+              error={noteError}
+              multiline
+              numberOfLines={4}
+              maxLength={300}
+              filterContact
+            />
+
+            {submitError ? (
+              <View style={styles.supportWarningCard}>
+                <Text style={styles.supportWarningText}>{submitError}</Text>
+              </View>
+            ) : null}
+
+            <Button
+              label="Request review"
+              onPress={send}
+              loading={sending}
+              disabled={sending || !reason}
+            />
+          </ScrollView>
+        </SafeAreaView>
+      </KeyboardAvoidingView>
+    </Modal>
+  )
+}
+
 // ─── Quote Modal ──────────────────────────────────────────────────────────────
 
-function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, defaultFulfillmentFee, customerDeadline, onClose, onSent }: {
+function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, customerDeadline, onClose, onSent }: {
   visible: boolean
   orderId: string
   defaultCurrency: CurrencyCode
   deliveryMethod: string
-  defaultFulfillmentFee: number
   customerDeadline: string | null
   onClose: () => void
   onSent: () => void
 }) {
   const [amount, setAmount] = useState('')
-  const [fulfillmentFee, setFulfillmentFee] = useState('')
   const [currency, setCurrency] = useState<CurrencyCode>(defaultCurrency)
   const [completionDate, setCompletionDate] = useState('')
   const [completionDateValue, setCompletionDateValue] = useState<Date | null>(null)
@@ -1590,7 +2375,6 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, default
   useEffect(() => {
     if (!visible) return
     setAmount('')
-    setFulfillmentFee(deliveryMethod === 'LOCAL_COLLECTION' ? '' : moneyInputFromMinorUnits(defaultFulfillmentFee))
     setCurrency(defaultCurrency)
     setCompletionDate('')
     setCompletionDateValue(null)
@@ -1598,7 +2382,7 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, default
     setNote('')
     setNoteError('')
     setSending(false)
-  }, [visible, orderId, defaultCurrency, defaultFulfillmentFee, deliveryMethod])
+  }, [visible, orderId, defaultCurrency, deliveryMethod])
 
   function openCompletionDatePicker() {
     const next = completionDateValue ? new Date(completionDateValue) : new Date()
@@ -1639,20 +2423,12 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, default
     setSending(true)
     try {
       const amountPence = Math.round(parseFloat(amount) * 100)
-      const fulfillmentFeePence = deliveryMethod === 'LOCAL_COLLECTION' ? 0 : minorUnitsFromInput(fulfillmentFee)
-
-      if (fulfillmentFeePence == null) {
-        Alert.alert('Invalid fee', 'Enter the shipping fee as a whole number or decimal with up to two places.')
-        setSending(false)
-        return
-      }
 
       const { data: efData, error: efError } = await invokeFunction('tailor-order-action', {
         body: {
           orderId,
           action: 'send-quote',
           amount: amountPence,
-          fulfillmentFee: fulfillmentFeePence,
           currency,
           completionDate: parsedDate.toISOString(),
           note: note.trim() || undefined,
@@ -1665,7 +2441,7 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, default
         throw err
       }
 
-      capture('quote_sent', { amount_pence: amountPence, fulfillment_fee_pence: fulfillmentFeePence, has_note: !!note.trim() })
+      capture('quote_sent', { amount_pence: amountPence, has_note: !!note.trim() })
       onSent()
     } catch (e) {
       console.error('Send quote error:', e)
@@ -1720,18 +2496,20 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, default
               onChangeText={setAmount}
               keyboardType="decimal-pad"
               required
-              hint="Enter your base quote. Shipping stays separate below when needed."
+              hint={
+                deliveryMethod === 'LOCAL_COLLECTION'
+                  ? 'Enter the full quote the customer should pay.'
+                  : 'Enter your base quote. Drape adds the standard dispatch fee automatically based on the customer address and your location.'
+              }
               testID="quote-amount-input"
             />
             {deliveryMethod !== 'LOCAL_COLLECTION' ? (
-              <Input
-                label={`Shipping fee (${SUPPORTED_CURRENCIES.find((c) => c.code === currency)?.symbol ?? currency})`}
-                placeholder="e.g. 25"
-                value={fulfillmentFee}
-                onChangeText={setFulfillmentFee}
-                keyboardType="decimal-pad"
-                hint="Leave blank if shipping is free or already included."
-              />
+              <View style={styles.supportCard}>
+                <Text style={styles.supportCardTitle}>Drape-managed dispatch</Text>
+                <Text style={styles.supportHint}>
+                  Standard {deliveryMethod === 'LOCAL_DELIVERY' ? 'delivery' : 'shipping'} is collected at checkout as a flat Drape fee. You do not need to enter a separate dispatch amount here.
+                </Text>
+              </View>
             ) : null}
             <Input
               label="Estimated completion date"
@@ -1793,14 +2571,17 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, default
 // ─── Stage Update Modal ───────────────────────────────────────────────────────
 
 function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, userId }: {
-  visible: boolean; order: OrderDetail; targetStage: OrderStage; onClose: () => void; onUpdated: () => void; userId: string
+  visible: boolean; order: OrderDetail; targetStage: OrderStage; onClose: () => void; onUpdated: (updatedStage: OrderStage) => void; userId: string
 }) {
   const [note, setNote] = useState('')
   const [noteError, setNoteError] = useState('')
   const [photoUri, setPhotoUri] = useState<string | null>(null)
   const [updating, setUpdating] = useState(false)
   const [trackingNumber, setTrackingNumber] = useState('')
-  const [carrier, setCarrier] = useState('')
+  const [provider, setProvider] = useState('')
+  const [reference, setReference] = useState('')
+  const [deliveryContactName, setDeliveryContactName] = useState('')
+  const [deliveryContactPhone, setDeliveryContactPhone] = useState('')
 
   const nextStage: OrderStage = targetStage
 
@@ -1811,11 +2592,14 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
     setPhotoUri(null)
     setUpdating(false)
     setTrackingNumber('')
-    setCarrier('')
+    setProvider('')
+    setReference('')
+    setDeliveryContactName('')
+    setDeliveryContactPhone('')
   }, [visible, order.id, targetStage])
 
   function validateNote(t: string) {
-    if (t.trim().length < 10) { setNoteError('Tell your customer what you\'re working on — at least 10 characters.'); return false }
+    if (t.trim().length < 10) { setNoteError('Tell your customer what you are working on. Use at least 10 characters.'); return false }
     const placeholder = rejectPlaceholder(t, 'Note')
     if (placeholder) { setNoteError(placeholder); return false }
     const res = filterContactInfo(t)
@@ -1833,25 +2617,31 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
     if (updating) return
     if (!nextStage) return
     if (note.trim().length < 10) {
-      Alert.alert('Note required', 'Tell your customer what you\'re working on — at least 10 characters.')
+      Alert.alert('Note required', 'Tell your customer what you are working on. Use at least 10 characters.')
       return
     }
     if (!validateNote(note)) return
     if (!photoUri) {
-      Alert.alert('Photo required', 'A photo at this stage builds trust. Please add at least one image before updating.')
+      Alert.alert('Photo required', stageUpdatePhotoRequiredMessage(order, nextStage))
       return
     }
-    const shippingPreflightError =
-      nextStage === 'SHIPPED'
-        ? getShipStagePreflightError({
+    const fulfillmentPreflightError =
+      nextStage === 'SHIPPED' || nextStage === 'OUT_FOR_DELIVERY'
+        ? getFulfillmentStagePreflightError({
+            targetStage: nextStage,
             deliveryMethod: order.deliveryMethod,
             deliveryAddress: order.deliveryAddress,
+            recipientName: order.recipientName,
+            recipientPhone: order.recipientPhone,
+            provider,
+            reference,
             trackingNumber,
-            carrier,
+            contactName: deliveryContactName,
+            contactPhone: deliveryContactPhone,
           })
         : null
-    if (shippingPreflightError) {
-      Alert.alert('Shipping details required', shippingPreflightError)
+    if (fulfillmentPreflightError) {
+      Alert.alert(nextStage === 'OUT_FOR_DELIVERY' ? 'Delivery details required' : 'Shipping details required', fulfillmentPreflightError)
       return
     }
     setUpdating(true)
@@ -1882,7 +2672,10 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
           note: note.trim() || undefined,
           photoUrl: photoUrl ?? undefined,
           trackingNumber: nextStage === 'SHIPPED' ? normalizeTrackingNumberInput(trackingNumber) || undefined : undefined,
-          carrier: nextStage === 'SHIPPED' ? carrier.trim() || undefined : undefined,
+          fulfillmentProvider: ['SHIPPED', 'OUT_FOR_DELIVERY'].includes(nextStage) ? provider.trim() || undefined : undefined,
+          fulfillmentReference: ['SHIPPED', 'OUT_FOR_DELIVERY'].includes(nextStage) ? normalizeDispatchReferenceInput(reference) || undefined : undefined,
+          fulfillmentContactName: ['SHIPPED', 'OUT_FOR_DELIVERY'].includes(nextStage) ? deliveryContactName.trim() || undefined : undefined,
+          fulfillmentContactPhone: ['SHIPPED', 'OUT_FOR_DELIVERY'].includes(nextStage) ? normalizeContactPhoneInput(deliveryContactPhone) || undefined : undefined,
         },
       })
 
@@ -1906,7 +2699,7 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
         has_note: !!note.trim(),
       })
 
-      onUpdated()
+      onUpdated(nextStage)
     } catch (e) {
       console.error('Stage update error:', e)
       Alert.alert(
@@ -1942,11 +2735,7 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
 
             <Input
               label="Note to customer"
-              placeholder={
-                order.orderKind === 'READY_MADE' && nextStage === 'FINISHING'
-                  ? 'e.g. "Packing your order now and checking it before dispatch."'
-                  : 'e.g. "Cutting the fabric — using the navy Ankara as planned."'
-              }
+              placeholder={stageUpdateNotePlaceholder(order, nextStage)}
               value={note}
               onChangeText={(v) => { setNote(v); if (noteError) validateNote(v) }}
               onBlur={() => validateNote(note)}
@@ -1960,8 +2749,8 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
 
             {/* Progress photo */}
             <View>
-              <Text style={styles.photoLabel}>Progress photo <Text style={{ color: Colors.error }}>*</Text></Text>
-              <Text style={styles.photoHint}>A photo at this stage builds trust with your customer.</Text>
+              <Text style={styles.photoLabel}>{stageUpdatePhotoLabel(order, nextStage)} <Text style={{ color: Colors.error }}>*</Text></Text>
+              <Text style={styles.photoHint}>{stageUpdatePhotoHint(order, nextStage)}</Text>
               {photoUri ? (
                 <View style={styles.photoPreviewWrap}>
                   <Image source={{ uri: photoUri }} style={styles.photoPreview} resizeMode="cover" />
@@ -1976,34 +2765,69 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
               )}
             </View>
 
-            {/* Tracking number — only for SHIPPED stage */}
-            {nextStage === 'SHIPPED' && (
+            {['SHIPPED', 'OUT_FOR_DELIVERY'].includes(nextStage) && (
               <View style={styles.shippingFields}>
+                <Input
+                  label={nextStage === 'OUT_FOR_DELIVERY' ? 'Delivery partner' : 'Courier or shipper'}
+                  placeholder={nextStage === 'OUT_FOR_DELIVERY' ? 'e.g. Gokada, Uber package, Local rider' : 'e.g. DHL, UPS, FedEx'}
+                  value={provider}
+                  onChangeText={setProvider}
+                  autoCapitalize="words"
+                  hint="Required so the customer knows who has the order."
+                  required
+                />
+                {order.recipientName || order.recipientPhone ? (
+                  <View style={styles.supportCard}>
+                    <Text style={styles.supportCardTitle}>Recipient details</Text>
+                    {order.recipientName ? <Text style={styles.supportHint}>Name: {order.recipientName}</Text> : null}
+                    {order.recipientPhone ? <Text style={styles.supportHint}>Phone: {order.recipientPhone}</Text> : null}
+                    {order.deliveryAddress ? <Text style={styles.supportHint}>Address: {order.deliveryAddress}</Text> : null}
+                  </View>
+                ) : null}
                 <Input
                   label="Tracking number"
                   placeholder="e.g. JD000095006536993823"
                   value={trackingNumber}
                   onChangeText={(value) => setTrackingNumber(normalizeTrackingNumberInput(value))}
                   autoCapitalize="characters"
-                  hint="Customer will see this in their order tracking."
+                  hint={nextStage === 'SHIPPED' ? 'Use this when the courier provides formal tracking.' : 'Optional for local delivery. Leave blank if there is no formal tracking.'}
+                />
+                <Input
+                  label={nextStage === 'OUT_FOR_DELIVERY' ? 'Trip or dispatch reference' : 'Shipment reference'}
+                  placeholder={nextStage === 'OUT_FOR_DELIVERY' ? 'e.g. trip id, rider booking code' : 'e.g. booking code, parcel reference'}
+                  value={reference}
+                  onChangeText={(value) => setReference(normalizeDispatchReferenceInput(value))}
+                  autoCapitalize="characters"
+                  hint={nextStage === 'SHIPPED' ? 'Required if there is no formal tracking number.' : 'Optional, but helpful for support and follow-up.'}
+                  required={nextStage === 'SHIPPED' && !trackingNumber.trim()}
+                />
+                <Input
+                  label={nextStage === 'OUT_FOR_DELIVERY' ? 'Rider or delivery contact' : 'Courier or shipping contact'}
+                  placeholder={nextStage === 'OUT_FOR_DELIVERY' ? 'e.g. Tunde, Dispatch desk' : 'e.g. DHL desk, Parcel hub contact'}
+                  value={deliveryContactName}
+                  onChangeText={setDeliveryContactName}
+                  autoCapitalize="words"
+                  hint={nextStage === 'OUT_FOR_DELIVERY' ? 'Required so the customer knows who is trying to reach them.' : 'Required so the customer knows who accepted the parcel.'}
                   required
                 />
                 <Input
-                  label="Carrier"
-                  placeholder="e.g. DHL, UPS, FedEx"
-                  value={carrier}
-                  onChangeText={setCarrier}
-                  autoCapitalize="words"
-                  hint="Required so the customer can track the shipment clearly."
+                  label={nextStage === 'OUT_FOR_DELIVERY' ? 'Delivery contact phone' : 'Shipping contact phone'}
+                  placeholder="e.g. +2348012345678"
+                  value={deliveryContactPhone}
+                  onChangeText={(value) => setDeliveryContactPhone(normalizeContactPhoneInput(value))}
+                  keyboardType="phone-pad"
+                  autoCapitalize="none"
+                  hint={nextStage === 'OUT_FOR_DELIVERY' ? 'Required so the customer can identify the active rider.' : 'Required so the customer can identify the courier or shipping desk.'}
                   required
                 />
                 <Text style={styles.shippingWarning}>
-                  Only mark this as shipped after the carrier has actually accepted the parcel. Keep carrier, tracking, and
-                  customs updates in Drape so support can recover the timeline if anything goes wrong.
+                  {nextStage === 'OUT_FOR_DELIVERY'
+                    ? 'Only mark this as out for delivery after the rider or local delivery partner has actually accepted the order. Keep rider, contact, and dispatch updates in Drape so support can recover the timeline if anything goes wrong.'
+                    : 'Only mark this as shipped after the courier has actually accepted the parcel. Keep provider, tracking, shipment reference, and customs updates in Drape so support can recover the timeline if anything goes wrong.'}
                 </Text>
                 {!order.deliveryAddress?.trim() ? (
                   <Text style={styles.shippingWarning}>
-                    Shipping address is missing on this order. Ask the customer to update it before marking this as shipped.
+                    Delivery address is missing on this order. Ask the customer to update it before marking this handoff as started.
                   </Text>
                 ) : null}
               </View>
@@ -2013,7 +2837,20 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
               label="Confirm update"
               onPress={update}
               loading={updating}
-              disabled={updating || note.trim().length < 10 || !!noteError || !photoUri || (nextStage === 'SHIPPED' && (!trackingNumber.trim() || !carrier.trim()))}
+              disabled={
+                updating ||
+                note.trim().length < 10 ||
+                !!noteError ||
+                !photoUri ||
+                (
+                  nextStage === 'SHIPPED' &&
+                  (!provider.trim() || (!trackingNumber.trim() && !reference.trim()) || !deliveryContactName.trim() || !deliveryContactPhone.trim())
+                ) ||
+                (
+                  nextStage === 'OUT_FOR_DELIVERY' &&
+                  (!provider.trim() || !deliveryContactName.trim() || !deliveryContactPhone.trim())
+                )
+              }
             />
           </ScrollView>
         </SafeAreaView>
@@ -2400,6 +3237,40 @@ const styles = StyleSheet.create({
   supportBadgeTextSuccess: { color: Colors.needleGreen },
   supportBodyText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 21 },
   supportHint: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20 },
+  handoffIssueCard: {
+    gap: Spacing.sm,
+    padding: Spacing.md,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.bone,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  handoffIssueHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  handoffIssueTitle: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  handoffStatusPill: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  handoffStatusPillEscalated: {
+    backgroundColor: '#FFF2DC',
+  },
+  handoffStatusText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+  },
   supportWarningCard: {
     backgroundColor: Colors.kanteRustLight,
     borderRadius: Radius.lg,

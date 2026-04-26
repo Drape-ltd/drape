@@ -10,6 +10,7 @@ import { composeStructuredAddress, parseNominatimSuggestion } from '@/lib/addres
 import { invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { Button } from '@/components/ui'
+import { goBackOrReturnToIfNeeded } from '@/lib/navigation'
 import { normalizePhoneForStorage, validatePhoneForProfile } from '@drape/shared/phone'
 import { phoneHintForContext } from '@/lib/phone-context'
 import { resolveDrapeManagedFulfillmentFee } from '@drape/shared'
@@ -93,10 +94,7 @@ export default function ReadyMadeCheckoutScreen() {
   useRefreshOnFocus(() => { void refetch() }, 0)
 
   function goBack() {
-    if (returnTo) {
-      router.replace(returnTo as any)
-    } else if (navigation.canGoBack()) router.back()
-    else router.replace(`/(customer)/tailor/item/${itemId}`)
+    goBackOrReturnToIfNeeded(router, navigation, returnTo, `/(customer)/tailor/item/${itemId}`)
   }
 
   useEffect(() => {

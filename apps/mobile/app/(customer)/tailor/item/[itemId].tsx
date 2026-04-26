@@ -8,6 +8,7 @@ import { quantityForSize } from '@/lib/ready-made-stock'
 import { invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { READY_MADE_POLICY_ROWS } from '@/lib/ready-made-policy'
+import { goBackOrReturnToIfNeeded } from '@/lib/navigation'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import {
   formatFitRange,
@@ -56,11 +57,12 @@ export default function SellerItemDetailScreen() {
   )
 
   function goBack() {
-    if (returnTo) {
-      router.replace(returnTo as any)
-    } else if (navigation.canGoBack()) router.back()
-    else if (item?.tailorProfileId) router.replace(`/(customer)/tailor/${item.tailorProfileId}`)
-    else router.replace('/(customer)')
+    goBackOrReturnToIfNeeded(
+      router,
+      navigation,
+      returnTo,
+      item?.tailorProfileId ? `/(customer)/tailor/${item.tailorProfileId}` : '/(customer)',
+    )
   }
 
   async function startSellerInquiry() {

@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { capture } from '@/lib/analytics'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
+import { goBackOrReturnTo } from '@/lib/navigation'
 import {
   BODY_PROFILE_FLAG_LABELS,
   buildMeasurementConfidenceByField,
@@ -202,12 +203,7 @@ export default function GuidedFitScreen() {
   }, [user?.id])
 
   function goBack() {
-    if (safeReturnTo) {
-      router.replace(safeReturnTo as any)
-      return
-    }
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(customer)/profile')
+    goBackOrReturnTo(router, navigation, safeReturnTo, '/(customer)/profile')
   }
 
   function finishAfterSave() {

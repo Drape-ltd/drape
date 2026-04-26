@@ -6,6 +6,7 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { serializeOrderSupportMeta } from '../_shared/order-support.ts'
+import { normalizeStoredPhone, validateRecipientPhone } from '../_shared/phone.ts'
 import { parseBody, z } from '../_shared/validate.ts'
 
 const FN = 'custom-order-action'
@@ -22,8 +23,10 @@ const BodySchema = z.object({
   fitNote: z.string().trim().max(2000).optional().nullable(),
   fabricSource: z.enum(['CUSTOMER_SUPPLIES', 'TAILOR_SOURCES']),
   supportMeta: z.unknown().optional().nullable(),
-  deliveryMethod: z.enum(['SHIPPING', 'LOCAL_COLLECTION']),
+  deliveryMethod: z.enum(['SHIPPING', 'LOCAL_DELIVERY', 'LOCAL_COLLECTION']),
   deliveryAddress: z.string().trim().max(500).optional().nullable(),
+  recipientName: z.string().trim().max(120).optional().nullable(),
+  recipientPhone: z.string().trim().max(40).optional().nullable(),
 })
 
 function buildReference() {
@@ -64,8 +67,28 @@ Deno.serve(async (req) => {
     }
 
     const body = parsed.data
-    if (body.deliveryMethod === 'SHIPPING' && !body.deliveryAddress?.trim()) {
-      return jsonError(cors, 400, 'DELIVERY_ADDRESS_REQUIRED', 'Delivery address is required for shipping orders.')
+    const needsRecipientDeliveryDetails = body.deliveryMethod !== 'LOCAL_COLLECTION'
+    const normalizedDeliveryAddress = needsRecipientDeliveryDetails ? body.deliveryAddress?.trim() ?? '' : ''
+    const normalizedRecipientName = needsRecipientDeliveryDetails ? body.recipientName?.trim() ?? '' : ''
+    const normalizedRecipientPhone = needsRecipientDeliveryDetails ? normalizeStoredPhone(body.recipientPhone) : ''
+
+    if (needsRecipientDeliveryDetails && !normalizedDeliveryAddress) {
+      return jsonError(cors, 400, 'DELIVERY_ADDRESS_REQUIRED', 'Delivery address is required for this fulfillment option.')
+    }
+
+    if (needsRecipientDeliveryDetails && !normalizedRecipientName) {
+      return jsonError(cors, 400, 'RECIPIENT_NAME_REQUIRED', 'Recipient name is required for this fulfillment option.')
+    }
+
+    if (needsRecipientDeliveryDetails && !normalizedRecipientPhone) {
+      return jsonError(cors, 400, 'RECIPIENT_PHONE_REQUIRED', 'Recipient phone is required for this fulfillment option.')
+    }
+
+    if (needsRecipientDeliveryDetails) {
+      const recipientPhoneError = validateRecipientPhone(normalizedRecipientPhone)
+      if (recipientPhoneError) {
+        return jsonError(cors, 400, 'RECIPIENT_PHONE_INVALID', recipientPhoneError)
+      }
     }
 
     const supportMeta = body.supportMeta && typeof body.supportMeta === 'object' && !Array.isArray(body.supportMeta)
@@ -131,7 +154,7 @@ Deno.serve(async (req) => {
 
     const { data: tailorProfile, error: tailorError } = await supabase
       .from('tailor_profiles')
-      .select('id, user_id, is_live, supports_custom_orders, shipping_fee')
+      .select('id, user_id, is_live, supports_custom_orders, location')
       .eq('id', body.tailorProfileId)
       .maybeSingle()
 
@@ -146,6 +169,28 @@ Deno.serve(async (req) => {
 
     if (!tailorProfile.is_live || !tailorProfile.supports_custom_orders) {
       return jsonError(cors, 409, 'SELLER_UNAVAILABLE', 'This seller is not accepting custom orders right now.')
+    }
+
+    if (body.deliveryMethod === 'LOCAL_COLLECTION') {
+      const { data: pickupDetails, error: pickupDetailsError } = await supabase
+        .from('tailor_pickup_details')
+        .select('pickup_address')
+        .eq('user_id', tailorProfile.user_id)
+        .maybeSingle()
+
+      if (pickupDetailsError) {
+        log('error', FN, 'db.error', { actor_id: caller.id, error: pickupDetailsError.message })
+        return jsonError(cors, 500, 'DATABASE_ERROR', 'Could not check pickup details for this seller right now.')
+      }
+
+      if (!pickupDetails?.pickup_address?.trim()) {
+        return jsonError(
+          cors,
+          409,
+          'PICKUP_NOT_READY',
+          'This seller has not finished pickup details yet. Please choose shipping or try local collection later.',
+        )
+      }
     }
 
     const { data: created, error: createError } = await supabase
@@ -166,8 +211,10 @@ Deno.serve(async (req) => {
         fabric_source: body.fabricSource,
         special_note: serializeOrderSupportMeta(supportMeta),
         delivery_method: body.deliveryMethod,
-        delivery_address: body.deliveryMethod === 'SHIPPING' ? body.deliveryAddress?.trim() || null : null,
-        fulfillment_fee: body.deliveryMethod === 'SHIPPING' ? (tailorProfile.shipping_fee ?? 0) : 0,
+        delivery_address: needsRecipientDeliveryDetails ? normalizedDeliveryAddress || null : null,
+        recipient_name: needsRecipientDeliveryDetails ? normalizedRecipientName || null : null,
+        recipient_phone: needsRecipientDeliveryDetails ? normalizedRecipientPhone || null : null,
+        fulfillment_fee: 0,
         stage: 'PENDING_QUOTE',
         stage_updated_at: new Date().toISOString(),
       })

@@ -13,6 +13,7 @@ import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { goBackOrFallback } from '@/lib/navigation'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
 import { stageColor } from '@/lib/stageColors'
@@ -42,6 +43,8 @@ type OrderHistoryRow = {
   id: string
   reference: string
   garmentType: string
+  orderKind: 'CUSTOM' | 'READY_MADE'
+  sellerItemId: string | null
   stage: OrderStage
   createdAt: string
   quotedAmount: number | null
@@ -61,6 +64,30 @@ function asStringList(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
   if (typeof value === 'string' && value.length > 0) return [value]
   return []
+}
+
+function generateUuid() {
+  const cryptoApi = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto
+  if (typeof cryptoApi?.randomUUID === 'function') {
+    return cryptoApi.randomUUID()
+  }
+
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
+    const random = Math.floor(Math.random() * 16)
+    const value = char === 'x' ? random : (random & 0x3) | 0x8
+    return value.toString(16)
+  })
+}
+
+function normalizeReadyMadeGarmentType(value: string | null | undefined) {
+  return value?.trim().toLowerCase() ?? ''
+}
+
+function clientStageLabel(order: Pick<OrderHistoryRow, 'orderKind' | 'stage'>) {
+  if (order.orderKind === 'READY_MADE' && order.stage === 'PENDING_QUOTE') {
+    return 'Inquiry open'
+  }
+  return STAGE_LABELS[order.stage]
 }
 
 
@@ -85,6 +112,7 @@ export default function ClientDetailScreen() {
 
   const [profile, setProfile] = useState<ClientProfile | null>(null)
   const [orders, setOrders] = useState<OrderHistoryRow[]>([])
+  const [notesRowId, setNotesRowId] = useState<string | null>(null)
   const [notes, setNotes] = useState('')
   const [notesInput, setNotesInput] = useState('')
   const [notesDirty, setNotesDirty] = useState(false)
@@ -101,6 +129,7 @@ export default function ClientDetailScreen() {
     setFetchError(false)
     setProfile(null)
     setOrders([])
+    setNotesRowId(null)
     setNotes('')
     setNotesInput('')
     setNotesDirty(false)
@@ -115,19 +144,21 @@ export default function ClientDetailScreen() {
           .maybeSingle(),
         supabase
           .from('orders')
-          .select('id, reference, garment_type, stage, created_at, quoted_amount, quoted_currency')
+          .select('id, reference, garment_type, order_kind, seller_item_id, stage, created_at, quoted_amount, quoted_currency')
           .eq('tailor_id', user?.id)
           .eq('customer_id', clientId)
           .order('created_at', { ascending: false }),
         supabase
           .from('tailor_client_notes')
-          .select('notes')
+          .select('id, notes')
           .eq('tailor_id', user?.id)
           .eq('customer_id', clientId)
+          .order('updated_at', { ascending: false })
+          .limit(1)
           .maybeSingle(),
         supabase
           .from('customer_reviews')
-          .select('id, rating, tags, body, reviewer_name, created_at')
+          .select('id, rating, tags, body, reviewer_name, created_at, orders!order_id(customer_profiles!customer_id(display_name))')
           .eq('customer_id', clientId)
           .order('created_at', { ascending: false }),
       ])
@@ -163,28 +194,59 @@ export default function ClientDetailScreen() {
         measurements: profileData?.measurements ?? null,
       })
 
+      const purchasedReadyMadeItemIds = new Set(
+        orderRows
+          .filter((row) => row.order_kind === 'READY_MADE' && row.stage !== 'PENDING_QUOTE' && typeof row.seller_item_id === 'string')
+          .map((row) => row.seller_item_id as string),
+      )
+      const purchasedReadyMadeGarmentTypes = new Set(
+        orderRows
+          .filter((row) => row.order_kind === 'READY_MADE' && row.stage !== 'PENDING_QUOTE')
+          .map((row) => normalizeReadyMadeGarmentType(row.garment_type))
+          .filter((value) => value.length > 0),
+      )
+
       setOrders(
-        orderRows.map((o) => ({
-          id: o.id,
-          reference: o.reference,
-          garmentType: o.garment_type,
-          stage: o.stage,
-          createdAt: o.created_at,
-          quotedAmount: o.quoted_amount,
-          quotedCurrency: (o.quoted_currency ?? 'USD') as CurrencyCode,
-        }))
+        orderRows
+          .filter((row) => {
+            if (row.stage !== 'PENDING_QUOTE') return true
+            const sellerItemMatch =
+              typeof row.seller_item_id === 'string' && purchasedReadyMadeItemIds.has(row.seller_item_id)
+            const garmentTypeKey = normalizeReadyMadeGarmentType(row.garment_type)
+            const garmentTypeMatch = garmentTypeKey.length > 0 && purchasedReadyMadeGarmentTypes.has(garmentTypeKey)
+            const looksLikeReadyMadeInquiry =
+              row.order_kind === 'READY_MADE' ||
+              typeof row.seller_item_id === 'string' ||
+              garmentTypeMatch
+            if (!looksLikeReadyMadeInquiry) return true
+            if (sellerItemMatch || garmentTypeMatch) return false
+            return true
+          })
+          .map((o) => ({
+            id: o.id,
+            reference: o.reference,
+            garmentType: o.garment_type,
+            orderKind: o.order_kind ?? 'CUSTOM',
+            sellerItemId: o.seller_item_id ?? null,
+            stage: o.stage,
+            createdAt: o.created_at,
+            quotedAmount: o.quoted_amount,
+            quotedCurrency: (o.quoted_currency ?? 'USD') as CurrencyCode,
+          })),
       )
 
       const savedNotes = notesData?.notes ?? ''
+      setNotesRowId(notesData?.id ?? null)
       setNotes(savedNotes)
       setNotesInput(savedNotes)
+      const clientDisplayName = profileData?.display_name ?? 'Customer'
       setReviews(
         customerReviews.map((review) => ({
           id: review.id,
           rating: review.rating,
           tags: asStringList(review.tags),
           body: review.body ?? null,
-          reviewerName: review.reviewer_name ?? 'Tailor',
+          reviewerName: clientDisplayName,
           createdAt: review.created_at,
         }))
       )
@@ -192,6 +254,7 @@ export default function ClientDetailScreen() {
       setFetchError(true)
       setProfile(null)
       setOrders([])
+      setNotesRowId(null)
       setNotes('')
       setNotesInput('')
     }
@@ -217,23 +280,80 @@ export default function ClientDetailScreen() {
 
   async function saveNotes() {
     if (!notesDirty) return
+    if (!user?.id || !clientId) {
+      Alert.alert('Error', 'We could not identify this client note right now. Please try again.')
+      return
+    }
     setSaving(true)
-    const { error } = await supabase
-      .from('tailor_client_notes')
-      .upsert(
-        {
-          tailor_id: user?.id,
+    const normalizedNotes = notesInput.trim()
+    let nextRowId = notesRowId
+    let error: { message?: string } | null = null
+    const now = new Date().toISOString()
+
+    if (notesRowId) {
+      const updateResult = await supabase
+        .from('tailor_client_notes')
+        .update({
+          notes: normalizedNotes,
+          updated_at: now,
+        })
+        .eq('id', notesRowId)
+        .select('id')
+        .single()
+
+      error = updateResult.error
+      nextRowId = updateResult.data?.id ?? notesRowId
+    } else {
+      const insertResult = await supabase
+        .from('tailor_client_notes')
+        .insert({
+          id: generateUuid(),
+          tailor_id: user.id,
           customer_id: clientId,
-          notes: notesInput,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'tailor_id,customer_id' }
-      )
+          notes: normalizedNotes,
+          created_at: now,
+          updated_at: now,
+        })
+        .select('id')
+        .single()
+
+      error = insertResult.error
+      nextRowId = insertResult.data?.id ?? null
+
+      if (error) {
+        const existingResult = await supabase
+          .from('tailor_client_notes')
+          .select('id')
+          .eq('tailor_id', user?.id)
+          .eq('customer_id', clientId)
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        if (!existingResult.error && existingResult.data?.id) {
+          const updateResult = await supabase
+            .from('tailor_client_notes')
+            .update({
+              notes: normalizedNotes,
+              updated_at: now,
+            })
+            .eq('id', existingResult.data.id)
+            .select('id')
+            .single()
+
+          error = updateResult.error
+          nextRowId = updateResult.data?.id ?? existingResult.data.id
+        }
+      }
+    }
+
     setSaving(false)
     if (error) {
-      Alert.alert('Error', 'Could not save notes. Please try again.')
+      Alert.alert('Error', error.message ? `Could not save notes. ${error.message}` : 'Could not save notes. Please try again.')
     } else {
-      setNotes(notesInput)
+      setNotesRowId(nextRowId)
+      setNotes(normalizedNotes)
+      setNotesInput(normalizedNotes)
       setNotesDirty(false)
     }
   }
@@ -300,8 +420,7 @@ export default function ClientDetailScreen() {
   const latestReviewableOrder = orders.find((row) => ['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(row.stage))
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(tailor)/clients')
+    goBackOrFallback(router, navigation, '/(tailor)/clients')
   }
 
   return (
@@ -464,7 +583,7 @@ export default function ClientDetailScreen() {
                     const val = m[key] as number | undefined
                     return (
                       <View key={key} style={styles.measItem}>
-                        <Text style={styles.measValue}>{val ? `${val}${unit}` : '—'}</Text>
+                        <Text style={styles.measValue}>{val ? `${val}${unit}` : 'Not added'}</Text>
                         <Text style={styles.measLabel}>{label}</Text>
                       </View>
                     )
@@ -506,7 +625,7 @@ export default function ClientDetailScreen() {
             {contactWarning && (
               <View style={styles.contactWarning}>
                 <Text style={styles.contactWarningText}>
-                  Contact details removed — keep notes within the platform.
+                  Contact details removed. Keep notes within the platform.
                 </Text>
               </View>
             )}
@@ -558,7 +677,10 @@ export default function ClientDetailScreen() {
                   <TouchableOpacity
                     key={order.id}
                     style={styles.orderRow}
-                    onPress={() => router.navigate(`/(tailor)/orders/${order.id}`)}
+                    onPress={() => router.push({
+                      pathname: '/(tailor)/orders/[id]',
+                      params: { id: order.id, returnTo: `/(tailor)/clients/${clientId}` },
+                    })}
                   >
                     <View style={{ flex: 1 }}>
                       <Text style={styles.orderGarment}>{order.garmentType}</Text>
@@ -579,7 +701,7 @@ export default function ClientDetailScreen() {
                         <Text
                           style={[styles.stageText, { color: stageColor(order.stage).text }]}
                         >
-                          {STAGE_LABELS[order.stage]}
+                          {clientStageLabel(order)}
                         </Text>
                       </View>
                       {order.quotedAmount ? (
@@ -604,20 +726,20 @@ export default function ClientDetailScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   scroll: { flex: 1 },
-  content: { paddingBottom: Spacing.xxxl },
+  content: { paddingBottom: Spacing.xxl },
   heroCard: {
-    marginHorizontal: Spacing.xl,
-    marginBottom: Spacing.lg,
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
+    borderRadius: Radius.md,
+    padding: 14,
+    gap: Spacing.sm,
     ...Shadow.sm,
   },
   heroBadge: {
     alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     borderRadius: Radius.full,
     backgroundColor: Colors.needleGreenLight,
   },
@@ -629,31 +751,31 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   heroTitle: {
-    fontSize: FontSize.xxl,
+    fontSize: FontSize.xl,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
-    lineHeight: 38,
+    lineHeight: 30,
   },
   heroSub: {
-    fontSize: FontSize.md,
+    fontSize: FontSize.sm,
     color: Colors.inkLight,
-    lineHeight: 24,
+    lineHeight: 19,
   },
   guideCard: {
-    marginHorizontal: Spacing.xl,
-    marginBottom: Spacing.lg,
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
   guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  guideText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
 
-  header: { paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md },
+  header: { paddingHorizontal: Spacing.lg, paddingVertical: 8 },
   back: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
   stateCard: {
@@ -678,41 +800,43 @@ const styles = StyleSheet.create({
 
   identityCard: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    marginHorizontal: Spacing.xl, marginBottom: Spacing.xl,
-    backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.lg, ...Shadow.sm,
+    marginHorizontal: Spacing.lg, marginBottom: Spacing.lg,
+    backgroundColor: Colors.white, borderRadius: Radius.md,
+    padding: 14, ...Shadow.sm,
   },
   avatarLg: {
-    width: 52, height: 52, borderRadius: 26,
+    width: 46, height: 46, borderRadius: 23,
     backgroundColor: Colors.needleGreenLight,
     justifyContent: 'center', alignItems: 'center',
   },
-  avatarLgText: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.needleGreen },
-  clientName: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
+  avatarLgText: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.needleGreen },
+  clientName: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink },
   clientSub: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
-  identityActions: { gap: Spacing.sm },
+  identityActions: { gap: 8 },
   messageBtn: {
-    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
-    borderRadius: Radius.md, borderWidth: 1.5, borderColor: Colors.needleGreen,
+    paddingHorizontal: 14, paddingVertical: 10,
+    borderRadius: Radius.md, borderWidth: 1.5, borderColor: Colors.needleGreen, minHeight: 44, justifyContent: 'center',
   },
   messageBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
   secondaryActionBtn: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     borderRadius: Radius.md,
     backgroundColor: Colors.needleGreen,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   secondaryActionText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
 
-  section: { paddingHorizontal: Spacing.xl, gap: Spacing.md, marginBottom: Spacing.xl },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
-  sectionHint: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20, marginTop: -Spacing.xs },
+  section: { paddingHorizontal: Spacing.lg, gap: Spacing.sm, marginBottom: Spacing.lg },
+  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  sectionHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18, marginTop: -2 },
   reviewList: { gap: Spacing.sm },
   reviewCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: Spacing.sm,
+    borderRadius: Radius.md,
+    padding: 14,
+    gap: 8,
     ...Shadow.sm,
   },
   reviewHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
@@ -730,8 +854,8 @@ const styles = StyleSheet.create({
   reviewBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   emptyInfoCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: 4,
     ...Shadow.sm,
   },
@@ -740,7 +864,7 @@ const styles = StyleSheet.create({
 
   emptyCard: {
     backgroundColor: Colors.white, borderRadius: Radius.md,
-    padding: Spacing.xl, alignItems: 'center', gap: Spacing.xs, ...Shadow.sm,
+    padding: 16, alignItems: 'center', gap: Spacing.xs, ...Shadow.sm,
   },
   emptyCardEyebrow: {
     fontSize: FontSize.xs,
@@ -754,8 +878,8 @@ const styles = StyleSheet.create({
 
   // Measurements
   measCard: {
-    backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.lg, gap: Spacing.lg, ...Shadow.sm,
+    backgroundColor: Colors.white, borderRadius: Radius.md,
+    padding: 14, gap: 14, ...Shadow.sm,
   },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   chip: {
@@ -784,7 +908,7 @@ const styles = StyleSheet.create({
   fitFlagText: { fontSize: FontSize.xs, fontWeight: FontWeight.medium, color: Colors.kanteRust },
   bodyNoteWrap: {
     backgroundColor: Colors.bone, borderRadius: Radius.md,
-    padding: Spacing.md, gap: 4,
+    padding: 12, gap: 4,
     borderLeftWidth: 3, borderLeftColor: Colors.kanteRust,
   },
   bodyNoteLabel: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.kanteRust },
@@ -793,32 +917,32 @@ const styles = StyleSheet.create({
   // Notes
   contactWarning: {
     backgroundColor: Colors.kanteRust + '15', borderRadius: Radius.md,
-    padding: Spacing.md, borderWidth: 1, borderColor: Colors.kanteRust + '40',
+    padding: 12, borderWidth: 1, borderColor: Colors.kanteRust + '40',
   },
   contactWarningText: { fontSize: FontSize.sm, color: Colors.kanteRust },
   notesCard: {
-    backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.lg, ...Shadow.sm, gap: Spacing.sm,
+    backgroundColor: Colors.white, borderRadius: Radius.md,
+    padding: 14, ...Shadow.sm, gap: 8,
   },
   notesInput: {
     fontSize: FontSize.sm, color: Colors.ink, lineHeight: 22,
-    minHeight: 120,
+    minHeight: 96,
   },
   notesFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   notesCount: { fontSize: FontSize.xs, color: Colors.midGrey },
   saveBtn: {
     backgroundColor: Colors.needleGreen, borderRadius: Radius.md,
-    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.lg, paddingVertical: 10, minHeight: 44, justifyContent: 'center',
   },
   saveBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
 
   // Order history
   orderList: {
-    backgroundColor: Colors.white, borderRadius: Radius.lg,
+    backgroundColor: Colors.white, borderRadius: Radius.md,
     overflow: 'hidden', ...Shadow.sm,
   },
   orderRow: {
-    flexDirection: 'row', alignItems: 'center', padding: Spacing.lg,
+    flexDirection: 'row', alignItems: 'center', padding: 14,
     borderBottomWidth: 1, borderBottomColor: Colors.lightGrey, gap: Spacing.md,
   },
   orderGarment: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },

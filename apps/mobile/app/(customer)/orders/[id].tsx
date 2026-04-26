@@ -8,11 +8,14 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { openConsultationCallUrl } from '@/lib/consultation'
+import { createOrderCallRoom, openDrapeCallUrl } from '@/lib/order-call'
 import { Sentry } from '@/lib/sentry'
 import { openTrackingPage } from '@/lib/shipping'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import {
+  CANCELLATION_REVIEW_REASON_LABELS,
   COVERAGE_PREFERENCE_LABELS,
+  DELIVERY_REVIEW_REASON_LABELS,
   enrichMeasurementSnapshot,
   FABRIC_HANDOFF_LABELS,
   FABRIC_STRETCH_LABELS,
@@ -23,16 +26,34 @@ import {
   MEASUREMENT_SOURCE_LABELS,
   MEASUREMENT_SCAN_STATUS_LABELS,
   WEAR_DAY_SUPPORT_LABELS,
+  hasOpenCancellationReview,
+  hasOpenDeliveryReview,
   hasOpenMaterialIssue,
   isShippingFabricHandoff,
   parseOrderSupportMeta,
+  type CancellationReviewReason,
+  type DeliveryReviewReason,
   type MaterialIssueResponse,
   type MeasurementSnapshotMeta,
   type OrderSupportMeta,
 } from '@/lib/order-support'
-import { Button, Input } from '@/components/ui'
+import {
+  CUSTOMER_COMPLETED_ORDER_STAGES,
+  customerOrderStageLabel,
+  isReadyMadePreparationStage,
+} from '@/lib/order-flow'
+import {
+  fetchOpenHandoffIssue,
+  handoffHelpCardBody,
+  handoffHelpCardTitle,
+  handoffIssueLabel,
+  handoffIssueStatusLabel,
+  resolveHandoffIssue,
+  type HandoffIssue,
+} from '@/lib/handoff-support'
+import { Button, HandoffSupportModal, Input } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { STAGE_LABELS, PRODUCTION_STAGES, type OrderStage } from '@drape/shared/order-machine'
+import { type OrderStage } from '@drape/shared/order-machine'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { useCurrency, formatAmount, STATIC_FALLBACK_RATES, SUPPORTED_CURRENCIES, type CurrencyCode } from '@/lib/currency'
 import { useOrderPaymentFlow } from '@/lib/payments'
@@ -63,15 +84,30 @@ type OrderDetail = {
   stage: OrderStage
   tailorId: string
   tailorName: string
+  tailorLocation: string | null
+  pickupAddress: string | null
+  pickupInstructions: string | null
   quotedAmount: number | null
   quotedCurrency: CurrencyCode
   consultationFee: number | null
   quotedCompletionDate: string | null
+  fulfillmentPaymentRequestedAt: string | null
+  fulfillmentPaymentPaidAt: string | null
+  fulfillmentPaymentProvider: string | null
+  fulfillmentPaymentIntentId: string | null
+  fulfillmentPaymentCheckoutUrl: string | null
   fabricSource: string
   deliveryMethod: string
+  deliveryAddress: string | null
+  recipientName: string | null
+  recipientPhone: string | null
   fabricTracking: string | null
   trackingNumber: string | null
   carrier: string | null
+  fulfillmentProvider: string | null
+  fulfillmentReference: string | null
+  fulfillmentContactName: string | null
+  fulfillmentContactPhone: string | null
   collectionCode: string | null
   videoCallUrl: string | null
   measurementSnapshot: MeasurementSnapshot | null
@@ -83,14 +119,14 @@ type OrderDetail = {
 const SUPPORT_EMAIL = 'support@drapeon.co'
 
 // The 5 production stages shown in the progress bar
-const CUSTOM_PROGRESS_STAGES: OrderStage[] = ['CONFIRMED', 'CUTTING', 'SEWING', 'FINISHING', 'SHIPPED']
-const READY_MADE_PROGRESS_STAGES: OrderStage[] = ['CONFIRMED', 'FINISHING', 'SHIPPED']
+const CUSTOM_PROGRESS_STAGES: OrderStage[] = ['CONFIRMED', 'CUTTING', 'SEWING', 'READY_FOR_DRAPE_DISPATCH', 'SHIPPED']
+const READY_MADE_PROGRESS_STAGES: OrderStage[] = ['CONFIRMED', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH', 'SHIPPED']
 
 // Stages that are before production starts — show a "Waiting" pre-step
 const PRE_PRODUCTION_STAGES: OrderStage[] = ['CONSULTATION', 'PAYMENT_PENDING']
 const CUSTOM_PROGRESS_LABELS: Record<string, string> = {
   CONFIRMED: 'Confirmed', CUTTING: 'Cutting', SEWING: 'Sewing',
-  FINISHING: 'Finishing', SHIPPED: 'Shipped',
+  FINISHING: 'Finishing', READY_FOR_DRAPE_DISPATCH: 'Dispatch', SHIPPED: 'Shipped',
 }
 
 function progressStagesForOrder(orderKind: 'CUSTOM' | 'READY_MADE') {
@@ -101,8 +137,12 @@ function progressLabel(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE', is
   if (orderKind === 'READY_MADE') {
     if (stage === 'CONFIRMED') return 'Placed'
     if (stage === 'FINISHING') return 'Preparing'
+    if (stage === 'READY_FOR_DRAPE_DISPATCH') return 'Dispatch'
+    if (stage === 'OUT_FOR_DELIVERY') return 'On the way'
     if (stage === 'SHIPPED') return isCollection ? 'Ready' : 'Shipped'
   }
+  if (stage === 'READY_FOR_DRAPE_DISPATCH') return 'Dispatch'
+  if (stage === 'OUT_FOR_DELIVERY') return 'On the way'
   return isCollection && stage === 'SHIPPED' ? 'Ready' : CUSTOM_PROGRESS_LABELS[stage]
 }
 
@@ -112,7 +152,10 @@ function stageIndex(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): numb
   // Map delivered / collected / complete -> final shipped-ready milestone in the progress bar.
   const normalised =
     stage === 'READY_FOR_COLLECTION' ? 'SHIPPED'
-    : (orderKind === 'READY_MADE' && ['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'].includes(stage)) ? 'FINISHING'
+    : stage === 'OUT_FOR_DELIVERY' ? 'SHIPPED'
+    : stage === 'READY_FOR_DRAPE_DISPATCH'
+      ? 'READY_FOR_DRAPE_DISPATCH'
+    : (orderKind === 'READY_MADE' && isReadyMadePreparationStage(stage)) ? 'FINISHING'
     : (stage === 'DESIGNING' || stage === 'SOURCING') ? 'CONFIRMED'
     : (stage === 'DELIVERED' || stage === 'COLLECTED' || stage === 'COMPLETE') ? 'SHIPPED'
     : stage
@@ -121,44 +164,56 @@ function stageIndex(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): numb
 
 function stageGuidance(stage: OrderStage, deliveryMethod: string, orderKind: 'CUSTOM' | 'READY_MADE'): string | null {
   if (stage === 'CONSULTATION') {
-    return 'Consultation comes before the quote.'
+    return 'Consultation comes before the quote. You and the tailor are next to clarify the work before pricing is final.'
   }
   if (stage === 'PAYMENT_PENDING') {
     return orderKind === 'READY_MADE'
-      ? 'Finish checkout to place this order.'
-      : 'Your quote is accepted, but production cannot start until payment is completed.'
+      ? 'You are next. Finish checkout to place this order.'
+      : 'You are next. Your quote is accepted, but production cannot start until payment is completed.'
   }
   if (stage === 'CONFIRMED') {
     return orderKind === 'READY_MADE'
-      ? 'Your order has been placed and the seller can now prepare it.'
-      : 'Your order is confirmed.'
+      ? deliveryMethod === 'LOCAL_COLLECTION'
+        ? 'Your order has been placed. The seller is next to prepare it for pickup.'
+        : 'Your payment is confirmed. The seller is next to prepare the order, then Drape will take over dispatch.'
+      : 'Your order is confirmed. The tailor is next to begin the first real work stage.'
   }
-  if (orderKind === 'READY_MADE' && ['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'].includes(stage)) {
-    return 'Your seller is preparing this order for dispatch or pickup.'
+  if (orderKind === 'READY_MADE' && isReadyMadePreparationStage(stage)) {
+    return deliveryMethod === 'LOCAL_COLLECTION'
+      ? 'Your seller is packing and checking this order. Once it is truly ready, they will mark it ready for collection.'
+      : 'Your seller is packing and checking this order. Once it is truly ready, Drape becomes the next owner of the dispatch leg.'
+  }
+  if (stage === 'READY_FOR_DRAPE_DISPATCH') {
+    return deliveryMethod === 'LOCAL_DELIVERY'
+      ? 'Your seller has packed the order. Drape is next to arrange local delivery now.'
+      : 'Your seller has packed the order. Drape is next to arrange shipment now.'
   }
   if (stage === 'DESIGNING') {
-    return 'Design details are being worked through.'
+    return 'The tailor is working through design details and pattern decisions.'
   }
   if (stage === 'SOURCING') {
-    return 'Fabric or materials are being sourced.'
+    return 'The tailor is sourcing the agreed fabric or materials.'
   }
   if (stage === 'CUTTING') {
-    return 'Fabric is being cut.'
+    return 'Fabric is being cut. This is the point where the garment starts becoming irreversible.'
   }
   if (stage === 'SEWING') {
     return 'Your garment is being sewn.'
   }
   if (stage === 'FINISHING') {
-    return 'Final checks and finishing are underway.'
+    return 'Final checks and finishing are underway before handoff.'
+  }
+  if (stage === 'OUT_FOR_DELIVERY') {
+    return 'A local delivery partner is bringing your order to you now. Be reachable on the phone tied to this order.'
   }
   if (stage === 'SHIPPED') {
-    return 'Track delivery, then confirm receipt once it arrives.'
+    return 'A courier has accepted the parcel. You are next once it arrives, either to confirm receipt or raise a concern.'
   }
   if (stage === 'DELIVERED') {
-    return 'Check everything, then finish the order. Review is optional.'
+    return 'Delivery is recorded. You are next to finish the order or report a problem before closing it out.'
   }
   if (stage === 'COLLECTED') {
-    return 'Collection is confirmed. Finish the order when you are happy. Review is optional.'
+    return 'Collection is confirmed. You are next to finish the order or report a problem before closing it out.'
   }
   if (stage === 'COMPLETE') {
     return 'This order is complete.'
@@ -167,19 +222,9 @@ function stageGuidance(stage: OrderStage, deliveryMethod: string, orderKind: 'CU
     return 'Your concern is under review.'
   }
   if (stage === 'READY_FOR_COLLECTION' && deliveryMethod === 'LOCAL_COLLECTION') {
-    return 'Bring your collection code to pickup.'
+    return 'Bring your collection code to pickup. Exact pickup details are shown below.'
   }
   return null
-}
-
-function customerStageLabel(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE') {
-  if (orderKind === 'READY_MADE') {
-    if (stage === 'PENDING_QUOTE') return 'Inquiry open'
-    if (stage === 'PAYMENT_PENDING') return 'Checkout open'
-    if (stage === 'CONFIRMED') return 'Order placed'
-    if (['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'].includes(stage)) return 'Preparing order'
-  }
-  return STAGE_LABELS[stage]
 }
 
 function preProductionLabel(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE') {
@@ -199,9 +244,23 @@ function baseAmount(order: Pick<OrderDetail, 'orderKind' | 'itemSubtotal' | 'quo
 }
 
 function fulfillmentFeeLabel(order: Pick<OrderDetail, 'orderKind' | 'deliveryMethod' | 'fulfillmentOption'>) {
-  if (order.orderKind === 'READY_MADE' && order.fulfillmentOption === 'DELIVERY') return 'Delivery fee'
+  if (order.deliveryMethod === 'LOCAL_DELIVERY' || (order.orderKind === 'READY_MADE' && order.fulfillmentOption === 'DELIVERY')) return 'Delivery fee'
   if (order.deliveryMethod === 'LOCAL_COLLECTION' || order.fulfillmentOption === 'PICKUP') return 'Fulfillment fee'
   return 'Shipping fee'
+}
+
+function pendingFulfillmentPaymentLabel(order: Pick<OrderDetail, 'deliveryMethod' | 'fulfillmentOption'>) {
+  if (order.deliveryMethod === 'LOCAL_DELIVERY' || order.fulfillmentOption === 'DELIVERY') return 'Extra delivery payment requested'
+  return 'Extra shipping payment requested'
+}
+
+function hasPendingFulfillmentPayment(
+  order: Pick<OrderDetail, 'deliveryMethod' | 'fulfillmentFee' | 'fulfillmentPaymentRequestedAt' | 'fulfillmentPaymentPaidAt'>,
+) {
+  return order.deliveryMethod !== 'LOCAL_COLLECTION'
+    && order.fulfillmentFee > 0
+    && !!order.fulfillmentPaymentRequestedAt
+    && !order.fulfillmentPaymentPaidAt
 }
 
 export default function OrderTrackingScreen() {
@@ -212,7 +271,7 @@ export default function OrderTrackingScreen() {
 
   function fallbackTab(stage?: OrderStage | null): 'active' | 'completed' {
     if (tab === 'active' || tab === 'completed') return tab
-    if (stage && ['COMPLETE', 'DECLINED', 'EXPIRED', 'REFUNDED', 'CANCELLED'].includes(stage)) {
+    if (stage && CUSTOMER_COMPLETED_ORDER_STAGES.includes(stage)) {
       return 'completed'
     }
     return 'active'
@@ -241,11 +300,17 @@ export default function OrderTrackingScreen() {
   const [confirming, setConfirming] = useState(false)
   const [paying, setPaying] = useState(false)
   const [showDispute, setShowDispute] = useState(false)
+  const [showCancellationReview, setShowCancellationReview] = useState(false)
+  const [showDeliveryReview, setShowDeliveryReview] = useState(false)
   const [showMaterialIssueResponse, setShowMaterialIssueResponse] = useState(false)
+  const [showHandoffSupport, setShowHandoffSupport] = useState(false)
   const [fabricTracking, setFabricTracking] = useState('')
   const [savingFabric, setSavingFabric] = useState(false)
   const [confirmingMeasurements, setConfirmingMeasurements] = useState(false)
   const [hasReview, setHasReview] = useState(false)
+  const [handoffIssue, setHandoffIssue] = useState<HandoffIssue | null>(null)
+  const [startingHandoffCall, setStartingHandoffCall] = useState<'audio' | 'video' | null>(null)
+  const [resolvingHandoffIssue, setResolvingHandoffIssue] = useState(false)
   const { startOrderPayment } = useOrderPaymentFlow()
 
   async function openCallUrl(url: string) {
@@ -280,9 +345,11 @@ export default function OrderTrackingScreen() {
           .select(`
             id, reference, order_kind, seller_item_id, fulfillment_option, garment_type, garment_description, item_title, item_size, item_quantity, item_subtotal, stage,
             tailor_id, tailor_profile_id, quoted_amount, quoted_currency, consultation_fee, fulfillment_fee, quoted_completion_date,
-            fabric_source, delivery_method, fabric_tracking, tracking_number, carrier,
+            fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_payment_provider, fulfillment_payment_intent_id, fulfillment_payment_checkout_url,
+            fabric_source, delivery_method, delivery_address, recipient_name, recipient_phone, fabric_tracking, tracking_number, carrier,
+            fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone,
             collection_code, video_call_url, special_note, customer_measurements_snapshot, created_at,
-            tailor_profiles!tailor_profile_id(display_name),
+            tailor_profiles!tailor_profile_id(display_name, location),
             order_stage_updates(id, stage, note, photo_url, created_at)
           `)
           .eq('id', id)
@@ -317,7 +384,23 @@ export default function OrderTrackingScreen() {
 
       if (data) {
         const d = data as any
+        const openHandoffIssue = await fetchOpenHandoffIssue(d.id)
+        let pickupAddress: string | null = null
+        let pickupInstructions: string | null = null
+
+        if (d.delivery_method === 'LOCAL_COLLECTION' && d.tailor_id) {
+          const { data: pickupData } = await supabase
+            .from('tailor_pickup_details')
+            .select('pickup_address, pickup_instructions')
+            .eq('user_id', d.tailor_id)
+            .maybeSingle()
+
+          pickupAddress = typeof pickupData?.pickup_address === 'string' ? pickupData.pickup_address : null
+          pickupInstructions = typeof pickupData?.pickup_instructions === 'string' ? pickupData.pickup_instructions : null
+        }
+
         setFabricTracking(d.fabric_tracking ?? '')
+        setHandoffIssue(openHandoffIssue)
         setOrder({
           id: d.id,
           reference: d.reference,
@@ -334,15 +417,30 @@ export default function OrderTrackingScreen() {
           stage: d.stage,
           tailorId: d.tailor_id,
           tailorName: d.tailor_profiles?.display_name ?? '',
+          tailorLocation: d.tailor_profiles?.location ?? null,
+          pickupAddress,
+          pickupInstructions,
           quotedAmount: d.quoted_amount,
           quotedCurrency: (d.quoted_currency ?? 'USD') as CurrencyCode,
           consultationFee: d.consultation_fee ?? null,
           quotedCompletionDate: d.quoted_completion_date,
+          fulfillmentPaymentRequestedAt: d.fulfillment_payment_requested_at ?? null,
+          fulfillmentPaymentPaidAt: d.fulfillment_payment_paid_at ?? null,
+          fulfillmentPaymentProvider: d.fulfillment_payment_provider ?? null,
+          fulfillmentPaymentIntentId: d.fulfillment_payment_intent_id ?? null,
+          fulfillmentPaymentCheckoutUrl: d.fulfillment_payment_checkout_url ?? null,
           fabricSource: d.fabric_source,
           deliveryMethod: d.delivery_method,
+          deliveryAddress: d.delivery_address ?? null,
+          recipientName: d.recipient_name ?? null,
+          recipientPhone: d.recipient_phone ?? null,
           fabricTracking: d.fabric_tracking,
           trackingNumber: d.tracking_number ?? null,
           carrier: d.carrier ?? null,
+          fulfillmentProvider: d.fulfillment_provider ?? null,
+          fulfillmentReference: d.fulfillment_reference ?? null,
+          fulfillmentContactName: d.fulfillment_contact_name ?? null,
+          fulfillmentContactPhone: d.fulfillment_contact_phone ?? null,
           collectionCode: d.collection_code,
           videoCallUrl: d.video_call_url ?? null,
           measurementSnapshot: enrichMeasurementSnapshot(d.customer_measurements_snapshot ?? null) as MeasurementSnapshot | null,
@@ -357,6 +455,7 @@ export default function OrderTrackingScreen() {
           createdAt: d.created_at,
         })
       } else {
+        setHandoffIssue(null)
         setOrder(null)
       }
       setLoading(false)
@@ -366,6 +465,7 @@ export default function OrderTrackingScreen() {
           ? 'Connection is weak. We could not load this order yet. Retry when the signal improves, or reopen it from Orders later.'
           : 'We could not load this order right now. Retry, or reopen it from your Orders list.'
       )
+      setHandoffIssue(null)
       setOrder(null)
       setLoading(false)
     }
@@ -384,6 +484,57 @@ export default function OrderTrackingScreen() {
       void fetchOrder()
     }, [fetchOrder])
   )
+
+  async function startHandoffCall(callType: 'audio' | 'video') {
+    if (!order || startingHandoffCall) return
+    setStartingHandoffCall(callType)
+    try {
+      const room = await createOrderCallRoom(order.id, callType)
+      if (!room?.url) return
+      await fetchOrder()
+      await openDrapeCallUrl(room.url)
+    } finally {
+      setStartingHandoffCall(null)
+    }
+  }
+
+  function openHandoffCallOptions() {
+    if (!order || startingHandoffCall) return
+    if (order.videoCallUrl) {
+      Alert.alert(
+        'Join Drape call',
+        `Open the current Drape call with ${order.tailorName}.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Video', onPress: () => { void openDrapeCallUrl(order.videoCallUrl!) } },
+          { text: 'Audio only', onPress: () => { void openDrapeCallUrl(order.videoCallUrl!) } },
+        ]
+      )
+      return
+    }
+
+    Alert.alert(
+      'Start Drape call',
+      `Start a Drape call with ${order.tailorName} without exposing personal phone numbers.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Video', onPress: () => { void startHandoffCall('video') } },
+        { text: 'Audio only', onPress: () => { void startHandoffCall('audio') } },
+      ]
+    )
+  }
+
+  async function markHandoffIssueResolved() {
+    if (!handoffIssue || resolvingHandoffIssue) return
+    setResolvingHandoffIssue(true)
+    const result = await resolveHandoffIssue(handoffIssue.id, 'Resolved from customer order screen.')
+    setResolvingHandoffIssue(false)
+    if (result.error) {
+      Alert.alert('Could not close help thread', result.error)
+      return
+    }
+    await fetchOrder()
+  }
 
   async function confirmReceipt() {
     if (confirming) return
@@ -444,6 +595,7 @@ export default function OrderTrackingScreen() {
 
   async function continuePayment() {
     if (!order || paying) return
+    const payingFulfillmentNow = hasPendingFulfillmentPayment(order)
 
     setPaying(true)
     const result = await startOrderPayment({
@@ -456,10 +608,16 @@ export default function OrderTrackingScreen() {
 
     if (result.ok) {
       Alert.alert(
-        order.orderKind === 'READY_MADE' ? 'Order placed' : 'Payment confirmed',
-        order.orderKind === 'READY_MADE'
-          ? 'Payment is confirmed and your seller can now prepare this order.'
-          : 'Payment is confirmed and your order is now ready for production.',
+        payingFulfillmentNow
+          ? 'Extra dispatch payment confirmed'
+          : order.orderKind === 'READY_MADE' ? 'Order placed' : 'Payment confirmed',
+        payingFulfillmentNow
+          ? order.deliveryMethod === 'LOCAL_DELIVERY'
+            ? 'The extra delivery payment is confirmed. Drape can now finish arranging this handoff.'
+            : 'The extra shipping payment is confirmed. Drape can now finish arranging this shipment.'
+          : order.orderKind === 'READY_MADE'
+            ? 'Payment is confirmed and your seller can now prepare this order.'
+            : 'Payment is confirmed and your order is now ready for production.',
       )
       return
     }
@@ -468,9 +626,11 @@ export default function OrderTrackingScreen() {
       if (result.reason === 'cancelled') {
         Alert.alert(
           'Payment not finished',
-          order.orderKind === 'READY_MADE'
-            ? 'Your checkout is still saved. You can finish payment from this order any time.'
-            : 'Your quote is still saved. You can finish payment from this order any time.',
+          payingFulfillmentNow
+            ? `Your extra ${order.deliveryMethod === 'LOCAL_DELIVERY' ? 'delivery' : 'shipping'} payment is still open. You can finish it from this order any time.`
+            : order.orderKind === 'READY_MADE'
+              ? 'Your checkout is still saved. You can finish payment from this order any time.'
+              : 'Your quote is still saved. You can finish payment from this order any time.',
         )
         return
       }
@@ -518,7 +678,7 @@ export default function OrderTrackingScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Order detail</Text>
             <ActivityIndicator color={Colors.needleGreen} size="large" />
-            <Text style={styles.stateTitle}>Loading your order…</Text>
+            <Text style={styles.stateTitle}>Loading your order...</Text>
             <Text style={styles.stateHint}>Pulling the latest order updates.</Text>
           </View>
         </View>
@@ -589,6 +749,9 @@ export default function OrderTrackingScreen() {
   const latestUpdate = [...order.stageUpdates].reverse()[0]
   const justPlacedReadyMade = placed === '1' && order.orderKind === 'READY_MADE'
   const isCollection = order.deliveryMethod === 'LOCAL_COLLECTION'
+  const pickupDetailsUnlocked =
+    isCollection && ['READY_FOR_COLLECTION', 'COLLECTED', 'COMPLETE', 'IN_DISPUTE'].includes(order.stage)
+  const handoffHelpAvailable = ['READY_FOR_COLLECTION', 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED', 'COLLECTED', 'IN_DISPUTE'].includes(order.stage)
   const stageHelp = stageGuidance(order.stage, order.deliveryMethod, order.orderKind)
   const measurementSource = order.measurementSnapshot?.measurementSource
   const fitConfidence = order.measurementSnapshot?.fitConfidence
@@ -611,6 +774,24 @@ export default function OrderTrackingScreen() {
   const materialIssueResponseLabel =
     materialIssue?.responseLabel ??
     (materialIssue?.response ? MATERIAL_ISSUE_RESPONSE_LABELS[materialIssue.response] : null)
+  const cancellationReview = order.supportMeta.cancellationReview ?? null
+  const cancellationReviewOpen = hasOpenCancellationReview(order.supportMeta)
+  const cancellationReasonLabel =
+    cancellationReview?.reasonLabel ??
+    (cancellationReview?.reason ? CANCELLATION_REVIEW_REASON_LABELS[cancellationReview.reason] : null)
+  const canRequestCancellationReview =
+    order.orderKind === 'READY_MADE' &&
+    !cancellationReviewOpen &&
+    ['CONFIRMED', 'DESIGNING', 'SOURCING', 'FINISHING'].includes(order.stage)
+  const deliveryReview = order.supportMeta.deliveryReview ?? null
+  const deliveryReviewOpen = hasOpenDeliveryReview(order.supportMeta)
+  const deliveryReasonLabel =
+    deliveryReview?.reasonLabel ??
+    (deliveryReview?.reason ? DELIVERY_REVIEW_REASON_LABELS[deliveryReview.reason] : null)
+  const canRequestDeliveryReview =
+    !cancellationReviewOpen &&
+    !deliveryReviewOpen &&
+    ['READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED'].includes(order.stage)
 
   // ── QUOTE_SENT state — dedicated accept / decline view ──────────────────
   if (order.stage === 'QUOTE_SENT') {
@@ -714,7 +895,10 @@ export default function OrderTrackingScreen() {
 
           {justPlacedReadyMade ? (
             <View style={styles.sentBanner}>
-              <Text style={styles.sentBannerText}>✓ Order placed · #{order.reference}</Text>
+              <Text style={styles.sentBannerText}>
+                ✓ Order placed · #{order.reference}
+                {order.deliveryMethod !== 'LOCAL_COLLECTION' ? ' · item paid first' : ''}
+              </Text>
             </View>
           ) : null}
 
@@ -748,7 +932,7 @@ export default function OrderTrackingScreen() {
 
           {/* Current stage status */}
           <View style={styles.statusCard} testID="order-tracking-status">
-            <Text style={styles.statusStage}>{customerStageLabel(order.stage, order.orderKind)}</Text>
+            <Text style={styles.statusStage}>{customerOrderStageLabel(order.stage, order.orderKind)}</Text>
             {stageHelp && <Text style={styles.statusHelp}>{stageHelp}</Text>}
             {latestUpdate?.note && (
               <Text style={styles.statusNote}>"{latestUpdate.note}"</Text>
@@ -763,6 +947,72 @@ export default function OrderTrackingScreen() {
             )}
           </View>
 
+          {(cancellationReviewOpen || canRequestCancellationReview) && (
+            <View style={styles.supportCard}>
+              <Text style={styles.supportCardTitle}>Cancellation and refund review</Text>
+              {cancellationReviewOpen ? (
+                <>
+                  <View style={[styles.supportStatusBadge, styles.supportStatusWarning]}>
+                    <Text style={[styles.supportStatusText, styles.supportStatusTextWarning]}>Review open</Text>
+                  </View>
+                  <Text style={styles.supportHint}>
+                    Drape is reviewing this cancellation request before handoff. Keep all updates inside this order while we decide the next step.
+                  </Text>
+                  {cancellationReasonLabel ? (
+                    <Text style={styles.supportBodyText}>Reason: {cancellationReasonLabel}</Text>
+                  ) : null}
+                  {cancellationReview?.note ? (
+                    <Text style={styles.supportHint}>{cancellationReview.note}</Text>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <Text style={styles.supportHint}>
+                    Need to cancel this ready-made order or change how it gets to you before dispatch starts? Ask Drape to review it here first.
+                  </Text>
+                  <Button
+                    label="Request cancellation review"
+                    variant="secondary"
+                    onPress={() => setShowCancellationReview(true)}
+                  />
+                </>
+              )}
+            </View>
+          )}
+
+          {(deliveryReviewOpen || canRequestDeliveryReview) && (
+            <View style={styles.supportCard}>
+              <Text style={styles.supportCardTitle}>Dispatch and delivery review</Text>
+              {deliveryReviewOpen ? (
+                <>
+                  <View style={[styles.supportStatusBadge, styles.supportStatusWarning]}>
+                    <Text style={[styles.supportStatusText, styles.supportStatusTextWarning]}>Review open</Text>
+                  </View>
+                  <Text style={styles.supportHint}>
+                    Drape is reviewing a dispatch or delivery issue on this order. Keep your updates and evidence inside the timeline while we work through the next step.
+                  </Text>
+                  {deliveryReasonLabel ? (
+                    <Text style={styles.supportBodyText}>Reason: {deliveryReasonLabel}</Text>
+                  ) : null}
+                  {deliveryReview?.note ? (
+                    <Text style={styles.supportHint}>{deliveryReview.note}</Text>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <Text style={styles.supportHint}>
+                    Use this if dispatch is dragging, delivery failed, the parcel was returned, or tracking says delivered but the order did not reach you cleanly.
+                  </Text>
+                  <Button
+                    label="Report dispatch or delivery issue"
+                    variant="secondary"
+                    onPress={() => setShowDeliveryReview(true)}
+                  />
+                </>
+              )}
+            </View>
+          )}
+
           {order.stage === 'PAYMENT_PENDING' && (
             <View style={styles.videoCallCard}>
               <Text style={styles.videoCallTitle}>
@@ -775,6 +1025,32 @@ export default function OrderTrackingScreen() {
               </Text>
               <Button
                 label={order.orderKind === 'READY_MADE' ? 'Complete checkout' : 'Continue payment'}
+                onPress={continuePayment}
+                loading={paying}
+                disabled={paying}
+              />
+            </View>
+          )}
+
+          {hasPendingFulfillmentPayment(order) && (
+            <View style={styles.videoCallCard}>
+              <Text style={styles.videoCallTitle}>{pendingFulfillmentPaymentLabel(order)}</Text>
+              <Text style={styles.videoCallHint}>
+                {order.deliveryMethod === 'LOCAL_DELIVERY'
+                  ? 'Your item is already paid. Drape requested an extra delivery payment for a non-standard handoff, such as rush or exception dispatch.'
+                  : 'Your item is already paid. Drape requested an extra shipping payment for a non-standard handoff, such as rush or exception dispatch.'}
+              </Text>
+              <View style={styles.timelineContent}>
+                {baseAmount(order) != null ? (
+                  <SummaryLine label="Item already paid" value={formatAmount(baseAmount(order) ?? 0, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)} />
+                ) : null}
+                <SummaryLine
+                  label={order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Extra delivery payment' : 'Extra shipping payment'}
+                  value={formatAmount(order.fulfillmentFee, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)}
+                />
+              </View>
+              <Button
+                label={order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Pay extra delivery fee' : 'Pay extra shipping fee'}
                 onPress={continuePayment}
                 loading={paying}
                 disabled={paying}
@@ -822,6 +1098,82 @@ export default function OrderTrackingScreen() {
             </View>
           )}
 
+          {isCollection ? (
+            <View style={styles.supportCard}>
+              <Text style={styles.supportCardTitle}>
+                {pickupDetailsUnlocked ? 'Pickup details' : 'Pickup plan'}
+              </Text>
+              {pickupDetailsUnlocked && order.pickupAddress ? (
+                <>
+                  <Text style={styles.supportBodyText}>{order.pickupAddress}</Text>
+                  {order.pickupInstructions ? (
+                    <Text style={styles.supportHint}>{order.pickupInstructions}</Text>
+                  ) : (
+                    <Text style={styles.supportHint}>
+                      Bring your collection code and inspect the order before confirming pickup.
+                    </Text>
+                  )}
+                </>
+              ) : (
+                <Text style={styles.supportHint}>
+                  {pickupDetailsUnlocked
+                    ? 'Your seller marked this order ready for collection, but exact pickup details are still missing. Message them in Drape before travelling.'
+                    : order.tailorLocation
+                      ? `This is a pickup order in ${order.tailorLocation}. Exact pickup details appear once the seller marks the order ready for collection.`
+                      : 'This is a pickup order. Exact pickup details appear once the seller marks the order ready for collection.'}
+                </Text>
+              )}
+            </View>
+          ) : null}
+
+          {handoffHelpAvailable ? (
+            <View style={styles.supportCard}>
+              <Text style={styles.supportCardTitle}>{handoffHelpCardTitle('CUSTOMER', order.deliveryMethod)}</Text>
+              <Text style={styles.supportHint}>{handoffHelpCardBody('CUSTOMER', order.deliveryMethod)}</Text>
+              {handoffIssue ? (
+                <View style={styles.handoffIssueCard}>
+                  <View style={styles.handoffIssueHeader}>
+                    <Text style={styles.handoffIssueTitle}>{handoffIssueLabel(handoffIssue.issueType)}</Text>
+                    <View
+                      style={[
+                        styles.handoffStatusPill,
+                        handoffIssue.status === 'ESCALATED' && styles.handoffStatusPillEscalated,
+                      ]}
+                    >
+                      <Text style={styles.handoffStatusText}>{handoffIssueStatusLabel(handoffIssue.status)}</Text>
+                    </View>
+                  </View>
+                  {handoffIssue.description ? <Text style={styles.supportHint}>{handoffIssue.description}</Text> : null}
+                  <Text style={styles.supportHint}>
+                    {handoffIssue.status === 'ESCALATED'
+                      ? 'Drape support has been flagged for follow-up. Keep all updates in this order thread.'
+                      : 'This handoff help thread is open inside Drape. Keep all updates here so the timeline stays clear.'}
+                  </Text>
+                  <Button
+                    label="Mark help resolved"
+                    variant="secondary"
+                    onPress={() => { void markHandoffIssueResolved() }}
+                    loading={resolvingHandoffIssue}
+                    disabled={resolvingHandoffIssue}
+                  />
+                </View>
+              ) : null}
+              <View style={{ gap: Spacing.md }}>
+                <Button
+                  label={startingHandoffCall ? 'Starting Drape call...' : order.videoCallUrl ? 'Join Drape call' : 'Start Drape call'}
+                  variant="secondary"
+                  onPress={openHandoffCallOptions}
+                  disabled={!!startingHandoffCall}
+                />
+                <Button
+                  label={handoffIssue ? 'Log another help issue' : 'Log handoff help'}
+                  variant="secondary"
+                  onPress={() => setShowHandoffSupport(true)}
+                />
+              </View>
+            </View>
+          ) : null}
+
           {/* Collection code — show when ready for collection */}
           {order.stage === 'READY_FOR_COLLECTION' && order.collectionCode && (
             <View style={styles.collectionCard}>
@@ -844,7 +1196,7 @@ export default function OrderTrackingScreen() {
           )}
 
           {/* Confirm receipt button — shipping path */}
-          {order.stage === 'SHIPPED' && order.deliveryMethod !== 'LOCAL_COLLECTION' && (
+          {['SHIPPED', 'OUT_FOR_DELIVERY'].includes(order.stage) && order.deliveryMethod !== 'LOCAL_COLLECTION' && (
             <Button
               label="I've received my order"
               onPress={confirmReceipt}
@@ -853,35 +1205,45 @@ export default function OrderTrackingScreen() {
             />
           )}
 
-          {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.trackingNumber && ['SHIPPED', 'DELIVERED', 'COMPLETE', 'IN_DISPUTE'].includes(order.stage) && (
+          {order.deliveryMethod !== 'LOCAL_COLLECTION' && ['SHIPPED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETE', 'IN_DISPUTE'].includes(order.stage) && (
             <View style={styles.trackingRow}>
               <View>
-                <Text style={styles.trackingLabel}>Shipment tracking</Text>
-                <Text style={styles.trackingNumber}>{order.trackingNumber}</Text>
-                {order.carrier ? <Text style={styles.fabricSavedNote}>{order.carrier}</Text> : null}
+                <Text style={styles.trackingLabel}>
+                  {order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Delivery details' : 'Shipment details'}
+                </Text>
+                {order.fulfillmentProvider ? <Text style={styles.trackingNumber}>{order.fulfillmentProvider}</Text> : null}
+                {order.trackingNumber ? <Text style={styles.fabricSavedNote}>Tracking: {order.trackingNumber}</Text> : null}
+                {order.fulfillmentReference ? <Text style={styles.fabricSavedNote}>Reference: {order.fulfillmentReference}</Text> : null}
+                {order.fulfillmentContactName ? <Text style={styles.fabricSavedNote}>Contact: {order.fulfillmentContactName}</Text> : null}
+                {order.fulfillmentContactPhone ? <Text style={styles.fabricSavedNote}>{order.fulfillmentContactPhone}</Text> : null}
+                {!order.fulfillmentProvider && order.carrier ? <Text style={styles.trackingNumber}>{order.carrier}</Text> : null}
               </View>
-              <View style={styles.trackingAction}>
-                <Button
-                  label="Track shipment"
-                  variant="secondary"
-                  onPress={() => {
-                    void openTrackingPage({
-                      trackingNumber: order.trackingNumber!,
-                      carrier: order.carrier,
-                      audience: 'customer',
-                    })
-                  }}
-                />
-              </View>
+              {order.trackingNumber ? (
+                <View style={styles.trackingAction}>
+                  <Button
+                    label="Track shipment"
+                    variant="secondary"
+                    onPress={() => {
+                      void openTrackingPage({
+                        trackingNumber: order.trackingNumber!,
+                        carrier: order.fulfillmentProvider ?? order.carrier,
+                        audience: 'customer',
+                      })
+                    }}
+                  />
+                </View>
+              ) : null}
             </View>
           )}
 
           {order.deliveryMethod !== 'LOCAL_COLLECTION' ? (
             <View style={styles.supportCard}>
-              <Text style={styles.supportCardTitle}>Shipping protection</Text>
+              <Text style={styles.supportCardTitle}>
+                {order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Delivery protection' : 'Shipping protection'}
+              </Text>
               <Text style={styles.supportHint}>
-                Do not confirm receipt until the garment is actually in hand. If tracking stalls, duties or delivery charges
-                were unclear, or the parcel looks lost, keep the conversation in this order and open a concern here instead
+                Do not confirm receipt until the garment is actually in hand. If dispatch stalls, the rider or courier cannot
+                be reached, or the handoff goes off track, keep the conversation in this order and open a concern here instead
                 of trying to settle it offline.
               </Text>
             </View>
@@ -1154,16 +1516,45 @@ export default function OrderTrackingScreen() {
                     value={order.fulfillmentOption === 'PICKUP' ? 'Pickup' : order.fulfillmentOption === 'DELIVERY' ? 'Delivery' : order.fulfillmentOption === 'SHIPPING' ? 'Shipping' : order.fulfillmentOption}
                   />
                 ) : null}
-                {order.itemSubtotal != null ? (
+                {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.recipientName ? (
+                  <SummaryLine label="Recipient" value={order.recipientName} />
+                ) : null}
+                {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.recipientPhone ? (
+                  <SummaryLine label="Recipient phone" value={order.recipientPhone} />
+                ) : null}
+                {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.deliveryAddress ? (
+                  <SummaryLine label={order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Deliver to' : 'Ship to'} value={order.deliveryAddress} />
+                ) : null}
+                {order.itemSubtotal != null && !(order.deliveryMethod !== 'LOCAL_COLLECTION' && order.fulfillmentFee > 0) ? (
                   <SummaryLine label="Subtotal" value={formatAmount(order.itemSubtotal, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)} />
                 ) : null}
-                <SummaryLine
-                  label={fulfillmentFeeLabel(order)}
-                  value={order.fulfillmentFee > 0 ? formatAmount(order.fulfillmentFee, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES) : 'Free'}
-                />
-                {order.quotedAmount != null ? (
-                  <SummaryLine label="Total" value={formatAmount(order.quotedAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)} />
-                ) : null}
+                {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.fulfillmentFee > 0 ? (
+                  <>
+                    {baseAmount(order) != null ? (
+                      <SummaryLine
+                        label={order.orderKind === 'READY_MADE' ? 'Item subtotal' : 'Quote amount'}
+                        value={formatAmount(baseAmount(order) ?? 0, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)}
+                      />
+                    ) : null}
+                    <SummaryLine
+                      label={fulfillmentFeeLabel(order)}
+                      value={formatAmount(order.fulfillmentFee, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)}
+                    />
+                    {order.quotedAmount != null ? (
+                      <SummaryLine label="Total" value={formatAmount(order.quotedAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)} />
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    <SummaryLine
+                      label={fulfillmentFeeLabel(order)}
+                      value={order.fulfillmentFee > 0 ? formatAmount(order.fulfillmentFee, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES) : 'Free'}
+                    />
+                    {order.quotedAmount != null ? (
+                      <SummaryLine label="Total" value={formatAmount(order.quotedAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)} />
+                    ) : null}
+                  </>
+                )}
               </View>
             </View>
           )}
@@ -1176,7 +1567,9 @@ export default function OrderTrackingScreen() {
                 <View key={u.id} style={styles.timelineItem}>
                   <View style={styles.timelineDot} />
                   <View style={styles.timelineContent}>
-                    <Text style={styles.timelineStage}>{STAGE_LABELS[u.stage as OrderStage] ?? u.stage}</Text>
+                    <Text style={styles.timelineStage}>
+                      {customerOrderStageLabel(u.stage as OrderStage, order.orderKind) ?? u.stage}
+                    </Text>
                     {u.note && <Text style={styles.timelineNote}>{u.note}</Text>}
                     <Text style={styles.timelineDate}>
                       {new Date(u.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
@@ -1250,7 +1643,7 @@ export default function OrderTrackingScreen() {
           testID="message-tailor-btn"
         />
         {/* Dispute entry — available from CONFIRMED onward, before auto-release */}
-        {['CONFIRMED','DESIGNING','SOURCING','CUTTING','SEWING','FINISHING','SHIPPED','READY_FOR_COLLECTION'].includes(order.stage) && (
+        {['CONFIRMED','DESIGNING','SOURCING','CUTTING','SEWING','FINISHING','OUT_FOR_DELIVERY','SHIPPED','READY_FOR_COLLECTION'].includes(order.stage) && (
           <TouchableOpacity style={styles.disputeEntry} onPress={() => setShowDispute(true)}>
             <Text style={styles.disputeEntryText}>Something wrong? Raise a concern</Text>
           </TouchableOpacity>
@@ -1274,12 +1667,44 @@ export default function OrderTrackingScreen() {
         userId={user?.id ?? ''}
       />
 
+      <CancellationReviewModal
+        visible={showCancellationReview}
+        orderId={order.id}
+        onClose={() => setShowCancellationReview(false)}
+        onSubmitted={() => {
+          setShowCancellationReview(false)
+          void fetchOrder()
+        }}
+      />
+
+      <DeliveryReviewModal
+        visible={showDeliveryReview}
+        orderId={order.id}
+        onClose={() => setShowDeliveryReview(false)}
+        onSubmitted={() => {
+          setShowDeliveryReview(false)
+          void fetchOrder()
+        }}
+      />
+
       <MaterialIssueResponseModal
         visible={showMaterialIssueResponse}
         orderId={order.id}
         onClose={() => setShowMaterialIssueResponse(false)}
         onSubmitted={() => {
           setShowMaterialIssueResponse(false)
+          void fetchOrder()
+        }}
+      />
+
+      <HandoffSupportModal
+        visible={showHandoffSupport}
+        orderId={order.id}
+        role="CUSTOMER"
+        deliveryMethod={order.deliveryMethod}
+        onClose={() => setShowHandoffSupport(false)}
+        onSubmitted={() => {
+          setShowHandoffSupport(false)
           void fetchOrder()
         }}
       />
@@ -1314,6 +1739,311 @@ const DISPUTE_REASONS = [
   'Tailor unresponsive',
   'Other',
 ]
+
+const CUSTOMER_CANCELLATION_REVIEW_OPTIONS: CancellationReviewReason[] = [
+  'CUSTOMER_CHANGED_MIND',
+  'NEED_FULFILLMENT_CHANGE',
+  'OTHER',
+]
+
+const CUSTOMER_DELIVERY_REVIEW_OPTIONS: DeliveryReviewReason[] = [
+  'DISPATCH_DELAY',
+  'DELIVERY_FAILED',
+  'RETURN_TO_SENDER',
+  'MARKED_DELIVERED_NOT_RECEIVED',
+  'WRONG_ITEM_RECEIVED',
+  'OTHER',
+]
+
+function CancellationReviewModal({ visible, orderId, onClose, onSubmitted }: {
+  visible: boolean
+  orderId: string
+  onClose: () => void
+  onSubmitted: () => void
+}) {
+  const [reason, setReason] = useState<CancellationReviewReason | null>(null)
+  const [note, setNote] = useState('')
+  const [noteError, setNoteError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState('')
+
+  useEffect(() => {
+    if (!visible) return
+    setReason(null)
+    setNote('')
+    setNoteError('')
+    setSubmitError('')
+    setSubmitting(false)
+  }, [visible, orderId])
+
+  function validateNote(value: string) {
+    if (!value.trim()) {
+      setNoteError('')
+      return true
+    }
+    const result = filterContactInfo(value)
+    if (result.blocked) {
+      setNoteError(result.userMessage)
+      return false
+    }
+    setNoteError('')
+    return true
+  }
+
+  async function submit() {
+    if (submitting) return
+    if (!reason) {
+      Alert.alert('Choose a reason', 'Tell Drape why this ready-made order needs review before handoff.')
+      return
+    }
+    if (!validateNote(note)) return
+
+    setSubmitting(true)
+    setSubmitError('')
+
+    const { error } = await invokeFunction('customer-order-action', {
+      body: {
+        orderId,
+        action: 'request-cancellation-review',
+        cancellationReason: reason,
+        note: note.trim() || undefined,
+      },
+    })
+
+    setSubmitting(false)
+    if (error) {
+      Sentry.captureException(error, { extra: { context: 'request_cancellation_review', orderId, reason } })
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. Your review request stayed here, so retry when the signal improves.'
+        : await readFunctionErrorMessage(error, 'Could not open cancellation review right now. Please try again.')
+      setSubmitError(message)
+      return
+    }
+
+    onSubmitted()
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <SafeAreaView style={disputeStyles.safe}>
+          <View style={disputeStyles.header}>
+            <TouchableOpacity onPress={onClose} disabled={submitting}>
+              <Text style={disputeStyles.cancel}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={disputeStyles.title}>Cancellation review</Text>
+            <View style={{ width: 60 }} />
+          </View>
+
+          <ScrollView style={disputeStyles.scroll} contentContainerStyle={disputeStyles.content}>
+            <View style={disputeStyles.infoCard}>
+              <Text style={disputeStyles.infoText}>
+                Use this before pickup or dispatch starts. Drape will pause the handoff and review the best remedy with you and the seller.
+              </Text>
+            </View>
+
+            <View>
+              <Text style={disputeStyles.label}>Reason <Text style={{ color: Colors.error }}>*</Text></Text>
+              {CUSTOMER_CANCELLATION_REVIEW_OPTIONS.map((option) => (
+                <TouchableOpacity
+                  key={option}
+                  style={[disputeStyles.reasonRow, reason === option && disputeStyles.reasonRowActive]}
+                  disabled={submitting}
+                  onPress={() => setReason(option)}
+                >
+                  <View style={[disputeStyles.radio, reason === option && disputeStyles.radioActive]} />
+                  <Text style={[disputeStyles.reasonText, reason === option && disputeStyles.reasonTextActive]}>
+                    {CANCELLATION_REVIEW_REASON_LABELS[option]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Input
+              label="Note (optional)"
+              placeholder="Add context for Drape. e.g. I need to switch from delivery to pickup before dispatch is booked."
+              value={note}
+              onChangeText={(value) => {
+                setNote(value)
+                if (noteError) validateNote(value)
+              }}
+              onBlur={() => validateNote(note)}
+              error={noteError}
+              multiline
+              numberOfLines={4}
+              maxLength={300}
+              filterContact
+            />
+
+            <View style={disputeStyles.warningCard}>
+              <Text style={disputeStyles.warningText}>
+                If dispatch has already been booked or the order is already at pickup handoff, Drape may need a fuller support review instead of an instant cancellation.
+              </Text>
+            </View>
+
+            {submitError ? (
+              <View style={disputeStyles.submitErrorCard}>
+                <Text style={disputeStyles.submitErrorText}>{submitError}</Text>
+              </View>
+            ) : null}
+
+            <Button
+              label="Request review"
+              onPress={submit}
+              loading={submitting}
+              disabled={submitting || !reason}
+            />
+          </ScrollView>
+        </SafeAreaView>
+      </KeyboardAvoidingView>
+    </Modal>
+  )
+}
+
+function DeliveryReviewModal({ visible, orderId, onClose, onSubmitted }: {
+  visible: boolean
+  orderId: string
+  onClose: () => void
+  onSubmitted: () => void
+}) {
+  const [reason, setReason] = useState<DeliveryReviewReason | null>(null)
+  const [note, setNote] = useState('')
+  const [noteError, setNoteError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState('')
+
+  useEffect(() => {
+    if (!visible) return
+    setReason(null)
+    setNote('')
+    setNoteError('')
+    setSubmitError('')
+    setSubmitting(false)
+  }, [visible, orderId])
+
+  function validateNote(value: string) {
+    if (!value.trim()) {
+      setNoteError('')
+      return true
+    }
+    const result = filterContactInfo(value)
+    if (result.blocked) {
+      setNoteError(result.userMessage)
+      return false
+    }
+    setNoteError('')
+    return true
+  }
+
+  async function submit() {
+    if (submitting) return
+    if (!reason) {
+      Alert.alert('Choose a reason', 'Tell Drape what went wrong with dispatch or delivery.')
+      return
+    }
+    if (!validateNote(note)) return
+
+    setSubmitting(true)
+    setSubmitError('')
+
+    const { error } = await invokeFunction('customer-order-action', {
+      body: {
+        orderId,
+        action: 'request-delivery-review',
+        deliveryReason: reason,
+        note: note.trim() || undefined,
+      },
+    })
+
+    setSubmitting(false)
+    if (error) {
+      Sentry.captureException(error, { extra: { context: 'request_delivery_review', orderId, reason } })
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. Your delivery review request stayed here, so retry when the signal improves.'
+        : await readFunctionErrorMessage(error, 'Could not open delivery review right now. Please try again.')
+      setSubmitError(message)
+      return
+    }
+
+    onSubmitted()
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <SafeAreaView style={disputeStyles.safe}>
+          <View style={disputeStyles.header}>
+            <TouchableOpacity onPress={onClose} disabled={submitting}>
+              <Text style={disputeStyles.cancel}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={disputeStyles.title}>Delivery review</Text>
+            <View style={{ width: 60 }} />
+          </View>
+
+          <ScrollView style={disputeStyles.scroll} contentContainerStyle={disputeStyles.content}>
+            <View style={disputeStyles.infoCard}>
+              <Text style={disputeStyles.infoText}>
+                Use this when dispatch is stalled, delivery failed, or the handoff record does not match what really happened. Drape will pause the order and review the next step.
+              </Text>
+            </View>
+
+            <View>
+              <Text style={disputeStyles.label}>Reason <Text style={{ color: Colors.error }}>*</Text></Text>
+              {CUSTOMER_DELIVERY_REVIEW_OPTIONS.map((option) => (
+                <TouchableOpacity
+                  key={option}
+                  style={[disputeStyles.reasonRow, reason === option && disputeStyles.reasonRowActive]}
+                  disabled={submitting}
+                  onPress={() => setReason(option)}
+                >
+                  <View style={[disputeStyles.radio, reason === option && disputeStyles.radioActive]} />
+                  <Text style={[disputeStyles.reasonText, reason === option && disputeStyles.reasonTextActive]}>
+                    {DELIVERY_REVIEW_REASON_LABELS[option]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Input
+              label="Note (optional)"
+              placeholder="Add context for Drape. e.g. The tracking says delivered, but nothing reached my address."
+              value={note}
+              onChangeText={(value) => {
+                setNote(value)
+                if (noteError) validateNote(value)
+              }}
+              onBlur={() => validateNote(note)}
+              error={noteError}
+              multiline
+              numberOfLines={4}
+              maxLength={300}
+              filterContact
+            />
+
+            <View style={disputeStyles.warningCard}>
+              <Text style={disputeStyles.warningText}>
+                Keep dispatch, courier, or proof details inside Drape while the review is open so support can follow one clean record.
+              </Text>
+            </View>
+
+            {submitError ? (
+              <View style={disputeStyles.submitErrorCard}>
+                <Text style={disputeStyles.submitErrorText}>{submitError}</Text>
+              </View>
+            ) : null}
+
+            <Button
+              label="Request review"
+              onPress={submit}
+              loading={submitting}
+              disabled={submitting || !reason}
+            />
+          </ScrollView>
+        </SafeAreaView>
+      </KeyboardAvoidingView>
+    </Modal>
+  )
+}
 
 function MaterialIssueResponseModal({ visible, orderId, onClose, onSubmitted }: {
   visible: boolean
@@ -1616,7 +2346,7 @@ function DisputeModal({ visible, orderId, onClose, onSubmitted, userId }: {
 
             <Input
               label="Describe the issue"
-              placeholder="What happened? Be as specific as possible — include dates, what was promised, and what you received."
+              placeholder="What happened? Be as specific as possible. Include dates, what was promised, and what you received."
               value={description}
               onChangeText={(v) => { setDescription(v); if (descError) validateDesc(v) }}
               onBlur={() => validateDesc(description)}
@@ -1714,7 +2444,8 @@ function QuoteReviewScreen({
   const { currency, rates, setCurrency } = useCurrency()
   const navigation = useNavigation()
   const { startOrderPayment } = useOrderPaymentFlow()
-  const totalLabel = order.quotedAmount ? formatAmount(order.quotedAmount, order.quotedCurrency, currency, rates) : '—'
+  const payNowLabel = baseAmount(order) != null ? formatAmount(baseAmount(order) ?? 0, order.quotedCurrency, currency, rates) : 'Not available'
+  const totalLabel = order.quotedAmount ? formatAmount(order.quotedAmount, order.quotedCurrency, currency, rates) : 'Not available'
   const feeLabel = order.fulfillmentFee > 0
     ? formatAmount(order.fulfillmentFee, order.quotedCurrency, currency, rates)
     : null
@@ -1735,8 +2466,8 @@ function QuoteReviewScreen({
     Alert.alert(
       'Accept and pay',
       feeLabel
-        ? `Accept the total of ${totalLabel} from ${order.tailorName}? This includes ${fulfillmentFeeLabel(order).toLowerCase()} of ${feeLabel}.\n\nYou’ll be taken to secure payment now. Production starts after payment succeeds.`
-        : `Accept the total of ${totalLabel} from ${order.tailorName}?\n\nYou’ll be taken to secure payment now. Production starts after payment succeeds.`,
+        ? `Accept the quote from ${order.tailorName}? You will pay the full total of ${totalLabel} now, including the ${fulfillmentFeeLabel(order).toLowerCase()} of ${feeLabel}.\n\nProduction starts after payment succeeds.`
+        : `Accept the quote of ${payNowLabel} from ${order.tailorName}?\n\nYou’ll be taken to secure payment now. Production starts after payment succeeds.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -1852,7 +2583,7 @@ function QuoteReviewScreen({
 
             {baseAmount(order) != null && (
               <View style={quoteDetailRow}>
-                <Text style={quoteLabel}>{order.orderKind === 'READY_MADE' ? 'Subtotal' : 'Quote amount'}</Text>
+                <Text style={quoteLabel}>{order.orderKind === 'READY_MADE' ? 'Item subtotal' : 'Quote amount'}</Text>
                 <Text style={quoteAmount}>{formatAmount(baseAmount(order) ?? 0, order.quotedCurrency, currency, rates)}</Text>
               </View>
             )}
@@ -1900,7 +2631,9 @@ function QuoteReviewScreen({
 
             <View style={styles.escrowNote}>
               <Text style={styles.escrowNoteText}>
-                Accepting locks in the price and delivery date. Raise a dispute any time if something goes wrong.
+                {feeLabel
+                  ? 'Accepting locks in the base quote now. Your tailor can request the shipping or delivery payment later, once dispatch is actually being arranged.'
+                  : 'Accepting locks in the price and delivery date. Raise a dispute any time if something goes wrong.'}
               </Text>
             </View>
           </View>
@@ -2104,6 +2837,40 @@ const styles = StyleSheet.create({
   supportStatusTextSuccess: { color: Colors.needleGreen },
   supportBodyText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 21 },
   supportHint: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20 },
+  handoffIssueCard: {
+    gap: Spacing.sm,
+    padding: Spacing.md,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.bone,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  handoffIssueHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  handoffIssueTitle: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  handoffStatusPill: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  handoffStatusPillEscalated: {
+    backgroundColor: '#FFF2DC',
+  },
+  handoffStatusText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+  },
 
   // Fabric tracking input
   trackingHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },

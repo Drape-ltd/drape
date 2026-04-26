@@ -5,8 +5,8 @@
  * Stage column is locked at DB level — only service role (this function) may mutate it.
  *
  * Actions:
- *   confirm-receipt  SHIPPED → DELIVERED
- *   open-dispute     CONFIRMED|DESIGNING|SOURCING|CUTTING|SEWING|FINISHING|SHIPPED|READY_FOR_COLLECTION → IN_DISPUTE
+ *   confirm-receipt  SHIPPED|OUT_FOR_DELIVERY → DELIVERED
+ *   open-dispute     CONFIRMED|DESIGNING|SOURCING|CUTTING|SEWING|FINISHING|READY_FOR_DRAPE_DISPATCH|OUT_FOR_DELIVERY|SHIPPED|READY_FOR_COLLECTION → IN_DISPUTE
  *   accept-quote     QUOTE_SENT → PAYMENT_PENDING
  *   decline-quote    QUOTE_SENT → DECLINED
  *   complete-order   DELIVERED|COLLECTED → COMPLETE
@@ -24,13 +24,18 @@ import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import {
+  buildCancellationReviewNote,
+  buildDeliveryReviewNote,
   buildMaterialIssueResponseNote,
   buildMeasurementConfirmedNote,
+  CANCELLATION_REVIEW_REASON_LABELS,
+  DELIVERY_REVIEW_REASON_LABELS,
   MATERIAL_ISSUE_RESPONSE_LABELS,
   parseMeasurementSnapshot,
   parseOrderSupportMeta,
   serializeOrderSupportMeta,
 } from '../_shared/order-support.ts'
+import { validateRecipientPhone } from '../_shared/phone.ts'
 import { z, parseBody, uuid, optionalNote } from '../_shared/validate.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
@@ -46,12 +51,27 @@ const BodySchema = z.object({
     'save-fabric-tracking',
     'confirm-measurements',
     'respond-material-issue',
+    'request-cancellation-review',
+    'request-delivery-review',
   ]),
   reason:      z.string().trim().min(1).max(200).optional(),
   description: z.string().trim().min(10).max(1000).optional(),
   note:        optionalNote,
   fabricTracking: z.string().trim().min(1).max(120).optional(),
   materialIssueResponse: z.enum(['REPLACE_FABRIC', 'ASK_TAILOR_TO_SOURCE', 'REVISE_DESIGN', 'CANCEL_ORDER']).optional(),
+  cancellationReason: z.enum([
+    'CUSTOMER_CHANGED_MIND',
+    'NEED_FULFILLMENT_CHANGE',
+    'OTHER',
+  ]).optional(),
+  deliveryReason: z.enum([
+    'DISPATCH_DELAY',
+    'DELIVERY_FAILED',
+    'RETURN_TO_SENDER',
+    'MARKED_DELIVERED_NOT_RECEIVED',
+    'WRONG_ITEM_RECEIVED',
+    'OTHER',
+  ]).optional(),
 })
 
 const FN = 'customer-order-action'
@@ -69,6 +89,8 @@ type Action =
   | 'save-fabric-tracking'
   | 'confirm-measurements'
   | 'respond-material-issue'
+  | 'request-cancellation-review'
+  | 'request-delivery-review'
 
 type OrderRow = {
   id: string
@@ -81,6 +103,8 @@ type OrderRow = {
   quote_expires_at?: string | null
   delivery_method?: string | null
   delivery_address?: string | null
+  recipient_name?: string | null
+  recipient_phone?: string | null
   special_note?: string | null
   customer_measurements_snapshot?: unknown
 }
@@ -93,14 +117,16 @@ declare const EdgeRuntime: {
 
 // Which stages each action is valid FROM
 const VALID_FROM: Record<Action, string[]> = {
-  'confirm-receipt': ['SHIPPED'],
-  'open-dispute':    ['CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'SHIPPED', 'READY_FOR_COLLECTION'],
+  'confirm-receipt': ['SHIPPED', 'OUT_FOR_DELIVERY'],
+  'open-dispute':    ['CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'READY_FOR_COLLECTION'],
   'accept-quote':    ['QUOTE_SENT'],
   'decline-quote':   ['QUOTE_SENT'],
   'complete-order':  ['DELIVERED', 'COLLECTED'],
   'save-fabric-tracking': ['PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'],
   'confirm-measurements': PRE_CUTTING_STAGES,
   'respond-material-issue': PRE_CUTTING_STAGES,
+  'request-cancellation-review': ['CONFIRMED', 'DESIGNING', 'SOURCING', 'FINISHING'],
+  'request-delivery-review': ['READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED'],
 }
 
 // The stage each action transitions TO (dispute handled separately)
@@ -119,6 +145,8 @@ const TAILOR_NOTIFICATION: Partial<Record<Action, { title: string; body: string 
   'complete-order':  { title: 'Order complete ⭐',       body: 'The customer marked the order complete!' },
   'confirm-measurements': { title: 'Measurements confirmed', body: 'The customer confirmed their measurements for this order.' },
   'respond-material-issue': { title: 'Customer responded to fabric issue', body: 'The customer chose how they want to handle the material issue.' },
+  'request-cancellation-review': { title: 'Cancellation review requested', body: 'The customer asked Drape to review cancellation before handoff.' },
+  'request-delivery-review': { title: 'Delivery review requested', body: 'The customer asked Drape to review a dispatch or delivery issue.' },
 }
 
 const STAGE_NOTE: Partial<Record<Action, string>> = {
@@ -183,8 +211,8 @@ Deno.serve(async (req) => {
     }
 
     const orderSelect = action === 'accept-quote'
-      ? 'id, stage, order_kind, customer_id, tailor_id, fabric_source, quoted_amount, quote_expires_at, delivery_method, delivery_address, special_note, customer_measurements_snapshot'
-      : 'id, stage, customer_id, tailor_id, fabric_source, special_note, customer_measurements_snapshot'
+      ? 'id, stage, order_kind, customer_id, tailor_id, fabric_source, quoted_amount, quote_expires_at, delivery_method, delivery_address, recipient_name, recipient_phone, special_note, customer_measurements_snapshot'
+      : 'id, stage, order_kind, customer_id, tailor_id, fabric_source, delivery_method, special_note, customer_measurements_snapshot'
 
     // Fetch order — verify ownership and current stage
     const { data: orderData, error: orderError } = await supabase
@@ -246,11 +274,35 @@ Deno.serve(async (req) => {
         )
       }
 
-      if (order.delivery_method === 'SHIPPING' && !order.delivery_address?.trim()) {
+      if (order.delivery_method !== 'LOCAL_COLLECTION' && !order.delivery_address?.trim()) {
         return new Response(
-          JSON.stringify({ error: 'Delivery address is required before you can accept this shipping quote.' }),
+          JSON.stringify({ error: 'Delivery address is required before you can accept this quote.' }),
           { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
+      }
+
+      if (order.delivery_method !== 'LOCAL_COLLECTION' && !order.recipient_name?.trim()) {
+        return new Response(
+          JSON.stringify({ error: 'Recipient name is required before you can accept this quote.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (order.delivery_method !== 'LOCAL_COLLECTION' && !order.recipient_phone?.trim()) {
+        return new Response(
+          JSON.stringify({ error: 'Recipient phone is required before you can accept this quote.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (order.delivery_method !== 'LOCAL_COLLECTION') {
+        const recipientPhoneError = validateRecipientPhone(order.recipient_phone)
+        if (recipientPhoneError) {
+          return new Response(
+            JSON.stringify({ error: recipientPhoneError }),
+            { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+          )
+        }
       }
     }
 
@@ -420,6 +472,138 @@ Deno.serve(async (req) => {
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.tailor_id.toString(), {
             ...TAILOR_NOTIFICATION['respond-material-issue']!,
+            data: { orderId },
+          })
+        )
+      }
+
+      return jsonResponse({ ok: true }, 200, cors)
+    }
+
+    if (action === 'request-cancellation-review') {
+      const cancellationReason = parsed.data.cancellationReason
+      if (!cancellationReason) {
+        return jsonError(cors, 400, 'CANCELLATION_REASON_REQUIRED', 'Choose why you want Drape to review this cancellation.')
+      }
+
+      const meta = parseOrderSupportMeta(order.special_note)
+      if (meta.cancellationReview?.status === 'OPEN') {
+        return jsonError(cors, 409, 'CANCELLATION_REVIEW_ALREADY_OPEN', 'A cancellation review is already open on this order.')
+      }
+
+      const reasonLabel = CANCELLATION_REVIEW_REASON_LABELS[cancellationReason]
+      const nextMeta = {
+        ...meta,
+        cancellationReview: {
+          status: 'OPEN' as const,
+          requestedBy: 'CUSTOMER' as const,
+          reason: cancellationReason,
+          reasonLabel,
+          note: parsed.data.note?.trim() || null,
+          requestedAt: new Date().toISOString(),
+          requestedFromStage: order.stage,
+        },
+      }
+
+      const { error } = await supabase
+        .from('orders')
+        .update({
+          stage: 'IN_DISPUTE',
+          stage_updated_at: new Date().toISOString(),
+          special_note: serializeOrderSupportMeta(nextMeta),
+        })
+        .eq('id', orderId)
+
+      if (error) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
+        return jsonError(cors, 500, 'CANCELLATION_REVIEW_FAILED', 'Could not open cancellation review right now.')
+      }
+
+      await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: 'IN_DISPUTE',
+        note: buildCancellationReviewNote('CUSTOMER', reasonLabel, parsed.data.note ?? null),
+      })
+
+      await audit(supabase, {
+        event: 'order.cancellation_review_requested',
+        actor_id: caller.id,
+        actor_role: 'CUSTOMER',
+        order_id: orderId,
+        severity: 'warn',
+        payload: { reason: cancellationReason, from_stage: order.stage },
+      })
+
+      if (order.tailor_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.tailor_id.toString(), {
+            ...TAILOR_NOTIFICATION['request-cancellation-review']!,
+            data: { orderId },
+          })
+        )
+      }
+
+      return jsonResponse({ ok: true }, 200, cors)
+    }
+
+    if (action === 'request-delivery-review') {
+      const deliveryReason = parsed.data.deliveryReason
+      if (!deliveryReason) {
+        return jsonError(cors, 400, 'DELIVERY_REVIEW_REASON_REQUIRED', 'Choose why you want Drape to review this dispatch or delivery issue.')
+      }
+
+      const meta = parseOrderSupportMeta(order.special_note)
+      if (meta.deliveryReview?.status === 'OPEN') {
+        return jsonError(cors, 409, 'DELIVERY_REVIEW_ALREADY_OPEN', 'A delivery review is already open on this order.')
+      }
+
+      const reasonLabel = DELIVERY_REVIEW_REASON_LABELS[deliveryReason]
+      const nextMeta = {
+        ...meta,
+        deliveryReview: {
+          status: 'OPEN' as const,
+          requestedBy: 'CUSTOMER' as const,
+          reason: deliveryReason,
+          reasonLabel,
+          note: parsed.data.note?.trim() || null,
+          requestedAt: new Date().toISOString(),
+          requestedFromStage: order.stage,
+        },
+      }
+
+      const { error } = await supabase
+        .from('orders')
+        .update({
+          stage: 'IN_DISPUTE',
+          stage_updated_at: new Date().toISOString(),
+          special_note: serializeOrderSupportMeta(nextMeta),
+        })
+        .eq('id', orderId)
+
+      if (error) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
+        return jsonError(cors, 500, 'DELIVERY_REVIEW_FAILED', 'Could not open delivery review right now.')
+      }
+
+      await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: 'IN_DISPUTE',
+        note: buildDeliveryReviewNote('CUSTOMER', reasonLabel, parsed.data.note ?? null),
+      })
+
+      await audit(supabase, {
+        event: 'order.delivery_review_requested',
+        actor_id: caller.id,
+        actor_role: 'CUSTOMER',
+        order_id: orderId,
+        severity: 'warn',
+        payload: { reason: deliveryReason, from_stage: order.stage },
+      })
+
+      if (order.tailor_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.tailor_id.toString(), {
+            ...TAILOR_NOTIFICATION['request-delivery-review']!,
             data: { orderId },
           })
         )

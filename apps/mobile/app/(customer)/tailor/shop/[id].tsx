@@ -1,21 +1,25 @@
 import { useMemo } from 'react'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Image } from 'react-native'
 import { Feather } from '@expo/vector-icons'
-import { useTailorShop } from '@/lib/queries'
+import { useRefreshOnFocus, useTailorShop } from '@/lib/queries'
 import { Button } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
+import { goBackOrReturnToIfNeeded } from '@/lib/navigation'
 
 export default function TailorShopScreen() {
   const { id, returnTo } = useLocalSearchParams<{ id: string; returnTo?: string }>()
   const router = useRouter()
-  const { data, isLoading, isFetching } = useTailorShop(id)
+  const navigation = useNavigation()
+  const { data, isLoading, refetch } = useTailorShop(id)
   const tailorName = data?.tailorName ?? 'This seller'
   const items = useMemo(() => data?.items ?? [], [data?.items])
 
+  useRefreshOnFocus(() => { void refetch() }, 0)
+
   function goBack() {
-    router.replace((returnTo as any) || `/(customer)/tailor/${id}`)
+    goBackOrReturnToIfNeeded(router, navigation, returnTo, `/(customer)/tailor/${id}`)
   }
 
   return (
@@ -47,13 +51,12 @@ export default function TailorShopScreen() {
               label="Start custom order"
               onPress={() => router.push({
                 pathname: `/(customer)/brief/${id}` as any,
-                params: { returnTo: `/(customer)/tailor/${id}` },
+                params: { returnTo: `/(customer)/tailor/shop/${id}` },
               })}
             />
           </View>
         ) : (
           <View style={styles.itemList}>
-            {isFetching ? <Text style={styles.refreshingText}>Refreshing items…</Text> : null}
             {items.map((item) => (
               <TouchableOpacity
                 key={item.id}
@@ -113,7 +116,6 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
   emptyHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   itemList: { gap: Spacing.md },
-  refreshingText: { fontSize: FontSize.xs, color: Colors.midGrey, marginBottom: Spacing.xs },
   itemCard: { backgroundColor: Colors.white, borderRadius: Radius.xl, overflow: 'hidden', ...Shadow.sm },
   itemImage: { width: '100%', height: 180, backgroundColor: Colors.lightGrey },
   itemPlaceholder: { alignItems: 'center', justifyContent: 'center' },

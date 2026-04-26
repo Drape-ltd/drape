@@ -82,7 +82,7 @@ function welcomeEmail(displayName: string, role: string): string {
 
 function paymentReceiptEmail(displayName: string, ref: string, amountPence: number, currency: string): string {
   const amount = (amountPence / 100).toFixed(2)
-  const symbol: Record<string, string> = { GBP: '£', USD: '$', EUR: '€', NGN: '₦', GHS: '₵', KES: 'KSh' }
+  const symbol: Record<string, string> = { GBP: '£', USD: '$', EUR: '€', NGN: '₦', GHS: '₵', KES: 'KSh', CAD: 'C$' }
   return `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#1a1a2e">
   <img src="${APP_URL}/logo.png" alt="Drape" width="80" style="margin:32px 0 16px"/>

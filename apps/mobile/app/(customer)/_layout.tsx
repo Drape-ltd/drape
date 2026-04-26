@@ -1,8 +1,9 @@
 import { Tabs, useRouter } from 'expo-router'
-import { Image, Pressable, View } from 'react-native'
+import { Pressable } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, Radius } from '@/constants/theme'
 import { useCustomerProfile } from '@/lib/customerProfile'
+import { AvatarImage } from '@/components/ui/AvatarImage'
 
 const PRIMARY_GREEN = '#1D9E75'
 const MUTED_GREY = '#8F8D88'
@@ -12,20 +13,12 @@ function ProfileTabIcon({ color, focused }: { color: string; focused: boolean })
 
   if (avatarUrl) {
     return (
-      <View
-        style={{
-          width: 26, height: 26, borderRadius: Radius.full,
-          borderWidth: focused ? 2 : 1.5,
-          borderColor: focused ? PRIMARY_GREEN : color,
-          overflow: 'hidden',
-        }}
-      >
-        <Image
-          source={{ uri: avatarUrl }}
-          style={{ width: '100%', height: '100%' }}
-          resizeMode="cover"
-        />
-      </View>
+      <AvatarImage
+        uri={avatarUrl}
+        size={26}
+        borderWidth={focused ? 2 : 1.5}
+        borderColor={focused ? PRIMARY_GREEN : color}
+      />
     )
   }
 
@@ -67,6 +60,7 @@ export default function CustomerTabLayout() {
         name="index"
         options={{
           title: 'Explore',
+          popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <Feather name="search" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => (
@@ -82,6 +76,7 @@ export default function CustomerTabLayout() {
         name="saved"
         options={{
           title: 'Wishlists',
+          popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <Feather name="heart" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => (
@@ -97,6 +92,7 @@ export default function CustomerTabLayout() {
         name="orders"
         options={{
           title: 'Orders',
+          popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <Feather name="package" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => (
@@ -112,6 +108,7 @@ export default function CustomerTabLayout() {
         name="messages"
         options={{
           title: 'Messages',
+          popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <Feather name="message-circle" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => (
@@ -127,6 +124,7 @@ export default function CustomerTabLayout() {
         name="profile"
         options={{
           title: 'Profile',
+          popToTopOnBlur: true,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarIcon: ({ color, focused }: any) => <ProfileTabIcon color={color} focused={focused} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any

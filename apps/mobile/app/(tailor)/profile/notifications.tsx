@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { useFocusEffect, useRouter } from 'expo-router'
+import { useFocusEffect, useNavigation, useRouter } from 'expo-router'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
 } from 'react-native'
@@ -22,6 +22,7 @@ import { Button, FeatureStateCard } from '@/components/ui'
 import { tailorOrderHint, tailorOrderStageLabel } from '@/lib/order-flow'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
+import { goBackOrFallback } from '@/lib/navigation'
 
 const TAILOR_NOTIFICATIONS_GUIDE_KEY = 'drape_tailor_notifications_best_use_dismissed'
 
@@ -89,6 +90,7 @@ function stageDescription(item: Pick<NotifItem, 'stage' | 'orderKind'>): string 
 
 export default function TailorNotificationsScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const [items, setItems] = useState<NotifItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -217,7 +219,7 @@ export default function TailorNotificationsScreen() {
   )
 
   function goBack() {
-    router.replace('/(tailor)/profile')
+    goBackOrFallback(router, navigation, '/(tailor)/profile')
   }
 
   return (
@@ -261,7 +263,7 @@ export default function TailorNotificationsScreen() {
           <Button
             label="Open profile"
             variant="ghost"
-            onPress={() => router.replace('/(tailor)/profile')}
+            onPress={goBack}
           />
         </FeatureStateCard>
       ) : items.length === 0 ? (

@@ -19,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { signInWithPasswordResilient, useAuth } from '@/lib/auth'
+import { goBackOrFallback } from '@/lib/navigation'
 import {
   isBiometricAvailable, getBiometricLabel,
   isBiometricEnabled, setBiometricEnabled, authenticate,
@@ -155,8 +156,7 @@ export default function LoginSecurityScreen() {
   }
 
   function goBack() {
-    if (navigation.canGoBack()) router.back()
-    else router.replace('/(customer)/profile/account-settings')
+    goBackOrFallback(router, navigation, '/(customer)/profile/account-settings')
   }
 
   return (

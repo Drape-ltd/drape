@@ -5,17 +5,19 @@
 import { useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  TextInput, ActivityIndicator, Alert, Modal, ScrollView, Image,
+  TextInput, ActivityIndicator, Alert, Modal, ScrollView,
   Dimensions,
 } from 'react-native'
-import { useNavigation, useRouter } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { Image as ExpoImage } from 'expo-image'
 import { Feather } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import * as ImageManipulator from 'expo-image-manipulator'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { goBackOrReturnTo } from '@/lib/navigation'
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
 const GRID_ITEM_SIZE = (SCREEN_WIDTH - Spacing.xl * 2 - Spacing.md) / 2
@@ -56,6 +58,7 @@ const EMPTY_EDIT: EditForm = {
 export default function PortfolioScreen() {
   const router = useRouter()
   const navigation = useNavigation()
+  const params = useLocalSearchParams<{ returnTo?: string }>()
   const { user } = useAuth()
 
   const [items, setItems] = useState<PortfolioItem[]>([])
@@ -65,7 +68,8 @@ export default function PortfolioScreen() {
   const [editModal, setEditModal] = useState<EditForm | null>(null)
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
-  const [expandedUrl, setExpandedUrl] = useState<string | null>(null)
+  const [expandedIndex, setExpandedIndex] = useState<number | null>(null)
+  const [expandedViewerIndex, setExpandedViewerIndex] = useState(0)
 
   useEffect(() => {
     loadData()
@@ -193,7 +197,7 @@ export default function PortfolioScreen() {
   }
 
   function goBack() {
-    router.replace('/(tailor)/profile')
+    goBackOrReturnTo(router, navigation, params.returnTo, '/(tailor)/profile')
   }
 
   async function handleSave() {
@@ -329,9 +333,9 @@ export default function PortfolioScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.secondaryBtn}
-              onPress={() => router.replace('/(tailor)/profile')}
+              onPress={goBack}
             >
-              <Text style={styles.secondaryBtnText}>Open profile</Text>
+              <Text style={styles.secondaryBtnText}>Go back</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -397,11 +401,15 @@ export default function PortfolioScreen() {
         renderItem={({ item }) => (
           <TouchableOpacity
             style={styles.gridItem}
-            onPress={() => setExpandedUrl(item.imageUrl)}
+            onPress={() => {
+              const nextIndex = items.findIndex((portfolioItem) => portfolioItem.id === item.id)
+              setExpandedViewerIndex(nextIndex >= 0 ? nextIndex : 0)
+              setExpandedIndex(nextIndex >= 0 ? nextIndex : 0)
+            }}
             onLongPress={() => openEdit(item)}
             activeOpacity={0.85}
           >
-            <Image source={{ uri: item.imageUrl }} style={styles.gridImage} resizeMode="cover" />
+            <ExpoImage source={item.imageUrl} style={styles.gridImage} contentFit="cover" transition={120} />
             <View style={styles.gridOverlay}>
               {item.category && (
                 <View style={styles.categoryPill}>
@@ -449,10 +457,11 @@ export default function PortfolioScreen() {
                 activeOpacity={0.8}
               >
                 {(editModal.imageUri || editModal.imageUrl) ? (
-                  <Image
-                    source={{ uri: editModal.imageUri || editModal.imageUrl }}
+                  <ExpoImage
+                    source={editModal.imageUri || editModal.imageUrl}
                     style={styles.imagePickerImg}
-                    resizeMode="cover"
+                    contentFit="cover"
+                    transition={120}
                   />
                 ) : (
                   <View style={styles.imagePickerEmpty}>
@@ -537,14 +546,38 @@ export default function PortfolioScreen() {
       )}
 
       {/* ── Full image expand ── */}
-      {expandedUrl && (
-        <Modal transparent animationType="fade" visible onRequestClose={() => setExpandedUrl(null)}>
-          <TouchableOpacity style={styles.expandOverlay} onPress={() => setExpandedUrl(null)} activeOpacity={1}>
-            <Image source={{ uri: expandedUrl }} style={styles.expandedImage} resizeMode="contain" />
-            <TouchableOpacity style={styles.expandClose} onPress={() => setExpandedUrl(null)}>
+      {expandedIndex !== null && items.length > 0 && (
+        <Modal transparent animationType="fade" visible onRequestClose={() => setExpandedIndex(null)}>
+          <View style={styles.expandOverlay}>
+            <FlatList
+              key={`portfolio-expanded-${expandedIndex}`}
+              data={items}
+              horizontal
+              pagingEnabled
+              initialScrollIndex={Math.min(expandedIndex, Math.max(items.length - 1, 0))}
+              getItemLayout={(_, index) => ({ length: SCREEN_WIDTH, offset: SCREEN_WIDTH * index, index })}
+              showsHorizontalScrollIndicator={false}
+              onMomentumScrollEnd={(event) => {
+                const nextIndex = Math.round(event.nativeEvent.contentOffset.x / SCREEN_WIDTH)
+                setExpandedViewerIndex(nextIndex)
+              }}
+              renderItem={({ item }) => (
+                <View style={styles.expandedSlide}>
+                  <ExpoImage source={item.imageUrl} style={styles.expandedImage} contentFit="contain" transition={150} />
+                </View>
+              )}
+            />
+            {items.length > 1 ? (
+              <View style={styles.expandedCount}>
+                <Text style={styles.expandedCountText}>
+                  {expandedViewerIndex + 1} / {items.length}
+                </Text>
+              </View>
+            ) : null}
+            <TouchableOpacity style={styles.expandClose} onPress={() => setExpandedIndex(null)}>
               <Feather name="x" size={20} color={Colors.white} />
             </TouchableOpacity>
-          </TouchableOpacity>
+          </View>
         </Modal>
       )}
     </SafeAreaView>
@@ -756,10 +789,26 @@ const styles = StyleSheet.create({
     flex: 1, backgroundColor: 'rgba(0,0,0,0.92)',
     alignItems: 'center', justifyContent: 'center',
   },
-  expandedImage: { width: SCREEN_WIDTH, height: SCREEN_WIDTH * 1.4 },
+  expandedSlide: {
+    width: SCREEN_WIDTH,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.lg,
+  },
+  expandedImage: { width: SCREEN_WIDTH - Spacing.lg * 2, height: SCREEN_WIDTH * 1.4 },
   expandClose: {
     position: 'absolute', top: 50, right: 20,
     width: 40, height: 40, borderRadius: 20,
     backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center',
   },
+  expandedCount: {
+    position: 'absolute',
+    bottom: 48,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: Radius.full,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  expandedCountText: { fontSize: FontSize.xs, color: Colors.white, fontWeight: FontWeight.semibold },
 })

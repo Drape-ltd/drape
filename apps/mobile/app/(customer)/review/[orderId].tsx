@@ -435,7 +435,7 @@ export default function ReviewScreen() {
             {/* Written review */}
             <Input
               label="Written review (optional)"
-              placeholder="Describe your experience — the fit, the communication, the quality…"
+              placeholder="Describe your experience: the fit, the communication, the quality..."
               value={body}
               onChangeText={(v) => { setBody(v); if (bodyError) validateBody(v) }}
               onBlur={() => validateBody(body)}
@@ -456,7 +456,7 @@ export default function ReviewScreen() {
                   const publicName = parts.length > 1
                     ? `${parts[0]} ${parts[parts.length - 1].charAt(0)}.`
                     : parts[0] || 'Customer'
-                  return `Your review appears publicly as "${publicName}" — first name and last initial only.`
+                  return `Your review appears publicly as "${publicName}". First name and last initial only.`
                 })()}
               </Text>
             </View>
@@ -474,7 +474,7 @@ export default function ReviewScreen() {
           />
           <TouchableOpacity style={styles.skipBtn} onPress={skip} disabled={submitting || skipping}>
             <Text style={[styles.skipText, (submitting || skipping) && styles.skipTextDisabled]}>
-              {skipping ? 'Completing order…' : 'Skip — complete order without reviewing'}
+              {skipping ? 'Completing order...' : 'Skip and complete order without reviewing'}
             </Text>
           </TouchableOpacity>
         </View>

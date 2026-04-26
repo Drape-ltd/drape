@@ -1,11 +1,12 @@
 import { Tabs, useRouter, useSegments } from 'expo-router'
-import { Image, Pressable, View } from 'react-native'
+import { Pressable } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { MaterialIcons } from '@expo/vector-icons'
 import { Colors, FontSize, Radius } from '@/constants/theme'
 import { useTailorProfile } from '@/lib/tailorProfile'
 import { useAuth } from '@/lib/auth'
 import { useRefreshOnFocus, useTailorOrders } from '@/lib/queries'
+import { AvatarImage } from '@/components/ui/AvatarImage'
 
 const PRIMARY_GREEN = '#1D9E75'
 const MUTED_GREY = '#8F8D88'
@@ -26,20 +27,12 @@ function ProfileTabIcon({ color, focused }: { color: string; focused: boolean })
 
   if (avatarUrl) {
     return (
-      <View
-        style={{
-          width: 26, height: 26, borderRadius: Radius.full,
-          borderWidth: focused ? 2 : 1.5,
-          borderColor: focused ? PRIMARY_GREEN : color,
-          overflow: 'hidden',
-        }}
-      >
-        <Image
-          source={{ uri: avatarUrl }}
-          style={{ width: '100%', height: '100%' }}
-          resizeMode="cover"
-        />
-      </View>
+      <AvatarImage
+        uri={avatarUrl}
+        size={26}
+        borderWidth={focused ? 2 : 1.5}
+        borderColor={focused ? PRIMARY_GREEN : color}
+      />
     )
   }
 
@@ -84,9 +77,17 @@ export default function TailorTabLayout() {
         name="index"
         options={{
           title: 'Dashboard',
+          popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <Feather name="bar-chart-2" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tabBarButton: (props: any) => <Pressable {...props} testID="tab-dashboard" />,
+          tabBarButton: (props: any) => (
+            <Pressable
+              {...props}
+              testID="tab-dashboard"
+              onPress={() => router.replace('/(tailor)')}
+              onLongPress={props.onLongPress}
+            />
+          ),
         }}
       />
       <Tabs.Screen
@@ -128,19 +129,35 @@ export default function TailorTabLayout() {
         name="shop"
         options={{
           title: 'Shop',
+          popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <MaterialIcons name="shopping-cart" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tabBarButton: (props: any) => <Pressable {...props} testID="tab-shop" />,
+          tabBarButton: (props: any) => (
+            <Pressable
+              {...props}
+              testID="tab-shop"
+              onPress={() => router.replace('/(tailor)/shop')}
+              onLongPress={props.onLongPress}
+            />
+          ),
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
           title: 'Profile',
+          popToTopOnBlur: true,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarIcon: ({ color, focused }: any) => <ProfileTabIcon color={color} focused={focused} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tabBarButton: (props: any) => <Pressable {...props} testID="tab-profile" />,
+          tabBarButton: (props: any) => (
+            <Pressable
+              {...props}
+              testID="tab-profile"
+              onPress={() => router.replace('/(tailor)/profile')}
+              onLongPress={props.onLongPress}
+            />
+          ),
         }}
       />
 

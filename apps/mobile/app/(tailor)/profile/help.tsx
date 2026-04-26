@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { CONTACTS } from '@drape/shared'
+import { goBackOrFallback } from '@/lib/navigation'
 
 const FAQ: Array<{ q: string; a: string }> = [
   {
@@ -28,8 +29,16 @@ const FAQ: Array<{ q: string; a: string }> = [
     a: "Customer payment stays protected while the order is active. Once the customer completes the handoff and closes the order out in Drape, the payout can move forward under your payout setup and Drape's platform fee terms.",
   },
   {
+    q: "How do delivery and shipping work now?",
+    a: "Standard delivery and shipping are Drape-managed. You prepare the order, mark it ready for Drape dispatch, and Drape ops takes over the normal dispatch handoff. Use pickup only for direct collection, and use support if something needs a rush or exception path.",
+  },
+  {
+    q: "What if I need to cancel a paid order?",
+    a: "Before irreversible work or handoff starts, request cancellation review from the order so Drape can review the right refund or next-step path. Do not mark an order complete, delivered, or collected if you already know you cannot fulfil it.",
+  },
+  {
     q: "How does ID verification work?",
-    a: "Upload a government-issued ID photo during profile setup. Our team manually reviews each submission — this typically takes 1–2 business days. Once approved your profile goes through a final review before going live.",
+    a: "Upload a government-issued ID photo during profile setup. Our team manually reviews each submission, and this typically takes 1 to 2 business days. Once approved, your profile goes through a final review before going live.",
   },
   {
     q: "Can I set my own availability?",
@@ -41,7 +50,7 @@ const FAQ: Array<{ q: string; a: string }> = [
   },
   {
     q: "How do I build my reputation on Drape?",
-    a: "Respond to quotes quickly, communicate clearly, and deliver quality work on time. Completed orders generate star ratings and reviews that appear on your public profile — these drive your ranking in search results.",
+    a: "Respond to quotes quickly, communicate clearly, and deliver quality work on time. Completed orders generate star ratings and reviews that appear on your public profile. These drive your ranking in search results.",
   },
   {
     q: "What if Drape pauses my access or asks for more information?",
@@ -49,7 +58,7 @@ const FAQ: Array<{ q: string; a: string }> = [
   },
   {
     q: "Can I work with international customers?",
-    a: "Yes. Enable 'Ships internationally' in your profile setup. Be clear in your quotes about postage costs and estimated delivery times. Currency is set per order based on your profile's default currency.",
+    a: "Yes. Enable shipping on your profile and keep your location accurate. Drape handles the standard shipping fee logic and dispatch ownership for standard flows, while your order quote still covers the garment work itself.",
   },
 ]
 
@@ -59,7 +68,7 @@ export default function TailorHelpScreen() {
   const [openIndex, setOpenIndex] = useState<number | null>(null)
 
   function goBack() {
-    router.replace('/(tailor)/profile')
+    goBackOrFallback(router, navigation, '/(tailor)/profile')
   }
 
   function toggleFaq(i: number) {

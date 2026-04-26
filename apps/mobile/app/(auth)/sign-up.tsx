@@ -173,7 +173,7 @@ export default function SignUpScreen() {
 
         <Input
           label="Display name"
-          placeholder="e.g. Ade Okafor"
+          placeholder="e.g. John Doe"
           value={displayName}
           onChangeText={(v) => {
             setDisplayName(v)

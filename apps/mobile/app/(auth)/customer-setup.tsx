@@ -214,7 +214,7 @@ export default function CustomerSetupScreen() {
 
               <Input
                 label="Your name"
-                placeholder="How your tailor will address you"
+                placeholder="John Doe"
                 value={displayName}
                 onChangeText={(v) => { setDisplayName(v); if (nameError) validateName(v) }}
                 onBlur={() => validateName(displayName)}

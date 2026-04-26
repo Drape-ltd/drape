@@ -2,8 +2,8 @@
  * auto-release — Supabase Edge Function (cron)
  *
  * Runs once daily via pg_cron + pg_net.
- * - Day 12 after SHIPPED: warns the customer that auto-release is close.
- * - Day 14 after SHIPPED: marks the order DELIVERED if no dispute/confirmation happened.
+ * - Day 12 after the final delivery handoff starts: warns the customer that auto-release is close.
+ * - Day 14 after the final delivery handoff starts: marks the order DELIVERED if no dispute/confirmation happened.
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -40,7 +40,7 @@ async function markOrderDelivered(supabase: any, order: OrderRow) {
       stage_updated_at: new Date().toISOString(),
     })
     .eq('id', order.id)
-    .eq('stage', 'SHIPPED')
+    .in('stage', ['SHIPPED', 'OUT_FOR_DELIVERY'])
     .select('id')
     .maybeSingle()
 
@@ -55,7 +55,7 @@ async function markOrderDelivered(supabase: any, order: OrderRow) {
   await supabase.from('order_stage_updates').insert({
     order_id: order.id,
     stage: 'DELIVERED',
-    note: 'System automatically marked this shipped order as delivered after 14 days without a dispute or customer confirmation.',
+    note: 'System automatically marked this order as delivered after 14 days without a dispute or customer confirmation.',
   })
 
   await audit(supabase, {
@@ -66,7 +66,7 @@ async function markOrderDelivered(supabase: any, order: OrderRow) {
       function: FN,
       from_stage: order.stage,
       to_stage: 'DELIVERED',
-      shipped_at: order.stage_updated_at,
+      handoff_started_at: order.stage_updated_at,
       release_after_days: RELEASE_AFTER_DAYS,
     },
   })
@@ -87,7 +87,7 @@ async function markOrderDelivered(supabase: any, order: OrderRow) {
     EdgeRuntime.waitUntil(
       sendPushToUser(supabase, order.tailor_id, {
         title: 'Order auto-delivered',
-        body: `${orderLabel} was automatically marked as delivered after 14 days in shipped status. Review the order in Drape if any follow-up is still needed.`,
+        body: `${orderLabel} was automatically marked as delivered after 14 days in the final handoff stage. Review the order in Drape if any follow-up is still needed.`,
         data: { orderId: order.id },
       }),
     )
@@ -125,7 +125,7 @@ async function sendAutoReleaseWarning(supabase: any, order: OrderRow) {
   EdgeRuntime.waitUntil(
     sendPushToUser(supabase, order.customer_id, {
       title: 'Confirm your order soon',
-      body: `Your ${orderLabel} has been in shipped status for 12 days. Confirm receipt or raise a concern within 2 days before Drape marks delivery automatically.`,
+      body: `Your ${orderLabel} has been in the final delivery stage for 12 days. Confirm receipt or raise a concern within 2 days before Drape marks delivery automatically.`,
       data: { orderId: order.id },
     }),
   )
@@ -136,7 +136,7 @@ async function sendAutoReleaseWarning(supabase: any, order: OrderRow) {
     order_id: order.id,
     payload: {
       function: FN,
-      shipped_at: order.stage_updated_at,
+      handoff_started_at: order.stage_updated_at,
       warning_after_days: WARNING_AFTER_DAYS,
     },
   })
@@ -160,7 +160,7 @@ Deno.serve(async (req) => {
     const { data: releaseData, error: releaseError } = await supabase
       .from('orders')
       .select('id, reference, garment_type, stage, customer_id, tailor_id, stage_updated_at')
-      .eq('stage', 'SHIPPED')
+      .in('stage', ['SHIPPED', 'OUT_FOR_DELIVERY'])
       .lt('stage_updated_at', releaseCutoff)
 
     if (releaseError) {
@@ -188,7 +188,7 @@ Deno.serve(async (req) => {
     const { data: warningData, error: warningError } = await supabase
       .from('orders')
       .select('id, reference, garment_type, stage, customer_id, tailor_id, stage_updated_at')
-      .eq('stage', 'SHIPPED')
+      .in('stage', ['SHIPPED', 'OUT_FOR_DELIVERY'])
       .lt('stage_updated_at', warningCutoff)
       .gte('stage_updated_at', releaseCutoff)
 

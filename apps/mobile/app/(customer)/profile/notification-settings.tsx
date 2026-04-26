@@ -16,6 +16,7 @@ import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
+import { goBackOrFallback } from '@/lib/navigation'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 type NotifPrefs = {
@@ -91,7 +92,7 @@ export default function NotificationSettingsScreen() {
   }
 
   function goBack() {
-    router.replace('/(customer)/profile/account-settings')
+    goBackOrFallback(router, navigation, '/(customer)/profile/account-settings')
   }
 
   return (
@@ -121,7 +122,7 @@ export default function NotificationSettingsScreen() {
             <PrefRow
               icon="package"
               title="Order updates"
-              description="Get notified when your tailor advances your order — cutting, shipping, ready to collect, and more."
+              description="Get notified when your tailor advances your order, including cutting, shipping, ready to collect, and more."
               value={prefs.orderUpdates}
               onChange={(v) => toggle('orderUpdates', v)}
               disabled={saving}

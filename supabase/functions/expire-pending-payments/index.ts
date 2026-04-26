@@ -62,6 +62,9 @@ type OrderRow = {
   tailor_id: string | null
   garment_type: string | null
   item_title: string | null
+  seller_item_id: string | null
+  item_size: string | null
+  item_quantity: number | null
   payment_intent_id: string | null
   payment_provider: string | null
   payment_checkout_url: string | null
@@ -182,6 +185,31 @@ async function expireOrderPayment(supabase: any, order: OrderRow) {
     note,
   })
 
+  if (order.order_kind === 'READY_MADE' && order.seller_item_id) {
+    const releasedQuantity = Math.max(order.item_quantity ?? 1, 1)
+    const { error: releaseError } = await supabase.rpc('release_seller_item_inventory', {
+      target_item_id: order.seller_item_id,
+      released_quantity: releasedQuantity,
+      released_size: order.item_size ?? null,
+    })
+
+    if (releaseError) {
+      await audit(supabase, {
+        event: 'ready_made.stock_release_failed',
+        actor_role: 'SYSTEM',
+        order_id: order.id,
+        severity: 'error',
+        payload: {
+          function: FN,
+          seller_item_id: order.seller_item_id,
+          released_quantity: releasedQuantity,
+          next_stage: nextStage,
+          error: releaseError.message,
+        },
+      })
+    }
+  }
+
   await audit(supabase, {
     event: 'payment.expired',
     actor_role: 'SYSTEM',
@@ -234,6 +262,9 @@ Deno.serve(async (req) => {
         tailor_id,
         garment_type,
         item_title,
+        seller_item_id,
+        item_size,
+        item_quantity,
         payment_intent_id,
         payment_provider,
         payment_checkout_url,

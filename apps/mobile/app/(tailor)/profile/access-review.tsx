@@ -3,16 +3,18 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Alert, ActivityIndicator, TextInput, Linking,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { CONTACTS } from '@drape/shared'
 import { useAuth } from '@/lib/auth'
 import { requestSellerAccessReview } from '@/lib/seller-access-review'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { goBackOrFallback } from '@/lib/navigation'
 
 export default function TailorAccessReviewScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const [note, setNote] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -57,7 +59,7 @@ export default function TailorAccessReviewScreen() {
   }
 
   function goBack() {
-    router.replace('/(tailor)/profile/trust-access' as never)
+    goBackOrFallback(router, navigation, '/(tailor)/profile/trust-access' as never)
   }
 
   if (submitted) {

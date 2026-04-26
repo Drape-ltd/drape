@@ -13,6 +13,7 @@ import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { goBackOrFallback } from '@/lib/navigation'
 
 type Measurements = Record<string, unknown>
 
@@ -82,7 +83,7 @@ export default function ViewProfileScreen() {
   const measureKeys = ['chest', 'waist', 'hips', 'shoulderWidth', 'inseam', 'sleeveLength', 'neckCircumference', 'height']
 
   function goBack() {
-    router.replace('/(customer)/profile')
+    goBackOrFallback(router, navigation, '/(customer)/profile')
   }
 
   if (loading) {
@@ -110,7 +111,7 @@ export default function ViewProfileScreen() {
             <TouchableOpacity onPress={() => { void loadProfile() }}>
               <Text style={styles.emptyLink}>Try again</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => router.replace('/(customer)/profile')}>
+            <TouchableOpacity onPress={goBack}>
               <Text style={styles.emptyLink}>Open profile</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => router.replace('/(customer)/profile/measurements')}>

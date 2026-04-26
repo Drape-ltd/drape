@@ -27,8 +27,12 @@ describe('canTransition — valid paths', () => {
     ['SOURCING', 'CUTTING', 'TAILOR'],
     ['CUTTING', 'SEWING', 'TAILOR'],
     ['SEWING', 'FINISHING', 'TAILOR'],
-    ['FINISHING', 'SHIPPED', 'TAILOR'],
+    ['FINISHING', 'READY_FOR_DRAPE_DISPATCH', 'TAILOR'],
+    ['READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'PLATFORM'],
+    ['READY_FOR_DRAPE_DISPATCH', 'SHIPPED', 'PLATFORM'],
     ['FINISHING', 'READY_FOR_COLLECTION', 'TAILOR'],
+    ['OUT_FOR_DELIVERY', 'DELIVERED', 'CUSTOMER'],
+    ['OUT_FOR_DELIVERY', 'DELIVERED', 'SYSTEM'],
     ['SHIPPED', 'DELIVERED', 'CUSTOMER'],
     ['SHIPPED', 'DELIVERED', 'SYSTEM'],
     ['DELIVERED', 'COMPLETE', 'CUSTOMER'],
@@ -49,7 +53,7 @@ describe('canTransition — invalid actor', () => {
   it('customer cannot advance production stages', () => {
     expect(canTransition('CONFIRMED', 'CUTTING', 'CUSTOMER')).toBe(false)
     expect(canTransition('CUTTING', 'SEWING', 'CUSTOMER')).toBe(false)
-    expect(canTransition('FINISHING', 'SHIPPED', 'CUSTOMER')).toBe(false)
+    expect(canTransition('FINISHING', 'READY_FOR_DRAPE_DISPATCH', 'CUSTOMER')).toBe(false)
   })
 
   it('tailor cannot accept or decline a quote on behalf of customer', () => {
@@ -61,6 +65,7 @@ describe('canTransition — invalid actor', () => {
     expect(canTransition('PAYMENT_PENDING', 'CONFIRMED', 'CUSTOMER')).toBe(false)
     expect(canTransition('QUOTE_SENT', 'EXPIRED', 'CUSTOMER')).toBe(false)
     expect(canTransition('SHIPPED', 'DELIVERED', 'TAILOR')).toBe(false)
+    expect(canTransition('READY_FOR_DRAPE_DISPATCH', 'SHIPPED', 'TAILOR')).toBe(false)
   })
 
   it('tailor cannot complete a delivered or collected order on behalf of the customer', () => {
@@ -88,9 +93,10 @@ describe('canTransition — invalid stage skips', () => {
 // ─── disputes ─────────────────────────────────────────────────────────────────
 
 describe('canTransition — disputes', () => {
-  const disputeFrom: OrderStage[] = ['CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'SHIPPED', 'READY_FOR_COLLECTION']
+  const disputeFrom: OrderStage[] = ['CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH', 'SHIPPED', 'READY_FOR_COLLECTION']
+  const extendedDisputeFrom: OrderStage[] = [...disputeFrom, 'OUT_FOR_DELIVERY', 'DELIVERED']
 
-  it.each(disputeFrom)('customer can open dispute from %s', (stage) => {
+  it.each(extendedDisputeFrom)('customer can open dispute from %s', (stage) => {
     expect(canTransition(stage, 'IN_DISPUTE', 'CUSTOMER')).toBe(true)
   })
 
@@ -123,9 +129,9 @@ describe('validNextStages', () => {
     expect(stages).toContain('DECLINED')
   })
 
-  it('tailor at FINISHING has both shipping and collection paths', () => {
+  it('tailor at FINISHING has drape-dispatch and collection paths', () => {
     const stages = validNextStages('FINISHING', 'TAILOR')
-    expect(stages).toContain('SHIPPED')
+    expect(stages).toContain('READY_FOR_DRAPE_DISPATCH')
     expect(stages).toContain('READY_FOR_COLLECTION')
   })
 
@@ -147,7 +153,7 @@ describe('isTerminal', () => {
     expect(isTerminal(stage)).toBe(true)
   })
 
-  const nonTerminal: OrderStage[] = ['PENDING_QUOTE', 'QUOTE_SENT', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'SHIPPED', 'DELIVERED', 'COLLECTED']
+  const nonTerminal: OrderStage[] = ['PENDING_QUOTE', 'QUOTE_SENT', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED', 'COLLECTED']
   it.each(nonTerminal)('%s is NOT terminal', (stage) => {
     expect(isTerminal(stage)).toBe(false)
   })
@@ -160,7 +166,7 @@ describe('ORDER_TRANSITIONS integrity', () => {
     const validStages = new Set<string>([
       'DRAFT', 'PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING',
       'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING',
-      'SHIPPED', 'READY_FOR_COLLECTION', 'DELIVERED', 'COLLECTED',
+      'READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'READY_FOR_COLLECTION', 'DELIVERED', 'COLLECTED',
       'COMPLETE', 'DECLINED', 'EXPIRED', 'IN_DISPUTE', 'REFUNDED', 'CANCELLED',
     ])
     for (const t of ORDER_TRANSITIONS) {
