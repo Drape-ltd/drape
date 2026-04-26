@@ -148,14 +148,6 @@ type UserRow = {
   role: string | null
 }
 
-function isMissingUsersTableError(error: unknown) {
-  const status = typeof (error as { status?: unknown })?.status === 'number' ? (error as { status: number }).status : null
-  const code = typeof (error as { code?: unknown })?.code === 'string' ? (error as { code: string }).code : ''
-  const message = typeof (error as { message?: unknown })?.message === 'string' ? (error as { message: string }).message.toLowerCase() : ''
-  const details = typeof (error as { details?: unknown })?.details === 'string' ? (error as { details: string }).details.toLowerCase() : ''
-  return status === 404 || code === 'PGRST205' || message.includes("relation 'users'") || details.includes("relation 'users'")
-}
-
 export type OpsDispute = {
   id: string
   orderId: string
