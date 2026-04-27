@@ -2,9 +2,26 @@ import type { Metadata } from 'next'
 import { CONTACTS } from '@drape/shared'
 import Link from 'next/link'
 import type { JSX } from 'react'
-import { hasOpsAccess, hasOpsDashboardToken } from '../../lib/ops-auth'
+import {
+  getOpsAccessMode,
+  getOpsBootstrapRole,
+  getOpsSession,
+  hasOpsWorkforceAccessConfig,
+} from '../../lib/ops-auth'
+import {
+  buildOpsHref,
+  buildOpsRedirectTarget,
+  canAccessOpsSection,
+  getOpsSection,
+  getVisibleOpsSections,
+  OPS_FUTURE_SURFACES,
+  OPS_LIVE_SECTIONS,
+  parseOpsView,
+  type OpsView,
+} from '../../lib/ops-console'
 import {
   type OpsAccountDeletionRequest,
+  type OpsDashboardData,
   loadOpsDashboardData,
   type OpsBypassLog,
   type OpsDispatchItem,
@@ -49,8 +66,11 @@ const NOTICE_COPY: Record<string, string> = {
 
 const ERROR_COPY: Record<string, string> = {
   locked: 'Unlock the ops dashboard to continue.',
+  forbidden: 'This bootstrap role does not have access to that control-plane surface.',
   'setup-needed': 'Add OPS_DASHBOARD_TOKEN before using the ops surface.',
   'invalid-token': 'That token did not match the configured ops access token.',
+  'workforce-login-required': 'This control plane is protected by workforce access. Sign in through the Drape Access gate with your @drapeon.co account.',
+  'workforce-unassigned': 'Your workforce identity is valid, but no control-plane role is assigned to it yet.',
   'service-role-missing': 'Add the server-side Supabase service role env vars to load ops data.',
   'invalid-action': 'That ops action was not recognized.',
   conflict: 'That record changed since the page loaded. Refresh the dashboard and try again.',
@@ -241,7 +261,13 @@ function DetailList({
   )
 }
 
-function DisputeCard({ dispute }: { dispute: OpsDispute }): JSX.Element {
+function DisputeCard({
+  dispute,
+  redirectTo,
+}: {
+  dispute: OpsDispute
+  redirectTo: string
+}): JSX.Element {
   const editable = dispute.status === 'OPEN' || dispute.status === 'UNDER_REVIEW'
   const canResolve = editable && dispute.orderStage === 'IN_DISPUTE'
   const detailItems = [
@@ -312,7 +338,7 @@ function DisputeCard({ dispute }: { dispute: OpsDispute }): JSX.Element {
         <>
           <form action="/ops/action" method="post" className="mt-5 flex flex-col gap-3 border-t border-ink/6 pt-5 sm:flex-row sm:items-end">
             <input type="hidden" name="kind" value="dispute-status" />
-            <input type="hidden" name="redirectTo" value="/ops#disputes" />
+            <input type="hidden" name="redirectTo" value={redirectTo} />
             <input type="hidden" name="disputeId" value={dispute.id} />
             <label className="grid gap-2 text-sm text-ink/70">
               Review status
@@ -336,7 +362,7 @@ function DisputeCard({ dispute }: { dispute: OpsDispute }): JSX.Element {
           {canResolve ? (
             <form action="/ops/action" method="post" className="mt-4 grid gap-3 rounded-[1.25rem] border border-ink/6 bg-white/76 p-4">
               <input type="hidden" name="kind" value="dispute-resolution" />
-              <input type="hidden" name="redirectTo" value="/ops#disputes" />
+              <input type="hidden" name="redirectTo" value={redirectTo} />
               <input type="hidden" name="disputeId" value={dispute.id} />
               <label className="grid gap-2 text-sm text-ink/70">
                 Resolution note
@@ -377,7 +403,13 @@ function DisputeCard({ dispute }: { dispute: OpsDispute }): JSX.Element {
   )
 }
 
-function BypassLogCard({ log }: { log: OpsBypassLog }): JSX.Element {
+function BypassLogCard({
+  log,
+  redirectTo,
+}: {
+  log: OpsBypassLog
+  redirectTo: string
+}): JSX.Element {
   return (
     <article className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -394,7 +426,7 @@ function BypassLogCard({ log }: { log: OpsBypassLog }): JSX.Element {
         </div>
         <form action="/ops/action" method="post">
           <input type="hidden" name="kind" value="bypass-review" />
-          <input type="hidden" name="redirectTo" value="/ops#bypass" />
+          <input type="hidden" name="redirectTo" value={redirectTo} />
           <input type="hidden" name="logId" value={log.id} />
           <input type="hidden" name="reviewed" value={log.reviewed ? 'false' : 'true'} />
           <button
@@ -424,7 +456,13 @@ function BypassLogCard({ log }: { log: OpsBypassLog }): JSX.Element {
   )
 }
 
-function ApplicationCard({ application }: { application: OpsTailorApplication }): JSX.Element {
+function ApplicationCard({
+  application,
+  redirectTo,
+}: {
+  application: OpsTailorApplication
+  redirectTo: string
+}): JSX.Element {
   return (
     <article className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -488,7 +526,7 @@ function ApplicationCard({ application }: { application: OpsTailorApplication })
 
       <form action="/ops/action" method="post" className="mt-5 flex flex-col gap-3 border-t border-ink/6 pt-5 sm:flex-row sm:items-end">
         <input type="hidden" name="kind" value="application-status" />
-        <input type="hidden" name="redirectTo" value="/ops#applications" />
+        <input type="hidden" name="redirectTo" value={redirectTo} />
         <input type="hidden" name="applicationId" value={application.id} />
         <label className="grid gap-2 text-sm text-ink/70">
           Application status
@@ -515,7 +553,13 @@ function ApplicationCard({ application }: { application: OpsTailorApplication })
   )
 }
 
-function VerificationCard({ profile }: { profile: OpsVerification }): JSX.Element {
+function VerificationCard({
+  profile,
+  redirectTo,
+}: {
+  profile: OpsVerification
+  redirectTo: string
+}): JSX.Element {
   return (
     <article className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -562,7 +606,7 @@ function VerificationCard({ profile }: { profile: OpsVerification }): JSX.Elemen
 
       <form action="/ops/action" method="post" className="mt-5 flex flex-col gap-3 border-t border-ink/6 pt-5 sm:flex-row">
         <input type="hidden" name="kind" value="verification-decision" />
-        <input type="hidden" name="redirectTo" value="/ops#verifications" />
+        <input type="hidden" name="redirectTo" value={redirectTo} />
         <input type="hidden" name="tailorUserId" value={profile.userId} />
         <button
           type="submit"
@@ -585,7 +629,13 @@ function VerificationCard({ profile }: { profile: OpsVerification }): JSX.Elemen
   )
 }
 
-function DeletionRequestCard({ request }: { request: OpsAccountDeletionRequest }): JSX.Element {
+function DeletionRequestCard({
+  request,
+  redirectTo,
+}: {
+  request: OpsAccountDeletionRequest
+  redirectTo: string
+}): JSX.Element {
   return (
     <article className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -628,7 +678,7 @@ function DeletionRequestCard({ request }: { request: OpsAccountDeletionRequest }
 
       <form action="/ops/action" method="post" className="mt-5 flex flex-col gap-3 border-t border-ink/6 pt-5 sm:flex-row sm:items-end">
         <input type="hidden" name="kind" value="deletion-status" />
-        <input type="hidden" name="redirectTo" value="/ops#deletions" />
+        <input type="hidden" name="redirectTo" value={redirectTo} />
         <input type="hidden" name="deletionRequestId" value={request.id} />
         <label className="grid gap-2 text-sm text-ink/70">
           Deletion status
@@ -691,7 +741,13 @@ function PayoutCard({ payout }: { payout: OpsPayout }): JSX.Element {
   )
 }
 
-function WorkflowIssueCard({ issue }: { issue: OpsWorkflowIssue }): JSX.Element {
+function WorkflowIssueCard({
+  issue,
+  redirectTo,
+}: {
+  issue: OpsWorkflowIssue
+  redirectTo: string
+}): JSX.Element {
   const canManageConversation = issue.event === 'conversation.safety_reported' && !!issue.orderId
 
   return (
@@ -742,7 +798,7 @@ function WorkflowIssueCard({ issue }: { issue: OpsWorkflowIssue }): JSX.Element 
       {canManageConversation ? (
         <form action="/ops/action" method="post" className="mt-5 flex flex-col gap-3 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4 sm:flex-row sm:items-center">
           <input type="hidden" name="kind" value="conversation-access" />
-          <input type="hidden" name="redirectTo" value="/ops#workflow-issues" />
+          <input type="hidden" name="redirectTo" value={redirectTo} />
           <input type="hidden" name="orderId" value={issue.orderId ?? ''} />
           <input type="hidden" name="reason" value={issue.reason ?? 'SAFETY_REVIEW'} />
           <div className="flex-1">
@@ -775,7 +831,13 @@ function WorkflowIssueCard({ issue }: { issue: OpsWorkflowIssue }): JSX.Element 
   )
 }
 
-function ReviewQueueCard({ review }: { review: OpsReviewQueueItem }): JSX.Element {
+function ReviewQueueCard({
+  review,
+  redirectTo,
+}: {
+  review: OpsReviewQueueItem
+  redirectTo: string
+}): JSX.Element {
   const visibilityLabel = review.publishedAt ? 'Public' : review.flagged ? 'Held for review' : 'Not public yet'
   const visibilityTone = review.publishedAt ? 'APPROVED' : review.flagged ? 'PENDING' : 'UNDER_REVIEW'
 
@@ -829,7 +891,7 @@ function ReviewQueueCard({ review }: { review: OpsReviewQueueItem }): JSX.Elemen
 
       <form action="/ops/action" method="post" className="mt-5 flex flex-col gap-3 border-t border-ink/6 pt-5 sm:flex-row">
         <input type="hidden" name="kind" value="review-visibility" />
-        <input type="hidden" name="redirectTo" value="/ops#reviews" />
+        <input type="hidden" name="redirectTo" value={redirectTo} />
         <input type="hidden" name="reviewId" value={review.id} />
         <button
           type="submit"
@@ -852,7 +914,13 @@ function ReviewQueueCard({ review }: { review: OpsReviewQueueItem }): JSX.Elemen
   )
 }
 
-function DispatchCard({ item }: { item: OpsDispatchItem }): JSX.Element {
+function DispatchCard({
+  item,
+  redirectTo,
+}: {
+  item: OpsDispatchItem
+  redirectTo: string
+}): JSX.Element {
   const isLocalDelivery = item.deliveryMethod === 'LOCAL_DELIVERY'
   const targetStage = isLocalDelivery ? 'OUT_FOR_DELIVERY' : 'SHIPPED'
   const providerLabel = isLocalDelivery ? 'Rider or provider' : 'Courier or provider'
@@ -901,7 +969,7 @@ function DispatchCard({ item }: { item: OpsDispatchItem }): JSX.Element {
 
       <form action="/ops/action" method="post" className="mt-5 grid gap-4 border-t border-ink/6 pt-5">
         <input type="hidden" name="kind" value="dispatch-stage" />
-        <input type="hidden" name="redirectTo" value="/ops#dispatch" />
+        <input type="hidden" name="redirectTo" value={redirectTo} />
         <input type="hidden" name="orderId" value={item.orderId} />
         <input type="hidden" name="targetStage" value={targetStage} />
         <div className="grid gap-4 md:grid-cols-2">
@@ -988,7 +1056,13 @@ function DispatchCard({ item }: { item: OpsDispatchItem }): JSX.Element {
   )
 }
 
-function OrderReviewCard({ review }: { review: OpsOrderReviewItem }): JSX.Element {
+function OrderReviewCard({
+  review,
+  redirectTo,
+}: {
+  review: OpsOrderReviewItem
+  redirectTo: string
+}): JSX.Element {
   const reviewTypeLabel = review.reviewType === 'CANCELLATION' ? 'Cancellation review' : 'Delivery review'
   const continueLabel =
     review.reviewType === 'CANCELLATION'
@@ -1043,7 +1117,7 @@ function OrderReviewCard({ review }: { review: OpsOrderReviewItem }): JSX.Elemen
 
       <form action="/ops/action" method="post" className="mt-5 grid gap-3 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
         <input type="hidden" name="kind" value="order-review-resolution" />
-        <input type="hidden" name="redirectTo" value="/ops#order-reviews" />
+        <input type="hidden" name="redirectTo" value={redirectTo} />
         <input type="hidden" name="orderId" value={review.orderId} />
         <input type="hidden" name="reviewType" value={review.reviewType} />
         <label className="grid gap-2 text-sm text-ink/72">
@@ -1091,6 +1165,8 @@ function LoginView({
 }: {
   error: string | null
 }): JSX.Element {
+  const bootstrapRole = getOpsBootstrapRole()
+
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(45,106,79,0.16),transparent_34%),radial-gradient(circle_at_80%_12%,rgba(216,90,48,0.12),transparent_28%),linear-gradient(180deg,#f7f1e8_0%,#efe8db_100%)]">
       <div className="mx-auto flex min-h-screen max-w-4xl items-center px-5 py-12 sm:px-8">
@@ -1119,6 +1195,9 @@ function LoginView({
             <div className="rounded-[1.75rem] border border-ink/8 bg-[linear-gradient(180deg,#faf5ed_0%,#f2eade_100%)] p-6">
               <h2 className="text-3xl text-ink">Unlock ops</h2>
               <p className="mt-3 text-sm leading-7 text-ink/66">Enter the shared ops token. The session stays scoped to this internal surface only.</p>
+              <div className="mt-4 rounded-[1.1rem] border border-ink/8 bg-white/72 px-4 py-3 text-xs leading-6 text-ink/58">
+                Bootstrap role for this environment: <span className="font-semibold uppercase tracking-[0.14em] text-ink">{bootstrapRole.replace(/_/g, ' ')}</span>. Real per-person enforcement will come from workforce SSO, not the shared token.
+              </div>
               {error ? (
                 <div className="mt-5 rounded-[1.25rem] border border-rust/16 bg-rust/8 px-4 py-3 text-sm leading-7 text-rust-700">
                   {error}
@@ -1151,7 +1230,57 @@ function LoginView({
   )
 }
 
+function WorkforceAccessView({
+  error,
+}: {
+  error: string | null
+}): JSX.Element {
+  return (
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(45,106,79,0.16),transparent_34%),radial-gradient(circle_at_80%_12%,rgba(216,90,48,0.12),transparent_28%),linear-gradient(180deg,#f7f1e8_0%,#efe8db_100%)]">
+      <div className="mx-auto flex min-h-screen max-w-4xl items-center px-5 py-12 sm:px-8">
+        <section className="w-full rounded-[2.4rem] border border-white/70 bg-white/82 p-7 shadow-[0_28px_90px_rgba(22,28,24,0.12)] backdrop-blur sm:p-10">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Internal ops</p>
+          <h1 className="mt-4 text-5xl leading-[0.94] text-ink sm:text-6xl">Use Drape workforce access, not a shared token.</h1>
+          <p className="mt-5 max-w-2xl text-lg leading-8 text-ink/68">
+            This control plane is configured for workforce login. Cloudflare Access should challenge the request before the app loads, and only `@drapeon.co` identities with an assigned role should reach this page.
+          </p>
+
+          <div className="mt-8 grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
+            <div className="rounded-[1.75rem] bg-ink p-6 text-white">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/62">What happens here</p>
+              <div className="mt-4 grid gap-3 text-sm leading-7 text-white/78">
+                <p>Cloudflare Access gates the route before page load.</p>
+                <p>Only `@drapeon.co` workforce identities should be admitted.</p>
+                <p>App-level permissions still decide which sections and actions are allowed.</p>
+                <p>If access feels wrong, it is usually an Access policy, audience, or role assignment issue.</p>
+              </div>
+            </div>
+
+            <div className="rounded-[1.75rem] border border-ink/8 bg-[linear-gradient(180deg,#faf5ed_0%,#f2eade_100%)] p-6">
+              <h2 className="text-3xl text-ink">Workforce checklist</h2>
+              <div className="mt-4 grid gap-3 text-sm leading-7 text-ink/66">
+                <p>1. The route is behind Cloudflare Access.</p>
+                <p>2. Your sign-in identity uses `@drapeon.co`.</p>
+                <p>3. The Access application audience is configured in web envs.</p>
+                <p>4. Your email or group is assigned to a Drape control-plane role.</p>
+              </div>
+              {error ? (
+                <div className="mt-5 rounded-[1.25rem] border border-rust/16 bg-rust/8 px-4 py-3 text-sm leading-7 text-rust-700">
+                  {error}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  )
+}
+
 function SetupView(): JSX.Element {
+  const bootstrapRole = getOpsBootstrapRole()
+  const workforceConfigured = hasOpsWorkforceAccessConfig()
+
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#f7f1e8_0%,#efe7da_100%)]">
       <div className="mx-auto flex min-h-screen max-w-4xl items-center px-5 py-12 sm:px-8">
@@ -1163,14 +1292,359 @@ function SetupView(): JSX.Element {
           </p>
           <div className="mt-8 rounded-[1.5rem] border border-ink/8 bg-bone/70 p-5">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/46">Required env</p>
-            <code className="mt-3 block whitespace-pre-wrap rounded-[1.1rem] bg-ink px-4 py-4 text-sm leading-7 text-white">
-              OPS_DASHBOARD_TOKEN=your_shared_internal_token
-            </code>
+            {workforceConfigured ? (
+              <>
+                <code className="mt-3 block whitespace-pre-wrap rounded-[1.1rem] bg-ink px-4 py-4 text-sm leading-7 text-white">
+                  CF_ACCESS_TEAM_DOMAIN=your-team.cloudflareaccess.com
+                </code>
+                <code className="mt-3 block whitespace-pre-wrap rounded-[1.1rem] bg-ink px-4 py-4 text-sm leading-7 text-white">
+                  CF_ACCESS_AUD=your_access_application_audience
+                </code>
+              </>
+            ) : (
+              <>
+                <code className="mt-3 block whitespace-pre-wrap rounded-[1.1rem] bg-ink px-4 py-4 text-sm leading-7 text-white">
+                  OPS_DASHBOARD_TOKEN=your_shared_internal_token
+                </code>
+                <code className="mt-3 block whitespace-pre-wrap rounded-[1.1rem] bg-ink px-4 py-4 text-sm leading-7 text-white">
+                  OPS_DASHBOARD_BOOTSTRAP_ROLE={bootstrapRole}
+                </code>
+              </>
+            )}
           </div>
         </section>
       </div>
     </main>
   )
+}
+
+function OpsNavItem({
+  href,
+  label,
+  count,
+  team,
+  active,
+}: {
+  href: string
+  label: string
+  count: number
+  team: string
+  active: boolean
+}): JSX.Element {
+  return (
+    <a
+      href={href}
+      className={`flex items-center justify-between rounded-[1.2rem] border px-4 py-3 transition ${
+        active
+          ? 'border-needle/18 bg-needle/10 text-ink'
+          : 'border-ink/8 bg-white/82 text-ink/72 hover:bg-bone hover:text-ink'
+      }`}
+    >
+      <div>
+        <p className="text-sm font-semibold">{label}</p>
+        <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/42">{team}</p>
+      </div>
+      <span className="rounded-full border border-ink/8 bg-white px-2.5 py-1 text-xs font-semibold text-ink/72">
+        {count}
+      </span>
+    </a>
+  )
+}
+
+function FutureSurfaceCard({
+  label,
+  team,
+  note,
+}: {
+  label: string
+  team: string
+  note: string
+}): JSX.Element {
+  return (
+    <div className="rounded-[1.2rem] border border-dashed border-ink/10 bg-white/62 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-semibold text-ink">{label}</p>
+        <span className="rounded-full border border-ink/8 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-ink/48">
+          {team}
+        </span>
+      </div>
+      <p className="mt-2 text-sm leading-6 text-ink/60">{note}</p>
+    </div>
+  )
+}
+
+function renderOpsSection(
+  sectionKey: OpsView,
+  data: OpsDashboardData,
+  currentView: OpsView,
+): JSX.Element {
+  switch (sectionKey) {
+    case 'disputes':
+      return (
+        <SectionFrame
+          id="disputes"
+          eyebrow="Disputes"
+          title="See the conflict context before you jump into rescue mode."
+          description="This queue is intentionally narrow: who is involved, what the customer said, what the order stage is, and whether ops has picked it up."
+        >
+          {data.disputes.length > 0 ? (
+            <div className="grid gap-5">
+              {data.disputes.map((dispute) => (
+                <DisputeCard
+                  key={dispute.id}
+                  dispute={dispute}
+                  redirectTo={buildOpsRedirectTarget(currentView, 'disputes')}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No disputes are open right now."
+              body="That is the state we want. If a customer raises a concern later, it will land here with order context."
+            />
+          )}
+        </SectionFrame>
+      )
+    case 'order-reviews':
+      return (
+        <SectionFrame
+          id="order-reviews"
+          eyebrow="Order reviews"
+          title="Cancellation and delivery reviews should become visible the moment either side asks Drape to step in."
+          description="These reviews come straight from the order timeline before handoff finishes cleanly. Use them to spot cancellation and delivery trouble early, not after it becomes a full dispute."
+        >
+          {data.orderReviews.length > 0 ? (
+            <div className="grid gap-5">
+              {data.orderReviews.map((review) => (
+                <OrderReviewCard
+                  key={review.id}
+                  review={review}
+                  redirectTo={buildOpsRedirectTarget(currentView, 'order-reviews')}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No order reviews are open right now."
+              body="If a customer or tailor asks Drape to review a cancellation or dispatch issue, it will appear here with full order context."
+            />
+          )}
+        </SectionFrame>
+      )
+    case 'reviews':
+      return (
+        <SectionFrame
+          id="reviews"
+          eyebrow="Review moderation"
+          title="Make review visibility intentional instead of accidental."
+          description="This queue shows reviews that are still held or unpublished so ops can decide whether they should go public, stay held, or just be sanity-checked in context."
+        >
+          {data.reviewQueue.length > 0 ? (
+            <div className="grid gap-5">
+              {data.reviewQueue.map((review) => (
+                <ReviewQueueCard
+                  key={review.id}
+                  review={review}
+                  redirectTo={buildOpsRedirectTarget(currentView, 'reviews')}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No reviews are waiting on moderation right now."
+              body="When a review is held for policy or dispute context, or it still needs a manual visibility decision, it will show up here."
+            />
+          )}
+        </SectionFrame>
+      )
+    case 'bypass':
+      return (
+        <SectionFrame
+          id="bypass"
+          eyebrow="Contact bypass"
+          title="Review blocked contact attempts without digging through raw logs."
+          description="This is the server-side record of users trying to move communication off-platform before the right milestone."
+        >
+          {data.bypassLogs.length > 0 ? (
+            <div className="grid gap-5">
+              {data.bypassLogs.map((log) => (
+                <BypassLogCard
+                  key={log.id}
+                  log={log}
+                  redirectTo={buildOpsRedirectTarget(currentView, 'bypass')}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No blocked contact attempts yet."
+              body="When the abuse filters catch phone numbers, handles, or external links, the review queue will show them here."
+            />
+          )}
+        </SectionFrame>
+      )
+    case 'applications':
+      return (
+        <SectionFrame
+          id="applications"
+          eyebrow="Tailor intake"
+          title="Keep application review lightweight, visible, and moving."
+          description="This mirrors the public application funnel from the website so ops can contact applicants and keep the pipeline from going stale."
+        >
+          {data.applications.length > 0 ? (
+            <div className="grid gap-5">
+              {data.applications.map((application) => (
+                <ApplicationCard
+                  key={application.id}
+                  application={application}
+                  redirectTo={buildOpsRedirectTarget(currentView, 'applications')}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No tailor applications are in the queue."
+              body="New website applications will land here automatically."
+            />
+          )}
+        </SectionFrame>
+      )
+    case 'verification':
+      return (
+        <SectionFrame
+          id="verification"
+          eyebrow="Verification"
+          title="Pending verification stays visible even before a fuller admin system exists."
+          description="This gives ops one place to spot pending tailor profiles and open the uploaded ID document quickly."
+        >
+          {data.pendingVerifications.length > 0 ? (
+            <div className="grid gap-5">
+              {data.pendingVerifications.map((profile) => (
+                <VerificationCard
+                  key={profile.profileId}
+                  profile={profile}
+                  redirectTo={buildOpsRedirectTarget(currentView, 'verification')}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No pending verification requests right now."
+              body="When a tailor submits ID verification, the profile will appear here until it is handled."
+            />
+          )}
+        </SectionFrame>
+      )
+    case 'dispatch':
+      return (
+        <SectionFrame
+          id="dispatch"
+          eyebrow="Dispatch queue"
+          title="Standard delivery and shipping handoff should happen from one ops queue."
+          description="These orders already collected the flat Drape-managed fulfillment fee at checkout. Once the seller has packed the parcel, ops owns the actual rider or courier handoff from here."
+        >
+          {data.dispatchQueue.length > 0 ? (
+            <div className="grid gap-5">
+              {data.dispatchQueue.map((item) => (
+                <DispatchCard
+                  key={item.orderId}
+                  item={item}
+                  redirectTo={buildOpsRedirectTarget(currentView, 'dispatch')}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="Nothing is waiting for Drape dispatch right now."
+              body="When a seller marks a delivery or shipping order ready for Drape dispatch, it will land here with the recipient details ops needs."
+            />
+          )}
+        </SectionFrame>
+      )
+    case 'workflow-issues':
+      return (
+        <SectionFrame
+          id="workflow-issues"
+          eyebrow="Workflow issues"
+          title="Recent safety, payment, and shipping problems should surface before support gets stuck guessing."
+          description="This is the launch-critical workflow stream from audit logs: conversation safety reports, in-app data access requests, seller access review requests, blocked payment starts, blocked shipping handoffs, and delivery webhooks that were skipped or failed. Safety reports can also pause or reopen chat from here."
+        >
+          {data.workflowIssues.length > 0 ? (
+            <div className="grid gap-5">
+              {data.workflowIssues.map((issue) => (
+                <WorkflowIssueCard
+                  key={issue.id}
+                  issue={issue}
+                  redirectTo={buildOpsRedirectTarget(currentView, 'workflow-issues')}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No recent safety, payment, or shipping issues are showing."
+              body="When someone reports unsafe chat behavior, requests privacy access, asks for seller access review, or checkout and delivery workflows get blocked, the latest audit breadcrumbs will appear here with enough context to triage quickly."
+            />
+          )}
+        </SectionFrame>
+      )
+    case 'deletions':
+      return (
+        <SectionFrame
+          id="deletions"
+          eyebrow="Privacy ops"
+          title="Deletion requests should never disappear into a support inbox."
+          description="People can already request deletion in-app. This queue makes the follow-through visible, statused, and easy to hand off between ops and privacy."
+        >
+          {data.deletionRequests.length > 0 ? (
+            <div className="grid gap-5">
+              {data.deletionRequests.map((request) => (
+                <DeletionRequestCard
+                  key={request.id}
+                  request={request}
+                  redirectTo={buildOpsRedirectTarget(currentView, 'deletions')}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No account deletion requests are waiting right now."
+              body="When a customer or tailor starts a deletion request in the app, it will appear here with its current handling status."
+            />
+          )}
+        </SectionFrame>
+      )
+    case 'payouts':
+      return (
+        <SectionFrame
+          id="payouts"
+          eyebrow="Payout visibility"
+          title="Recent payouts should be visible enough to answer trust questions quickly."
+          description="This is intentionally read-only for now. The goal is simple operational context: who was paid, how much, when, and whether the payout maps back to an order."
+        >
+          {data.payouts.length > 0 ? (
+            <div className="grid gap-5">
+              {data.payouts.map((payout) => (
+                <PayoutCard key={payout.id} payout={payout} />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No payout records are showing yet."
+              body="Once payouts start being written into the active database, this panel will show the latest records with order and tailor context."
+            />
+          )}
+        </SectionFrame>
+      )
+    case 'overview':
+    default:
+      return (
+        <div className="grid gap-8">
+          {OPS_LIVE_SECTIONS.filter((section) => section.key !== 'overview').map((section) => (
+            <div key={section.key}>{renderOpsSection(section.key, data, currentView)}</div>
+          ))}
+        </div>
+      )
+  }
 }
 
 export default async function OpsPage({
@@ -1179,19 +1653,26 @@ export default async function OpsPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }): Promise<JSX.Element> {
   const params = await searchParams
+  const accessMode = getOpsAccessMode()
   const noticeKey = readParam(params, 'notice')
   const errorKey = readParam(params, 'error')
+  const view = parseOpsView(readParam(params, 'view'))
   const notice = noticeKey ? NOTICE_COPY[noticeKey] ?? null : null
   const error = errorKey ? ERROR_COPY[errorKey] ?? 'Something went wrong while opening the ops surface.' : null
 
-  if (!hasOpsDashboardToken()) {
+  if (accessMode === 'unconfigured') {
     return <SetupView />
   }
 
-  const access = await hasOpsAccess()
-  if (!access) {
-    return <LoginView error={error} />
+  const session = await getOpsSession()
+  if (!session) {
+    return accessMode === 'cloudflare-access' ? <WorkforceAccessView error={error} /> : <LoginView error={error} />
   }
+
+  const visibleSections = getVisibleOpsSections(session.role)
+  const safeView = canAccessOpsSection(session.role, view) ? view : visibleSections[0]?.key ?? 'overview'
+  const safeSection = getOpsSection(safeView)
+  const roleError = safeView !== view ? ERROR_COPY.forbidden : error
 
   const data = await loadOpsDashboardData()
   if (!data) {
@@ -1200,14 +1681,14 @@ export default async function OpsPage({
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(45,106,79,0.16),transparent_34%),radial-gradient(circle_at_82%_10%,rgba(216,90,48,0.10),transparent_26%),linear-gradient(180deg,#f7f1e8_0%,#f1eadf_100%)]">
-      <div className="mx-auto max-w-7xl px-5 py-6 sm:px-8 lg:px-12">
+      <div className="mx-auto max-w-[95rem] px-5 py-6 sm:px-8 lg:px-12">
         <header className="rounded-[2rem] border border-white/72 bg-white/72 px-5 py-5 shadow-[0_18px_60px_rgba(22,28,24,0.08)] backdrop-blur sm:px-6">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Internal ops</p>
-              <h1 className="mt-3 text-4xl text-ink sm:text-5xl">Trust, abuse, and intake in one operating view.</h1>
+              <h1 className="mt-3 text-4xl text-ink sm:text-5xl">Drape control plane for launch-critical operations.</h1>
               <p className="mt-3 max-w-3xl text-sm leading-7 text-ink/64">
-                This is the lightweight control surface for launch-critical support work: disputes, review moderation, contact bypass review, conversation safety reports, privacy and trust requests, workflow issues, tailor intake, pending verification, account deletion follow-up, and payout visibility.
+                The public website keeps serving waitlist and growth. This protected surface is where Drape resolves dispatch, payouts, verification, privacy requests, deletion follow-up, review moderation, disputes, and operational exceptions without leaving an audit trail gap.
               </p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row">
@@ -1227,29 +1708,17 @@ export default async function OpsPage({
               </form>
             </div>
           </div>
-
-          <nav className="mt-5 flex flex-wrap gap-2 text-sm font-medium text-ink/70">
-            {([
-              { href: '#disputes', label: 'Disputes' },
-              { href: '#order-reviews', label: 'Order reviews' },
-              { href: '#reviews', label: 'Reviews' },
-              { href: '#bypass', label: 'Bypass logs' },
-              { href: '#applications', label: 'Applications' },
-              { href: '#verification', label: 'Verification' },
-              { href: '#dispatch', label: 'Dispatch' },
-              { href: '#workflow-issues', label: 'Workflow issues' },
-              { href: '#deletions', label: 'Deletion' },
-              { href: '#payouts', label: 'Payouts' },
-            ] as const).map(({ href, label }) => (
-              <Link
-                key={href}
-                href={href}
-                className="rounded-full border border-ink/8 bg-white/88 px-4 py-2 transition hover:bg-bone hover:text-ink"
-              >
-                {label}
-              </Link>
-            ))}
-          </nav>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <div className="rounded-full border border-needle/18 bg-needle/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-needle">
+              Bootstrap access mode
+            </div>
+            <div className="rounded-full border border-ink/8 bg-white/84 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-ink/56">
+              Shared token today
+            </div>
+            <div className="rounded-full border border-ink/8 bg-white/84 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-ink/56">
+              Workforce SSO next
+            </div>
+          </div>
         </header>
 
         {notice ? (
@@ -1258,9 +1727,9 @@ export default async function OpsPage({
           </div>
         ) : null}
 
-        {error ? (
+        {roleError ? (
           <div className="mt-6 rounded-[1.3rem] border border-rust/16 bg-rust/8 px-5 py-4 text-sm leading-7 text-rust-700">
-            {error}
+            {roleError}
           </div>
         ) : null}
 
@@ -1275,254 +1744,110 @@ export default async function OpsPage({
           </div>
         ) : null}
 
-        <section className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-8">
-          <SummaryCard
-            label="Open disputes"
-            value={data.summary.openDisputes}
-            hint="Live disputes still waiting for human attention."
-          />
-          <SummaryCard
-            label="Order reviews"
-            value={data.summary.pendingOrderReviews}
-            hint="Cancellation and delivery reviews waiting on Drape ops."
-          />
-          <SummaryCard
-            label="Review holds"
-            value={data.summary.pendingReviewVisibility}
-            hint="Reviews still waiting on a publish or hold decision."
-          />
-          <SummaryCard
-            label="Bypass review"
-            value={data.summary.unreviewedBypassLogs}
-            hint="Blocked contact attempts still unreviewed."
-          />
-          <SummaryCard
-            label="Safety reports"
-            value={data.summary.recentSafetyReports}
-            hint="Conversation safety reports from the last 7 days."
-          />
-          <SummaryCard
-            label="Applications"
-            value={data.summary.pendingApplications}
-            hint="Tailor applications still sitting in pending."
-          />
-          <SummaryCard
-            label="Verification"
-            value={data.summary.pendingVerifications}
-            hint="Profiles still waiting on verification review."
-          />
-          <SummaryCard
-            label="Dispatch"
-            value={data.summary.pendingDispatch}
-            hint="Orders packed and waiting for Drape to hand off delivery or shipping."
-          />
-          <SummaryCard
-            label="Deletion queue"
-            value={data.summary.pendingDeletionRequests}
-            hint="Account deletion requests still waiting on a first response."
-          />
-        </section>
+        <div className="mt-8 grid gap-8 xl:grid-cols-[19rem_minmax(0,1fr)]">
+          <aside className="h-fit rounded-[2rem] border border-ink/8 bg-white/80 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.08)] backdrop-blur">
+            <div className="rounded-[1.4rem] border border-needle/12 bg-needle/8 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Current focus</p>
+              <h2 className="mt-2 text-2xl text-ink">{safeSection.label}</h2>
+              <p className="mt-2 text-sm leading-7 text-ink/62">{safeSection.description}</p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <span className="rounded-full border border-ink/8 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/56">
+                  {safeSection.team}
+                </span>
+                <span className="rounded-full border border-ink/8 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/56">
+                  {safeSection.status}
+                </span>
+                <span className="rounded-full border border-ink/8 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/56">
+                  {session.role.replace(/_/g, ' ')}
+                </span>
+              </div>
+            </div>
 
-        <div className="mt-8 grid gap-8">
-          <SectionFrame
-            id="disputes"
-            eyebrow="Disputes"
-            title="See the conflict context before you jump into rescue mode."
-            description="This queue is intentionally narrow: who is involved, what the customer said, what the order stage is, and whether ops has picked it up."
-          >
-            {data.disputes.length > 0 ? (
-              <div className="grid gap-5">
-                {data.disputes.map((dispute) => (
-                  <DisputeCard key={dispute.id} dispute={dispute} />
+            <div className="mt-5 grid gap-3">
+              {visibleSections.map((section) => (
+                <OpsNavItem
+                  key={section.key}
+                  href={buildOpsHref(section.key)}
+                  label={section.label}
+                  count={section.summaryCount(data.summary)}
+                  team={section.team}
+                  active={safeView === section.key}
+                />
+              ))}
+            </div>
+
+            <div className="mt-6 border-t border-ink/6 pt-5">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/46">Next surfaces</p>
+              <div className="mt-3 grid gap-3">
+                {OPS_FUTURE_SURFACES.map((surface) => (
+                  <FutureSurfaceCard
+                    key={surface.key}
+                    label={surface.label}
+                    team={surface.team}
+                    note={surface.note}
+                  />
                 ))}
               </div>
-            ) : (
-              <EmptyState
-                title="No disputes are open right now."
-                body="That is the state we want. If a customer raises a concern later, it will land here with order context."
-              />
-            )}
-          </SectionFrame>
+            </div>
+          </aside>
 
-          <SectionFrame
-            id="order-reviews"
-            eyebrow="Order reviews"
-            title="Cancellation and delivery reviews should become visible the moment either side asks Drape to step in."
-            description="These reviews come straight from the order timeline before handoff finishes cleanly. Use them to spot cancellation and delivery trouble early, not after it becomes a full dispute."
-          >
-            {data.orderReviews.length > 0 ? (
-              <div className="grid gap-5">
-                {data.orderReviews.map((review) => (
-                  <OrderReviewCard key={review.id} review={review} />
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                title="No order reviews are open right now."
-                body="If a customer or tailor asks Drape to review a cancellation or dispatch issue, it will appear here with full order context."
+          <div className="grid gap-8">
+            <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+              <SummaryCard
+                label="Open disputes"
+                value={data.summary.openDisputes}
+                hint="Live disputes still waiting for human attention."
               />
-            )}
-          </SectionFrame>
+              <SummaryCard
+                label="Order reviews"
+                value={data.summary.pendingOrderReviews}
+                hint="Cancellation and delivery reviews waiting on Drape ops."
+              />
+              <SummaryCard
+                label="Dispatch"
+                value={data.summary.pendingDispatch}
+                hint="Orders packed and waiting for Drape to hand off delivery or shipping."
+              />
+              <SummaryCard
+                label="Verification"
+                value={data.summary.pendingVerifications}
+                hint="Profiles still waiting on verification review."
+              />
+              <SummaryCard
+                label="Deletion queue"
+                value={data.summary.pendingDeletionRequests}
+                hint="Account deletion requests still waiting on a first response."
+              />
+            </section>
 
-          <SectionFrame
-            id="reviews"
-            eyebrow="Review moderation"
-            title="Make review visibility intentional instead of accidental."
-            description="This queue shows reviews that are still held or unpublished so ops can decide whether they should go public, stay held, or just be sanity-checked in context."
-          >
-            {data.reviewQueue.length > 0 ? (
-              <div className="grid gap-5">
-                {data.reviewQueue.map((review) => (
-                  <ReviewQueueCard key={review.id} review={review} />
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                title="No reviews are waiting on moderation right now."
-                body="When a review is held for policy or dispute context, or it still needs a manual visibility decision, it will show up here."
-              />
-            )}
-          </SectionFrame>
+            {safeView === 'overview' ? (
+              <section className="rounded-[2rem] border border-ink/8 bg-white/80 p-6 shadow-[0_20px_70px_rgba(22,28,24,0.08)]">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/80">Architecture stance</p>
+                <div className="mt-3 grid gap-4 lg:grid-cols-3">
+                  <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
+                    <p className="text-sm font-semibold text-ink">Public web stays public</p>
+                    <p className="mt-2 text-sm leading-7 text-ink/62">
+                      Waitlist, marketing, and future customer acquisition stay clean. Internal ops should never leak into the public nav.
+                    </p>
+                  </div>
+                  <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
+                    <p className="text-sm font-semibold text-ink">Drape owns the workflow</p>
+                    <p className="mt-2 text-sm leading-7 text-ink/62">
+                      Refunds, verification, deletion, dispatch, review moderation, and trust decisions live here with audit history.
+                    </p>
+                  </div>
+                  <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
+                    <p className="text-sm font-semibold text-ink">Security gets stricter from here</p>
+                    <p className="mt-2 text-sm leading-7 text-ink/62">
+                      Today is token bootstrap mode. Next is workforce SSO, @drapeon.co gating, team roles, and app-level permission checks.
+                    </p>
+                  </div>
+                </div>
+              </section>
+            ) : null}
 
-          <SectionFrame
-            id="bypass"
-            eyebrow="Contact bypass"
-            title="Review blocked contact attempts without digging through raw logs."
-            description="This is the server-side record of users trying to move communication off-platform before the right milestone."
-          >
-            {data.bypassLogs.length > 0 ? (
-              <div className="grid gap-5">
-                {data.bypassLogs.map((log) => (
-                  <BypassLogCard key={log.id} log={log} />
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                title="No blocked contact attempts yet."
-                body="When the abuse filters catch phone numbers, handles, or external links, the review queue will show them here."
-              />
-            )}
-          </SectionFrame>
-
-          <SectionFrame
-            id="applications"
-            eyebrow="Tailor intake"
-            title="Keep application review lightweight, visible, and moving."
-            description="This mirrors the public application funnel from the website so ops can contact applicants and keep the pipeline from going stale."
-          >
-            {data.applications.length > 0 ? (
-              <div className="grid gap-5">
-                {data.applications.map((application) => (
-                  <ApplicationCard key={application.id} application={application} />
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                title="No tailor applications are in the queue."
-                body="New website applications will land here automatically."
-              />
-            )}
-          </SectionFrame>
-
-          <SectionFrame
-            id="verification"
-            eyebrow="Verification"
-            title="Pending verification stays visible even before a fuller admin system exists."
-            description="This gives ops one place to spot pending tailor profiles and open the uploaded ID document quickly."
-          >
-            {data.pendingVerifications.length > 0 ? (
-              <div className="grid gap-5">
-                {data.pendingVerifications.map((profile) => (
-                  <VerificationCard key={profile.profileId} profile={profile} />
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                title="No pending verification requests right now."
-                body="When a tailor submits ID verification, the profile will appear here until it is handled."
-              />
-            )}
-          </SectionFrame>
-
-          <SectionFrame
-            id="dispatch"
-            eyebrow="Dispatch queue"
-            title="Standard delivery and shipping handoff should happen from one ops queue."
-            description="These orders already collected the flat Drape-managed fulfillment fee at checkout. Once the seller has packed the parcel, ops owns the actual rider or courier handoff from here."
-          >
-            {data.dispatchQueue.length > 0 ? (
-              <div className="grid gap-5">
-                {data.dispatchQueue.map((item) => (
-                  <DispatchCard key={item.orderId} item={item} />
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                title="Nothing is waiting for Drape dispatch right now."
-                body="When a seller marks a delivery or shipping order ready for Drape dispatch, it will land here with the recipient details ops needs."
-              />
-            )}
-          </SectionFrame>
-
-          <SectionFrame
-            id="workflow-issues"
-            eyebrow="Workflow issues"
-            title="Recent safety, payment, and shipping problems should surface before support gets stuck guessing."
-            description="This is the launch-critical workflow stream from audit logs: conversation safety reports, in-app data access requests, seller access review requests, blocked payment starts, blocked shipping handoffs, and delivery webhooks that were skipped or failed. Safety reports can also pause or reopen chat from here."
-          >
-            {data.workflowIssues.length > 0 ? (
-              <div className="grid gap-5">
-                {data.workflowIssues.map((issue) => (
-                  <WorkflowIssueCard key={issue.id} issue={issue} />
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                title="No recent safety, payment, or shipping issues are showing."
-                body="When someone reports unsafe chat behavior, requests privacy access, asks for seller access review, or checkout and delivery workflows get blocked, the latest audit breadcrumbs will appear here with enough context to triage quickly."
-              />
-            )}
-          </SectionFrame>
-
-          <SectionFrame
-            id="deletions"
-            eyebrow="Privacy ops"
-            title="Deletion requests should never disappear into a support inbox."
-            description="People can already request deletion in-app. This queue makes the follow-through visible, statused, and easy to hand off between ops and privacy."
-          >
-            {data.deletionRequests.length > 0 ? (
-              <div className="grid gap-5">
-                {data.deletionRequests.map((request) => (
-                  <DeletionRequestCard key={request.id} request={request} />
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                title="No account deletion requests are waiting right now."
-                body="When a customer or tailor starts a deletion request in the app, it will appear here with its current handling status."
-              />
-            )}
-          </SectionFrame>
-
-          <SectionFrame
-            id="payouts"
-            eyebrow="Payout visibility"
-            title="Recent payouts should be visible enough to answer trust questions quickly."
-            description="This is intentionally read-only for now. The goal is simple operational context: who was paid, how much, when, and whether the payout maps back to an order."
-          >
-            {data.payouts.length > 0 ? (
-              <div className="grid gap-5">
-                {data.payouts.map((payout) => (
-                  <PayoutCard key={payout.id} payout={payout} />
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                title="No payout records are showing yet."
-                body="Once payouts start being written into the active database, this panel will show the latest records with order and tailor context."
-              />
-            )}
-          </SectionFrame>
+            {renderOpsSection(safeView, data, safeView)}
+          </div>
         </div>
       </div>
     </main>
