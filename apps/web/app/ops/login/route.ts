@@ -1,5 +1,11 @@
 import { NextResponse } from 'next/server'
-import { OPS_SESSION_COOKIE, getOpsDashboardToken, hashOpsToken, matchesOpsDashboardToken } from '../../../lib/ops-auth'
+import {
+  getOpsAccessMode,
+  OPS_SESSION_COOKIE,
+  getOpsDashboardToken,
+  hashOpsToken,
+  matchesOpsDashboardToken,
+} from '../../../lib/ops-auth'
 
 function sanitizeRedirect(value: FormDataEntryValue | null) {
   if (typeof value !== 'string' || !value.startsWith('/ops')) return '/ops'
@@ -17,6 +23,11 @@ export async function POST(request: Request) {
   const redirectTo = sanitizeRedirect(formData.get('redirectTo'))
   const submitted = typeof formData.get('token') === 'string' ? formData.get('token')?.toString().trim() ?? '' : ''
   const expected = getOpsDashboardToken()
+  const mode = getOpsAccessMode()
+
+  if (mode === 'cloudflare-access') {
+    return NextResponse.redirect(buildRedirect(request, redirectTo, 'error', 'workforce-login-required'))
+  }
 
   if (!expected) {
     return NextResponse.redirect(buildRedirect(request, redirectTo, 'error', 'setup-needed'))
