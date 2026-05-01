@@ -42,6 +42,8 @@ function orderPreview(stage: OrderStage, garmentType: string, orderKind: 'CUSTOM
       return `${garmentType} · Consultation requested`
     case 'QUOTE_SENT':
       return `${garmentType} · Quote ready for review`
+    case 'PAYMENT_FAILED':
+      return `${garmentType} · Payment failed, retry needed`
     case 'CONFIRMED':
     case 'DESIGNING':
     case 'SOURCING':

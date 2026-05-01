@@ -16,7 +16,7 @@ alter table tailor_profiles
 
 create table if not exists seller_items (
   id uuid primary key default gen_random_uuid(),
-  tailor_profile_id text not null references tailor_profiles(id) on delete cascade,
+  tailor_profile_id uuid not null references tailor_profiles(id) on delete cascade,
   title text not null,
   description text,
   category text,

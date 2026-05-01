@@ -38,6 +38,16 @@ export function getPaystackCallbackUrl(): string {
   return `${siteUrl.replace(/\/+$/u, '')}/payments/paystack/callback`
 }
 
+export function getZiptaxApiKey(): string {
+  const key = Deno.env.get('ZIPTAX_API_KEY')
+  if (!key) throw new Error('Missing ZIPTAX_API_KEY environment variable.')
+  return key
+}
+
+export function getOptionalSentryDsn(): string | null {
+  return Deno.env.get('SENTRY_DSN') ?? Deno.env.get('SUPABASE_SENTRY_DSN') ?? null
+}
+
 export function getDailyApiKey(): string {
   const key = Deno.env.get('DAILY_API_KEY')
   if (!key) throw new Error('Missing Daily API key environment variable.')

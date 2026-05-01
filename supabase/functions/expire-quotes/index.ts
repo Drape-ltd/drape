@@ -10,12 +10,12 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { authorizeCronRequest } from '../_shared/cron.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
-import { log, audit } from '../_shared/logger.ts'
+import { log } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
+import { finalizeOrderTerminal } from '../_shared/order-terminal.ts'
+import { buildQuoteExpiredTerminalRequest } from '../../../packages/shared/src/order-terminal.ts'
 
 const FN = 'expire-quotes'
-const EXPIRED_NOTE = 'Quote expired after 48 hours without customer response.'
-
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
 }
@@ -31,43 +31,18 @@ type OrderRow = {
 }
 
 async function expireQuote(supabase: any, order: OrderRow) {
-  const { data: updatedOrder, error: updateError } = await supabase
-    .from('orders')
-    .update({
-      stage: 'EXPIRED',
-      stage_updated_at: new Date().toISOString(),
-    })
-    .eq('id', order.id)
-    .eq('stage', 'QUOTE_SENT')
-    .select('id')
-    .maybeSingle()
+  const result = await finalizeOrderTerminal(
+    supabase,
+    order.id,
+    buildQuoteExpiredTerminalRequest({
+      fromStage: order.stage as any,
+      quoteExpiresAt: order.quote_expires_at,
+    }),
+  )
 
-  if (updateError) {
-    throw new Error(updateError.message)
-  }
-
-  if (!updatedOrder?.id) {
+  if (result.idempotent) {
     return false
   }
-
-  await supabase.from('order_stage_updates').insert({
-    order_id: order.id,
-    stage: 'EXPIRED',
-    note: EXPIRED_NOTE,
-  })
-
-  await audit(supabase, {
-    event: 'order.quote_expired',
-    actor_role: 'SYSTEM',
-    order_id: order.id,
-    severity: 'warn',
-    payload: {
-      function: FN,
-      from_stage: order.stage,
-      to_stage: 'EXPIRED',
-      quote_expires_at: order.quote_expires_at,
-    },
-  })
 
   const orderLabel = order.garment_type ?? 'order'
 

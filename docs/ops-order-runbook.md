@@ -69,35 +69,59 @@ Ops should especially treat these definitions as hard rules:
 
 1. Customer submits brief.
 2. Tailor quotes or requests consultation.
-3. Customer pays accepted quote.
-4. Tailor progresses work.
-5. Tailor marks `Preparing order`.
-6. Tailor marks `Ready for Drape dispatch` or `Ready for collection`.
-7. Ops arranges standard non-pickup handoff.
+3. If consultation is paid, customer pays the consultation fee before the call starts.
+4. Tailor starts consultation only after payment is confirmed when a fee is required.
+5. Customer pays accepted quote.
+6. Tailor progresses work.
+7. Tailor marks `Preparing order`.
+8. Tailor marks `Ready for Drape dispatch` or `Ready for collection`.
+9. Ops arranges standard non-pickup handoff.
 
 ## Cancellation and Refund Windows
 
 ### Before payment
 
 - customer can walk away
+- if a custom quote is still waiting on acceptance, the customer should decline the quote instead of forcing a cancellation
 - no refund question yet
 
-### Paid but before `Preparing order`
+### Ready-made before dispatch starts
 
-Ready-made:
+- `PAYMENT_PENDING`
+  - customer can self-cancel
+  - no settled refund math yet
+- `CONFIRMED` or `FINISHING`
+  - use Drape cancellation review
+  - likely refundable:
+    - item amount
+    - standard fulfillment fee
+  - premium or exception logistics fee stays case by case
+- `READY_FOR_DRAPE_DISPATCH`
+  - customer self-cancel is closed
+  - tailor can still open cancellation review if the packed order should not move forward
+  - if dispatch is already booked, treat refund as conditional on what Drape has already committed
 
-- default customer cancellation should be the simplest refund window
-- tailor cancellation should require a reason
+### Custom before irreversible work starts
 
-Custom:
+- `PENDING_QUOTE`, `CONSULTATION`, `PAYMENT_PENDING`
+  - customer can self-cancel
+  - tailor can still decline directly before the order becomes live production
+- `QUOTE_SENT`
+  - customer should decline the quote if they do not want to proceed
+- `CONFIRMED`, `DESIGNING`, `SOURCING`
+  - use Drape cancellation review
+  - likely refundable:
+    - quote amount
+    - standard fulfillment fee if it was part of the order
+  - paid consultation fee follows the consultation terms and may be separate or creditable
 
-- use Drape review if work has started to become committed
+### Custom after irreversible work starts
 
-### After `Preparing order`
-
-- do not allow blind instant cancellation
-- route through Drape review
-- use the in-order cancellation review lane whenever handoff has not started yet
+- `CUTTING`, `SEWING`, `FINISHING`
+  - standard customer cancellation is closed
+  - if something has gone wrong, use concern, support, or Drape review
+  - tailor can still ask Drape to review if the order truly cannot be completed
+  - refund is partial or case by case because irreversible work has started
 
 ### After dispatch is arranged
 
@@ -106,18 +130,18 @@ Custom:
 
 ## Paid Consultation Operating Rule
 
-If paid consultation is enabled later:
-
-- customer pays before the slot is confirmed
-- tailor starts the call only after payment is confirmed
-- ops should know whether the fee is:
+- consultation can be free or paid
+- if paid, the customer pays before the call starts
+- the order should show whether the fee is:
   - kept separate
-  - or credited to a later order
+  - or credited to a later quote
+- the tailor should not be able to start the consultation call until payment is confirmed
 
 If the customer pays but the consultation never really happens:
 
 - follow the consultation no-show and reschedule rule
 - do not let the order sit in limbo indefinitely
+- do not assume the consultation fee automatically refunds with the rest of the order
 
 ## Fabric Issue Operating Rule
 
@@ -126,6 +150,8 @@ If `CUSTOMER_SUPPLIES` fabric:
 - do not allow production to continue until receipt is confirmed
 - record how the fabric arrived
 - if the tailor rejects the fabric, require a clear reason
+- allow rejection reasons such as poor quality, wrong drape, wrong composition, insufficient yardage, damaged fabric, or unusable remnants or width
+- keep prep expectations visible, including prewash, pressing, or stabilization when needed
 
 Allowed next steps:
 
@@ -138,6 +164,14 @@ If `TAILOR_SOURCES` fabric:
 
 - source after payment, not before
 - require clear direction on type, color, and quality level
+- if replacement fabric is needed later, get customer approval inside Drape first
+
+## Rush and Exception Dispatch
+
+- standard local delivery and shipping stay Drape-managed at the flat fee
+- if an order needs same-day, next-day, express, or another non-standard dispatch path, ops should mark it as a premium or exception dispatch
+- any extra dispatch cost should be captured and explained inside the order before the handoff moves forward
+- do not expose Drape's internal dispatch cost view to the tailor by default
 
 ## Bulk Custom Operating Rule
 
@@ -202,6 +236,8 @@ For launch, use these defaults:
 
 - `Need fulfillment change` stays ops-managed and only before dispatch is actually booked
 - once dispatch is booked, changing pickup, delivery, or shipping is no longer a self-serve customer action
+- if ops approves a pre-booking method change and the new standard fee is lower, refund the difference
+- if ops approves a pre-booking method change and the new standard fee is higher, collect the difference before dispatch
 - if the parcel returns to sender, ops decides whether to:
   - retry dispatch
   - switch the fulfillment method

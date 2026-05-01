@@ -110,6 +110,11 @@ export default function TailorCustomerReviewScreen() {
   }
 
   async function load() {
+    if (!orderId || !user?.id) {
+      setLoading(false)
+      setLoadError('')
+      return
+    }
     setLoading(true)
     setLoadError('')
 
@@ -118,7 +123,7 @@ export default function TailorCustomerReviewScreen() {
         .from('orders')
         .select('customer_id, stage, stage_updated_at, customer_profiles!customer_id(display_name)')
         .eq('id', orderId)
-        .eq('tailor_id', user?.id)
+        .eq('tailor_id', user.id)
         .maybeSingle()
 
       if (orderError) throw orderError

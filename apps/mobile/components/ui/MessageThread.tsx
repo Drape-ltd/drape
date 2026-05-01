@@ -7,10 +7,11 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  TextInput, Image, Alert, ActivityIndicator, Keyboard,
+  TextInput, Alert, ActivityIndicator, Keyboard,
 } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
 import { Audio } from 'expo-av'
+import { Image as ExpoImage } from 'expo-image'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { stripExif } from '@/lib/stripExif'
 import { readFunctionErrorPayload } from '@/lib/function-errors'
@@ -670,7 +671,7 @@ function MessageBubble({ message, isOwn }: { message: Message; isOwn: boolean })
         )}
 
         {message.type === 'PHOTO' && message.photo_url && (
-          <Image source={{ uri: message.photo_url }} style={styles.bubblePhoto} resizeMode="cover" />
+          <ExpoImage source={{ uri: message.photo_url }} style={styles.bubblePhoto} contentFit="cover" transition={120} />
         )}
 
         {message.type === 'VOICE' && (
@@ -724,7 +725,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.8,
   },
-  emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   emptyText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 21 },
   retryThreadBtn: {
     marginTop: Spacing.sm,
@@ -821,7 +822,7 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   bubbleOwn: { backgroundColor: Colors.needleGreen, borderBottomRightRadius: 4 },
-  senderName: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
+  senderName: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen, fontFamily: 'Georgia' },
   bubbleText: { fontSize: FontSize.md, color: Colors.ink, lineHeight: 22 },
   bubbleTextOwn: { color: Colors.white },
   bubblePhoto: { width: 200, height: 200, borderRadius: Radius.md },

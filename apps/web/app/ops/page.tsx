@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
-import { CONTACTS } from '@drape/shared'
+import { CONTACTS, OPS_ISSUE_SEVERITIES, OPS_ISSUE_TYPES } from '@drape/shared'
 import Link from 'next/link'
-import type { JSX } from 'react'
+import type { JSX, ReactNode } from 'react'
 import {
   getOpsAccessMode,
   getOpsBootstrapRole,
@@ -31,6 +31,7 @@ import {
   type OpsReviewQueueItem,
   type OpsTailorApplication,
   type OpsVerification,
+  type OpsIssueHistoryEntry,
   type OpsWorkflowIssue,
 } from '../../lib/ops-data'
 
@@ -62,6 +63,12 @@ const NOTICE_COPY: Record<string, string> = {
   'conversation-unblocked': 'Conversation reopened.',
   'order-review-refunded': 'Order review approved and refund resolution recorded.',
   'order-review-continued': 'Order review closed and the order was returned to its live stage.',
+  'payout-release-triggered': 'Payout release was triggered for that order.',
+  'payout-resolution-applied': 'Payout resolution was saved and payout release was retried.',
+  'payout-resolution-refunded': 'Customer refund completed for that payout-blocked order.',
+  'partial-refund-issued': 'Partial refund issued and logged to the order timeline.',
+  'workflow-issue-saved': 'Workflow issue status updated.',
+  'manual-issue-created': 'Manual ops issue created.',
 }
 
 const ERROR_COPY: Record<string, string> = {
@@ -75,6 +82,11 @@ const ERROR_COPY: Record<string, string> = {
   'invalid-action': 'That ops action was not recognized.',
   conflict: 'That record changed since the page loaded. Refresh the dashboard and try again.',
   'save-failed': 'That update could not be saved right now.',
+  'refund-failed': 'The provider refund did not complete, so the order was not marked refunded.',
+  'partial-refund-invalid': 'Enter a refund amount greater than zero and below the remaining refundable balance.',
+  'payout-release-failed': 'The payout release could not be triggered right now.',
+  'workflow-issue-save-failed': 'That workflow issue could not be updated right now.',
+  'manual-issue-create-failed': 'That manual issue could not be created right now.',
 }
 
 function readParam(
@@ -118,7 +130,13 @@ function statusPillClass(status: string) {
   if (normalized === 'OPEN' || normalized === 'PENDING') {
     return 'border-rust/20 bg-rust/10 text-rust-700'
   }
+  if (normalized === 'ESCALATED') {
+    return 'border-rust/20 bg-rust/10 text-rust-700'
+  }
   if (normalized === 'UNDER_REVIEW' || normalized === 'REVIEWING' || normalized === 'CONTACTED') {
+    return 'border-needle/20 bg-needle/10 text-needle-700'
+  }
+  if (normalized === 'IN_REVIEW') {
     return 'border-needle/20 bg-needle/10 text-needle-700'
   }
   if (normalized === 'ACKNOWLEDGED') {
@@ -137,12 +155,20 @@ function statusPillClass(status: string) {
 function severityPillClass(severity: string) {
   const normalized = severity.toUpperCase()
 
-  if (normalized === 'ERROR') {
+  if (normalized === 'CRITICAL' || normalized === 'ERROR') {
     return 'border-rust/20 bg-rust/10 text-rust-700'
   }
 
-  if (normalized === 'WARN') {
+  if (normalized === 'HIGH' || normalized === 'WARN') {
     return 'border-rust/16 bg-rust/8 text-rust-700'
+  }
+
+  if (normalized === 'MEDIUM' || normalized === 'INFO') {
+    return 'border-needle/20 bg-needle/10 text-needle-700'
+  }
+
+  if (normalized === 'LOW') {
+    return 'border-ink/10 bg-bone text-ink/70'
   }
 
   return 'border-needle/20 bg-needle/10 text-needle-700'
@@ -150,16 +176,29 @@ function severityPillClass(severity: string) {
 
 function workflowIssueLabel(event: string) {
   switch (event) {
+    case 'CONVERSATION_SAFETY':
     case 'conversation.safety_reported':
       return 'Safety report'
     case 'conversation.blocked':
       return 'Conversation paused'
+    case 'PAYMENT_BLOCKED':
     case 'payment.blocked':
       return 'Payment blocked'
+    case 'PAYOUT_BLOCKED':
+      return 'Payout blocked'
+    case 'PAYOUT_FAILED':
+      return 'Payout failed'
     case 'privacy.data_access_requested':
       return 'Data access request'
+    case 'SELLER_ACCESS_REVIEW':
     case 'seller.access_review_requested':
       return 'Seller access review'
+    case 'ORDER_REVIEW':
+      return 'Cancellation review'
+    case 'DELIVERY_REVIEW':
+      return 'Delivery review'
+    case 'AFTERCARE_REQUEST':
+      return 'Aftercare request'
     case 'shipping.handoff_blocked':
       return 'Shipping handoff blocked'
     case 'shipping.webhook_skipped':
@@ -171,8 +210,24 @@ function workflowIssueLabel(event: string) {
     case 'shipping.delivery_update_failed':
       return 'Delivery update failed'
     default:
-      return event.replace(/\./g, ' ')
+      return event.replace(/[._]/g, ' ')
   }
+}
+
+function formatIssueTypeLabel(value: string) {
+  return value
+    .toLowerCase()
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function formatHistoryAction(value: string) {
+  return value
+    .toLowerCase()
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
 }
 
 function sectionMailto(subject: string) {
@@ -208,7 +263,7 @@ function SectionFrame({
   eyebrow: string
   title: string
   description: string
-  children: JSX.Element
+  children: ReactNode
 }): JSX.Element {
   return (
     <section
@@ -258,6 +313,202 @@ function DetailList({
         </div>
       ))}
     </dl>
+  )
+}
+
+function IssueHistoryBlock({
+  history,
+}: {
+  history: OpsIssueHistoryEntry[]
+}): JSX.Element | null {
+  if (history.length === 0) return null
+
+  return (
+    <div className="mt-5 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Audit trail</p>
+      <div className="mt-3 grid gap-3">
+        {history.slice(0, 4).map((entry) => (
+          <div key={entry.id} className="rounded-[1rem] border border-ink/6 bg-bone/52 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-ink">{formatHistoryAction(entry.actionTaken)}</p>
+              <p className="text-xs uppercase tracking-[0.14em] text-ink/46">{formatDateTime(entry.createdAt)}</p>
+            </div>
+            <p className="mt-1 text-sm leading-6 text-ink/62">
+              {(entry.performedBy ?? 'System')}{entry.performedRole ? ` · ${entry.performedRole}` : ''}
+            </p>
+            {entry.reason ? (
+              <p className="mt-2 text-sm leading-6 text-ink/72">{entry.reason}</p>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ManualIssueCreateCard({
+  redirectTo,
+}: {
+  redirectTo: string
+}): JSX.Element {
+  return (
+    <article className="rounded-[1.5rem] border border-needle/12 bg-[linear-gradient(180deg,#ffffff_0%,#eef8f4_100%)] p-5 shadow-sm">
+      <div className="flex flex-col gap-2">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Manual issue</p>
+        <h3 className="text-2xl text-ink">Open a numbered case for anything the automations missed.</h3>
+        <p className="text-sm leading-7 text-ink/64">
+          Use this when ops needs a tracked case before the trigger is fully automated. Critical issues notify the ops inbox immediately.
+        </p>
+      </div>
+
+      <form action="/ops/action" method="post" className="mt-5 grid gap-4">
+        <input type="hidden" name="kind" value="manual-issue-create" />
+        <input type="hidden" name="redirectTo" value={redirectTo} />
+        <div className="grid gap-4 lg:grid-cols-2">
+          <label className="grid gap-2 text-sm text-ink/70">
+            Issue type
+            <select
+              name="issueType"
+              defaultValue="SYSTEM_ALERT"
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
+            >
+              {OPS_ISSUE_TYPES.map((issueType) => (
+                <option key={issueType} value={issueType}>
+                  {formatIssueTypeLabel(issueType)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="grid gap-2 text-sm text-ink/70">
+            Severity
+            <select
+              name="severity"
+              defaultValue="MEDIUM"
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
+            >
+              {OPS_ISSUE_SEVERITIES.map((severity) => (
+                <option key={severity} value={severity}>
+                  {formatIssueTypeLabel(severity)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <label className="grid gap-2 text-sm text-ink/70">
+          Title
+          <input
+            name="title"
+            required
+            placeholder="Short case title ops will recognize at a glance"
+            className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+          />
+        </label>
+
+        <label className="grid gap-2 text-sm text-ink/70">
+          Description
+          <textarea
+            name="description"
+            required
+            rows={4}
+            placeholder="Explain what is wrong, what users are affected, and why this needs a case."
+            className="min-h-[120px] rounded-[1.2rem] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+          />
+        </label>
+
+        <label className="grid gap-2 text-sm text-ink/70">
+          Recommended next action
+          <textarea
+            name="recommendedAction"
+            required
+            rows={3}
+            placeholder="Tell the next ops teammate exactly what should happen next."
+            className="min-h-[104px] rounded-[1.2rem] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+          />
+        </label>
+
+        <div className="grid gap-4 lg:grid-cols-3">
+          <label className="grid gap-2 text-sm text-ink/70">
+            Order ID
+            <input
+              name="orderId"
+              placeholder="Optional order UUID"
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+            />
+          </label>
+          <label className="grid gap-2 text-sm text-ink/70">
+            User ID
+            <input
+              name="userId"
+              placeholder="Optional user UUID"
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+            />
+          </label>
+          <label className="grid gap-2 text-sm text-ink/70">
+            Tailor profile ID
+            <input
+              name="tailorProfileId"
+              placeholder="Optional tailor profile UUID"
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+            />
+          </label>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-4">
+          <label className="grid gap-2 text-sm text-ink/70">
+            Related entity type
+            <input
+              name="relatedEntityType"
+              placeholder="review, payout, order, user"
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+            />
+          </label>
+          <label className="grid gap-2 text-sm text-ink/70">
+            Related entity ID
+            <input
+              name="relatedEntityId"
+              placeholder="Optional entity ID"
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+            />
+          </label>
+          <label className="grid gap-2 text-sm text-ink/70">
+            Provider
+            <input
+              name="provider"
+              placeholder="PAYSTACK, STRIPE, Drape"
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+            />
+          </label>
+          <label className="grid gap-2 text-sm text-ink/70">
+            Stage
+            <input
+              name="stage"
+              placeholder="PAYMENT_PENDING, DELIVERED..."
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+            />
+          </label>
+        </div>
+
+        <label className="grid gap-2 text-sm text-ink/70">
+          Internal note
+          <textarea
+            name="note"
+            rows={3}
+            placeholder="Optional context for the audit trail only."
+            className="min-h-[96px] rounded-[1.2rem] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+          />
+        </label>
+
+        <div className="flex justify-end">
+          <button
+            type="submit"
+            className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90"
+          >
+            Create ops case
+          </button>
+        </div>
+      </form>
+    </article>
   )
 }
 
@@ -415,6 +666,9 @@ function BypassLogCard({
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex rounded-full border border-ink/8 bg-bone px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/55">
+              {log.displayId}
+            </span>
             <span className="text-lg text-ink">{log.userName}</span>
             <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(log.reviewed ? 'REVIEWED' : 'PENDING')}`}>
               {log.reviewed ? 'Reviewed' : 'Needs review'}
@@ -452,6 +706,8 @@ function BypassLogCard({
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Blocked content</p>
         <p className="mt-2 whitespace-pre-wrap break-words font-mono text-sm leading-7 text-ink/78">{log.content}</p>
       </div>
+
+      <IssueHistoryBlock history={log.history} />
     </article>
   )
 }
@@ -468,6 +724,9 @@ function ApplicationCard({
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex rounded-full border border-ink/8 bg-bone px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/55">
+              {application.displayId}
+            </span>
             <span className="text-lg text-ink">{application.businessName}</span>
             <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(application.status)}`}>
               {application.status.replace(/_/g, ' ')}
@@ -549,6 +808,8 @@ function ApplicationCard({
           Save application
         </button>
       </form>
+
+      <IssueHistoryBlock history={application.history} />
     </article>
   )
 }
@@ -565,6 +826,9 @@ function VerificationCard({
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex rounded-full border border-ink/8 bg-bone px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/55">
+              {profile.displayId}
+            </span>
             <span className="text-lg text-ink">{profile.displayName}</span>
             <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(profile.status)}`}>
               {profile.status.replace(/_/g, ' ')}
@@ -585,6 +849,8 @@ function VerificationCard({
           items={[
             { label: 'Location', value: profile.location },
             { label: 'Specialties', value: profile.specialtyTags.length > 0 ? profile.specialtyTags.join(', ') : '—' },
+            { label: 'Payout path', value: profile.payoutProvider ? `${profile.payoutProvider} · ${profile.payoutCurrency ?? '—'}` : 'Not set up yet' },
+            { label: 'Payout verified', value: profile.payoutAccountVerified ? 'Yes' : 'No' },
             { label: 'Submitted', value: formatDateTime(profile.createdAt) },
             { label: 'Last updated', value: formatDateTime(profile.updatedAt) },
           ]}
@@ -604,27 +870,40 @@ function VerificationCard({
         ) : null}
       </div>
 
-      <form action="/ops/action" method="post" className="mt-5 flex flex-col gap-3 border-t border-ink/6 pt-5 sm:flex-row">
+      <form action="/ops/action" method="post" className="mt-5 flex flex-col gap-3 border-t border-ink/6 pt-5">
         <input type="hidden" name="kind" value="verification-decision" />
         <input type="hidden" name="redirectTo" value={redirectTo} />
         <input type="hidden" name="tailorUserId" value={profile.userId} />
-        <button
-          type="submit"
-          name="decision"
-          value="APPROVE"
-          className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90"
-        >
-          Approve and go live
-        </button>
-        <button
-          type="submit"
-          name="decision"
-          value="REJECT"
-          className="inline-flex items-center justify-center rounded-full border border-rust/18 bg-rust/8 px-5 py-3 text-sm font-semibold text-rust-700 transition hover:bg-rust/12"
-        >
-          Reject verification
-        </button>
+        <label className="grid gap-2 text-sm text-ink/72">
+          Trust note
+          <textarea
+            name="note"
+            rows={3}
+            placeholder="Add what you verified, what is missing, or why this needs resubmission."
+            className="min-h-[104px] rounded-[1.2rem] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
+          />
+        </label>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <button
+            type="submit"
+            name="decision"
+            value="APPROVE"
+            className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90"
+          >
+            Approve and go live
+          </button>
+          <button
+            type="submit"
+            name="decision"
+            value="REJECT"
+            className="inline-flex items-center justify-center rounded-full border border-rust/18 bg-rust/8 px-5 py-3 text-sm font-semibold text-rust-700 transition hover:bg-rust/12"
+          >
+            Reject verification
+          </button>
+        </div>
       </form>
+
+      <IssueHistoryBlock history={profile.history} />
     </article>
   )
 }
@@ -641,6 +920,9 @@ function DeletionRequestCard({
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex rounded-full border border-ink/8 bg-bone px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/55">
+              {request.displayId}
+            </span>
             <span className="text-lg text-ink">{request.displayName}</span>
             <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(request.status)}`}>
               {request.status.replace(/_/g, ' ')}
@@ -700,18 +982,26 @@ function DeletionRequestCard({
           Save deletion status
         </button>
       </form>
+
+      <IssueHistoryBlock history={request.history} />
     </article>
   )
 }
 
 function PayoutCard({ payout }: { payout: OpsPayout }): JSX.Element {
+  const canRetryRelease =
+    !!payout.orderId && ['BLOCKED', 'FAILED', 'PENDING'].includes(payout.status.toUpperCase())
+
   return (
     <article className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-lg text-ink">{payout.tailorDisplayName}</span>
-            <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass('COMPLETED')}`}>
+            <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(payout.status)}`}>
+              {payout.status.replace(/_/g, ' ')}
+            </span>
+            <span className="inline-flex rounded-full border border-ink/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-ink/70">
               {payout.provider}
             </span>
           </div>
@@ -731,12 +1021,37 @@ function PayoutCard({ payout }: { payout: OpsPayout }): JSX.Element {
         <DetailList
           items={[
             { label: 'Amount', value: formatMoney(payout.amount, payout.currency) },
+            { label: 'Status', value: payout.status.replace(/_/g, ' ') },
             { label: 'Processed', value: formatDateTime(payout.processedAt) },
+            { label: 'Initiated', value: formatDateTime(payout.initiatedAt) },
+            { label: 'Completed', value: formatDateTime(payout.completedAt) },
+            { label: 'Failed', value: formatDateTime(payout.failedAt) },
             { label: 'Order', value: payout.orderReference ? `#${payout.orderReference}` : payout.orderId ?? '—' },
             { label: 'Provider ID', value: payout.providerPayoutId ?? '—' },
+            { label: 'Blocked reason', value: payout.blockedReason ? payout.blockedReason.replace(/_/g, ' ') : '—' },
           ]}
         />
       </div>
+
+      {canRetryRelease ? (
+        <form action="/ops/action" method="post" className="mt-5 flex flex-col gap-3 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4 sm:flex-row sm:items-center">
+          <input type="hidden" name="kind" value="payout-release" />
+          <input type="hidden" name="redirectTo" value={buildOpsRedirectTarget('payouts', 'payouts')} />
+          <input type="hidden" name="orderId" value={payout.orderId ?? ''} />
+          <div className="flex-1">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Direct payout action</p>
+            <p className="mt-2 text-sm leading-7 text-ink/68">
+              Retry payout release for the related order after you have confirmed the payout account, delivery state, and dispute window are all clean.
+            </p>
+          </div>
+          <button
+            type="submit"
+            className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90"
+          >
+            Retry payout release
+          </button>
+        </form>
+      ) : null}
     </article>
   )
 }
@@ -748,16 +1063,30 @@ function WorkflowIssueCard({
   issue: OpsWorkflowIssue
   redirectTo: string
 }): JSX.Element {
-  const canManageConversation = issue.event === 'conversation.safety_reported' && !!issue.orderId
+  const canManageConversation =
+    (issue.issueType === 'CONVERSATION_SAFETY' || issue.event === 'conversation.safety_reported')
+    && !!issue.orderId
+  const canUpdateIssueStatus = issue.source !== 'audit_logs'
+  const canResolveBlockedPayout = issue.issueType === 'PAYOUT_BLOCKED' && !!issue.orderId
+  const canPartialRefund =
+    !!issue.orderId
+    && issue.maxRefundableAmount > 0
+    && ['AFTERCARE_REQUEST', 'ORDER_REVIEW', 'DELIVERY_REVIEW', 'PAYMENT_BLOCKED', 'PAYOUT_BLOCKED'].includes(issue.issueType)
 
   return (
     <article className="rounded-[1.5rem] border border-ink/8 bg-[linear-gradient(180deg,#fffdf9_0%,#f4eee3_100%)] p-5 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex rounded-full border border-ink/8 bg-bone px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/55">
+              {issue.displayId}
+            </span>
             <span className="text-lg text-ink">{workflowIssueLabel(issue.event)}</span>
             <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${severityPillClass(issue.severity)}`}>
               {issue.severity}
+            </span>
+            <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(issue.status)}`}>
+              {issue.status.replace(/_/g, ' ')}
             </span>
           </div>
           <p className="mt-2 text-sm leading-7 text-ink/66">{issue.summary}</p>
@@ -779,6 +1108,10 @@ function WorkflowIssueCard({
             { label: 'Order', value: issue.orderReference ? `#${issue.orderReference}` : issue.orderId ?? '—' },
             { label: 'Stage', value: issue.orderStage ?? '—' },
             { label: 'Provider', value: issue.provider ?? '—' },
+            { label: 'Source', value: issue.source ?? 'ops-issues' },
+            { label: 'Order total', value: formatMoney(issue.orderTotalAmount, issue.orderCurrency) },
+            { label: 'Already refunded', value: formatMoney(issue.alreadyRefundedAmount, issue.orderCurrency) },
+            { label: 'Refundable now', value: formatMoney(issue.maxRefundableAmount, issue.orderCurrency) },
           ]}
         />
       </div>
@@ -788,11 +1121,180 @@ function WorkflowIssueCard({
           <DetailList
             items={[
               { label: 'Reason', value: issue.reason ? issue.reason.replace(/_/g, ' ') : '—' },
+              {
+                label: 'Currency conflict',
+                value:
+                  issue.blockedReasonCode === 'PAYOUT_CURRENCY_MISMATCH'
+                    ? `${issue.lockedPayoutCurrency ?? '—'} locked on the order vs ${issue.payoutCurrency ?? '—'} on the current payout setup`
+                    : '—',
+              },
               { label: 'Tracking', value: issue.trackingNumber ?? '—' },
               { label: 'Payment status', value: issue.paymentStatus ?? '—' },
             ]}
           />
         </div>
+      ) : null}
+
+      <div className="mt-5 rounded-[1.2rem] border border-needle/10 bg-needle/6 p-4">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Recommended action</p>
+        <p className="mt-2 text-sm leading-7 text-ink/72">{issue.recommendedAction}</p>
+      </div>
+
+      <IssueHistoryBlock history={issue.history} />
+
+      {canUpdateIssueStatus ? (
+        <form action="/ops/action" method="post" className="mt-5 flex flex-col gap-3 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+          <input type="hidden" name="kind" value="ops-issue-status" />
+          <input type="hidden" name="redirectTo" value={redirectTo} />
+          <input type="hidden" name="issueId" value={issue.id} />
+          <label className="grid gap-2 text-sm text-ink/70">
+            Internal note
+            <input
+              name="note"
+              placeholder="Add context for the ops trail"
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
+            />
+          </label>
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="submit"
+              name="status"
+              value="IN_REVIEW"
+              className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink transition hover:bg-bone"
+            >
+              Mark in review
+            </button>
+            <button
+              type="submit"
+              name="status"
+              value="ESCALATED"
+              className="inline-flex items-center justify-center rounded-full border border-rust/18 bg-rust/8 px-5 py-3 text-sm font-semibold text-rust-700 transition hover:bg-rust/12"
+            >
+              Escalate
+            </button>
+            <button
+              type="submit"
+              name="status"
+              value="RESOLVED"
+              className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90"
+            >
+              Mark resolved
+            </button>
+          </div>
+        </form>
+      ) : null}
+
+      {canResolveBlockedPayout ? (
+        <form action="/ops/action" method="post" className="mt-5 flex flex-col gap-3 rounded-[1.2rem] border border-rust/12 bg-rust/6 p-4">
+          <input type="hidden" name="kind" value="payout-block-resolution" />
+          <input type="hidden" name="redirectTo" value={redirectTo} />
+          <input type="hidden" name="issueId" value={issue.id} />
+          <input type="hidden" name="orderId" value={issue.orderId ?? ''} />
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-rust-700">Payout resolution</p>
+            <p className="mt-2 text-sm leading-7 text-ink/72">
+              Resolve this payout block from ops without touching the database. Use the locked order currency, convert to the current payout currency, or refund the customer if the order cannot be settled safely.
+            </p>
+          </div>
+          <label className="grid gap-2 text-sm text-ink/70">
+            Resolution note
+            <textarea
+              name="note"
+              required
+              rows={3}
+              placeholder="Explain why this resolution is safe and what ops approved."
+              className="rounded-[1.25rem] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
+            />
+          </label>
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="submit"
+              name="resolutionMode"
+              value="ORIGINAL_CURRENCY"
+              className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink transition hover:bg-bone"
+            >
+              Pay original currency
+            </button>
+            <button
+              type="submit"
+              name="resolutionMode"
+              value="CONVERT_TO_CURRENT"
+              className="inline-flex items-center justify-center rounded-full border border-needle/18 bg-needle/8 px-5 py-3 text-sm font-semibold text-needle-700 transition hover:bg-needle/12"
+            >
+              Convert and pay out
+            </button>
+            <button
+              type="submit"
+              name="resolutionMode"
+              value="REFUND_CUSTOMER"
+              className="inline-flex items-center justify-center rounded-full border border-rust/18 bg-rust/10 px-5 py-3 text-sm font-semibold text-rust-700 transition hover:bg-rust/14"
+            >
+              Refund customer
+            </button>
+          </div>
+        </form>
+      ) : null}
+
+      {canPartialRefund ? (
+        <form action="/ops/action" method="post" className="mt-5 flex flex-col gap-3 rounded-[1.2rem] border border-rust/12 bg-white/92 p-4">
+          <input type="hidden" name="kind" value="order-partial-refund" />
+          <input type="hidden" name="redirectTo" value={redirectTo} />
+          <input type="hidden" name="issueId" value={issue.id} />
+          <input type="hidden" name="orderId" value={issue.orderId ?? ''} />
+          <input type="hidden" name="maxRefundableAmount" value={String(issue.maxRefundableAmount)} />
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-rust-700">Partial refund</p>
+            <p className="mt-2 text-sm leading-7 text-ink/72">
+              Refund part of the customer payment without leaving ops. Use this for aftercare resolutions, delivery make-goods, or a payout block that only needs a partial customer return.
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-[1rem] border border-ink/8 bg-bone px-4 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Order total</p>
+              <p className="mt-2 text-sm text-ink">{formatMoney(issue.orderTotalAmount, issue.orderCurrency)}</p>
+            </div>
+            <div className="rounded-[1rem] border border-ink/8 bg-bone px-4 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Already refunded</p>
+              <p className="mt-2 text-sm text-ink">{formatMoney(issue.alreadyRefundedAmount, issue.orderCurrency)}</p>
+            </div>
+            <div className="rounded-[1rem] border border-ink/8 bg-bone px-4 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Maximum now</p>
+              <p className="mt-2 text-sm text-ink">{formatMoney(issue.maxRefundableAmount, issue.orderCurrency)}</p>
+            </div>
+          </div>
+          <label className="grid gap-2 text-sm text-ink/70">
+            Refund amount ({issue.orderCurrency ?? 'order currency'})
+            <input
+              name="amount"
+              type="number"
+              min="0.01"
+              step="0.01"
+              required
+              placeholder="25.00"
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
+            />
+          </label>
+          <label className="grid gap-2 text-sm text-ink/70">
+            Refund reason
+            <textarea
+              name="note"
+              required
+              rows={3}
+              placeholder="Explain why this partial refund is being issued and what the customer was told."
+              className="rounded-[1.25rem] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
+            />
+          </label>
+          <label className="inline-flex items-center gap-3 text-sm text-ink/72">
+            <input type="checkbox" name="notifyCustomer" value="yes" className="h-4 w-4 rounded border border-ink/18 text-needle" />
+            Email the customer after the refund completes
+          </label>
+          <button
+            type="submit"
+            className="inline-flex items-center justify-center rounded-full border border-rust/18 bg-rust px-5 py-3 text-sm font-semibold text-white transition hover:bg-rust/92"
+          >
+            Issue partial refund
+          </button>
+        </form>
       ) : null}
 
       {canManageConversation ? (
@@ -846,6 +1348,9 @@ function ReviewQueueCard({
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex rounded-full border border-ink/8 bg-bone px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/55">
+              {review.displayId}
+            </span>
             <span className="text-lg text-ink">Order {review.orderReference ? `#${review.orderReference}` : review.orderId.slice(0, 8)}</span>
             <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(visibilityTone)}`}>
               {visibilityLabel}
@@ -910,6 +1415,8 @@ function ReviewQueueCard({
           Hold from public view
         </button>
       </form>
+
+      <IssueHistoryBlock history={review.history} />
     </article>
   )
 }
@@ -973,6 +1480,31 @@ function DispatchCard({
         <input type="hidden" name="orderId" value={item.orderId} />
         <input type="hidden" name="targetStage" value={targetStage} />
         <div className="grid gap-4 md:grid-cols-2">
+          <label className="grid gap-2 text-sm text-ink/72">
+            Service level
+            <select
+              name="serviceLevel"
+              defaultValue={isLocalDelivery ? 'STANDARD' : 'INTERNATIONAL_STANDARD'}
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
+            >
+              {isLocalDelivery ? (
+                <>
+                  <option value="STANDARD">Standard</option>
+                  <option value="SAME_DAY">Same day</option>
+                  <option value="NEXT_DAY">Next day</option>
+                  <option value="CUSTOM">Custom</option>
+                </>
+              ) : (
+                <>
+                  <option value="STANDARD">Standard</option>
+                  <option value="NEXT_DAY">Next day</option>
+                  <option value="INTERNATIONAL_STANDARD">International standard</option>
+                  <option value="INTERNATIONAL_EXPRESS">International express</option>
+                  <option value="CUSTOM">Custom</option>
+                </>
+              )}
+            </select>
+          </label>
           <label className="grid gap-2 text-sm text-ink/72">
             {providerLabel}
             <input
@@ -1042,6 +1574,10 @@ function DispatchCard({
                 : 'Optional note like: DHL accepted the parcel and tracking is now active.'
             }
           />
+        </label>
+        <label className="inline-flex items-center gap-3 text-sm text-ink/72">
+          <input type="checkbox" name="premiumException" value="on" className="size-4 rounded border border-ink/20" />
+          Mark this as a premium or non-standard dispatch exception
         </label>
         <div className="flex flex-wrap gap-3">
           <button
@@ -1186,7 +1722,7 @@ function LoginView({
                 <p>Blocked contact attempts with review toggles.</p>
                 <p>Tailor application triage with status updates.</p>
                 <p>Pending verification profiles with direct approve or reject controls.</p>
-                <p>Recent safety, privacy, trust, payment, and shipping workflow issues pulled straight from audit logs.</p>
+                <p>Open ops issues now come from the dedicated issue ledger, with legacy shipping and privacy alerts still surfaced until every trigger is fully migrated.</p>
                 <p>Deletion requests with privacy-safe status tracking.</p>
                 <p>Recent payout records with enough context to answer trust questions fast.</p>
               </div>
@@ -1566,9 +2102,14 @@ function renderOpsSection(
         <SectionFrame
           id="workflow-issues"
           eyebrow="Workflow issues"
-          title="Recent safety, payment, and shipping problems should surface before support gets stuck guessing."
-          description="This is the launch-critical workflow stream from audit logs: conversation safety reports, in-app data access requests, seller access review requests, blocked payment starts, blocked shipping handoffs, and delivery webhooks that were skipped or failed. Safety reports can also pause or reopen chat from here."
+          title="Open safety, payment, payout, and shipping issues should surface before support gets stuck guessing."
+          description="This queue now reads from the dedicated ops issue ledger first, with legacy shipping and privacy alerts still shown until every trigger is migrated. Safety reports can also pause or reopen chat from here."
         >
+          <div className="mb-5">
+            <ManualIssueCreateCard
+              redirectTo={buildOpsRedirectTarget(currentView, 'workflow-issues')}
+            />
+          </div>
           {data.workflowIssues.length > 0 ? (
             <div className="grid gap-5">
               {data.workflowIssues.map((issue) => (
@@ -1792,16 +2333,31 @@ export default async function OpsPage({
           </aside>
 
           <div className="grid gap-8">
-            <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
               <SummaryCard
                 label="Open disputes"
                 value={data.summary.openDisputes}
                 hint="Live disputes still waiting for human attention."
               />
               <SummaryCard
+                label="Workflow issues"
+                value={data.summary.openWorkflowIssues}
+                hint="Open safety, payment, payout, privacy, and shipping issues that still need human action."
+              />
+              <SummaryCard
                 label="Order reviews"
                 value={data.summary.pendingOrderReviews}
                 hint="Cancellation and delivery reviews waiting on Drape ops."
+              />
+              <SummaryCard
+                label="Orders in escrow"
+                value={data.summary.ordersInEscrowCount}
+                hint={`${data.summary.ordersInEscrowValueLabel} gross still protected across active paid orders.`}
+              />
+              <SummaryCard
+                label="Pending payouts"
+                value={data.summary.pendingPayoutCount}
+                hint={`${data.summary.pendingPayoutValueLabel} still needs release, completion, or manual ops review.`}
               />
               <SummaryCard
                 label="Dispatch"
@@ -1812,6 +2368,11 @@ export default async function OpsPage({
                 label="Verification"
                 value={data.summary.pendingVerifications}
                 hint="Profiles still waiting on verification review."
+              />
+              <SummaryCard
+                label="Flagged content"
+                value={data.summary.flaggedContentCount}
+                hint="Unreviewed bypass attempts, flagged reviews, and safety reports now visible in ops."
               />
               <SummaryCard
                 label="Deletion queue"

@@ -39,17 +39,26 @@ If you choose pickup:
 
 ## Can I cancel my order?
 
-Before payment:
+Ready-made:
 
-- yes, you can walk away
+- if checkout is still `Payment pending`, you can cancel directly
+- once the paid order is `Confirmed` or `Preparing order`, use the in-order cancellation review path
+- once it is `Ready for Drape dispatch`, `Out for delivery`, `Shipped`, or `Ready for collection`, standard customer cancellation is closed
+- after that point, use delivery review or support if something has gone wrong
 
-After payment:
+Custom:
 
-- timing matters
-- early orders are easier to cancel cleanly than orders already in production or dispatch
-- if the order is already moving, Drape may need to review the situation rather than allowing instant cancellation
-- if the order is ready-made and handoff has not started yet, use the in-order cancellation review path instead of going off-platform
-- if the order is already marked `Ready for Drape dispatch`, `Out for delivery`, `Shipped`, or `Ready for collection`, expect Drape review instead of instant cancellation
+- if the order is still `Pending quote`, `Consultation`, or `Payment pending`, you can still walk away cleanly
+- if a quote is already sitting with you, decline it there instead of trying to force a cancellation
+- once the paid custom order is in `Confirmed`, `Designing`, or `Sourcing`, use Drape review to cancel fairly
+- once cutting has started, standard cancellation is closed and any remedy becomes a Drape review or concern path instead
+
+Refund logic:
+
+- quote or item amount is easiest to refund before cutting or dispatch booking
+- standard fulfillment fees are usually refundable before dispatch is booked
+- paid consultation fees follow the consultation terms shown on the order
+- rush or premium logistics fees are treated case by case
 
 ## What if my order is running late?
 
@@ -84,9 +93,14 @@ The normal next steps are:
 
 ## Are consultations free?
 
-Some consultations may stay free.
+Some consultations can stay free.
 
-In the future, some tailors may charge for consultation time, especially on more complex custom work. If that happens, Drape should tell you clearly before any session is booked.
+If a tailor charges for consultation time:
+
+- Drape shows the fee inside the order before the call starts
+- the order also shows whether that fee is separate or credited toward the final quote
+- the tailor cannot start the consultation call until the fee is confirmed
+- the order shows the reschedule, no-show, and expiry rule before you pay
 
 ## What if I am ordering for my family or wedding group?
 
@@ -114,6 +128,16 @@ For launch, the working rule is:
 Those are the cleanest exchange or refund cases.
 
 Change-of-mind return is not automatic once preparation, dispatch, or collection has started.
+
+## What if I cancel after paying for a consultation?
+
+You can still stop the order before live production starts, but the consultation fee does not automatically behave like the main order money.
+
+Instead:
+
+- if the consultation was free, there is nothing extra to refund
+- if the consultation fee was creditable, Drape can review whether it should be credited or refunded
+- if the consultation fee was separate, it follows the no-show, expiry, and consultation terms already shown on the order
 
 ## What if I need to change pickup, delivery, or shipping after paying?
 

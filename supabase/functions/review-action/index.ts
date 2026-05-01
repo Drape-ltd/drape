@@ -5,6 +5,7 @@ import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
+import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { parseBody, uuid, z } from '../_shared/validate.ts'
 
 const FN = 'review-action'
@@ -180,7 +181,7 @@ Deno.serve(async (req) => {
       const publicationStatus = holdReasons.length > 0 ? 'held' : 'published'
       const publishedAt = publicationStatus === 'published' ? new Date().toISOString() : null
 
-      const { error } = await supabase
+      const { data: savedReview, error } = await supabase
         .from('reviews')
         .upsert({
           order_id: body.orderId,
@@ -193,6 +194,8 @@ Deno.serve(async (req) => {
           published_at: publishedAt,
           flagged: publicationStatus === 'held',
         }, { onConflict: 'order_id' })
+        .select('id')
+        .single()
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: body.orderId, error: error.message })
@@ -209,6 +212,28 @@ Deno.serve(async (req) => {
           payload: {
             rating: body.rating,
             reasons: holdReasons,
+          },
+        })
+
+        await createOrRefreshOpsIssue(supabase, {
+          issueType: 'CONTENT_FLAG',
+          severity: 'MEDIUM',
+          source: FN,
+          actorId: caller.id,
+          actorRole: 'CUSTOMER',
+          orderId: body.orderId,
+          userId: caller.id,
+          relatedEntityType: 'review',
+          relatedEntityId: (savedReview as { id?: string } | null)?.id ?? null,
+          title: 'Review held for moderation',
+          description: 'A customer review was held before publication and needs trust moderation.',
+          recommendedAction: 'Review the text, hold reasons, and dispute context, then either publish the review or keep it held with a documented moderation note.',
+          dedupeKey: `review-held:${(savedReview as { id?: string } | null)?.id ?? body.orderId}`,
+          metadata: {
+            reasons: holdReasons,
+            rating: body.rating,
+            tag_count: body.tags.length,
+            publication_status: publicationStatus,
           },
         })
       }

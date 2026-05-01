@@ -55,21 +55,19 @@ export default function TailorTabLayout() {
           backgroundColor: Colors.white,
           borderTopColor: Colors.lightGrey,
           borderTopWidth: 1,
-          paddingHorizontal: 10,
-          paddingTop: 4,
           display: hideTabBar ? 'none' : 'flex',
         },
         tabBarItemStyle: {
           minHeight: 49,
-          paddingHorizontal: 2,
-          paddingVertical: 2,
+          paddingHorizontal: 0,
+          paddingVertical: 0,
         },
         tabBarIconStyle: {
-          marginTop: 1,
+          marginTop: 0,
         },
         tabBarLabelStyle: {
           fontSize: 11,
-          marginTop: -2,
+          marginTop: 0,
         },
       }}
     >

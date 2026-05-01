@@ -256,7 +256,7 @@ create table payouts (
 
 create table contact_bypass_logs (
   id          uuid primary key default gen_random_uuid(),
-  user_id     uuid not null references users(id),
+  user_id     uuid not null references auth.users(id) on delete cascade,
   surface     text not null,
   content     text not null,
   attempt     integer not null,

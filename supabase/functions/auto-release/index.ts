@@ -38,6 +38,8 @@ async function markOrderDelivered(supabase: any, order: OrderRow) {
     .update({
       stage: 'DELIVERED',
       stage_updated_at: new Date().toISOString(),
+      handoff_completed_at: new Date().toISOString(),
+      handoff_confirmation_source: 'SYSTEM_AUTO_DELIVERED',
     })
     .eq('id', order.id)
     .in('stage', ['SHIPPED', 'OUT_FOR_DELIVERY'])

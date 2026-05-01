@@ -1,43 +1,35 @@
-/**
- * Drape currency utility
- *
- * All amounts in the DB are stored in minor units (cents) of the tailor's quoted currency.
- * The `quoted_currency` column defaults to 'USD'. This module provides:
- *  - SUPPORTED_CURRENCIES list with symbols
- *  - fetchRates() — live exchange rates from Frankfurter (free, no key)
- *  - formatAmount(amountMinorUnits, fromCurrency, toCurrency, rate) — display string
- *  - useCurrency() hook — user's preferred currency + live rates
- */
+import { useEffect, useMemo, useState } from 'react'
+import {
+  currencyDisplayLabel,
+  currencySymbol,
+  DEFAULT_ACCOUNT_CURRENCY,
+  detectCurrencyPreference,
+  normalizeAccountCurrency,
+  SUPPORTED_ACCOUNT_CURRENCIES,
+  type AccountCurrencyCode,
+  type CurrencySource,
+} from '@drape/shared'
+import { useAuth } from './auth'
+import { supabase } from './supabase'
 
-import { useState, useEffect } from 'react'
-import AsyncStorage from '@react-native-async-storage/async-storage'
+type CurrencyCode = AccountCurrencyCode
 
-const CURRENCY_PREF_KEY = 'drape_currency'
-const RATES_CACHE_KEY = 'drape_rates_cache'
-const RATES_TTL_MS = 60 * 60 * 1000 // 1 hour
+export type { CurrencyCode }
 
-export type CurrencyCode = 'USD' | 'GBP' | 'EUR' | 'NGN' | 'GHS' | 'KES' | 'ZAR' | 'CAD' | 'AUD' | 'INR'
-
-export const SUPPORTED_CURRENCIES: Array<{ code: CurrencyCode; symbol: string; name: string }> = [
-  { code: 'USD', symbol: '$', name: 'US Dollar' },
-  { code: 'GBP', symbol: '£', name: 'British Pound' },
-  { code: 'EUR', symbol: '€', name: 'Euro' },
-  { code: 'NGN', symbol: '₦', name: 'Nigerian Naira' },
-  { code: 'GHS', symbol: 'GH₵', name: 'Ghanaian Cedi' },
-  { code: 'KES', symbol: 'KSh', name: 'Kenyan Shilling' },
-  { code: 'ZAR', symbol: 'R', name: 'South African Rand' },
-  { code: 'CAD', symbol: 'C$', name: 'Canadian Dollar' },
-  { code: 'AUD', symbol: 'A$', name: 'Australian Dollar' },
-  { code: 'INR', symbol: '₹', name: 'Indian Rupee' },
-]
+export const SUPPORTED_CURRENCIES: Array<{ code: CurrencyCode; symbol: string; name: string }> =
+  SUPPORTED_ACCOUNT_CURRENCIES.map((code) => ({
+    code,
+    symbol: currencySymbol(code),
+    name: currencyDisplayLabel(code),
+  }))
 
 export type Rates = Partial<Record<CurrencyCode, number>>
+export type CurrencyPreferenceContext = ReturnType<typeof detectCurrencyPreference>
 
-/**
- * Fetch live exchange rates from Frankfurter (base USD).
- * Falls back to a static snapshot if unavailable.
- */
-// Snapshot: 2026-03-18. Update if rates diverge > 15% from live.
+const RATES_TTL_MS = 60 * 60 * 1000
+
+let inMemoryRatesCache: { rates: Rates; fetchedAt: number } | null = null
+
 export const STATIC_FALLBACK_RATES: Rates = {
   USD: 1,
   GBP: 0.79,
@@ -45,59 +37,103 @@ export const STATIC_FALLBACK_RATES: Rates = {
   NGN: 1580,
   GHS: 15.6,
   KES: 129,
-  ZAR: 18.4,
   CAD: 1.36,
-  AUD: 1.53,
-  INR: 83.5,
+}
+
+function deviceLocale() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().locale ?? null
+  } catch {
+    return null
+  }
+}
+
+function isMissingUsersTable(error: { code?: string | null; message?: string | null; details?: string | null } | null | undefined) {
+  const message = `${error?.message ?? ''} ${error?.details ?? ''}`.toLowerCase()
+  return error?.code === 'PGRST205' ||
+    message.includes('schema cache') ||
+    message.includes("could not find the table 'public.users'") ||
+    message.includes("relation 'public.users' does not exist") ||
+    message.includes("relation \"public.users\" does not exist")
+}
+
+export function detectDeviceCurrencyPreference() {
+  return detectCurrencyPreference({ locale: deviceLocale() })
+}
+
+export async function fetchCurrencyPreferenceContext(input?: {
+  locale?: string | null
+}): Promise<CurrencyPreferenceContext> {
+  const locale = input?.locale ?? deviceLocale()
+  const fallback = detectCurrencyPreference({ locale })
+
+  try {
+    const { data, error } = await supabase.functions.invoke('currency-context', {
+      body: { locale },
+    })
+
+    if (error) return fallback
+
+    const currency = normalizeAccountCurrency((data as any)?.currency)
+    const source = typeof (data as any)?.source === 'string'
+      ? ((data as any).source.trim().toUpperCase() as CurrencySource)
+      : fallback.source
+    const regionCode = typeof (data as any)?.regionCode === 'string' && (data as any).regionCode.trim().length > 0
+      ? (data as any).regionCode.trim().toUpperCase()
+      : fallback.regionCode
+
+    if (!currency) return fallback
+
+    return {
+      currency,
+      source,
+      regionCode,
+      usedFallback: source === 'UNSUPPORTED_FALLBACK',
+    }
+  } catch {
+    return fallback
+  }
 }
 
 export async function fetchRates(): Promise<Rates> {
+  const now = Date.now()
+  if (inMemoryRatesCache && now - inMemoryRatesCache.fetchedAt < RATES_TTL_MS) {
+    return inMemoryRatesCache.rates
+  }
+
   try {
-    // Check cache
-    const cached = await AsyncStorage.getItem(RATES_CACHE_KEY)
-    if (cached) {
-      const { rates, fetchedAt } = JSON.parse(cached)
-      if (Date.now() - fetchedAt < RATES_TTL_MS) return rates
+    const codes = SUPPORTED_ACCOUNT_CURRENCIES.filter((code) => code !== 'USD').join(',')
+    const response = await fetch(`https://api.frankfurter.app/latest?from=USD&to=${codes}`, {
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!response.ok) throw new Error(`Rates request failed with ${response.status}`)
+
+    const json = await response.json()
+    const rates: Rates = {
+      USD: 1,
+      ...(json?.rates ?? {}),
     }
 
-    const codes = SUPPORTED_CURRENCIES.map((c) => c.code).filter((c) => c !== 'USD').join(',')
-    const res = await fetch(`https://api.frankfurter.app/latest?from=USD&to=${codes}`, { signal: AbortSignal.timeout(5000) })
-    if (!res.ok) throw new Error('Rate fetch failed')
-    const json = await res.json()
-    const rates: Rates = { USD: 1, ...json.rates }
-
-    await AsyncStorage.setItem(RATES_CACHE_KEY, JSON.stringify({ rates, fetchedAt: Date.now() }))
+    inMemoryRatesCache = { rates, fetchedAt: now }
     return rates
   } catch {
     return STATIC_FALLBACK_RATES
   }
 }
 
-/**
- * Convert and format an amount.
- * @param amountMinorUnits — amount in minor units of fromCurrency (e.g. cents)
- * @param fromCurrency — the currency the amount is stored in
- * @param toCurrency — the currency to display in
- * @param rates — exchange rates relative to USD
- */
 export function formatAmount(
   amountMinorUnits: number,
-  fromCurrency: CurrencyCode = 'USD',
+  fromCurrency: CurrencyCode = DEFAULT_ACCOUNT_CURRENCY,
   toCurrency: CurrencyCode,
   rates: Rates,
 ): string {
   const amount = amountMinorUnits / 100
-
   const fromRate = rates[fromCurrency] ?? 1
   const toRate = rates[toCurrency] ?? 1
-
   const converted = (amount / fromRate) * toRate
+  const symbol = currencySymbol(toCurrency)
 
-  const currency = SUPPORTED_CURRENCIES.find((c) => c.code === toCurrency)
-  const symbol = currency?.symbol ?? toCurrency
-
-  // Format with appropriate decimals
-  const isLargeUnit = ['NGN', 'KES', 'INR', 'ZAR', 'GHS'].includes(toCurrency)
+  const isLargeUnit = ['NGN', 'KES', 'GHS'].includes(toCurrency)
   const formatted = isLargeUnit
     ? Math.round(converted).toLocaleString()
     : converted.toFixed(0)
@@ -105,32 +141,118 @@ export function formatAmount(
   return `${symbol}${formatted}`
 }
 
-/**
- * useCurrency hook — provides the user's preferred currency, live rates,
- * and a setter to change the preference.
- */
 export function useCurrency() {
-  const [currency, setCurrencyState] = useState<CurrencyCode>('USD')
+  const { user } = useAuth()
+  const detected = useMemo(() => detectDeviceCurrencyPreference(), [])
+
+  const [currency, setCurrencyState] = useState<CurrencyCode>(detected.currency)
+  const [source, setSource] = useState<CurrencySource>(detected.source)
+  const [regionCode, setRegionCode] = useState(detected.regionCode)
   const [rates, setRates] = useState<Rates>(STATIC_FALLBACK_RATES)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    let cancelled = false
+
     async function init() {
-      const [savedPref, liveRates] = await Promise.all([
-        AsyncStorage.getItem(CURRENCY_PREF_KEY),
-        fetchRates(),
-      ])
-      if (savedPref) setCurrencyState(savedPref as CurrencyCode)
+      const liveRates = await fetchRates()
+      if (cancelled) return
       setRates(liveRates)
+
+      const resolvedDetection = await fetchCurrencyPreferenceContext()
+      if (cancelled) return
+
+      if (!user?.id) {
+        setCurrencyState(resolvedDetection.currency)
+        setSource(resolvedDetection.source)
+        setRegionCode(resolvedDetection.regionCode)
+        setLoading(false)
+        return
+      }
+
+      const { data, error } = await supabase
+        .from('users')
+        .select('default_currency, currency_source, region_code')
+        .eq('id', user.id)
+        .maybeSingle()
+
+      if (cancelled) return
+
+      if (error) {
+        if (!isMissingUsersTable(error)) {
+          console.warn('Unable to load account currency, falling back to detected locale.', {
+            message: error.message,
+            code: error.code,
+          })
+        }
+        setCurrencyState(resolvedDetection.currency)
+        setSource(resolvedDetection.source)
+        setRegionCode(resolvedDetection.regionCode)
+        setLoading(false)
+        return
+      }
+
+      const nextCurrency = normalizeAccountCurrency((data as any)?.default_currency) ?? resolvedDetection.currency
+      const nextSource = ((data as any)?.currency_source as CurrencySource | null) ?? resolvedDetection.source
+      const nextRegionCode = typeof (data as any)?.region_code === 'string'
+        ? (data as any).region_code.trim().toUpperCase() || resolvedDetection.regionCode
+        : resolvedDetection.regionCode
+
+      setCurrencyState(nextCurrency)
+      setSource(nextSource)
+      setRegionCode(nextRegionCode)
       setLoading(false)
     }
-    init()
-  }, [])
 
-  async function setCurrency(code: CurrencyCode) {
+    void init()
+
+    return () => {
+      cancelled = true
+    }
+  }, [user?.id])
+
+  async function setCurrency(
+    code: CurrencyCode,
+    options?: {
+      source?: CurrencySource
+      regionCode?: string | null
+    },
+  ) {
+    const nextSource = options?.source ?? 'USER_SELECTED'
+    const nextRegionCode = options?.regionCode?.trim().toUpperCase() || regionCode || detected.regionCode
+
     setCurrencyState(code)
-    await AsyncStorage.setItem(CURRENCY_PREF_KEY, code)
+    setSource(nextSource)
+    setRegionCode(nextRegionCode)
+
+    if (!user?.id) return
+
+    const { error } = await supabase
+      .from('users')
+      .update({
+        default_currency: code,
+        currency_source: nextSource,
+        region_code: nextRegionCode,
+        currency_confirmed_at: new Date().toISOString(),
+      })
+      .eq('id', user.id)
+
+    if (error) {
+      throw error
+    }
   }
 
-  return { currency, rates, loading, setCurrency }
+  const unsupportedMessage = source === 'UNSUPPORTED_FALLBACK'
+    ? 'Your local currency is not supported yet. Prices are shown in USD.'
+    : null
+
+  return {
+    currency,
+    rates,
+    loading,
+    setCurrency,
+    source,
+    regionCode,
+    unsupportedMessage,
+  }
 }

@@ -11,6 +11,7 @@ import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
+import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { optionalNote, parseBody, z } from '../_shared/validate.ts'
 
@@ -96,6 +97,24 @@ Deno.serve(async (req) => {
         account_email: caller.email ?? null,
         note,
         reason: note,
+      },
+    })
+
+    await createOrRefreshOpsIssue(supabase, {
+      issueType: 'DATA_ACCESS_REQUEST',
+      severity: 'MEDIUM',
+      source: FN,
+      actorId: caller.id,
+      actorRole,
+      userId: caller.id,
+      title: 'Data access request',
+      description: `${actorRole.toLowerCase()} requested an in-app copy of their account data.`,
+      recommendedAction: 'Acknowledge the privacy request, verify identity if needed, and coordinate the export response.',
+      dedupeKey: `data-access:${caller.id}`,
+      metadata: {
+        account_email: caller.email ?? null,
+        note,
+        source: 'MOBILE_APP',
       },
     })
 

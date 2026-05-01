@@ -5,17 +5,19 @@
  * Step 2: Portfolio (min 4 photos)
  * Step 3: Availability + ID verification upload
  */
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Image, Alert, KeyboardAvoidingView, Platform, FlatList,
+  Alert, KeyboardAvoidingView, Platform, FlatList,
 } from 'react-native'
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
+import { Image as ExpoImage } from 'expo-image'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { isLikelyConnectivityIssue } from '@/lib/function-errors'
+import { detectDeviceCurrencyPreference, fetchCurrencyPreferenceContext } from '@/lib/currency'
+import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { syncUserRow } from '@/lib/syncUserRow'
 import { stripExif } from '@/lib/stripExif'
 import { AddressAutocompleteInput, Button, Input, TagSelector, ProgressStepper } from '@/components/ui'
@@ -115,6 +117,7 @@ export default function TailorSetupScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { user, signOut } = useAuth()
+  const detectedCurrency = useMemo(() => detectDeviceCurrencyPreference(), [])
   const oauthName = user?.user_metadata?.display_name
     ?? user?.user_metadata?.full_name
     ?? user?.user_metadata?.name
@@ -179,7 +182,9 @@ export default function TailorSetupScreen() {
   const [specialties, setSpecialties] = useState<string[]>([])
   const [priceMin, setPriceMin] = useState('')
   const [priceMax, setPriceMax] = useState('')
-  const [currency, setCurrency] = useState<'GBP' | 'USD' | 'EUR' | 'NGN' | 'GHS' | 'KES' | 'CAD'>('GBP')
+  const [currency, setCurrency] = useState<'GBP' | 'USD' | 'EUR' | 'NGN' | 'GHS' | 'KES' | 'CAD'>(detectedCurrency.currency)
+  const [currencySource, setCurrencySource] = useState(detectedCurrency.source)
+  const [regionCode, setRegionCode] = useState(detectedCurrency.regionCode)
 
   // Step 2
   const [portfolioItems, setPortfolioItems] = useState<Array<{ type: 'photo' | 'video'; url: string }>>([])
@@ -202,6 +207,13 @@ export default function TailorSetupScreen() {
   useEffect(() => {
     if (!user?.id) return
     let cancelled = false
+
+    void fetchCurrencyPreferenceContext().then((resolved) => {
+      if (cancelled) return
+      setCurrency(resolved.currency)
+      setCurrencySource(resolved.source)
+      setRegionCode(resolved.regionCode)
+    })
 
     supabase
       .from('tailor_profiles')
@@ -270,6 +282,31 @@ export default function TailorSetupScreen() {
         if (typeof row.pickup_available === 'boolean') setPickupAvailable(row.pickup_available)
         if (typeof row.delivery_available === 'boolean') setDeliveryAvailable(row.delivery_available)
         if (typeof row.shipping_available === 'boolean') setShippingAvailable(row.shipping_available)
+      })
+
+    supabase
+      .from('users')
+      .select('default_currency, currency_source, region_code')
+      .eq('id', user.id)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelled) return
+        if (error || !data) return
+
+        const nextCurrency = typeof (data as any).default_currency === 'string'
+          && ['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES', 'CAD'].includes((data as any).default_currency)
+          ? ((data as any).default_currency as typeof currency)
+          : null
+
+        if (nextCurrency) {
+          setCurrency(nextCurrency)
+        }
+        if (typeof (data as any).currency_source === 'string' && (data as any).currency_source.trim().length > 0) {
+          setCurrencySource((data as any).currency_source.trim().toUpperCase() as typeof currencySource)
+        }
+        if (typeof (data as any).region_code === 'string' && (data as any).region_code.trim().length > 0) {
+          setRegionCode((data as any).region_code.trim().toUpperCase())
+        }
       })
 
     supabase
@@ -512,11 +549,22 @@ export default function TailorSetupScreen() {
     setSaving(false)
 
     if (error) {
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. We could not save your setup yet. Your details are still here, so retry when the signal improves.'
+        : await readFunctionErrorMessage(error, 'Could not save your profile right now. Please try again in a moment.')
+      console.error('tailor setup submit failed', {
+        message: error.message,
+        step,
+        userId: user.id,
+        pickupAvailable,
+        deliveryAvailable,
+        shippingAvailable,
+        supportsCustomOrders,
+        supportsReadyMade,
+      })
       Alert.alert(
         'Error',
-        isLikelyConnectivityIssue(error)
-          ? 'Connection looks weak. We could not save your setup yet. Your details are still here, so retry when the signal improves.'
-          : 'Could not save your profile right now. Please try again in a moment.',
+        message,
       )
       return
     }
@@ -530,11 +578,26 @@ export default function TailorSetupScreen() {
       return
     }
 
-    await syncUserRow({
-      userId: user.id,
-      displayName: displayName.trim(),
-      role: 'TAILOR',
-    })
+    try {
+      await syncUserRow({
+        userId: user.id,
+        displayName: displayName.trim(),
+        role: 'TAILOR',
+        defaultCurrency: currency,
+        currencySource,
+        regionCode,
+        currencyConfirmedAt: new Date().toISOString(),
+        strict: true,
+      })
+    } catch (syncError: any) {
+      Alert.alert(
+        'Profile saved',
+        isLikelyConnectivityIssue(syncError)
+          ? 'Your seller profile was saved, but we could not finish locking your account currency because the connection looks weak. Please reopen setup and retry.'
+          : 'Your seller profile was saved, but we could not finish locking your account currency right now. Please reopen setup and try again.',
+      )
+      return
+    }
 
     if (idUrl) {
       invokeFunction('notify-ops-verification', {
@@ -735,6 +798,11 @@ export default function TailorSetupScreen() {
                 <View>
                   <Text style={styles.fieldLabel}>Typical price range <Text style={styles.required}>*</Text></Text>
                   <Text style={styles.fieldHint}>This shows on your profile as a guide, not a fixed price.</Text>
+                  <Text style={styles.fieldHint}>
+                    {currencySource === 'UNSUPPORTED_FALLBACK'
+                      ? 'Your region is not mapped to a supported local currency yet, so we preselected USD. Change it here if another supported currency fits your business better.'
+                      : `We preselected ${currency} from your device region. Change it now if you want a different supported account currency.`}
+                  </Text>
                   <View style={styles.templateRow}>
                     {PRICE_PRESETS.map((preset) => (
                       <TouchableOpacity
@@ -755,7 +823,11 @@ export default function TailorSetupScreen() {
                       <TouchableOpacity
                         key={c}
                         style={[styles.currencyChip, currency === c && styles.currencyChipActive]}
-                        onPress={() => setCurrency(c)}
+                        onPress={() => {
+                          setCurrency(c)
+                          setCurrencySource('USER_SELECTED')
+                          setRegionCode(regionCode || detectedCurrency.regionCode)
+                        }}
                       >
                         <Text style={[styles.currencyChipText, currency === c && styles.currencyChipTextActive]}>{c}</Text>
                       </TouchableOpacity>
@@ -810,7 +882,7 @@ export default function TailorSetupScreen() {
                   {portfolioItems.map((item, i) => (
                     <View key={i} style={styles.portfolioThumb}>
                       {item.type === 'photo' ? (
-                        <Image source={{ uri: item.url }} style={styles.portfolioImg} resizeMode="cover" />
+                        <ExpoImage source={{ uri: item.url }} style={styles.portfolioImg} contentFit="cover" transition={120} />
                       ) : (
                         <View style={[styles.portfolioImg, styles.videoThumb]}>
                           <Text style={styles.videoIcon}>▶</Text>
@@ -971,7 +1043,7 @@ export default function TailorSetupScreen() {
                   </Text>
                   {idPhotoUri ? (
                     <View style={styles.idPreviewWrap}>
-                      <Image source={{ uri: idPhotoUri }} style={styles.idPreview} resizeMode="cover" />
+                      <ExpoImage source={{ uri: idPhotoUri }} style={styles.idPreview} contentFit="cover" transition={120} />
                       <TouchableOpacity onPress={() => setIdPhotoUri(null)}>
                         <Text style={styles.idRemove}>Remove and re-upload</Text>
                       </TouchableOpacity>
@@ -1075,14 +1147,14 @@ const styles = StyleSheet.create({
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
-  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   formCard: {
     backgroundColor: Colors.white,
     borderRadius: 24,
     padding: Spacing.xl,
   },
-  stepTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
+  stepTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
   stepSub: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20, marginTop: 4 },
 
   fields: { gap: Spacing.xl },
@@ -1171,7 +1243,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   choiceCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
-  choiceTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
+  choiceTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight, fontFamily: 'Georgia' },
   choiceTitleActive: { color: Colors.needleGreen },
   choiceHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   fulfillmentFeeBlock: { gap: Spacing.md, marginTop: Spacing.md },
@@ -1183,7 +1255,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.lightGrey,
   },
   idPickIcon: { fontSize: 40 },
-  idPickLabel: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  idPickLabel: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   idPickHint: { fontSize: FontSize.xs, color: Colors.midGrey },
   idPreviewWrap: { gap: Spacing.md },
   idPreview: { width: '100%', height: 200, borderRadius: Radius.md, backgroundColor: Colors.boneDeep },

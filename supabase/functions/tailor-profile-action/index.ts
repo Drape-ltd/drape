@@ -4,7 +4,9 @@ import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
+import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { parseBody, z } from '../_shared/validate.ts'
+import { normalizeAccountCurrency, resolvePaymentProviderForCurrency } from '../../../packages/shared/src/currency-config.ts'
 
 const FN = 'tailor-profile-action'
 
@@ -182,6 +184,17 @@ Deno.serve(async (req) => {
       return new Response('Could not save profile', { status: 500, headers: cors })
     }
 
+    const { data: savedProfile, error: savedProfileError } = await supabase
+      .from('tailor_profiles')
+      .select('id, user_id, display_name, location, specialty_tags, id_document_url, id_verification_status, payout_account_verified, payout_provider, payout_currency')
+      .eq('user_id', caller.id)
+      .maybeSingle()
+
+    if (savedProfileError) {
+      log('error', FN, 'profile.saved_lookup_failed', { actor_id: caller.id, action: body.action, error: savedProfileError.message })
+      return new Response('Could not load saved profile', { status: 500, headers: cors })
+    }
+
     const pickupAddress = profile.pickupAddress?.trim() || null
     const pickupInstructions = profile.pickupInstructions?.trim() || null
     const { error: pickupDetailsError } = await supabase
@@ -209,6 +222,38 @@ Deno.serve(async (req) => {
         supports_custom_orders: profile.supportsCustomOrders,
       },
     })
+
+    if (
+      body.action === 'upsert-setup'
+      && savedProfile?.id
+      && savedProfile.id_verification_status === 'PENDING'
+      && typeof savedProfile.id_document_url === 'string'
+      && savedProfile.id_document_url.trim().length > 0
+    ) {
+      const payoutCurrency = normalizeAccountCurrency(savedProfile.payout_currency ?? profile.currency)
+      await createOrRefreshOpsIssue(supabase, {
+        issueType: 'TAILOR_VERIFICATION',
+        severity: 'HIGH',
+        source: FN,
+        actorId: caller.id,
+        actorRole: 'TAILOR',
+        userId: caller.id,
+        tailorProfileId: savedProfile.id,
+        title: 'Tailor verification submitted',
+        description: `${savedProfile.display_name ?? profile.displayName} submitted identity verification and is waiting on trust review.`,
+        recommendedAction: 'Review the uploaded ID document, confirm the profile details, and approve, reject, or request a resubmission with specific feedback.',
+        dedupeKey: `tailor-verification:${caller.id}`,
+        metadata: {
+          display_name: savedProfile.display_name ?? profile.displayName,
+          location: savedProfile.location ?? profile.location,
+          specialty_tags: savedProfile.specialty_tags ?? specialties,
+          id_document_url: savedProfile.id_document_url,
+          payout_account_verified: savedProfile.payout_account_verified ?? false,
+          payout_provider: payoutCurrency ? resolvePaymentProviderForCurrency(payoutCurrency) : null,
+          payout_currency: payoutCurrency ?? profile.currency,
+        },
+      })
+    }
 
     return new Response(JSON.stringify({ ok: true }), {
       headers: { ...cors, 'Content-Type': 'application/json' },

@@ -50,6 +50,7 @@ const MEASUREMENT_KEYS: Array<keyof MeasurementProfile> = [
 
 const STAGE_COLOR: Partial<Record<OrderStage, string>> = {
   PENDING_QUOTE: Colors.warning, CONSULTATION: Colors.warning, QUOTE_SENT: Colors.warning,
+  PAYMENT_FAILED: Colors.kanteRust,
   CONFIRMED: Colors.needleGreen, DESIGNING: Colors.needleGreen, SOURCING: Colors.needleGreen,
   CUTTING: Colors.needleGreen, SEWING: Colors.needleGreen,
   FINISHING: Colors.needleGreen, SHIPPED: Colors.needleGreen, READY_FOR_COLLECTION: Colors.needleGreen,
@@ -66,6 +67,8 @@ function recentOrderHint(stage: OrderStage): string {
       return 'Consultation requested'
     case 'QUOTE_SENT':
       return 'Review quote'
+    case 'PAYMENT_FAILED':
+      return 'Retry payment'
     case 'READY_FOR_COLLECTION':
       return 'Bring your collection code'
     case 'SHIPPED':
@@ -431,6 +434,8 @@ export default function CustomerProfileScreen() {
 
           {/* ── Main action list ── */}
           <View style={styles.flatList}>
+            <FlatRow icon="credit-card" label="Payment history" onPress={() => router.push('/(customer)/profile/payments' as never)} />
+            <View style={styles.flatDivider} />
             <FlatRow icon="settings" label="Account settings" onPress={() => router.push('/(customer)/profile/account-settings')} />
             <FlatRow icon="help-circle" label="Get help" onPress={() => router.push('/(customer)/profile/help')} />
             <FlatRow icon="user" label="View profile" onPress={() => router.push('/(customer)/profile/view-profile')} />
@@ -520,6 +525,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     color: Colors.ink,
     textAlign: 'center',
+    fontFamily: 'Georgia',
   },
   stateHint: {
     fontSize: FontSize.sm,
@@ -548,11 +554,11 @@ const styles = StyleSheet.create({
   profileHeader: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingHorizontal: Spacing.xl,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.sm,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.xs,
     backgroundColor: Colors.needleGreen,
   },
-  profileHeaderTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.white },
+  profileHeaderTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.white, fontFamily: 'Georgia' },
   bellBtn: {
     width: 38, height: 38, borderRadius: Radius.full,
     backgroundColor: 'rgba(255,255,255,0.2)',
@@ -572,8 +578,8 @@ const styles = StyleSheet.create({
   // Hero
   hero: {
     backgroundColor: Colors.needleGreen,
-    paddingTop: Spacing.lg,
-    paddingBottom: Spacing.xxxl,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.xxl,
     alignItems: 'center',
     gap: Spacing.xs,
     paddingHorizontal: Spacing.xl,
@@ -599,7 +605,7 @@ const styles = StyleSheet.create({
     borderWidth: 2, borderColor: Colors.needleGreen,
     alignItems: 'center', justifyContent: 'center',
   },
-  heroName: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.white },
+  heroName: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.white, fontFamily: 'Georgia' },
   heroMeta: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.75)' },
 
   body: {
@@ -607,14 +613,14 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: Radius.xl,
     borderTopRightRadius: Radius.xl,
     backgroundColor: Colors.bone,
-    paddingTop: Spacing.xl,
+    paddingTop: Spacing.lg,
     paddingHorizontal: Spacing.xl,
-    gap: Spacing.xl,
+    gap: Spacing.md,
   },
   workspaceCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    padding: Spacing.md,
     gap: Spacing.xs,
     ...Shadow.sm,
   },
@@ -644,44 +650,44 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
   },
-  quickLinksRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.md },
+  quickLinksRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   quickLinkCard: {
     width: '48%',
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    paddingVertical: Spacing.lg,
-    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.md,
     alignItems: 'center',
     justifyContent: 'space-between',
-    minHeight: 92,
+    minHeight: 82,
     gap: 6,
     ...Shadow.sm,
   },
-  quickLinkValue: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
+  quickLinkValue: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
   quickLinkLabel: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'center', lineHeight: 16 },
 
   // Sections
-  section: { gap: Spacing.md },
+  section: { gap: Spacing.sm },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   sectionLink: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   sectionLinkText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
 
   // Cards
   card: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.lg, gap: Spacing.md, ...Shadow.sm,
+    padding: Spacing.md, gap: Spacing.sm, ...Shadow.sm,
   },
 
   emptyRow: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.lg, flexDirection: 'row', alignItems: 'center', gap: Spacing.md, ...Shadow.sm,
+    padding: Spacing.md, flexDirection: 'row', alignItems: 'center', gap: Spacing.md, ...Shadow.sm,
   },
   emptyRowIcon: {
     width: 42, height: 42, borderRadius: Radius.md,
     backgroundColor: Colors.needleGreenLight, alignItems: 'center', justifyContent: 'center',
   },
-  emptyRowTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  emptyRowTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   emptyRowHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
 
   // Completeness bar
@@ -706,9 +712,9 @@ const styles = StyleSheet.create({
   menuList: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
   orderRow: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    padding: Spacing.lg, borderBottomWidth: 1, borderBottomColor: Colors.lightGrey,
+    padding: Spacing.md, borderBottomWidth: 1, borderBottomColor: Colors.lightGrey,
   },
-  orderTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  orderTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   orderSub: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
   orderHint: { fontSize: FontSize.xs, color: Colors.needleGreen, marginTop: 4, fontWeight: FontWeight.medium },
   stagePill: {
@@ -720,20 +726,25 @@ const styles = StyleSheet.create({
   // Become a tailor
   becomeCard: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.lg, flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
+    padding: Spacing.md, flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
     ...Shadow.sm,
   },
   becomeEmoji: { fontSize: 32 },
-  becomeTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  becomeTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   becomeSub: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2, lineHeight: 16 },
 
   // Flat action list (Airbnb style)
   flatList: {
     backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm,
   },
+  flatDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: Colors.lightGrey,
+    marginLeft: Spacing.lg + 24,
+  },
   flatRow: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.lg,
-    paddingHorizontal: Spacing.lg, paddingVertical: 18,
+    paddingHorizontal: Spacing.lg, paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.lightGrey,
   },
   rowLast: { borderBottomWidth: 0 },

@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, KeyboardAvoidingView, Platform, Image, Modal, TextInput,
+  Alert, KeyboardAvoidingView, Platform, Modal, TextInput,
 } from 'react-native'
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as ImagePicker from 'expo-image-picker'
 import DateTimePicker from '@react-native-community/datetimepicker'
+import { Image as ExpoImage } from 'expo-image'
 import { isLikelyConnectivityIssue, readFunctionErrorPayload } from '@/lib/function-errors'
 import { goBackOrReturnTo } from '@/lib/navigation'
 import {
@@ -28,6 +29,7 @@ import { capture } from '@/lib/analytics'
 import { composeStructuredAddress, parseNominatimSuggestion } from '@/lib/address'
 import { stripExif } from '@/lib/stripExif'
 import { Button, Input } from '@/components/ui'
+import { CUSTOM_ORDER_RESUMABLE_STAGES } from '@drape/shared'
 import { filterContactInfo, rejectPlaceholder, filterStyleReference } from '@drape/shared/contact-filter'
 import { normalizePhoneForStorage, validatePhoneForProfile } from '@drape/shared/phone'
 import { phoneHintForContext } from '@/lib/phone-context'
@@ -94,6 +96,23 @@ const SUPPORTED_STYLE_LINK_LABELS = [
   'X posts',
 ]
 
+function newBriefDraftSession() {
+  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+function buildBriefRoute(
+  tailorId: string,
+  options?: { draftSession?: string | null; resumeDraft?: boolean },
+) {
+  const search = new URLSearchParams()
+  if (options?.draftSession) search.set('draftSession', options.draftSession)
+  if (options?.resumeDraft) search.set('resumeDraft', '1')
+  const query = search.toString()
+  return query.length > 0
+    ? `/(customer)/brief/${tailorId}?${query}`
+    : `/(customer)/brief/${tailorId}`
+}
+
 function defaultDeadline() {
   const next = new Date()
   next.setDate(next.getDate() + 28)
@@ -154,13 +173,23 @@ async function resolveOrderSubmitErrorMessage(error: Error | null) {
     return 'Your session has expired. Sign in again before placing this order.'
   }
 
+  if (normalized.includes("contact details can't be included")) {
+    return "Remove phone numbers, social handles, or off-platform contact details from your brief before sending it. Fit measurements like bust, waist, and hips are still fine."
+  }
+
   return rawMessage
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function OrderBriefScreen() {
-  const { tailorId, returnTo } = useLocalSearchParams<{ tailorId: string; returnTo?: string }>()
+  const { tailorId, returnTo, draftSession, freshStart, resumeDraft } = useLocalSearchParams<{
+    tailorId: string
+    returnTo?: string
+    draftSession?: string
+    freshStart?: string
+    resumeDraft?: string
+  }>()
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
@@ -182,6 +211,10 @@ export default function OrderBriefScreen() {
   const [occasion, setOccasion] = useState('')
   const [deadline, setDeadline] = useState<Date | null>(() => defaultDeadline())
   const [showDatePicker, setShowDatePicker] = useState(false)
+  const [isBulkOrder, setIsBulkOrder] = useState(false)
+  const [bulkRecipientCount, setBulkRecipientCount] = useState('')
+  const [bulkLabel, setBulkLabel] = useState('')
+  const [bulkNotes, setBulkNotes] = useState('')
 
   // Step 2
   const [photos, setPhotos] = useState<string[]>([])
@@ -217,10 +250,11 @@ export default function OrderBriefScreen() {
   const [deliveryAddressSuggestions, setDeliveryAddressSuggestions] = useState<any[]>([])
   const [showDeliverySuggestions, setShowDeliverySuggestions] = useState(false)
   const suppressNextDeliveryLookup = useRef(false)
+  const handledLaunchRef = useRef<string | null>(null)
   const guidedFitProfile = buildOrderFitProfile(measurements)
   const recipientPhoneHint = phoneHintForContext(deliveryCountry)
 
-  useEffect(() => {
+  function resetBriefState() {
     setStep(0)
     setSubmitting(false)
     setShowMeasPrompt(false)
@@ -232,6 +266,10 @@ export default function OrderBriefScreen() {
     setOccasion('')
     setDeadline(defaultDeadline())
     setShowDatePicker(false)
+    setIsBulkOrder(false)
+    setBulkRecipientCount('')
+    setBulkLabel('')
+    setBulkNotes('')
     setPhotos([])
     setInspirationLinks([])
     setInspirationInput('')
@@ -258,7 +296,12 @@ export default function OrderBriefScreen() {
     setDeliveryAddressSearch('')
     setDeliveryAddressSuggestions([])
     setShowDeliverySuggestions(false)
-  }, [tailorId])
+  }
+
+  useEffect(() => {
+    if (resumeDraft === '1') return
+    resetBriefState()
+  }, [tailorId, draftSession, freshStart, resumeDraft])
 
   useEffect(() => {
     if (!user || recipientMode !== 'SELF') return
@@ -270,6 +313,39 @@ export default function OrderBriefScreen() {
     setFetchError(false)
     setInitialLoading(true)
     setMeasurements(null)
+
+    const launchKey = `${tailorId}:${draftSession ?? 'default'}:${freshStart ?? '0'}`
+    if (freshStart === '1' && handledLaunchRef.current !== launchKey && user?.id) {
+      handledLaunchRef.current = launchKey
+      const { data: existingOrder } = await supabase
+        .from('orders')
+        .select('id, reference, stage')
+        .eq('customer_id', user.id)
+        .eq('tailor_profile_id', tailorId)
+        .eq('order_kind', 'CUSTOM')
+        .in('stage', [...CUSTOM_ORDER_RESUMABLE_STAGES])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (existingOrder?.id) {
+        Alert.alert(
+          'Continue your current custom order?',
+          `You already have a custom order with this tailor in progress (${existingOrder.reference ?? existingOrder.stage}). Continue it or start a new brief from scratch.`,
+          [
+            { text: 'Start new', style: 'destructive' },
+            {
+              text: 'Continue order',
+              onPress: () =>
+                router.replace({
+                  pathname: `/(customer)/orders/${existingOrder.id}` as any,
+                  params: { returnTo: '/(customer)/orders?tab=active', tab: 'active' },
+                }),
+            },
+          ],
+        )
+      }
+    }
 
     const [tailorRes, measRes] = await Promise.allSettled([
       supabase
@@ -434,7 +510,11 @@ export default function OrderBriefScreen() {
   }
 
   function canProceed(): boolean {
-    if (step === 0) return !!garmentType && description.trim().length >= 1 && !descriptionError && !!deadline
+    if (step === 0) {
+      const bulkCount = Number.parseInt(bulkRecipientCount, 10)
+      if (isBulkOrder && (!Number.isFinite(bulkCount) || bulkCount < 2)) return false
+      return !!garmentType && description.trim().length >= 1 && !descriptionError && !!deadline
+    }
     if (step === 1) return true // photos optional
     if (step === 2) return !!measurements && fitNote.trim().length >= 20 && !fitNoteError
     if (step === 3) {
@@ -514,21 +594,69 @@ export default function OrderBriefScreen() {
 
     const measurementSnapshot = enrichMeasurementSnapshot(measurements)
     const fitProfile = buildOrderFitProfile(measurementSnapshot)
+    const fabricPolicy = fabricSource === 'CUSTOMER_SUPPLIES'
+      ? {
+          approvalRequiredForTailorSourcing: true,
+          rejectionReasons: [
+            'Poor fabric quality',
+            'Insufficient yardage',
+            'Wrong fabric type',
+            'Fabric damaged or mismatched',
+            'Non-continuous remnants or unusable width',
+          ],
+          lateFabricRule: 'Production stays paused until the tailor confirms fabric receipt.',
+          missingFabricRule: 'If the fabric never arrives, the customer can resend, ask the tailor to source, revise the design, or request cancellation review.',
+          replacementRule: 'Replacement fabric must be confirmed inside the order before cutting resumes.',
+          disagreementRule: 'If fabric suitability is disputed, Drape reviews the timeline before work continues.',
+          prepRequirements: [
+            'Share the handoff plan before the order is submitted',
+            'Keep any shipping reference inside the order thread',
+            'Do not expect cutting to start before receipt is confirmed',
+            'Prewash, press, or stabilize the fabric first when the tailor asks for it',
+          ],
+        }
+      : {
+          approvalRequiredForTailorSourcing: true,
+          replacementRule: 'Tailor-sourced fabric should only be replaced after customer approval inside Drape.',
+          disagreementRule: 'If sourcing changes the agreed design or budget, Drape should review before work continues.',
+          prepRequirements: [
+            'Fabric sourcing is covered by the accepted quote',
+            'Tailor should not buy replacement fabric without approval',
+          ],
+        }
+    const bulkCount = Number.parseInt(bulkRecipientCount, 10)
+    const bulkOrder = isBulkOrder
+      ? {
+          enabled: true,
+          mode: 'OPS_MANAGED_SPECIAL_CASE' as const,
+          label: bulkLabel.trim() || null,
+          recipientCount: Number.isFinite(bulkCount) && bulkCount >= 2 ? bulkCount : null,
+          payerModel: 'SINGLE_PAYER' as const,
+          measurementPrivacy: 'TAILOR_ONLY' as const,
+          statusPolicy: 'OPS_MANAGED_LINKED_CHILDREN' as const,
+          dyeLotConsistencyRequired: true,
+          notes: bulkNotes.trim() || null,
+        }
+      : null
     const supportMeta = fabricSource === 'CUSTOMER_SUPPLIES'
       ? {
           fabricHandoffMode,
           fabricHandoffLabel: fabricHandoffMode ? FABRIC_HANDOFF_LABELS[fabricHandoffMode] : null,
+          fabricPolicy,
+          bulkOrder,
           fitProfile,
+          styleInspirationLinks: inspirationLinks,
         }
       : {
           fabricHandoffMode: 'NO_CUSTOMER_HANDOFF_REQUIRED' as const,
           fabricHandoffLabel: FABRIC_HANDOFF_LABELS.NO_CUSTOMER_HANDOFF_REQUIRED,
+          fabricPolicy,
+          bulkOrder,
           fitProfile,
+          styleInspirationLinks: inspirationLinks,
         }
 
-    const composedFitNote = fitNote.trim()
-      ? (inspirationLinks.length > 0 ? `${fitNote.trim()}\n\nStyle inspiration: ${inspirationLinks.join(', ')}` : fitNote.trim())
-      : (inspirationLinks.length > 0 ? `Style inspiration: ${inspirationLinks.join(', ')}` : null)
+    const composedFitNote = fitNote.trim() || null
 
     const { data, error } = await invokeFunction<{ ok: boolean; orderId?: string }>('custom-order-action', {
       body: {
@@ -545,6 +673,10 @@ export default function OrderBriefScreen() {
         supportMeta,
         deliveryMethod,
         deliveryAddress: deliveryMethod !== 'LOCAL_COLLECTION' ? composeDeliveryAddress() : null,
+        deliveryCity: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryCity.trim() : null,
+        deliveryRegion: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryStateRegion.trim() : null,
+        deliveryPostalCode: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryPostalCode.trim() : null,
+        deliveryCountryCode: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryCountry.trim() : null,
         recipientName: deliveryMethod !== 'LOCAL_COLLECTION' ? recipientName.trim() : null,
         recipientPhone: deliveryMethod !== 'LOCAL_COLLECTION' ? normalizePhoneForStorage(recipientPhone) : null,
       },
@@ -570,6 +702,7 @@ export default function OrderBriefScreen() {
       fabric_source: fabricSource,
       fabric_handoff_mode: supportMeta.fabricHandoffMode ?? null,
       delivery_method: deliveryMethod,
+      bulk_order: isBulkOrder,
       has_deadline: !!deadline,
     })
 
@@ -594,7 +727,7 @@ export default function OrderBriefScreen() {
             text: 'Set up now',
             onPress: () => router.push({
               pathname: '/(customer)/profile/measurements',
-              params: { returnTo: `/(customer)/brief/${tailorId}` },
+              params: { returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }) },
             }),
           },
           { text: 'Cancel', style: 'cancel' },
@@ -618,7 +751,7 @@ export default function OrderBriefScreen() {
     if (goToMeasurements) {
       router.push({
         pathname: '/(customer)/profile/measurements',
-        params: { returnTo: `/(customer)/brief/${tailorId}` },
+        params: { returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }) },
       })
     }
   }
@@ -647,7 +780,7 @@ export default function OrderBriefScreen() {
               style={[styles.errorBtn, styles.errorBtnSecondary]}
               onPress={() => router.push({
                 pathname: '/(customer)/profile/measurements',
-                params: { returnTo: `/(customer)/brief/${tailorId}` },
+                params: { returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }) },
               })}
             >
               <Text style={[styles.errorBtnText, styles.errorBtnTextSecondary]}>Open measurements</Text>
@@ -758,6 +891,56 @@ export default function OrderBriefScreen() {
                 </View>
 
                 <View>
+                  <Text style={styles.fieldLabel}>Who is this order for?</Text>
+                  <View style={styles.optionCards}>
+                    <OptionCard
+                      title="One person"
+                      hint="Standard custom order flow for a single recipient."
+                      active={!isBulkOrder}
+                      onPress={() => setIsBulkOrder(false)}
+                    />
+                    <OptionCard
+                      title="Group or family order"
+                      hint="Best for ashoebi, wedding parties, or family sets. Drape may manage this as a linked special case."
+                      active={isBulkOrder}
+                      onPress={() => setIsBulkOrder(true)}
+                    />
+                  </View>
+                </View>
+
+                {isBulkOrder ? (
+                  <View style={styles.measureSubcard}>
+                    <Input
+                      label="How many people?"
+                      placeholder="e.g. 4"
+                      value={bulkRecipientCount}
+                      onChangeText={setBulkRecipientCount}
+                      keyboardType="number-pad"
+                      hint="Use the expected number of recipients or outfit variations in this group order."
+                      required
+                    />
+                    <Input
+                      label="Group label (optional)"
+                      placeholder="e.g. Asoebi for Ada's wedding"
+                      value={bulkLabel}
+                      onChangeText={setBulkLabel}
+                    />
+                    <Input
+                      label="Group notes (optional)"
+                      placeholder="Anything ops and the tailor should know about dye-lot consistency, measurement privacy, or linked recipients..."
+                      value={bulkNotes}
+                      onChangeText={setBulkNotes}
+                      multiline
+                      numberOfLines={3}
+                      maxLength={300}
+                    />
+                    <Text style={styles.measureSubcardHint}>
+                      Bulk custom orders stay inside Drape, but ops may help manage linked recipients, dye-lot consistency, and measurement privacy before quote acceptance.
+                    </Text>
+                  </View>
+                ) : null}
+
+                <View>
                   <Text style={styles.fieldLabel}>Deadline <Text style={styles.required}>*</Text></Text>
                   <Text style={styles.fieldHint}>When do you need this by? Default is 4 weeks from today.</Text>
                   <TouchableOpacity style={[styles.dateButton, !deadline && styles.dateButtonRequired]} onPress={() => setShowDatePicker(true)}>
@@ -791,7 +974,7 @@ export default function OrderBriefScreen() {
                   <View style={[styles.photoGrid, { marginTop: Spacing.md }]}>
                     {photos.map((uri, i) => (
                       <View key={i} style={styles.photoThumb}>
-                        <Image source={{ uri }} style={styles.photoImage} resizeMode="cover" />
+                        <ExpoImage source={{ uri }} style={styles.photoImage} contentFit="cover" transition={120} />
                         <TouchableOpacity
                           style={styles.photoRemove}
                           onPress={() => setPhotos((prev) => prev.filter((_, idx) => idx !== i))}
@@ -972,7 +1155,7 @@ export default function OrderBriefScreen() {
                             style={styles.measureActionBtn}
                             onPress={() => router.push({
                               pathname: '/(customer)/profile/guided-fit',
-                              params: { returnTo: `/(customer)/brief/${tailorId}` },
+                              params: { returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }) },
                             })}
                           >
                             <Text style={styles.measureActionBtnText}>Add guided fit intake</Text>
@@ -991,7 +1174,7 @@ export default function OrderBriefScreen() {
                       style={styles.noMeasureBtn}
                       onPress={() => router.push({
                         pathname: '/(customer)/profile/measurements',
-                        params: { returnTo: `/(customer)/brief/${tailorId}` },
+                        params: { returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }) },
                       })}
                     >
                       <Text style={styles.noMeasureBtnText}>Complete measurement profile</Text>

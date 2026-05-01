@@ -13,6 +13,7 @@
  *
  * What it does:
  *   - confirms any stale `PAYMENT_PENDING` order whose Stripe or Paystack payment already succeeded
+ *   - cancels any `PAYMENT_FAILED` order not retried within 30 minutes
  *   - cancels abandoned Stripe intents after 30 minutes
  *   - returns custom orders to `QUOTE_SENT` when the quote is still valid
  *   - expires custom or ready-made orders when the payment window is over
@@ -23,6 +24,7 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
+import { finalizeOrderTerminal } from '../_shared/order-terminal.ts'
 import {
   paymentConfirmedStageNote,
   tailorPaymentConfirmedNotification,
@@ -32,6 +34,10 @@ import {
   cancelStripePaymentIntent,
   retrieveStripePaymentIntent,
 } from '../_shared/stripe.ts'
+import {
+  buildFailedPaymentAutoCancelTerminalRequest,
+  buildPaymentExpiredTerminalRequest,
+} from '../../../packages/shared/src/order-terminal.ts'
 
 const FN = 'expire-pending-payments'
 const PAYMENT_TIMEOUT_MINUTES = 30
@@ -93,6 +99,18 @@ function customerTimeoutNotification(order: OrderRow, nextStage: 'QUOTE_SENT' | 
     title: 'Checkout expired',
     body: 'Your ready-made checkout timed out before payment finished. Start checkout again when you are ready.',
   }
+}
+
+function customerFailedPaymentNotification(order: OrderRow) {
+  return order.order_kind === 'CUSTOM'
+    ? {
+        title: 'Order cancelled after failed payment',
+        body: 'Payment was not retried in time, so this custom order was cancelled automatically.',
+      }
+    : {
+        title: 'Checkout cancelled after failed payment',
+        body: 'Payment was not retried in time, so this ready-made checkout was cancelled automatically.',
+      }
 }
 
 async function markOrderConfirmed(
@@ -164,64 +182,52 @@ async function expireOrderPayment(supabase: any, order: OrderRow) {
         : 'Payment window expired and the quote is no longer valid.'
       : 'Checkout expired before payment was completed.'
 
-  const { error: updateError } = await supabase
-    .from('orders')
-    .update({
-      stage: nextStage,
-      stage_updated_at: new Date().toISOString(),
-      payment_provider: null,
-      payment_intent_id: null,
-      payment_checkout_url: null,
-    })
-    .eq('id', order.id)
-
-  if (updateError) {
-    throw new Error(updateError.message)
-  }
-
-  await supabase.from('order_stage_updates').insert({
-    order_id: order.id,
-    stage: nextStage,
-    note,
-  })
-
-  if (order.order_kind === 'READY_MADE' && order.seller_item_id) {
-    const releasedQuantity = Math.max(order.item_quantity ?? 1, 1)
-    const { error: releaseError } = await supabase.rpc('release_seller_item_inventory', {
-      target_item_id: order.seller_item_id,
-      released_quantity: releasedQuantity,
-      released_size: order.item_size ?? null,
-    })
-
-    if (releaseError) {
-      await audit(supabase, {
-        event: 'ready_made.stock_release_failed',
-        actor_role: 'SYSTEM',
-        order_id: order.id,
-        severity: 'error',
-        payload: {
-          function: FN,
-          seller_item_id: order.seller_item_id,
-          released_quantity: releasedQuantity,
-          next_stage: nextStage,
-          error: releaseError.message,
-        },
+  if (nextStage === 'QUOTE_SENT') {
+    const { error: updateError } = await supabase
+      .from('orders')
+      .update({
+        stage: nextStage,
+        stage_updated_at: new Date().toISOString(),
+        payment_provider: null,
+        payment_intent_id: null,
+        payment_checkout_url: null,
       })
-    }
-  }
+      .eq('id', order.id)
 
-  await audit(supabase, {
-    event: 'payment.expired',
-    actor_role: 'SYSTEM',
-    order_id: order.id,
-    severity: 'warn',
-    payload: {
-      function: FN,
-      order_kind: order.order_kind,
-      next_stage: nextStage,
-      payment_intent_id: order.payment_intent_id,
-    },
-  })
+    if (updateError) {
+      throw new Error(updateError.message)
+    }
+
+    await supabase.from('order_stage_updates').insert({
+      order_id: order.id,
+      stage: nextStage,
+      note,
+    })
+
+    await audit(supabase, {
+      event: 'payment.expired',
+      actor_role: 'SYSTEM',
+      order_id: order.id,
+      severity: 'warn',
+      payload: {
+        function: FN,
+        order_kind: order.order_kind,
+        next_stage: nextStage,
+        payment_intent_id: order.payment_intent_id,
+      },
+    })
+  } else {
+    await finalizeOrderTerminal(
+      supabase,
+      order.id,
+      buildPaymentExpiredTerminalRequest({
+        fromStage: order.stage as any,
+        orderKind: order.order_kind,
+        paymentIntentId: order.payment_intent_id,
+        releaseReadyMadeInventory: order.order_kind === 'READY_MADE' && !!order.seller_item_id,
+      }),
+    )
+  }
 
   if (order.customer_id) {
     EdgeRuntime.waitUntil(
@@ -233,6 +239,28 @@ async function expireOrderPayment(supabase: any, order: OrderRow) {
   }
 
   return nextStage
+}
+
+async function cancelFailedPaymentOrder(supabase: any, order: OrderRow) {
+  await finalizeOrderTerminal(
+    supabase,
+    order.id,
+    buildFailedPaymentAutoCancelTerminalRequest({
+      fromStage: order.stage as any,
+      orderKind: order.order_kind,
+      paymentIntentId: order.payment_intent_id,
+      releaseReadyMadeInventory: order.order_kind === 'READY_MADE' && !!order.seller_item_id,
+    }),
+  )
+
+  if (order.customer_id) {
+    EdgeRuntime.waitUntil(
+      sendPushToUser(supabase, order.customer_id, {
+        ...customerFailedPaymentNotification(order),
+        data: { orderId: order.id },
+      }),
+    )
+  }
 }
 
 Deno.serve(async (req) => {
@@ -271,7 +299,7 @@ Deno.serve(async (req) => {
         quote_expires_at,
         stage_updated_at
       `)
-      .eq('stage', 'PAYMENT_PENDING')
+      .in('stage', ['PAYMENT_PENDING', 'PAYMENT_FAILED'])
       .lt('stage_updated_at', cutoff)
 
     if (error) {
@@ -299,6 +327,23 @@ Deno.serve(async (req) => {
             if (transaction.status === 'success') {
               const changed = await markOrderConfirmed(supabase, order, 'PAYSTACK', transaction.reference)
               if (changed) confirmed += 1
+              continue
+            }
+
+            if (order.stage === 'PAYMENT_FAILED' && (transaction.status === 'pending' || transaction.status === 'ongoing')) {
+              skipped += 1
+              await audit(supabase, {
+                event: 'payment.expiry_skipped_processing',
+                actor_role: 'SYSTEM',
+                order_id: order.id,
+                severity: 'warn',
+                payload: {
+                  function: FN,
+                  provider: 'PAYSTACK',
+                  payment_intent_id: transaction.reference,
+                  status: transaction.status,
+                },
+              })
               continue
             }
           } else {
@@ -333,7 +378,11 @@ Deno.serve(async (req) => {
           }
         }
 
-        await expireOrderPayment(supabase, order)
+        if (order.stage === 'PAYMENT_FAILED') {
+          await cancelFailedPaymentOrder(supabase, order)
+        } else {
+          await expireOrderPayment(supabase, order)
+        }
         expired += 1
       } catch (orderError) {
         skipped += 1

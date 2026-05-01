@@ -9,6 +9,7 @@ export type OrderStage =
   | 'CONSULTATION'
   | 'QUOTE_SENT'
   | 'PAYMENT_PENDING'
+  | 'PAYMENT_FAILED'
   | 'CONFIRMED'
   | 'DESIGNING'
   | 'SOURCING'
@@ -22,6 +23,7 @@ export type OrderStage =
   | 'DELIVERED'
   | 'COLLECTED'
   | 'COMPLETE'
+  | 'PARTIALLY_REFUNDED'
   | 'DECLINED'
   | 'EXPIRED'
   | 'IN_DISPUTE'
@@ -45,10 +47,12 @@ export const ORDER_TRANSITIONS: Transition[] = [
   { from: 'PENDING_QUOTE', to: 'QUOTE_SENT', actor: 'TAILOR', trigger: 'send_quote' },
   { from: 'PENDING_QUOTE', to: 'CONSULTATION', actor: 'TAILOR', trigger: 'request_consultation' },
   { from: 'PENDING_QUOTE', to: 'DECLINED', actor: 'TAILOR', trigger: 'decline' },
+  { from: 'PENDING_QUOTE', to: 'CANCELLED', actor: 'CUSTOMER', trigger: 'cancel_request' },
 
   // After consultation, tailor sends quote or declines
   { from: 'CONSULTATION', to: 'QUOTE_SENT', actor: 'TAILOR', trigger: 'send_quote' },
   { from: 'CONSULTATION', to: 'DECLINED', actor: 'TAILOR', trigger: 'decline' },
+  { from: 'CONSULTATION', to: 'CANCELLED', actor: 'CUSTOMER', trigger: 'cancel_before_quote' },
 
   // Customer accepts the quote and begins payment, or declines it outright.
   { from: 'QUOTE_SENT', to: 'PAYMENT_PENDING', actor: 'CUSTOMER', trigger: 'accept_quote' },
@@ -57,6 +61,12 @@ export const ORDER_TRANSITIONS: Transition[] = [
 
   // Payment succeeds
   { from: 'PAYMENT_PENDING', to: 'CONFIRMED', actor: 'SYSTEM', trigger: 'payment_succeeded' },
+  { from: 'PAYMENT_PENDING', to: 'PAYMENT_FAILED', actor: 'SYSTEM', trigger: 'payment_failed' },
+  { from: 'PAYMENT_PENDING', to: 'CANCELLED', actor: 'CUSTOMER', trigger: 'cancel_before_payment_settles' },
+  { from: 'PAYMENT_FAILED', to: 'PAYMENT_PENDING', actor: 'CUSTOMER', trigger: 'retry_payment' },
+  { from: 'PAYMENT_FAILED', to: 'CONFIRMED', actor: 'SYSTEM', trigger: 'payment_succeeded' },
+  { from: 'PAYMENT_FAILED', to: 'CANCELLED', actor: 'CUSTOMER', trigger: 'cancel_after_failed_payment' },
+  { from: 'PAYMENT_FAILED', to: 'CANCELLED', actor: 'SYSTEM', trigger: 'failed_payment_timeout_30m' },
 
   // Tailor pre-production stages (flexible order — tailor chooses what applies)
   { from: 'CONFIRMED', to: 'DESIGNING', actor: 'TAILOR', trigger: 'start_designing' },
@@ -80,6 +90,8 @@ export const ORDER_TRANSITIONS: Transition[] = [
   { from: 'SHIPPED', to: 'DELIVERED', actor: 'SYSTEM', trigger: 'auto_release_14d' },
   { from: 'DELIVERED', to: 'COMPLETE', actor: 'CUSTOMER', trigger: 'complete_order' },
   { from: 'DELIVERED', to: 'COMPLETE', actor: 'SYSTEM', trigger: 'review_submitted_or_skipped' },
+  { from: 'COMPLETE', to: 'PARTIALLY_REFUNDED', actor: 'PLATFORM', trigger: 'partial_refund' },
+  { from: 'PARTIALLY_REFUNDED', to: 'REFUNDED', actor: 'PLATFORM', trigger: 'resolve_full_refund' },
 
   // Local collection path
   { from: 'FINISHING', to: 'READY_FOR_COLLECTION', actor: 'TAILOR', trigger: 'mark_ready' },
@@ -148,6 +160,7 @@ export const STAGE_LABELS: Record<OrderStage, string> = {
   CONSULTATION: 'Consultation',
   QUOTE_SENT: 'Quote Sent',
   PAYMENT_PENDING: 'Payment Pending',
+  PAYMENT_FAILED: 'Payment Failed',
   CONFIRMED: 'Confirmed',
   DESIGNING: 'Designing',
   SOURCING: 'Sourcing',
@@ -161,6 +174,7 @@ export const STAGE_LABELS: Record<OrderStage, string> = {
   DELIVERED: 'Delivered',
   COLLECTED: 'Collected',
   COMPLETE: 'Complete',
+  PARTIALLY_REFUNDED: 'Partially Refunded',
   DECLINED: 'Declined',
   EXPIRED: 'Expired',
   IN_DISPUTE: 'Under Review',
@@ -171,6 +185,7 @@ export const STAGE_LABELS: Record<OrderStage, string> = {
 // Customer-facing descriptions for active production stages
 export const STAGE_DESCRIPTIONS: Partial<Record<OrderStage, string>> = {
   CONSULTATION: 'Your tailor has requested a consultation before sending a quote.',
+  PAYMENT_FAILED: 'Payment did not complete. Retry from this order to keep it moving.',
   DESIGNING: 'Your tailor is working on patterns and design details.',
   SOURCING: 'Your tailor is sourcing fabric and materials.',
   CUTTING: 'Fabric is being cut to your measurements.',

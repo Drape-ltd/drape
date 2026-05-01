@@ -98,7 +98,7 @@ export default function HelpScreen() {
         <Text style={styles.headerTitle}>Get help</Text>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 40, gap: Spacing.lg }}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 32, gap: Spacing.md }}>
         <View style={styles.heroCard}>
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Customer support</Text>
@@ -298,11 +298,11 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    padding: Spacing.md,
     gap: Spacing.sm,
     ...Shadow.sm,
   },
@@ -318,12 +318,12 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
   },
-  heroTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 26 },
+  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 28, fontFamily: 'Georgia' },
   heroSub: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   supportGuideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    padding: Spacing.md,
     gap: Spacing.sm,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -345,6 +345,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     color: Colors.ink,
     lineHeight: 22,
+    fontFamily: 'Georgia',
   },
   supportGuideBody: {
     fontSize: FontSize.sm,
@@ -354,7 +355,7 @@ const styles = StyleSheet.create({
   networkGuideCard: {
     backgroundColor: Colors.boneDeep,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    padding: Spacing.md,
     gap: Spacing.sm,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -372,7 +373,7 @@ const styles = StyleSheet.create({
   contactGuideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    padding: Spacing.md,
     gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -393,28 +394,28 @@ const styles = StyleSheet.create({
   helpCentreCard: {
     backgroundColor: Colors.needleGreenLight,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    padding: Spacing.md,
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
     borderWidth: 1, borderColor: Colors.needleGreen + '30',
     ...Shadow.sm,
   },
   helpCentreIcon: {
-    width: 48, height: 48, borderRadius: Radius.md,
+    width: 44, height: 44, borderRadius: Radius.md,
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
   },
-  helpCentreTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  helpCentreTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   helpCentreSub: { fontSize: FontSize.sm, color: Colors.inkLight, marginTop: 2, lineHeight: 18 },
 
   section: { gap: Spacing.sm },
-  sectionTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
 
   card: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.lg },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.md },
 
   // Contact rows
   contactRow: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    padding: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.lightGrey,
+    padding: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.lightGrey,
   },
   contactRowLast: { borderBottomWidth: 0 },
   contactIcon: {
@@ -431,11 +432,11 @@ const styles = StyleSheet.create({
   faqLast: { borderBottomWidth: 0 },
   faqHeader: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    padding: 14,
+    padding: 12,
   },
   faqQuestion: { flex: 1, fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink, lineHeight: 20 },
   faqAnswer: {
     fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20,
-    paddingHorizontal: 14, paddingBottom: 14,
+    paddingHorizontal: 12, paddingBottom: 12,
   },
 })

@@ -169,6 +169,11 @@ export default function LoginSecurityScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
+        <View style={styles.guideCard}>
+          <Text style={styles.guideEyebrow}>Account protection</Text>
+          <Text style={styles.guideTitle}>Security changes should feel deliberate, not buried.</Text>
+          <Text style={styles.guideCopy}>Turn on biometric unlock if it fits your device, then re-verify your identity before changing your password.</Text>
+        </View>
 
         {/* ── Biometric toggle (always visible) ── */}
         {biometricAvailable && (
@@ -338,22 +343,23 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
   },
   backBtn: {
-    width: 38, height: 38, borderRadius: Radius.full,
+    width: 44, height: 44, borderRadius: Radius.full,
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
-  body: { padding: Spacing.xl, paddingBottom: 64, gap: Spacing.xl },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  body: { padding: Spacing.lg, paddingBottom: 32, gap: Spacing.sm },
   guideCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
+    borderRadius: Radius.md,
+    padding: 14,
     gap: 4,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
+    ...Shadow.sm,
   },
   guideEyebrow: {
     fontSize: FontSize.xs,
@@ -374,12 +380,12 @@ const styles = StyleSheet.create({
     lineHeight: 21,
   },
 
-  section: { gap: Spacing.md },
-  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  section: { gap: 8 },
+  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
 
   card: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.lg },
-  field: { padding: Spacing.lg, gap: 6 },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.md },
+  field: { padding: Spacing.md, gap: 6 },
   label: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.inkLight },
   input: {
     backgroundColor: Colors.bone, borderRadius: Radius.md,
@@ -390,8 +396,8 @@ const styles = StyleSheet.create({
   fieldError: { fontSize: FontSize.xs, color: Colors.error, lineHeight: 18 },
 
   // Re-auth gate
-  gateWrap: { padding: Spacing.xl, alignItems: 'center', gap: Spacing.sm },
-  gateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  gateWrap: { padding: Spacing.lg, alignItems: 'center', gap: Spacing.sm },
+  gateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   gateSub: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 20, marginBottom: Spacing.md },
   biometricBtn: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
@@ -403,17 +409,17 @@ const styles = StyleSheet.create({
 
   verifiedBanner: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    padding: Spacing.lg, backgroundColor: Colors.success + '12',
+    padding: Spacing.md, backgroundColor: Colors.success + '12',
   },
   verifiedText: { fontSize: FontSize.sm, color: Colors.success, fontWeight: FontWeight.medium },
 
   saveBtn: {
     backgroundColor: Colors.needleGreen, borderRadius: Radius.lg,
-    padding: Spacing.lg, alignItems: 'center',
+    padding: 12, alignItems: 'center',
   },
   saveBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.white },
 
-  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, padding: Spacing.lg },
+  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, padding: Spacing.md },
   toggleTitle: { fontSize: FontSize.md, fontWeight: FontWeight.medium, color: Colors.ink, marginBottom: 4 },
   toggleSub: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 

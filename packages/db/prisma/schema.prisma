@@ -25,6 +25,13 @@ enum GarmentContext {
   @@map("garment_context")
 }
 
+enum UserRole {
+  CUSTOMER
+  TAILOR
+
+  @@map("user_role")
+}
+
 enum BodyShape {
   RECTANGLE
   BROAD_SHOULDERS
@@ -97,6 +104,7 @@ enum OrderStage {
   CONSULTATION
   QUOTE_SENT
   PAYMENT_PENDING
+  PAYMENT_FAILED
   CONFIRMED
   DESIGNING
   SOURCING
@@ -110,6 +118,7 @@ enum OrderStage {
   DELIVERED
   COLLECTED
   COMPLETE
+  PARTIALLY_REFUNDED
   DECLINED
   EXPIRED
   IN_DISPUTE
@@ -136,6 +145,45 @@ enum PaymentProvider {
   PAYSTACK
 
   @@map("payment_provider")
+}
+
+enum OrderPaymentPhase {
+  INITIAL_ORDER
+  CONSULTATION
+  FULFILLMENT
+
+  @@map("order_payment_phase")
+}
+
+enum OrderPaymentStatus {
+  INITIATED
+  PENDING
+  SUCCEEDED
+  FAILED
+  CANCELED
+  PARTIAL_REFUND
+  REFUNDED
+
+  @@map("order_payment_status")
+}
+
+enum PayoutStatus {
+  PENDING
+  PROCESSING
+  BLOCKED
+  PAID
+  FAILED
+  REVERSED
+  CANCELED
+
+  @@map("payout_status")
+}
+
+enum PayoutAccountType {
+  PAYSTACK
+  STRIPE_CONNECT
+
+  @@map("payout_account_type")
 }
 
 enum DisputeStatus {
@@ -183,6 +231,22 @@ model CustomerProfile {
   @@map("customer_profiles")
 }
 
+model PublicUser {
+  id                  String         @id
+  email               String         @unique
+  displayName         String         @map("display_name")
+  role                UserRole
+  phone               String?
+  defaultCurrency     Currency       @default(USD) @map("default_currency")
+  currencyConfirmedAt DateTime       @default(now()) @map("currency_confirmed_at")
+  currencySource      String         @default("UNSUPPORTED_FALLBACK") @map("currency_source")
+  regionCode          String         @default("ZZ") @map("region_code")
+  createdAt           DateTime       @default(now()) @map("created_at")
+  updatedAt           DateTime       @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
 model MeasurementScan {
   id                   String   @id @default(uuid())
   userId               String   @map("user_id")
@@ -221,7 +285,20 @@ model TailorProfile {
   specialtyTags        String[]           @map("specialty_tags")
   priceRangeMin        Int?               @map("price_range_min")
   priceRangeMax        Int?               @map("price_range_max")
-  currency             Currency           @default(GBP)
+  currency             Currency           @default(USD)
+  payoutCurrency       Currency           @default(USD) @map("payout_currency")
+  payoutProvider       PaymentProvider?   @map("payout_provider")
+  payoutReverificationRequired Boolean    @default(false) @map("payout_reverification_required")
+  payoutAccountType    PayoutAccountType? @map("payout_account_type")
+  payoutAccountVerified Boolean           @default(false) @map("payout_account_verified")
+  payoutBankName       String?            @map("payout_bank_name")
+  payoutBankCode       String?            @map("payout_bank_code")
+  payoutAccountName    String?            @map("payout_account_name")
+  payoutAccountMasked  String?            @map("payout_account_masked")
+  payoutCountryCode    String?            @map("payout_country_code")
+  paystackRecipientCode String?           @map("paystack_recipient_code")
+  stripeConnectAccountId String?          @map("stripe_connect_account_id")
+  payoutAccountVerifiedAt DateTime?       @map("payout_account_verified_at")
   tier                 TailorTier         @default(VERIFIED)
   availability         AvailabilityStatus @default(OPEN)
   isVerified           Boolean            @default(false) @map("is_verified")
@@ -342,7 +419,7 @@ model SellerItem {
   category          String?
   sizes             String[]
   priceAmount       Int      @map("price_amount")
-  currency          Currency @default(GBP)
+  currency          Currency @default(USD)
   photoUrls         String[] @default([]) @map("photo_urls")
   isReadyMade       Boolean  @default(true) @map("is_ready_made")
   isLive            Boolean  @default(false) @map("is_live")
@@ -421,7 +498,7 @@ model OfflineOrder {
   garmentType String    @map("garment_type")
   description String?
   price       Int?
-  currency    Currency  @default(GBP)
+  currency    Currency  @default(USD)
   status      String    @default("completed")
   notes       String?
   completedAt DateTime? @map("completed_at")
@@ -460,6 +537,10 @@ model Order {
   fabricSource                 FabricSource?   @map("fabric_source")
   deliveryMethod               DeliveryMethod? @map("delivery_method")
   deliveryAddress              String?         @map("delivery_address")
+  deliveryCity                 String?         @map("delivery_city")
+  deliveryRegion               String?         @map("delivery_region")
+  deliveryPostalCode           String?         @map("delivery_postal_code")
+  deliveryCountryCode          String?         @map("delivery_country_code")
   recipientName                String?         @map("recipient_name")
   recipientPhone               String?         @map("recipient_phone")
   fulfillmentProvider          String?         @map("fulfillment_provider")
@@ -475,7 +556,7 @@ model Order {
   fitNote                      String?         @map("fit_note")
   consultationFee              Int?            @map("consultation_fee")
   quotedAmount                 Int?            @map("quoted_amount")
-  currency                     Currency        @default(GBP)
+  currency                     Currency        @default(USD)
   quotedCompletionDate         DateTime?       @map("quoted_completion_date")
   quoteNote                    String?         @map("quote_note")
   quoteExpiresAt               DateTime?       @map("quote_expires_at")
@@ -493,9 +574,38 @@ model Order {
   escrowReleased               Boolean         @default(false) @map("escrow_released")
   escrowReleasedAt             DateTime?       @map("escrow_released_at")
   autoReleaseAt                DateTime?       @map("auto_release_at")
+  handoffCompletedAt           DateTime?       @map("handoff_completed_at")
+  customerHandoffConfirmedAt   DateTime?       @map("customer_handoff_confirmed_at")
+  handoffConfirmationSource    String?         @map("handoff_confirmation_source")
   collectionCode               String?         @map("collection_code")
   collectionCodeExpiry         DateTime?       @map("collection_code_expiry")
   collectionCodeUsed           Boolean         @default(false) @map("collection_code_used")
+  sourceCurrency               Currency?       @map("source_currency")
+  sourceAmount                 Int?            @map("source_amount")
+  tailorPayoutCurrencyLocked   Currency?       @map("tailor_payout_currency_locked")
+  tailorPayoutProviderLocked   PaymentProvider? @map("tailor_payout_provider_locked")
+  tailorPaystackRecipientCodeLocked String?    @map("tailor_paystack_recipient_code_locked")
+  tailorStripeConnectAccountIdLocked String?   @map("tailor_stripe_connect_account_id_locked")
+  opsPayoutResolutionMode      String?         @map("ops_payout_resolution_mode")
+  opsPayoutOverrideCurrency    Currency?       @map("ops_payout_override_currency")
+  opsPayoutOverrideProvider    PaymentProvider? @map("ops_payout_override_provider")
+  opsPayoutOverrideAmount      Int?            @map("ops_payout_override_amount")
+  opsPayoutOverrideFxRate      Decimal?        @db.Decimal(18, 8) @map("ops_payout_override_fx_rate")
+  opsPayoutOverrideFxRateTimestamp DateTime?   @map("ops_payout_override_fx_rate_timestamp")
+  opsPayoutOverrideNote        String?         @map("ops_payout_override_note")
+  opsPayoutOverrideSetAt       DateTime?       @map("ops_payout_override_set_at")
+  opsPayoutOverrideSetBy       String?         @map("ops_payout_override_set_by")
+  fxRate                       Decimal?        @db.Decimal(18, 8) @map("fx_rate")
+  fxRateTimestamp              DateTime?       @map("fx_rate_timestamp")
+  subtotalAmount               Int             @default(0) @map("subtotal_amount")
+  platformFeeAmount            Int             @default(0) @map("platform_fee_amount")
+  taxAmount                    Int             @default(0) @map("tax_amount")
+  taxRateBps                   Int             @default(0) @map("tax_rate_bps")
+  taxRegion                    String          @default("Tax") @map("tax_region")
+  taxFallback                  Boolean         @default(false) @map("tax_fallback")
+  taxFallbackReason            String?         @map("tax_fallback_reason")
+  shippingAmount               Int             @default(0) @map("shipping_amount")
+  totalAmount                  Int             @default(0) @map("total_amount")
   createdAt                    DateTime        @default(now()) @map("created_at")
   updatedAt                    DateTime        @updatedAt @map("updated_at")
 
@@ -504,6 +614,8 @@ model Order {
   messages     Message[]
   review       Review?
   dispute      Dispute?
+  payments     OrderPayment[]
+  webhookEvents PaymentWebhookEvent[]
 
   @@map("orders")
 }
@@ -619,11 +731,88 @@ model Payout {
   amount           Int
   currency         Currency
   provider         PaymentProvider
+  status           PayoutStatus    @default(PAID)
   providerPayoutId String?         @map("provider_payout_id")
+  sourcePaymentId  String?         @map("source_payment_id")
+  providerResponse Json            @default("{}") @map("provider_response")
   orderId          String?         @map("order_id")
+  blockedReason    String?         @map("blocked_reason")
+  initiatedAt      DateTime        @default(now()) @map("initiated_at")
+  completedAt      DateTime?       @map("completed_at")
+  failedAt         DateTime?       @map("failed_at")
   processedAt      DateTime        @default(now()) @map("processed_at")
 
   @@map("payouts")
+}
+
+model TaxRateCache {
+  countryCode        String   @map("country_code")
+  postalCode         String   @map("postal_code")
+  rateBps            Int      @map("rate_bps")
+  taxRegion          String   @map("tax_region")
+  source             String   @default("ZIPTAX")
+  shippingTaxable    Boolean  @default(false) @map("shipping_taxable")
+  platformFeeTaxable Boolean  @default(false) @map("platform_fee_taxable")
+  rawResponse        Json     @default("{}") @map("raw_response")
+  expiresAt          DateTime @map("expires_at")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@id([countryCode, postalCode])
+  @@map("tax_rate_cache")
+}
+
+model OrderPayment {
+  id                  String             @id @default(uuid())
+  orderId             String             @map("order_id")
+  order               Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  phase               OrderPaymentPhase
+  provider            PaymentProvider
+  currency            Currency
+  amount              Int
+  status              OrderPaymentStatus @default(INITIATED)
+  idempotencyKey      String             @unique @map("idempotency_key")
+  providerPaymentId   String?            @map("provider_payment_id")
+  providerCheckoutUrl String?            @map("provider_checkout_url")
+  providerResponse    Json               @default("{}") @map("provider_response")
+  refundedAmount      Int                @default(0) @map("refunded_amount")
+  partialRefundCount  Int                @default(0) @map("partial_refund_count")
+  lastRefundAmount    Int?               @map("last_refund_amount")
+  lastRefundAt        DateTime?          @map("last_refund_at")
+  createdAt           DateTime           @default(now()) @map("created_at")
+  updatedAt           DateTime           @updatedAt @map("updated_at")
+  confirmedAt         DateTime?          @map("confirmed_at")
+  failedAt            DateTime?          @map("failed_at")
+  refundedAt          DateTime?          @map("refunded_at")
+
+  webhookEvents PaymentWebhookEvent[]
+
+  @@index([orderId, createdAt])
+  @@index([provider, providerPaymentId])
+  @@index([status, createdAt])
+  @@map("order_payments")
+}
+
+model PaymentWebhookEvent {
+  id              String          @id @default(uuid())
+  provider        PaymentProvider
+  providerEventId String          @map("provider_event_id")
+  eventType       String          @map("event_type")
+  idempotencyKey  String?         @map("idempotency_key")
+  orderId         String?         @map("order_id")
+  order           Order?          @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  paymentId       String?         @map("payment_id")
+  payment         OrderPayment?   @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  signatureValid  Boolean         @default(false) @map("signature_valid")
+  payload         Json            @default("{}")
+  processedAt     DateTime?       @map("processed_at")
+  processingResult String?        @map("processing_result")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  @@unique([provider, providerEventId])
+  @@index([orderId, createdAt])
+  @@index([paymentId, createdAt])
+  @@map("payment_webhook_events")
 }
 
 // ─────────────────────────────────────────────

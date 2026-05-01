@@ -125,6 +125,10 @@ async function resolvePaymentErrorMessage(
     return 'Payment was canceled. Start payment again when you are ready.'
   }
 
+  if (normalized.includes('payment failed')) {
+    return 'Payment failed. Start payment again when you are ready.'
+  }
+
   return rawMessage
 }
 
@@ -146,6 +150,11 @@ function successResult(data: {
 export function useOrderPaymentFlow() {
   const { available: stripeRuntimeAvailable, initPaymentSheet, presentPaymentSheet } = useOptionalStripe()
 
+  async function failureStage(error: Error | null) {
+    const payload = error ? await readFunctionErrorPayload(error) : null
+    return typeof payload?.stage === 'string' ? payload.stage : undefined
+  }
+
   async function confirmPreparedPayment(
     orderId: string,
     paymentIntentId: string,
@@ -166,6 +175,7 @@ export function useOrderPaymentFlow() {
           confirmError,
           'Payment went through, but we could not confirm the order yet. Pull to refresh in a moment.',
         ),
+        stage: await failureStage(confirmError),
       }
     }
 
@@ -193,6 +203,7 @@ export function useOrderPaymentFlow() {
           prepareError,
           'Could not start payment for this order right now.',
         ),
+        stage: await failureStage(prepareError),
       }
     }
 

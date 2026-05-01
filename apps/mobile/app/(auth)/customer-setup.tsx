@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, KeyboardAvoidingView, Platform,
 } from 'react-native'
@@ -9,6 +9,12 @@ import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { syncUserRow } from '@/lib/syncUserRow'
+import {
+  SUPPORTED_CURRENCIES,
+  detectDeviceCurrencyPreference,
+  fetchCurrencyPreferenceContext,
+  type CurrencyCode,
+} from '@/lib/currency'
 import { Button, Input } from '@/components/ui'
 import { validateDisplayName } from '@drape/shared/contact-filter'
 import { normalizePhoneForStorage, PHONE_STORAGE_HINT, validatePhoneForProfile } from '@drape/shared/phone'
@@ -35,6 +41,7 @@ function normalizeGarmentContext(value: unknown): GarmentContext | null {
 export default function CustomerSetupScreen() {
   const router = useRouter()
   const { user } = useAuth()
+  const detectedCurrency = useMemo(() => detectDeviceCurrencyPreference(), [])
 
   // Pre-fill display name from OAuth metadata if available
   const oauthName = user?.user_metadata?.full_name ?? user?.user_metadata?.name ?? ''
@@ -45,12 +52,22 @@ export default function CustomerSetupScreen() {
   const [phoneError, setPhoneError] = useState('')
   const [unit, setUnit] = useState<Unit>('in')
   const [garmentContext, setGarmentContext] = useState<GarmentContext | null>(null)
+  const [defaultCurrency, setDefaultCurrency] = useState<CurrencyCode>(detectedCurrency.currency)
+  const [currencySource, setCurrencySource] = useState(detectedCurrency.source)
+  const [regionCode, setRegionCode] = useState(detectedCurrency.regionCode)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
 
   useEffect(() => {
     if (!user?.id) return
     let cancelled = false
+
+    void fetchCurrencyPreferenceContext().then((resolved) => {
+      if (cancelled) return
+      setDefaultCurrency(resolved.currency)
+      setCurrencySource(resolved.source)
+      setRegionCode(resolved.regionCode)
+    })
 
     supabase
       .from('customer_profiles')
@@ -80,6 +97,31 @@ export default function CustomerSetupScreen() {
           setGarmentContext(nextGarmentContext)
         }
       })
+
+    supabase
+      .from('users')
+      .select('default_currency, currency_source, region_code')
+      .eq('id', user.id)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelled) return
+        if (error || !data) return
+
+        const nextCurrency = typeof (data as any).default_currency === 'string'
+          ? SUPPORTED_CURRENCIES.find((item) => item.code === (data as any).default_currency)
+          : null
+
+        if (nextCurrency) {
+          setDefaultCurrency(nextCurrency.code)
+        }
+        if (typeof (data as any).currency_source === 'string' && (data as any).currency_source.trim().length > 0) {
+          setCurrencySource((data as any).currency_source.trim().toUpperCase() as typeof currencySource)
+        }
+        if (typeof (data as any).region_code === 'string' && (data as any).region_code.trim().length > 0) {
+          setRegionCode((data as any).region_code.trim().toUpperCase())
+        }
+      })
+
     return () => {
       cancelled = true
     }
@@ -159,11 +201,27 @@ export default function CustomerSetupScreen() {
         return
       }
 
-      await syncUserRow({
-        userId: user?.id,
-        displayName: displayName.trim(),
-        role: 'CUSTOMER',
-      })
+      try {
+        await syncUserRow({
+          userId: user?.id,
+          displayName: displayName.trim(),
+          role: 'CUSTOMER',
+          phone: normalizedPhone,
+          defaultCurrency,
+          currencySource,
+          regionCode,
+          currencyConfirmedAt: now,
+          strict: true,
+        })
+      } catch (syncError: any) {
+        setSaving(false)
+        const message = isLikelyConnectivityIssue(syncError)
+          ? 'We saved your setup, but could not finish locking your account currency because the connection looks weak. Please retry once the signal improves.'
+          : 'We saved your setup, but could not finish locking your account currency right now. Please try again in a moment.'
+        setSaveError(message)
+        Alert.alert('Error', message)
+        return
+      }
     }
 
     setSaving(false)
@@ -236,6 +294,41 @@ export default function CustomerSetupScreen() {
                 autoCapitalize="none"
                 hint={PHONE_STORAGE_HINT}
               />
+
+              <View>
+                <Text style={styles.fieldLabel}>Account currency <Text style={styles.required}>*</Text></Text>
+                <Text style={styles.fieldHint}>
+                  This becomes the currency you see everywhere and the currency you pay in for new orders.
+                </Text>
+                {currencySource === 'UNSUPPORTED_FALLBACK' ? (
+                  <View style={styles.currencyNotice}>
+                    <Text style={styles.currencyNoticeTitle}>USD fallback</Text>
+                    <Text style={styles.currencyNoticeCopy}>Your local currency is not supported yet. Prices are shown in USD until you choose another supported currency.</Text>
+                  </View>
+                ) : (
+                  <View style={styles.currencyNotice}>
+                    <Text style={styles.currencyNoticeTitle}>Detected from your region</Text>
+                    <Text style={styles.currencyNoticeCopy}>We pre-selected {defaultCurrency} from your device region. Change it now if you want your account to use a different supported currency.</Text>
+                  </View>
+                )}
+                <View style={styles.currencyRow}>
+                  {SUPPORTED_CURRENCIES.map((option) => (
+                    <TouchableOpacity
+                      key={option.code}
+                      style={[styles.currencyChip, defaultCurrency === option.code && styles.currencyChipActive]}
+                      onPress={() => {
+                        setDefaultCurrency(option.code)
+                        setCurrencySource('USER_SELECTED')
+                        setRegionCode(regionCode || detectedCurrency.regionCode)
+                      }}
+                    >
+                      <Text style={[styles.currencyChipText, defaultCurrency === option.code && styles.currencyChipTextActive]}>
+                        {option.symbol} {option.code}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
 
               <View>
                 <Text style={styles.fieldLabel}>Measurement units <Text style={styles.required}>*</Text></Text>
@@ -374,6 +467,39 @@ const styles = StyleSheet.create({
   fieldLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: Spacing.sm },
   required: { color: Colors.error },
   fieldHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginBottom: Spacing.md, lineHeight: 18 },
+  currencyNotice: {
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: 4,
+    marginBottom: Spacing.md,
+  },
+  currencyNoticeTitle: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  currencyNoticeCopy: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+  },
+  currencyRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  currencyChip: {
+    minHeight: 40,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.full,
+    borderWidth: 1.5,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  currencyChipActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
+  currencyChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
+  currencyChipTextActive: { color: Colors.needleGreen },
 
   unitRow: { gap: Spacing.sm },
   unitBtn: {

@@ -20,6 +20,7 @@ const STAGE_COLOR: Partial<Record<OrderStage, string>> = {
   CONSULTATION: Colors.warning,
   QUOTE_SENT: Colors.warning,
   PAYMENT_PENDING: Colors.warning,
+  PAYMENT_FAILED: Colors.kanteRust,
   CONFIRMED: Colors.needleGreen,
   DESIGNING: Colors.needleGreen,
   SOURCING: Colors.needleGreen,
@@ -61,6 +62,7 @@ function orderPriority(stage: OrderStage): number {
     case 'PENDING_QUOTE':
     case 'CONSULTATION':
     case 'PAYMENT_PENDING':
+    case 'PAYMENT_FAILED':
       return 5
     default:
       return 6
@@ -298,11 +300,11 @@ function EmptyOrdersView({
 
 const emptyStyles = StyleSheet.create({
   container: {
-    paddingTop: Spacing.lg,
+    paddingTop: Spacing.md,
     paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.xxl,
+    paddingBottom: Spacing.xl,
     alignItems: 'center',
-    gap: Spacing.lg,
+    gap: Spacing.md,
   },
   previewStack: { width: '100%', gap: Spacing.sm },
   ghostCard: {
@@ -329,9 +331,9 @@ const emptyStyles = StyleSheet.create({
     backgroundColor: Colors.boneDeep,
   },
 
-  textBlock: { alignItems: 'center', gap: 6 },
-  heading: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
-  sub: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
+  textBlock: { alignItems: 'center', gap: 4 },
+  heading: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center', fontFamily: 'Georgia' },
+  sub: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 19 },
 
   ctaBtn: {
     backgroundColor: Colors.needleGreen,
@@ -358,7 +360,7 @@ const emptyStyles = StyleSheet.create({
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
     paddingHorizontal: Spacing.lg,
-    paddingVertical: 12,
+    paddingVertical: 10,
     ...Shadow.sm,
     minHeight: 44,
   },
@@ -368,14 +370,14 @@ const emptyStyles = StyleSheet.create({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
-  header: { paddingHorizontal: Spacing.lg, paddingTop: 10, paddingBottom: 8, gap: Spacing.sm },
-  title: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.ink },
+  header: { paddingHorizontal: Spacing.lg, paddingTop: 8, paddingBottom: 6, gap: Spacing.xs },
+  title: { fontSize: 28, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
   guideCard: {
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.sm,
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    padding: 14,
+    padding: 12,
     gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -395,15 +397,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row', backgroundColor: Colors.boneDeep,
     borderRadius: Radius.full, padding: 3,
   },
-  tabBtn: { flex: 1, paddingVertical: 9, borderRadius: Radius.full, alignItems: 'center', minHeight: 44, justifyContent: 'center' },
+  tabBtn: { flex: 1, paddingVertical: 8, borderRadius: Radius.full, alignItems: 'center', minHeight: 44, justifyContent: 'center' },
   tabBtnActive: { backgroundColor: Colors.white, ...Shadow.sm },
   tabLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.midGrey },
   tabLabelActive: { color: Colors.ink, fontWeight: FontWeight.semibold },
 
-  list: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.xxl },
-  card: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: Spacing.sm, ...Shadow.sm },
+  list: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.xl },
+  card: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: Spacing.xs, ...Shadow.sm },
   cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
-  garment: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.ink },
+  garment: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   tailor: { fontSize: FontSize.sm, color: Colors.inkLight, marginTop: 2 },
   stagePill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.full },
   stageText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
@@ -417,6 +419,6 @@ const styles = StyleSheet.create({
   reviewNudgeText: { fontSize: FontSize.xs, color: Colors.kanteRust, fontWeight: FontWeight.semibold },
   ref: { fontSize: FontSize.xs, color: Colors.midGrey },
   eta: { fontSize: FontSize.xs, color: Colors.midGrey },
-  amount: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginLeft: 'auto' },
+  amount: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginLeft: 'auto', fontFamily: 'Georgia' },
 
 })

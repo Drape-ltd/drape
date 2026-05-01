@@ -14,7 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { capture } from '@/lib/analytics'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
-import { goBackOrReturnTo } from '@/lib/navigation'
+import { goBackOrReturnToIfNeeded } from '@/lib/navigation'
 import {
   BODY_PROFILE_FLAG_LABELS,
   buildMeasurementConfidenceByField,
@@ -202,15 +202,11 @@ export default function GuidedFitScreen() {
   }, [user?.id])
 
   function goBack() {
-    goBackOrReturnTo(router, navigation, safeReturnTo, '/(customer)/profile')
+    goBackOrReturnToIfNeeded(router, navigation, safeReturnTo, '/(customer)/profile')
   }
 
   function finishAfterSave() {
-    if (safeReturnTo) {
-      router.replace(safeReturnTo as any)
-      return
-    }
-    router.replace('/(customer)/profile')
+    goBackOrReturnToIfNeeded(router, navigation, safeReturnTo, '/(customer)/profile')
   }
 
   function validateNotes() {
@@ -632,13 +628,13 @@ function SelectionPill({ label, active, onPress }: { label: string; active: bool
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   scroll: { flex: 1 },
-  content: { padding: Spacing.xl, gap: Spacing.lg, paddingBottom: Spacing.xxxl },
+  content: { padding: Spacing.xl, gap: Spacing.md, paddingBottom: Spacing.xxl },
   centerState: { flex: 1, justifyContent: 'center', padding: Spacing.xl },
   stateCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.lg,
+    padding: Spacing.lg,
+    gap: Spacing.md,
     ...Shadow.lg,
   },
   stateEyebrow: {
@@ -652,6 +648,7 @@ const styles = StyleSheet.create({
     fontSize: FontSize.lg,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
+    fontFamily: 'Georgia',
   },
   stateHint: {
     fontSize: FontSize.sm,
@@ -660,8 +657,8 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingHorizontal: Spacing.xl,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.sm,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.xs,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -675,12 +672,13 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md,
     color: Colors.ink,
     fontWeight: FontWeight.semibold,
+    fontFamily: 'Georgia',
   },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
+    padding: Spacing.lg,
+    gap: Spacing.sm,
     ...Shadow.md,
   },
   heroEyebrow: {
@@ -691,20 +689,21 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
   },
   heroTitle: {
-    fontSize: FontSize.xxl,
+    fontSize: FontSize.xl,
     color: Colors.ink,
     fontWeight: FontWeight.bold,
+    fontFamily: 'Georgia',
   },
   heroText: {
-    fontSize: FontSize.md,
+    fontSize: FontSize.sm,
     color: Colors.inkLight,
-    lineHeight: 24,
+    lineHeight: 20,
   },
   sectionCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
+    padding: Spacing.lg,
+    gap: Spacing.sm,
     ...Shadow.md,
   },
   warningCard: {
@@ -712,14 +711,15 @@ const styles = StyleSheet.create({
     borderColor: Colors.warning,
   },
   sectionTitle: {
-    fontSize: FontSize.lg,
+    fontSize: FontSize.md,
     color: Colors.ink,
     fontWeight: FontWeight.semibold,
+    fontFamily: 'Georgia',
   },
   sectionHint: {
     fontSize: FontSize.sm,
     color: Colors.inkLight,
-    lineHeight: 21,
+    lineHeight: 19,
   },
   fieldLabel: {
     fontSize: FontSize.sm,
@@ -736,9 +736,11 @@ const styles = StyleSheet.create({
     borderRadius: Radius.full,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
     backgroundColor: Colors.white,
+    minHeight: 40,
+    justifyContent: 'center',
   },
   selectionPillActive: {
     backgroundColor: Colors.needleGreen,

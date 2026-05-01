@@ -4,9 +4,17 @@ import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getPaystackCallbackUrl, getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
+import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
+import { markInitialOrderPaymentFailed } from '../_shared/payment-failure.ts'
+import {
+  findLatestPaymentAttemptForOrderPhase,
+  markPaymentAttemptStatus,
+  upsertPreparedPaymentAttempt,
+} from '../_shared/payment-ledger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import { sendOrderConfirmationEmails } from '../_shared/order-email.ts'
 import { notifyTailorAboutReadyMadeStockChange } from '../_shared/ready-made-stock-alert.ts'
+import { sendSmsToUser } from '../_shared/sms.ts'
 import {
   fulfillmentPaymentConfirmedStageNote,
   paymentConfirmedStageNote,
@@ -17,9 +25,23 @@ import {
 import { initializePaystackTransaction, verifyPaystackTransaction } from '../_shared/paystack.ts'
 import { createStripePaymentIntent, retrieveStripePaymentIntent } from '../_shared/stripe.ts'
 import { parseBody, uuid, z } from '../_shared/validate.ts'
+import {
+  parseOrderSupportMeta,
+  serializeOrderSupportMeta,
+  type ConsultationMeta,
+} from '../_shared/order-support.ts'
+import {
+  buildCustomerOrderPaymentSms,
+  buildTailorOrderPaymentSms,
+} from '../../../packages/shared/src/sms-copy.ts'
+import {
+  normalizeAccountCurrency,
+  resolvePaymentProviderForCurrency,
+  type AccountCurrencyCode,
+} from '../../../packages/shared/src/currency-config.ts'
+import { resolvePreparedPaymentReference } from '../_shared/payment-recovery.ts'
 
 const FN = 'payment-action'
-const PAYSTACK_CURRENCIES = new Set(['NGN', 'GHS'])
 
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
@@ -38,7 +60,8 @@ const BodySchema = z.discriminatedUnion('action', [
 ])
 
 type PaymentProvider = 'STRIPE' | 'PAYSTACK'
-type PaymentPhase = 'INITIAL_ORDER' | 'FULFILLMENT'
+type PaymentPhase = 'INITIAL_ORDER' | 'FULFILLMENT' | 'CONSULTATION'
+type OrderCurrency = AccountCurrencyCode
 
 type OrderRow = {
   id: string
@@ -52,6 +75,8 @@ type OrderRow = {
   quoted_currency?: string | null
   currency?: string | null
   quote_expires_at?: string | null
+  consultation_fee?: number | null
+  special_note?: string | null
   delivery_method?: string | null
   delivery_address?: string | null
   fulfillment_fee?: number | null
@@ -72,33 +97,54 @@ function isPaymentProvider(value: string | null | undefined): value is PaymentPr
   return value === 'STRIPE' || value === 'PAYSTACK'
 }
 
-function resolvePaymentProvider(order: OrderRow, currency: string): PaymentProvider {
-  if (isPaymentProvider(order.payment_provider)) {
-    return order.payment_provider
-  }
-
-  return PAYSTACK_CURRENCIES.has(currency.toUpperCase()) ? 'PAYSTACK' : 'STRIPE'
+function normalizeOrderCurrency(value: string | null | undefined): OrderCurrency | null {
+  return normalizeAccountCurrency(value)
 }
 
-function resolveStoredProvider(value: string | null | undefined, currency: string): PaymentProvider {
-  if (isPaymentProvider(value)) {
-    return value
-  }
+function paymentProviderForCurrency(currency: OrderCurrency): PaymentProvider {
+  return resolvePaymentProviderForCurrency(currency)
+}
 
-  return PAYSTACK_CURRENCIES.has(currency.toUpperCase()) ? 'PAYSTACK' : 'STRIPE'
+function resolveStoredProvider(value: string | null | undefined, currency: OrderCurrency): PaymentProvider | null {
+  if (!isPaymentProvider(value)) return null
+  return value === paymentProviderForCurrency(currency) ? value : null
 }
 
 function buildPaystackReference(order: OrderRow, phase: PaymentPhase) {
   const seed = (order.reference ?? order.id).replace(/[^A-Za-z0-9._=-]/gu, '').slice(0, 60) || order.id
-  return `DRP-${phase === 'FULFILLMENT' ? 'F' : 'P'}-${seed}-${Date.now()}`
+  const phaseCode = phase === 'FULFILLMENT' ? 'F' : phase === 'CONSULTATION' ? 'C' : 'P'
+  return `DRP-${phaseCode}-${seed}-${Date.now()}`
+}
+
+function jsonResponse(body: Record<string, unknown>, status: number, cors: HeadersInit) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...cors, 'Content-Type': 'application/json' },
+  })
+}
+
+function jsonError(cors: HeadersInit, status: number, error: string, extra?: Record<string, unknown>) {
+  return jsonResponse({ error, ...(extra ?? {}) }, status, cors)
 }
 
 function isPayableStage(stage: string) {
-  return ['QUOTE_SENT', 'PAYMENT_PENDING', 'CONFIRMED'].includes(stage)
+  return ['QUOTE_SENT', 'PAYMENT_PENDING', 'PAYMENT_FAILED', 'CONFIRMED'].includes(stage)
 }
 
 function isReusablePaystackStatus(status: string) {
   return !['success', 'failed', 'abandoned', 'reversed'].includes(status)
+}
+
+function paystackFailureAttemptStatus(status: string): 'FAILED' | 'CANCELED' | null {
+  if (status === 'failed') return 'FAILED'
+  if (status === 'abandoned' || status === 'reversed') return 'CANCELED'
+  return null
+}
+
+function stripeFailureAttemptStatus(status: string): 'FAILED' | 'CANCELED' | null {
+  if (status === 'processing' || status === 'succeeded') return null
+  if (status === 'canceled') return 'CANCELED'
+  return 'FAILED'
 }
 
 function paymentDescription(order: {
@@ -108,6 +154,10 @@ function paymentDescription(order: {
   item_title?: string | null
   delivery_method?: string | null
 }, phase: PaymentPhase) {
+  if (phase === 'CONSULTATION') {
+    return `Drape consultation payment #${order.reference ?? 'unknown'}`
+  }
+
   if (phase === 'FULFILLMENT') {
     return order.delivery_method === 'LOCAL_DELIVERY'
       ? `Drape delivery payment #${order.reference ?? 'unknown'}`
@@ -136,15 +186,7 @@ function paystackStatusMessage(status: string) {
   return `Payment is not complete yet (${status}).`
 }
 
-function providerFailureMessage(provider: PaymentProvider, currency: string, phase: 'prepare' | 'confirm') {
-  const normalizedCurrency = currency.trim().toUpperCase()
-
-  if (provider === 'PAYSTACK' && normalizedCurrency === 'KES') {
-    return phase === 'prepare'
-      ? 'KES checkout could not start on the Paystack path for this Drape setup. Please retry after switching this payment to Stripe.'
-      : 'KES checkout could not be confirmed on the Paystack path for this Drape setup yet. Please refresh and try again.'
-  }
-
+function providerFailureMessage(provider: PaymentProvider, _currency: OrderCurrency, phase: 'prepare' | 'confirm') {
   if (provider === 'PAYSTACK') {
     return phase === 'prepare'
       ? 'We could not start Paystack checkout right now. Please try again in a moment.'
@@ -179,6 +221,29 @@ async function auditPaymentBlocked(
       ...(payload ?? {}),
     },
   })
+
+  await createOrRefreshOpsIssue(supabase, {
+    issueType: 'PAYMENT_BLOCKED',
+    severity: 'CRITICAL',
+    source: FN,
+    actorId: callerId,
+    actorRole: 'CUSTOMER',
+    orderId: order.id,
+    provider: order.payment_provider ?? null,
+    stage: order.stage,
+    title: 'Payment blocked',
+    description: `Customer payment could not continue because ${reason.replace(/_/gu, ' ').toLowerCase()}.`,
+    recommendedAction: 'Verify the provider payment state, the order stage, and whether the customer should retry, be confirmed manually, or be refunded.',
+    dedupeKey: `payment-blocked:${order.id}:${reason}`,
+    metadata: {
+      reason,
+      order_kind: order.order_kind ?? 'CUSTOM',
+      stage: order.stage,
+      provider: order.payment_provider ?? null,
+      delivery_method: order.delivery_method ?? null,
+      ...(payload ?? {}),
+    },
+  })
 }
 
 function isFulfillmentPaymentPending(order: OrderRow) {
@@ -188,6 +253,28 @@ function isFulfillmentPaymentPending(order: OrderRow) {
     && order.fulfillment_fee > 0
     && !!order.fulfillment_payment_requested_at
     && !order.fulfillment_payment_paid_at
+}
+
+function consultationMetaForOrder(order: OrderRow): ConsultationMeta | null {
+  return parseOrderSupportMeta(order.special_note).consultation ?? null
+}
+
+function isConsultationPaymentPending(order: OrderRow) {
+  const consultation = consultationMetaForOrder(order)
+  return order.order_kind === 'CUSTOM'
+    && order.stage === 'CONSULTATION'
+    && typeof order.consultation_fee === 'number'
+    && order.consultation_fee > 0
+    && consultation?.paymentTiming === 'BEFORE_CALL_STARTS'
+    && !consultation?.paidAt
+}
+
+function consultationPaymentAmount(order: OrderRow) {
+  if (typeof order.consultation_fee !== 'number' || order.consultation_fee <= 0) {
+    return null
+  }
+
+  return order.consultation_fee
 }
 
 function initialPaymentAmount(order: OrderRow) {
@@ -206,6 +293,10 @@ function fulfillmentPaymentAmount(order: OrderRow) {
 }
 
 function resolveActivePaymentPhase(order: OrderRow): PaymentPhase {
+  if (isConsultationPaymentPending(order)) {
+    return 'CONSULTATION'
+  }
+
   if (isFulfillmentPaymentPending(order)) {
     return 'FULFILLMENT'
   }
@@ -215,35 +306,48 @@ function resolveActivePaymentPhase(order: OrderRow): PaymentPhase {
 
 function isInitialPaymentPayable(order: OrderRow) {
   if (order.order_kind === 'CUSTOM') {
-    return ['QUOTE_SENT', 'PAYMENT_PENDING'].includes(order.stage)
+    return ['QUOTE_SENT', 'PAYMENT_PENDING', 'PAYMENT_FAILED'].includes(order.stage)
   }
 
   if (order.order_kind === 'READY_MADE') {
-    return order.stage === 'PAYMENT_PENDING'
+    return ['PAYMENT_PENDING', 'PAYMENT_FAILED'].includes(order.stage)
   }
 
   return false
 }
 
 function paymentIntentForPhase(order: OrderRow, phase: PaymentPhase) {
+  if (phase === 'CONSULTATION') {
+    return consultationMetaForOrder(order)?.paymentIntentId?.trim() || null
+  }
   return phase === 'FULFILLMENT'
     ? (order.fulfillment_payment_intent_id?.trim() || null)
     : (order.payment_intent_id?.trim() || null)
 }
 
 function paymentCheckoutUrlForPhase(order: OrderRow, phase: PaymentPhase) {
+  if (phase === 'CONSULTATION') {
+    return consultationMetaForOrder(order)?.paymentCheckoutUrl?.trim() || null
+  }
   return phase === 'FULFILLMENT'
     ? (order.fulfillment_payment_checkout_url?.trim() || null)
     : (order.payment_checkout_url?.trim() || null)
 }
 
-function resolveProviderForPhase(order: OrderRow, phase: PaymentPhase, currency: string) {
+function resolveProviderForPhase(order: OrderRow, phase: PaymentPhase, currency: OrderCurrency) {
+  if (phase === 'CONSULTATION') {
+    return resolveStoredProvider(consultationMetaForOrder(order)?.paymentProvider, currency) ?? paymentProviderForCurrency(currency)
+  }
   return phase === 'FULFILLMENT'
-    ? resolveStoredProvider(order.fulfillment_payment_provider, currency)
-    : resolvePaymentProvider(order, currency)
+    ? (resolveStoredProvider(order.fulfillment_payment_provider, currency) ?? paymentProviderForCurrency(currency))
+    : (resolveStoredProvider(order.payment_provider, currency) ?? paymentProviderForCurrency(currency))
 }
 
 function resolveConfirmPhase(order: OrderRow, paymentIntentId?: string) {
+  if (paymentIntentId && paymentIntentId === consultationMetaForOrder(order)?.paymentIntentId) {
+    return 'CONSULTATION' as const
+  }
+
   if (paymentIntentId && paymentIntentId === order.fulfillment_payment_intent_id) {
     return 'FULFILLMENT' as const
   }
@@ -263,6 +367,87 @@ async function finalizeSuccessfulPayment(
   paymentIntentId: string,
   phase: PaymentPhase,
 ) {
+  if (phase === 'CONSULTATION') {
+    const supportMeta = parseOrderSupportMeta(order.special_note)
+    const consultation = supportMeta.consultation
+
+    if (consultation?.paidAt) {
+      return { alreadyConfirmed: true as const, stage: order.stage }
+    }
+
+    const nextMeta = {
+      ...supportMeta,
+      consultation: consultation
+        ? {
+            ...consultation,
+            paymentProvider: provider,
+            paymentIntentId,
+            paymentCheckoutUrl: null,
+            paidAt: new Date().toISOString(),
+          }
+        : consultation,
+    }
+
+    const { data: updatedOrder, error: updateError } = await supabase
+      .from('orders')
+      .update({
+        special_note: serializeOrderSupportMeta(nextMeta),
+      })
+      .eq('id', order.id)
+      .select('id')
+      .maybeSingle()
+
+    if (updateError) {
+      throw new Error('Could not confirm consultation payment for this order.')
+    }
+
+    if (!updatedOrder?.id) {
+      return { alreadyConfirmed: true as const, stage: order.stage }
+    }
+
+    await supabase.from('order_stage_updates').insert({
+      order_id: order.id,
+      stage: order.stage,
+      note: 'Consultation fee paid. The tailor can now start the consultation call.',
+    })
+
+    await markPaymentAttemptStatus(supabase, {
+      provider,
+      providerPaymentId: paymentIntentId,
+      status: 'SUCCEEDED',
+      providerResponse: {
+        order_id: order.id,
+        payment_phase: phase,
+        stage: order.stage,
+      },
+    })
+
+    await audit(supabase, {
+      event: 'payment.consultation_confirmed',
+      actor_id: callerId,
+      actor_role: 'CUSTOMER',
+      order_id: order.id,
+      payload: {
+        function: FN,
+        provider,
+        payment_phase: phase,
+        payment_intent_id: paymentIntentId,
+      },
+    })
+
+    if (order.tailor_id) {
+      EdgeRuntime.waitUntil(
+        sendPushToUser(supabase, order.tailor_id.toString(), {
+          title: 'Consultation fee paid',
+          body: 'The customer paid the consultation fee. You can start the consultation when ready.',
+          data: { orderId: order.id },
+        }),
+      )
+    }
+
+    return { alreadyConfirmed: false as const, stage: order.stage }
+  }
+
   if (phase === 'INITIAL_ORDER' && order.stage === 'CONFIRMED') {
     return { alreadyConfirmed: true as const, stage: 'CONFIRMED' }
   }
@@ -299,6 +484,17 @@ async function finalizeSuccessfulPayment(
       note: fulfillmentPaymentConfirmedStageNote(order.delivery_method),
     })
 
+    await markPaymentAttemptStatus(supabase, {
+      provider,
+      providerPaymentId: paymentIntentId,
+      status: 'SUCCEEDED',
+      providerResponse: {
+        order_id: order.id,
+        payment_phase: phase,
+        stage: order.stage,
+      },
+    })
+
     await audit(supabase, {
       event: 'payment.fulfillment_confirmed',
       actor_id: callerId,
@@ -318,6 +514,45 @@ async function finalizeSuccessfulPayment(
         sendPushToUser(supabase, order.tailor_id.toString(), {
           ...tailorFulfillmentPaymentConfirmedNotification(order.delivery_method),
           data: { orderId: order.id },
+        }),
+      )
+      EdgeRuntime.waitUntil(
+        sendSmsToUser({
+          supabase,
+          userId: order.tailor_id.toString(),
+          audience: 'TAILOR',
+          orderId: order.id,
+          event: 'order.fulfillment_payment_confirmed',
+          body: buildTailorOrderPaymentSms({
+            id: order.id,
+            reference: order.reference,
+            orderKind: order.order_kind,
+            garmentType: order.garment_type,
+            itemTitle: order.item_title,
+            itemSize: order.item_size,
+            deliveryMethod: order.delivery_method,
+          }, phase),
+        }),
+      )
+    }
+
+    if (order.customer_id) {
+      EdgeRuntime.waitUntil(
+        sendSmsToUser({
+          supabase,
+          userId: order.customer_id.toString(),
+          audience: 'CUSTOMER',
+          orderId: order.id,
+          event: 'order.fulfillment_payment_confirmed',
+          body: buildCustomerOrderPaymentSms({
+            id: order.id,
+            reference: order.reference,
+            orderKind: order.order_kind,
+            garmentType: order.garment_type,
+            itemTitle: order.item_title,
+            itemSize: order.item_size,
+            deliveryMethod: order.delivery_method,
+          }, phase),
         }),
       )
     }
@@ -359,6 +594,17 @@ async function finalizeSuccessfulPayment(
     note: paymentConfirmedStageNote(order.order_kind),
   })
 
+  await markPaymentAttemptStatus(supabase, {
+    provider,
+    providerPaymentId: paymentIntentId,
+    status: 'SUCCEEDED',
+    providerResponse: {
+      order_id: order.id,
+      payment_phase: phase,
+      stage: 'CONFIRMED',
+    },
+  })
+
   await audit(supabase, {
     event: 'payment.confirmed',
     actor_id: callerId,
@@ -382,6 +628,24 @@ async function finalizeSuccessfulPayment(
         }),
       )
       EdgeRuntime.waitUntil(
+        sendSmsToUser({
+          supabase,
+          userId: order.tailor_id.toString(),
+          audience: 'TAILOR',
+          orderId: order.id,
+          event: 'order.payment_confirmed',
+          body: buildTailorOrderPaymentSms({
+            id: order.id,
+            reference: order.reference,
+            orderKind: order.order_kind,
+            garmentType: order.garment_type,
+            itemTitle: order.item_title,
+            itemSize: order.item_size,
+            deliveryMethod: order.delivery_method,
+          }, phase),
+        }),
+      )
+      EdgeRuntime.waitUntil(
         notifyTailorAboutReadyMadeStockChange(supabase, {
           orderKind: order.order_kind,
           sellerItemId: order.seller_item_id,
@@ -391,6 +655,27 @@ async function finalizeSuccessfulPayment(
         }),
       )
     }
+
+  if (order.customer_id) {
+    EdgeRuntime.waitUntil(
+      sendSmsToUser({
+        supabase,
+        userId: order.customer_id.toString(),
+        audience: 'CUSTOMER',
+        orderId: order.id,
+        event: 'order.payment_confirmed',
+        body: buildCustomerOrderPaymentSms({
+          id: order.id,
+          reference: order.reference,
+          orderKind: order.order_kind,
+          garmentType: order.garment_type,
+          itemTitle: order.item_title,
+          itemSize: order.item_size,
+          deliveryMethod: order.delivery_method,
+        }, phase),
+      }),
+    )
+  }
 
   EdgeRuntime.waitUntil(sendOrderConfirmationEmails(supabase, order, phase))
 
@@ -443,6 +728,8 @@ Deno.serve(async (req) => {
         quoted_currency,
         currency,
         quote_expires_at,
+        consultation_fee,
+        special_note,
         seller_item_id,
         delivery_method,
         delivery_address,
@@ -472,21 +759,80 @@ Deno.serve(async (req) => {
     if (row.customer_id?.toString() !== caller.id) return new Response('Forbidden', { status: 403, headers: cors })
 
     const orderKind = row.order_kind ?? 'CUSTOM'
-    const currency = typeof row.quoted_currency === 'string' ? row.quoted_currency.trim().toLowerCase() : ''
+    const orderCurrency = normalizeOrderCurrency(row.currency ?? row.quoted_currency)
+    if (!orderCurrency) {
+      await auditPaymentBlocked(supabase, caller.id, row, 'unsupported_currency', {
+        order_currency: row.currency ?? null,
+        quoted_currency: row.quoted_currency ?? null,
+      })
+      return new Response('This order currency is not supported for payment right now.', { status: 409, headers: cors })
+    }
     const phase = parsed.data.action === 'confirm-payment'
       ? resolveConfirmPhase(row, parsed.data.paymentIntentId)
       : resolveActivePaymentPhase(row)
-    const amount = phase === 'FULFILLMENT' ? fulfillmentPaymentAmount(row) : initialPaymentAmount(row)
-    const provider = resolveProviderForPhase(row, phase, currency)
-    const storedProviderForPhase = phase === 'FULFILLMENT' ? row.fulfillment_payment_provider : row.payment_provider
+    const amount =
+      phase === 'FULFILLMENT'
+        ? fulfillmentPaymentAmount(row)
+        : phase === 'CONSULTATION'
+          ? consultationPaymentAmount(row)
+          : initialPaymentAmount(row)
+    const provider = resolveProviderForPhase(row, phase, orderCurrency)
+    const latestAttempt = await findLatestPaymentAttemptForOrderPhase(supabase, {
+      orderId: row.id,
+      phase,
+      statuses: ['PENDING', 'SUCCEEDED', 'FAILED', 'CANCELED'],
+    }).catch(() => null)
+    const storedProviderForPhase =
+      phase === 'FULFILLMENT'
+        ? row.fulfillment_payment_provider
+        : phase === 'CONSULTATION'
+          ? consultationMetaForOrder(row)?.paymentProvider
+          : row.payment_provider
 
     if (storedProviderForPhase && !isPaymentProvider(storedProviderForPhase)) {
       await auditPaymentBlocked(supabase, caller.id, row, 'provider_not_supported')
       return new Response('This order is tied to an unsupported payment provider.', { status: 409, headers: cors })
     }
 
+    if (
+      isPaymentProvider(storedProviderForPhase)
+      && storedProviderForPhase !== paymentProviderForCurrency(orderCurrency)
+    ) {
+      await auditPaymentBlocked(supabase, caller.id, row, 'provider_currency_mismatch', {
+        stored_provider: storedProviderForPhase,
+        expected_provider: paymentProviderForCurrency(orderCurrency),
+        currency: orderCurrency,
+        payment_phase: phase,
+      })
+      return new Response('This order has a payment-provider mismatch. Refresh the order and try again.', { status: 409, headers: cors })
+    }
+
+    if (latestAttempt?.provider && latestAttempt.provider !== provider) {
+      await auditPaymentBlocked(supabase, caller.id, row, 'ledger_provider_mismatch', {
+        expected_provider: provider,
+        recovered_provider: latestAttempt.provider,
+        payment_phase: phase,
+      })
+      return new Response('This order has a payment-provider mismatch. Refresh the order and try again.', { status: 409, headers: cors })
+    }
+
     if (parsed.data.action === 'confirm-payment') {
-      const preparedPaymentIntentId = paymentIntentForPhase(row, phase)
+      const preparedPayment = resolvePreparedPaymentReference({
+        expectedProvider: provider,
+        storedPaymentIntentId: paymentIntentForPhase(row, phase),
+        storedCheckoutUrl: paymentCheckoutUrlForPhase(row, phase),
+        latestAttempt,
+      })
+
+      if (preparedPayment.providerMismatch) {
+        await auditPaymentBlocked(supabase, caller.id, row, 'confirm_provider_recovery_mismatch', {
+          expected_provider: provider,
+          payment_phase: phase,
+        })
+        return new Response('This order has a payment-provider mismatch. Refresh the order and try again.', { status: 409, headers: cors })
+      }
+
+      const preparedPaymentIntentId = preparedPayment.providerPaymentId
 
       if (!preparedPaymentIntentId) {
         await auditPaymentBlocked(supabase, caller.id, row, 'not_prepared')
@@ -507,6 +853,11 @@ Deno.serve(async (req) => {
         return new Response('This order is no longer awaiting payment confirmation.', { status: 409, headers: cors })
       }
 
+      if (phase === 'CONSULTATION' && !isConsultationPaymentPending(row)) {
+        await auditPaymentBlocked(supabase, caller.id, row, 'consultation_not_payable')
+        return new Response('This order is not awaiting consultation payment confirmation right now.', { status: 409, headers: cors })
+      }
+
       if (phase === 'FULFILLMENT' && !isFulfillmentPaymentPending(row) && !row.fulfillment_payment_paid_at) {
         await auditPaymentBlocked(supabase, caller.id, row, 'fulfillment_not_payable')
         return new Response('This order is not awaiting fulfillment payment confirmation right now.', { status: 409, headers: cors })
@@ -523,16 +874,36 @@ Deno.serve(async (req) => {
             payment_phase: phase,
             error: error instanceof Error ? error.message : String(error),
           })
-          return new Response(providerFailureMessage('PAYSTACK', currency, 'confirm'), { status: 502, headers: cors })
+          return new Response(providerFailureMessage('PAYSTACK', orderCurrency, 'confirm'), { status: 502, headers: cors })
         }
         if (transaction.status !== 'success') {
+          const failureStatus = paystackFailureAttemptStatus(transaction.status)
+          let nextStage = row.stage
+          if (failureStatus) {
+            await markPaymentAttemptStatus(supabase, {
+              provider: 'PAYSTACK',
+              providerPaymentId: preparedPaymentIntentId,
+              status: failureStatus,
+              providerResponse: transaction as unknown as Record<string, unknown>,
+            }).catch(() => null)
+            const failure = await markInitialOrderPaymentFailed(supabase, row, {
+              provider: 'PAYSTACK',
+              paymentIntentId: preparedPaymentIntentId,
+              phase,
+            })
+            nextStage = failure.stage
+          }
           await auditPaymentBlocked(supabase, caller.id, row, 'confirm_status_not_success', {
             provider: 'PAYSTACK',
             payment_status: transaction.status,
             payment_intent_id: preparedPaymentIntentId,
             payment_phase: phase,
           })
-          return new Response(paystackStatusMessage(transaction.status), { status: 409, headers: cors })
+          return jsonError(cors, 409, paystackStatusMessage(transaction.status), {
+            code: failureStatus ? 'PAYMENT_FAILED' : 'PAYMENT_NOT_COMPLETE',
+            stage: nextStage,
+            paymentStatus: transaction.status,
+          })
         }
 
         const { alreadyConfirmed, stage } = await finalizeSuccessfulPayment(
@@ -568,9 +939,25 @@ Deno.serve(async (req) => {
           payment_phase: phase,
           error: error instanceof Error ? error.message : String(error),
         })
-        return new Response(providerFailureMessage('STRIPE', currency, 'confirm'), { status: 502, headers: cors })
+        return new Response(providerFailureMessage('STRIPE', orderCurrency, 'confirm'), { status: 502, headers: cors })
       }
       if (paymentIntent.status !== 'succeeded') {
+        const failureStatus = stripeFailureAttemptStatus(paymentIntent.status)
+        let nextStage = row.stage
+        if (failureStatus) {
+          await markPaymentAttemptStatus(supabase, {
+            provider: 'STRIPE',
+            providerPaymentId: preparedPaymentIntentId,
+            status: failureStatus,
+            providerResponse: paymentIntent as unknown as Record<string, unknown>,
+          }).catch(() => null)
+          const failure = await markInitialOrderPaymentFailed(supabase, row, {
+            provider: 'STRIPE',
+            paymentIntentId: preparedPaymentIntentId,
+            phase,
+          })
+          nextStage = failure.stage
+        }
         const message =
           paymentIntent.status === 'processing'
             ? 'Payment is still processing. Pull to refresh in a moment.'
@@ -583,7 +970,11 @@ Deno.serve(async (req) => {
           payment_intent_id: preparedPaymentIntentId,
           payment_phase: phase,
         })
-        return new Response(message, { status: 409, headers: cors })
+        return jsonError(cors, 409, message, {
+          code: failureStatus ? 'PAYMENT_FAILED' : 'PAYMENT_NOT_COMPLETE',
+          stage: nextStage,
+          paymentStatus: paymentIntent.status,
+        })
       }
 
       const { alreadyConfirmed, stage } = await finalizeSuccessfulPayment(
@@ -611,7 +1002,7 @@ Deno.serve(async (req) => {
 
     if (phase === 'INITIAL_ORDER') {
       if (orderKind === 'CUSTOM') {
-        if (!['QUOTE_SENT', 'PAYMENT_PENDING'].includes(row.stage)) {
+        if (!['QUOTE_SENT', 'PAYMENT_PENDING', 'PAYMENT_FAILED'].includes(row.stage)) {
           await auditPaymentBlocked(supabase, caller.id, row, 'custom_not_payable')
           return new Response('This custom order is not ready for payment yet.', { status: 409, headers: cors })
         }
@@ -622,7 +1013,7 @@ Deno.serve(async (req) => {
           return new Response('This quote has expired. Ask the tailor to send a fresh quote.', { status: 409, headers: cors })
         }
       } else if (orderKind === 'READY_MADE') {
-        if (row.stage !== 'PAYMENT_PENDING') {
+        if (!['PAYMENT_PENDING', 'PAYMENT_FAILED'].includes(row.stage)) {
           await auditPaymentBlocked(supabase, caller.id, row, 'ready_made_not_payable')
           return new Response('This ready-made order is not in a payable state.', { status: 409, headers: cors })
         }
@@ -632,21 +1023,26 @@ Deno.serve(async (req) => {
         })
         return new Response('Unsupported order kind.', { status: 409, headers: cors })
       }
+    } else if (phase === 'CONSULTATION') {
+      if (!isConsultationPaymentPending(row)) {
+        await auditPaymentBlocked(supabase, caller.id, row, 'consultation_not_payable')
+        return new Response('This order is not awaiting a consultation payment right now.', { status: 409, headers: cors })
+      }
     } else if (!isFulfillmentPaymentPending(row)) {
       await auditPaymentBlocked(supabase, caller.id, row, 'fulfillment_not_payable')
       return new Response('This order is not awaiting a delivery or shipping payment right now.', { status: 409, headers: cors })
     }
 
-    if (!amount || amount <= 0 || !currency) {
+    if (!amount || amount <= 0) {
       await auditPaymentBlocked(supabase, caller.id, row, 'payment_details_missing', {
         amount,
-        currency,
+        currency: orderCurrency,
         payment_phase: phase,
       })
       return new Response('This order is missing payment details.', { status: 409, headers: cors })
     }
 
-    if (row.delivery_method !== 'LOCAL_COLLECTION' && !row.delivery_address?.trim()) {
+    if (phase !== 'CONSULTATION' && row.delivery_method !== 'LOCAL_COLLECTION' && !row.delivery_address?.trim()) {
       await auditPaymentBlocked(supabase, caller.id, row, 'delivery_address_missing')
       return new Response('Delivery address is required before payment can start.', { status: 409, headers: cors })
     }
@@ -659,10 +1055,24 @@ Deno.serve(async (req) => {
         return new Response('A verified email is required before Paystack checkout can start.', { status: 409, headers: cors })
       }
 
-      let paymentReference = row.payment_intent_id?.trim() || null
-      let checkoutUrl = paymentCheckoutUrlForPhase(row, phase)
+      const preparedPayment = resolvePreparedPaymentReference({
+        expectedProvider: 'PAYSTACK',
+        storedPaymentIntentId: paymentIntentForPhase(row, phase),
+        storedCheckoutUrl: paymentCheckoutUrlForPhase(row, phase),
+        latestAttempt,
+      })
+
+      if (preparedPayment.providerMismatch) {
+        await auditPaymentBlocked(supabase, caller.id, row, 'prepare_provider_recovery_mismatch', {
+          expected_provider: 'PAYSTACK',
+          payment_phase: phase,
+        })
+        return new Response('This order has a payment-provider mismatch. Refresh the order and try again.', { status: 409, headers: cors })
+      }
+
+      let paymentReference = preparedPayment.providerPaymentId
+      let checkoutUrl = preparedPayment.providerCheckoutUrl
       let existing = false
-      paymentReference = paymentIntentForPhase(row, phase)
 
       if (paymentReference) {
         let transaction
@@ -675,7 +1085,7 @@ Deno.serve(async (req) => {
             payment_phase: phase,
             error: error instanceof Error ? error.message : String(error),
           })
-          return new Response(providerFailureMessage('PAYSTACK', currency, 'prepare'), { status: 502, headers: cors })
+          return new Response(providerFailureMessage('PAYSTACK', orderCurrency, 'prepare'), { status: 502, headers: cors })
         }
 
         if (transaction.status === 'success') {
@@ -692,7 +1102,7 @@ Deno.serve(async (req) => {
             existing: true,
             stage: finalized.stage,
             amount,
-            currency: currency.toUpperCase(),
+            currency: orderCurrency,
           }), {
             headers: { ...cors, 'Content-Type': 'application/json' },
           })
@@ -718,34 +1128,38 @@ Deno.serve(async (req) => {
         }
       }
 
+      let paystackIdempotencyKey = paymentReference || buildPaystackReference(row, phase)
+
       if (!paymentReference || !checkoutUrl) {
         let transaction
         try {
           transaction = await initializePaystackTransaction({
             amount,
-            currency,
+            currency: orderCurrency,
             email: caller.email,
-            reference: buildPaystackReference(row, phase),
+            reference: paystackIdempotencyKey,
             callbackUrl: getPaystackCallbackUrl(),
             metadata: {
               order_id: row.id,
               reference: row.reference ?? row.id,
               order_kind: orderKind,
               payment_phase: phase,
+              idempotency_key: paystackIdempotencyKey,
             },
           })
         } catch (error) {
           await auditPaymentBlocked(supabase, caller.id, row, 'prepare_provider_error', {
             provider: 'PAYSTACK',
             error: error instanceof Error ? error.message : String(error),
-            currency: currency.toUpperCase(),
+            currency: orderCurrency,
             payment_phase: phase,
           })
-          return new Response(providerFailureMessage('PAYSTACK', currency, 'prepare'), { status: 502, headers: cors })
+          return new Response(providerFailureMessage('PAYSTACK', orderCurrency, 'prepare'), { status: 502, headers: cors })
         }
 
         paymentReference = transaction.reference
         checkoutUrl = transaction.authorization_url ?? null
+        paystackIdempotencyKey = transaction.reference
         existing = false
       }
 
@@ -757,22 +1171,39 @@ Deno.serve(async (req) => {
         return new Response('Paystack did not return a checkout URL for this payment.', { status: 502, headers: cors })
       }
 
-      const updates: Record<string, unknown> = {
-        ...(phase === 'FULFILLMENT'
+      const updates: Record<string, unknown> =
+        phase === 'FULFILLMENT'
           ? {
               fulfillment_payment_provider: 'PAYSTACK',
               fulfillment_payment_intent_id: paymentReference,
               fulfillment_payment_checkout_url: checkoutUrl,
             }
-          : {
-              payment_provider: 'PAYSTACK',
-              payment_intent_id: paymentReference,
-              payment_checkout_url: checkoutUrl,
-            }),
-      }
+          : phase === 'CONSULTATION'
+            ? {
+                special_note: serializeOrderSupportMeta({
+                  ...parseOrderSupportMeta(row.special_note),
+                  consultation: {
+                    ...(consultationMetaForOrder(row) ?? {}),
+                    paymentProvider: 'PAYSTACK',
+                    paymentIntentId: paymentReference,
+                    paymentCheckoutUrl: checkoutUrl,
+                  },
+                }),
+              }
+            : {
+                payment_provider: 'PAYSTACK',
+                payment_intent_id: paymentReference,
+                payment_checkout_url: checkoutUrl,
+              }
 
       let movedToPaymentPending = false
-      if (phase === 'INITIAL_ORDER' && orderKind === 'CUSTOM' && row.stage === 'QUOTE_SENT') {
+      if (
+        phase === 'INITIAL_ORDER'
+        && (
+          (orderKind === 'CUSTOM' && row.stage === 'QUOTE_SENT')
+          || row.stage === 'PAYMENT_FAILED'
+        )
+      ) {
         updates.stage = 'PAYMENT_PENDING'
         updates.stage_updated_at = new Date().toISOString()
         movedToPaymentPending = true
@@ -795,6 +1226,24 @@ Deno.serve(async (req) => {
           note: paymentPendingStageNote(orderKind),
         })
       }
+
+      await upsertPreparedPaymentAttempt(supabase, {
+        orderId: row.id,
+        phase,
+        provider: 'PAYSTACK',
+        currency: orderCurrency,
+        amount,
+        idempotencyKey: paystackIdempotencyKey,
+        providerPaymentId: paymentReference,
+        providerCheckoutUrl: checkoutUrl,
+        providerResponse: {
+          order_id: row.id,
+          payment_phase: phase,
+          existing,
+          checkout_url: checkoutUrl,
+        },
+        status: 'PENDING',
+      })
 
       await audit(supabase, {
         event: 'payment.prepared',
@@ -821,7 +1270,7 @@ Deno.serve(async (req) => {
         existing,
         stage: movedToPaymentPending ? 'PAYMENT_PENDING' : row.stage,
         amount,
-        currency: currency.toUpperCase(),
+        currency: orderCurrency,
       }), {
         headers: { ...cors, 'Content-Type': 'application/json' },
       })
@@ -829,8 +1278,21 @@ Deno.serve(async (req) => {
 
     let paymentIntent = null as Awaited<ReturnType<typeof retrieveStripePaymentIntent>> | Awaited<ReturnType<typeof createStripePaymentIntent>> | null
     let existing = false
-
-    const existingPaymentIntentId = paymentIntentForPhase(row, phase)
+    const preparedPayment = resolvePreparedPaymentReference({
+      expectedProvider: 'STRIPE',
+      storedPaymentIntentId: paymentIntentForPhase(row, phase),
+      storedCheckoutUrl: paymentCheckoutUrlForPhase(row, phase),
+      latestAttempt,
+    })
+    if (preparedPayment.providerMismatch) {
+      await auditPaymentBlocked(supabase, caller.id, row, 'prepare_provider_recovery_mismatch', {
+        expected_provider: 'STRIPE',
+        payment_phase: phase,
+      })
+      return new Response('This order has a payment-provider mismatch. Refresh the order and try again.', { status: 409, headers: cors })
+    }
+    const existingPaymentIntentId = preparedPayment.providerPaymentId
+    let stripeIdempotencyKey: string = crypto.randomUUID()
 
     if (existingPaymentIntentId) {
       try {
@@ -842,7 +1304,7 @@ Deno.serve(async (req) => {
           payment_phase: phase,
           error: error instanceof Error ? error.message : String(error),
         })
-        return new Response(providerFailureMessage('STRIPE', currency, 'prepare'), { status: 502, headers: cors })
+        return new Response(providerFailureMessage('STRIPE', orderCurrency, 'prepare'), { status: 502, headers: cors })
       }
       if (paymentIntent.status === 'succeeded') {
         const finalized = await finalizeSuccessfulPayment(supabase, row, caller.id, 'STRIPE', paymentIntent.id, phase)
@@ -859,13 +1321,17 @@ Deno.serve(async (req) => {
           existing: true,
           stage: finalized.stage,
           amount,
-          currency: currency.toUpperCase(),
+          currency: orderCurrency,
         }), {
           headers: { ...cors, 'Content-Type': 'application/json' },
         })
       }
-      if (paymentIntent.status !== 'canceled') {
+      if (
+        paymentIntent.status !== 'canceled'
+        && !(phase === 'INITIAL_ORDER' && row.stage === 'PAYMENT_FAILED' && paymentIntent.status !== 'processing')
+      ) {
         existing = true
+        stripeIdempotencyKey = existingPaymentIntentId
       } else {
         paymentIntent = null
       }
@@ -875,23 +1341,25 @@ Deno.serve(async (req) => {
       try {
         paymentIntent = await createStripePaymentIntent({
           amount,
-          currency,
+          currency: orderCurrency,
           description: paymentDescription(row, phase),
+          idempotencyKey: stripeIdempotencyKey,
           metadata: {
             order_id: row.id,
             reference: row.reference ?? row.id,
             order_kind: orderKind,
             payment_phase: phase,
+            idempotency_key: stripeIdempotencyKey,
           },
         })
       } catch (error) {
         await auditPaymentBlocked(supabase, caller.id, row, 'prepare_provider_error', {
           provider: 'STRIPE',
           error: error instanceof Error ? error.message : String(error),
-          currency: currency.toUpperCase(),
+          currency: orderCurrency,
           payment_phase: phase,
         })
-        return new Response(providerFailureMessage('STRIPE', currency, 'prepare'), { status: 502, headers: cors })
+        return new Response(providerFailureMessage('STRIPE', orderCurrency, 'prepare'), { status: 502, headers: cors })
       }
     }
 
@@ -903,22 +1371,39 @@ Deno.serve(async (req) => {
       return new Response('Stripe did not return a client secret for this payment intent.', { status: 502, headers: cors })
     }
 
-    const updates: Record<string, unknown> = {
-      ...(phase === 'FULFILLMENT'
+    const updates: Record<string, unknown> =
+      phase === 'FULFILLMENT'
         ? {
             fulfillment_payment_provider: 'STRIPE',
             fulfillment_payment_intent_id: paymentIntent.id,
             fulfillment_payment_checkout_url: null,
           }
-        : {
-            payment_provider: 'STRIPE',
-            payment_intent_id: paymentIntent.id,
-            payment_checkout_url: null,
-          }),
-    }
+        : phase === 'CONSULTATION'
+          ? {
+              special_note: serializeOrderSupportMeta({
+                ...parseOrderSupportMeta(row.special_note),
+                consultation: {
+                  ...(consultationMetaForOrder(row) ?? {}),
+                  paymentProvider: 'STRIPE',
+                  paymentIntentId: paymentIntent.id,
+                  paymentCheckoutUrl: null,
+                },
+              }),
+            }
+          : {
+              payment_provider: 'STRIPE',
+              payment_intent_id: paymentIntent.id,
+              payment_checkout_url: null,
+            }
 
     let movedToPaymentPending = false
-    if (phase === 'INITIAL_ORDER' && orderKind === 'CUSTOM' && row.stage === 'QUOTE_SENT') {
+    if (
+      phase === 'INITIAL_ORDER'
+      && (
+        (orderKind === 'CUSTOM' && row.stage === 'QUOTE_SENT')
+        || row.stage === 'PAYMENT_FAILED'
+      )
+    ) {
       updates.stage = 'PAYMENT_PENDING'
       updates.stage_updated_at = new Date().toISOString()
       movedToPaymentPending = true
@@ -941,6 +1426,25 @@ Deno.serve(async (req) => {
         note: paymentPendingStageNote(orderKind),
       })
     }
+
+    await upsertPreparedPaymentAttempt(supabase, {
+      orderId: row.id,
+      phase,
+      provider: 'STRIPE',
+      currency: orderCurrency,
+      amount,
+      idempotencyKey: stripeIdempotencyKey,
+      providerPaymentId: paymentIntent.id,
+      providerCheckoutUrl: null,
+      providerResponse: {
+        order_id: row.id,
+        payment_phase: phase,
+        existing,
+        client_secret_present: !!paymentIntent.client_secret,
+        status: paymentIntent.status,
+      },
+      status: 'PENDING',
+    })
 
     await audit(supabase, {
       event: 'payment.prepared',
@@ -968,7 +1472,7 @@ Deno.serve(async (req) => {
       existing,
       stage: movedToPaymentPending ? 'PAYMENT_PENDING' : row.stage,
       amount,
-      currency: currency.toUpperCase(),
+      currency: orderCurrency,
     }), {
       headers: { ...cors, 'Content-Type': 'application/json' },
     })

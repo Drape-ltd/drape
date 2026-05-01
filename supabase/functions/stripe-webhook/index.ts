@@ -2,15 +2,28 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getStripeWebhookSecret, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
+import { markInitialOrderPaymentFailed } from '../_shared/payment-failure.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import { sendOrderConfirmationEmails } from '../_shared/order-email.ts'
 import { notifyTailorAboutReadyMadeStockChange } from '../_shared/ready-made-stock-alert.ts'
+import { sendSmsToUser } from '../_shared/sms.ts'
 import {
   fulfillmentPaymentConfirmedStageNote,
   paymentConfirmedStageNote,
   tailorFulfillmentPaymentConfirmedNotification,
   tailorPaymentConfirmedNotification,
 } from '../_shared/payment-copy.ts'
+import {
+  buildCustomerOrderPaymentSms,
+  buildTailorOrderPaymentSms,
+} from '../../../packages/shared/src/sms-copy.ts'
+import {
+  createWebhookEvent,
+  findPaymentAttemptByProviderPaymentId,
+  markPaymentAttemptStatus,
+  markWebhookEventProcessed,
+} from '../_shared/payment-ledger.ts'
+import { recordRejectedWebhook } from '../_shared/payment-webhook.ts'
 import { verifyStripeWebhookSignature, type StripePaymentIntent } from '../_shared/stripe.ts'
 
 const FN = 'stripe-webhook'
@@ -49,6 +62,51 @@ type OrderRow = {
 }
 
 type PaymentPhase = 'INITIAL_ORDER' | 'FULFILLMENT'
+
+type StripeTransferObject = {
+  id: string
+  amount?: number | null
+  currency?: string | null
+  metadata?: Record<string, string> | null
+}
+
+function isStripePaymentIntent(value: unknown): value is StripePaymentIntent {
+  return !!value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string'
+}
+
+function isStripeTransferObject(value: unknown): value is StripeTransferObject {
+  return !!value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string'
+}
+
+async function findPayoutForStripeTransfer(supabase: any, transfer: StripeTransferObject) {
+  const payoutId =
+    typeof transfer.metadata?.payout_id === 'string' && transfer.metadata.payout_id.trim().length > 0
+      ? transfer.metadata.payout_id.trim()
+      : ''
+
+  if (payoutId) {
+    const { data, error } = await supabase
+      .from('payouts')
+      .select('id, order_id, status, provider_payout_id')
+      .eq('id', payoutId)
+      .maybeSingle()
+
+    if (error) throw new Error(error.message)
+    if (data?.id) {
+      return data as { id: string; order_id: string | null; status: string; provider_payout_id: string | null }
+    }
+  }
+
+  const { data, error } = await supabase
+    .from('payouts')
+    .select('id, order_id, status, provider_payout_id')
+    .eq('provider', 'STRIPE')
+    .eq('provider_payout_id', transfer.id)
+    .maybeSingle()
+
+  if (error) throw new Error(error.message)
+  return (data as { id: string; order_id: string | null; status: string; provider_payout_id: string | null } | null) ?? null
+}
 
 async function findOrderForPaymentIntent(supabase: any, paymentIntent: StripePaymentIntent) {
   const metadataOrderId =
@@ -145,6 +203,45 @@ async function markOrderConfirmed(supabase: any, order: OrderRow, paymentIntent:
           data: { orderId: order.id },
         }),
       )
+      EdgeRuntime.waitUntil(
+        sendSmsToUser({
+          supabase,
+          userId: order.tailor_id.toString(),
+          audience: 'TAILOR',
+          orderId: order.id,
+          event: 'order.fulfillment_payment_confirmed',
+          body: buildTailorOrderPaymentSms({
+            id: order.id,
+            reference: order.reference,
+            orderKind: order.order_kind,
+            garmentType: order.garment_type,
+            itemTitle: order.item_title,
+            itemSize: order.item_size,
+            deliveryMethod: order.delivery_method,
+          }, phase),
+        }),
+      )
+    }
+
+    if (order.customer_id) {
+      EdgeRuntime.waitUntil(
+        sendSmsToUser({
+          supabase,
+          userId: order.customer_id.toString(),
+          audience: 'CUSTOMER',
+          orderId: order.id,
+          event: 'order.fulfillment_payment_confirmed',
+          body: buildCustomerOrderPaymentSms({
+            id: order.id,
+            reference: order.reference,
+            orderKind: order.order_kind,
+            garmentType: order.garment_type,
+            itemTitle: order.item_title,
+            itemSize: order.item_size,
+            deliveryMethod: order.delivery_method,
+          }, phase),
+        }),
+      )
     }
 
     EdgeRuntime.waitUntil(sendOrderConfirmationEmails(supabase, order, phase))
@@ -186,6 +283,24 @@ async function markOrderConfirmed(supabase: any, order: OrderRow, paymentIntent:
       }),
     )
     EdgeRuntime.waitUntil(
+      sendSmsToUser({
+        supabase,
+        userId: order.tailor_id.toString(),
+        audience: 'TAILOR',
+        orderId: order.id,
+        event: 'order.payment_confirmed',
+        body: buildTailorOrderPaymentSms({
+          id: order.id,
+          reference: order.reference,
+          orderKind: order.order_kind,
+          garmentType: order.garment_type,
+          itemTitle: order.item_title,
+          itemSize: order.item_size,
+          deliveryMethod: order.delivery_method,
+        }, phase),
+      }),
+    )
+    EdgeRuntime.waitUntil(
       notifyTailorAboutReadyMadeStockChange(supabase, {
         orderKind: order.order_kind,
         sellerItemId: order.seller_item_id,
@@ -196,13 +311,34 @@ async function markOrderConfirmed(supabase: any, order: OrderRow, paymentIntent:
     )
   }
 
+  if (order.customer_id) {
+    EdgeRuntime.waitUntil(
+      sendSmsToUser({
+        supabase,
+        userId: order.customer_id.toString(),
+        audience: 'CUSTOMER',
+        orderId: order.id,
+        event: 'order.payment_confirmed',
+        body: buildCustomerOrderPaymentSms({
+          id: order.id,
+          reference: order.reference,
+          orderKind: order.order_kind,
+          garmentType: order.garment_type,
+          itemTitle: order.item_title,
+          itemSize: order.item_size,
+          deliveryMethod: order.delivery_method,
+        }, phase),
+      }),
+    )
+  }
+
   EdgeRuntime.waitUntil(sendOrderConfirmationEmails(supabase, order, phase))
 
   return true
 }
 
 function isInitialPaymentStage(stage: string) {
-  return ['QUOTE_SENT', 'PAYMENT_PENDING', 'CONFIRMED'].includes(stage)
+  return ['QUOTE_SENT', 'PAYMENT_PENDING', 'PAYMENT_FAILED', 'CONFIRMED'].includes(stage)
 }
 
 function isFulfillmentPaymentStage(order: OrderRow) {
@@ -216,12 +352,20 @@ Deno.serve(async (req) => {
     return new Response('Method not allowed', { status: 405, headers: cors })
   }
 
+  const supabase: any = createClient(getSupabaseUrl(), getServiceRoleKey())
   const signature = req.headers.get('Stripe-Signature')
-  if (!signature) {
-    return new Response('Missing Stripe-Signature header', { status: 400, headers: cors })
-  }
-
   const payload = await req.text()
+
+  if (!signature) {
+    await recordRejectedWebhook(supabase, {
+      provider: 'STRIPE',
+      functionName: FN,
+      rawPayload: payload,
+      reason: 'missing_signature',
+      signatureHeader: null,
+    })
+    return new Response('Missing Stripe-Signature header', { status: 401, headers: cors })
+  }
 
   try {
     await verifyStripeWebhookSignature({
@@ -229,12 +373,151 @@ Deno.serve(async (req) => {
       signatureHeader: signature,
       webhookSecret: getStripeWebhookSecret(),
     })
+  } catch (error) {
+    await recordRejectedWebhook(supabase, {
+      provider: 'STRIPE',
+      functionName: FN,
+      rawPayload: payload,
+      reason: 'invalid_signature',
+      signatureHeader: signature,
+      verificationError: error instanceof Error ? error.message : String(error),
+    })
+    return new Response('Invalid Stripe signature', { status: 401, headers: cors })
+  }
 
+  try {
     const event = JSON.parse(payload) as StripeEvent
-    const supabase: any = createClient(getSupabaseUrl(), getServiceRoleKey())
 
     if (!event?.id || !event?.type) {
       return new Response('Invalid event payload', { status: 400, headers: cors })
+    }
+
+    const paymentIntent = isStripePaymentIntent(event.data?.object) ? event.data?.object : null
+    const paymentIntentId = paymentIntent?.id ?? null
+    const paymentAttempt = paymentIntentId
+      ? await findPaymentAttemptByProviderPaymentId(supabase, 'STRIPE', paymentIntentId).catch(() => null)
+      : null
+    const webhookEvent = await createWebhookEvent(supabase, {
+      provider: 'STRIPE',
+      providerEventId: event.id,
+      eventType: event.type,
+      idempotencyKey:
+        paymentAttempt?.idempotency_key
+        ?? (typeof paymentIntent?.metadata?.idempotency_key === 'string' ? paymentIntent.metadata.idempotency_key : null),
+      orderId: paymentAttempt?.order_id ?? null,
+      paymentId: paymentAttempt?.id ?? null,
+      signatureValid: true,
+      payload: event as Record<string, unknown>,
+    })
+
+    if (webhookEvent.duplicate && webhookEvent.alreadyProcessed) {
+      await audit(supabase, {
+        event: 'payment.webhook_duplicate',
+        actor_role: 'SYSTEM',
+        order_id: paymentAttempt?.order_id ?? null,
+        payload: {
+          function: FN,
+          provider: 'STRIPE',
+          stripe_event_id: event.id,
+          stripe_event_type: event.type,
+          payment_intent_id: paymentIntentId,
+          processing_result: webhookEvent.processingResult,
+        },
+      })
+
+      return new Response(JSON.stringify({ ok: true, duplicate: true, processed: true }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (event.type === 'transfer.created' || event.type === 'transfer.reversed') {
+      const transfer = isStripeTransferObject(event.data?.object) ? event.data?.object : null
+      if (!transfer?.id) {
+        await markWebhookEventProcessed(supabase, webhookEvent.id, {
+          orderId: null,
+          paymentId: null,
+          processingResult: 'invalid_payload:missing_transfer_id',
+        })
+        return new Response('Missing transfer payload', { status: 400, headers: cors })
+      }
+
+      const payout = await findPayoutForStripeTransfer(supabase, transfer)
+      if (!payout?.id) {
+        await markWebhookEventProcessed(supabase, webhookEvent.id, {
+          orderId: null,
+          paymentId: null,
+          processingResult: 'missing_payout',
+        })
+        await audit(supabase, {
+          event: 'payout.webhook_missing',
+          actor_role: 'SYSTEM',
+          severity: 'warn',
+          payload: {
+            function: FN,
+            provider: 'STRIPE',
+            stripe_event_id: event.id,
+            stripe_event_type: event.type,
+            provider_payout_id: transfer.id,
+          },
+        })
+        return new Response(JSON.stringify({ ok: true, missingPayout: true }), {
+          headers: { ...cors, 'Content-Type': 'application/json' },
+        })
+      }
+
+      const nowIso = new Date().toISOString()
+      const nextStatus = event.type === 'transfer.created' ? 'PAID' : 'REVERSED'
+      const payoutPatch: Record<string, unknown> = {
+        status: nextStatus,
+        provider_response: event as Record<string, unknown>,
+        processed_at: nowIso,
+      }
+      if (nextStatus === 'PAID') payoutPatch.completed_at = nowIso
+      if (nextStatus === 'REVERSED') payoutPatch.failed_at = nowIso
+
+      const { error: payoutError } = await supabase
+        .from('payouts')
+        .update(payoutPatch)
+        .eq('id', payout.id)
+
+      if (payoutError) {
+        throw new Error(payoutError.message)
+      }
+
+      if (nextStatus === 'REVERSED' && payout.order_id) {
+        await supabase
+          .from('orders')
+          .update({
+            escrow_released: false,
+            escrow_released_at: null,
+          })
+          .eq('id', payout.order_id)
+      }
+
+      await markWebhookEventProcessed(supabase, webhookEvent.id, {
+        orderId: payout.order_id ?? null,
+        paymentId: null,
+        processingResult: nextStatus === 'PAID' ? 'payout_paid' : 'payout_reversed',
+      })
+
+      await audit(supabase, {
+        event: nextStatus === 'PAID' ? 'payout.completed' : 'payout.failed',
+        actor_role: 'SYSTEM',
+        order_id: payout.order_id ?? null,
+        severity: nextStatus === 'PAID' ? 'info' : 'error',
+        payload: {
+          function: FN,
+          provider: 'STRIPE',
+          stripe_event_id: event.id,
+          stripe_event_type: event.type,
+          provider_payout_id: transfer.id,
+          payout_id: payout.id,
+        },
+      })
+
+      return new Response(JSON.stringify({ ok: true, recorded: true, type: event.type }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      })
     }
 
     if (
@@ -242,13 +525,23 @@ Deno.serve(async (req) => {
       event.type !== 'payment_intent.payment_failed' &&
       event.type !== 'payment_intent.canceled'
     ) {
+      await markWebhookEventProcessed(supabase, webhookEvent.id, {
+        orderId: paymentAttempt?.order_id ?? null,
+        paymentId: paymentAttempt?.id ?? null,
+        processingResult: `ignored:${event.type}`,
+      })
+
       return new Response(JSON.stringify({ ok: true, ignored: true, type: event.type }), {
         headers: { ...cors, 'Content-Type': 'application/json' },
       })
     }
 
-    const paymentIntent = (event.data?.object ?? null) as StripePaymentIntent | null
     if (!paymentIntent?.id) {
+      await markWebhookEventProcessed(supabase, webhookEvent.id, {
+        orderId: paymentAttempt?.order_id ?? null,
+        paymentId: paymentAttempt?.id ?? null,
+        processingResult: 'invalid_payload:missing_payment_intent',
+      })
       return new Response('Missing payment intent payload', { status: 400, headers: cors })
     }
 
@@ -268,6 +561,12 @@ Deno.serve(async (req) => {
         },
       })
 
+      await markWebhookEventProcessed(supabase, webhookEvent.id, {
+        orderId: paymentAttempt?.order_id ?? null,
+        paymentId: paymentAttempt?.id ?? null,
+        processingResult: 'missing_order',
+      })
+
       return new Response(JSON.stringify({ ok: true, missingOrder: true }), {
         headers: { ...cors, 'Content-Type': 'application/json' },
       })
@@ -277,18 +576,53 @@ Deno.serve(async (req) => {
 
     if (event.type === 'payment_intent.succeeded') {
       if (phase === 'INITIAL_ORDER' && !isInitialPaymentStage(order.stage)) {
+        await markPaymentAttemptStatus(supabase, {
+          provider: 'STRIPE',
+          providerPaymentId: paymentIntent.id,
+          status: 'SUCCEEDED',
+          providerResponse: event as Record<string, unknown>,
+        }).catch(() => null)
+        const matchedAttempt = await findPaymentAttemptByProviderPaymentId(supabase, 'STRIPE', paymentIntent.id).catch(() => null)
+        await markWebhookEventProcessed(supabase, webhookEvent.id, {
+          orderId: order.id,
+          paymentId: matchedAttempt?.id ?? paymentAttempt?.id ?? null,
+          processingResult: 'ignored:stage_not_payable',
+        })
         return new Response(JSON.stringify({ ok: true, ignored: true, reason: 'stage_not_payable' }), {
           headers: { ...cors, 'Content-Type': 'application/json' },
         })
       }
 
       if (phase === 'FULFILLMENT' && !isFulfillmentPaymentStage(order)) {
+        await markPaymentAttemptStatus(supabase, {
+          provider: 'STRIPE',
+          providerPaymentId: paymentIntent.id,
+          status: 'SUCCEEDED',
+          providerResponse: event as Record<string, unknown>,
+        }).catch(() => null)
+        const matchedAttempt = await findPaymentAttemptByProviderPaymentId(supabase, 'STRIPE', paymentIntent.id).catch(() => null)
+        await markWebhookEventProcessed(supabase, webhookEvent.id, {
+          orderId: order.id,
+          paymentId: matchedAttempt?.id ?? paymentAttempt?.id ?? null,
+          processingResult: 'ignored:stage_not_payable',
+        })
         return new Response(JSON.stringify({ ok: true, ignored: true, reason: 'stage_not_payable' }), {
           headers: { ...cors, 'Content-Type': 'application/json' },
         })
       }
 
       const changed = await markOrderConfirmed(supabase, order, paymentIntent, phase)
+      const matchedAttempt = await markPaymentAttemptStatus(supabase, {
+        provider: 'STRIPE',
+        providerPaymentId: paymentIntent.id,
+        status: 'SUCCEEDED',
+        providerResponse: event as Record<string, unknown>,
+      }).catch(() => null)
+      await markWebhookEventProcessed(supabase, webhookEvent.id, {
+        orderId: order.id,
+        paymentId: matchedAttempt?.id ?? paymentAttempt?.id ?? null,
+        processingResult: changed ? 'confirmed' : 'already_confirmed',
+      })
 
       await audit(supabase, {
         event: phase === 'FULFILLMENT' ? 'payment.fulfillment_confirmed' : 'payment.confirmed',
@@ -311,6 +645,26 @@ Deno.serve(async (req) => {
       })
     }
 
+    const failureStatus = event.type === 'payment_intent.payment_failed' ? 'FAILED' : 'CANCELED'
+    const failure = await markInitialOrderPaymentFailed(supabase, order, {
+      provider: 'STRIPE',
+      paymentIntentId: paymentIntent.id,
+      phase,
+    }).catch(() => ({ changed: false as const, stage: order.stage }))
+    const matchedAttempt = await markPaymentAttemptStatus(supabase, {
+      provider: 'STRIPE',
+      providerPaymentId: paymentIntent.id,
+      status: failureStatus,
+      providerResponse: event as Record<string, unknown>,
+    }).catch(() => null)
+    await markWebhookEventProcessed(supabase, webhookEvent.id, {
+      orderId: order.id,
+      paymentId: matchedAttempt?.id ?? paymentAttempt?.id ?? null,
+      processingResult: failureStatus === 'FAILED'
+        ? (failure.changed ? 'payment_failed' : 'recorded_failure')
+        : (failure.changed ? 'payment_failed' : 'recorded_canceled'),
+    })
+
     await audit(supabase, {
       event: event.type === 'payment_intent.payment_failed' ? 'payment.failed' : 'payment.canceled',
       actor_role: 'SYSTEM',
@@ -322,6 +676,7 @@ Deno.serve(async (req) => {
         stripe_event_type: event.type,
         payment_intent_id: paymentIntent.id,
         stage: order.stage,
+        next_stage: failure.stage,
         status: paymentIntent.status,
         message: paymentIntent.last_payment_error?.message ?? null,
       },

@@ -1,10 +1,56 @@
 import { audit, log } from './logger.ts'
+import { createOrRefreshOpsIssue } from './ops-issues.ts'
 
-const CONTACT_BYPASS_PATTERN =
-  /(https?:\/\/|www\.|\b\w+\.(com|co|io|ng|co\.uk|net|org|info|biz|app|dev|me)\b|instagram|whatsapp|facebook|messenger|telegram|signal|viber|line|kik|tiktok|snapchat|@\w+|\b(find me on|dm me|message me on|reach me at|same handle|my @ is|look me up|hit me up on|slide into|call me|text me|email me|send me your number|drop me your number)\b|\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b|\+?\d[\d\s().-]{6,}\d)/i
+const URL_OR_WEB_PATTERN =
+  /(https?:\/\/|www\.|\b\w+\.(com|co|io|ng|co\.uk|net|org|info|biz|app|dev|me)\b)/i
+const PLATFORM_PATTERN =
+  /\b(instagram|whatsapp|facebook|messenger|telegram|signal|viber|line|kik|tiktok|snapchat)\b/i
+const SOCIAL_HANDLE_PATTERN = /(^|[\s(])@[a-zA-Z0-9_.]{2,}\b/
+const REDIRECT_PATTERN =
+  /\b(find me on|dm me|message me on|reach me at|same handle|my @ is|look me up|hit me up on|slide into|call me|text me|email me|send me your number|drop me your number)\b/i
+const EMAIL_PATTERN = /\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/i
+const PHONE_CANDIDATE_PATTERN = /\+?\d[\d\s()./-]{5,}\d/g
+
+function isLikelyDateCandidate(value: string): boolean {
+  return /^\d{4}[./-]\d{1,2}[./-]\d{1,2}$/.test(value) || /^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/.test(value)
+}
+
+function isLikelyMeasurementTuple(value: string): boolean {
+  const groups = value.match(/\d+/g) ?? []
+  const digitCount = groups.join('').length
+  if (groups.length < 2) return false
+  return groups.every((group) => group.length <= 2) && digitCount <= 8
+}
+
+function isLikelyPhoneCandidate(value: string): boolean {
+  const candidate = value.trim()
+  if (!candidate) return false
+  if (isLikelyDateCandidate(candidate)) return false
+  if (isLikelyMeasurementTuple(candidate)) return false
+
+  const groups = candidate.match(/\d+/g) ?? []
+  const digitsOnly = groups.join('')
+  if (digitsOnly.length < 7) return false
+
+  if (candidate.startsWith('+')) return true
+  if (groups.some((group) => group.length >= 3)) return true
+
+  return digitsOnly.length >= 9
+}
 
 export function hasBlockedContact(text: string): boolean {
-  return CONTACT_BYPASS_PATTERN.test(text)
+  if (
+    URL_OR_WEB_PATTERN.test(text) ||
+    PLATFORM_PATTERN.test(text) ||
+    SOCIAL_HANDLE_PATTERN.test(text) ||
+    REDIRECT_PATTERN.test(text) ||
+    EMAIL_PATTERN.test(text)
+  ) {
+    return true
+  }
+
+  const phoneCandidates = text.match(PHONE_CANDIDATE_PATTERN) ?? []
+  return phoneCandidates.some((candidate) => isLikelyPhoneCandidate(candidate))
 }
 
 export async function logContactBypassAttempt(options: {
@@ -37,7 +83,7 @@ export async function logContactBypassAttempt(options: {
       attempt = (count ?? 0) + 1
     }
 
-    const { error: insertError } = await options.supabase
+    const { data: insertedLog, error: insertError } = await options.supabase
       .from('contact_bypass_logs')
       .insert({
         user_id: options.actorId,
@@ -45,6 +91,8 @@ export async function logContactBypassAttempt(options: {
         content,
         attempt,
       })
+      .select('id')
+      .single()
 
     if (insertError) {
       log('error', options.fn, 'contact_bypass.insert_failed', {
@@ -63,6 +111,28 @@ export async function logContactBypassAttempt(options: {
       severity: 'warn',
       payload: {
         function: options.fn,
+        surface: options.surface,
+        attempt,
+        content_length: content.length,
+        ...(options.extra ?? {}),
+      },
+    })
+
+    await createOrRefreshOpsIssue(options.supabase, {
+      issueType: 'CONTACT_BYPASS',
+      severity: attempt >= 3 ? 'HIGH' : 'MEDIUM',
+      source: options.fn,
+      actorId: options.actorId,
+      actorRole: options.actorRole,
+      orderId: options.orderId ?? null,
+      userId: options.actorId,
+      relatedEntityType: 'contact_bypass_log',
+      relatedEntityId: (insertedLog as { id?: string } | null)?.id ?? null,
+      title: 'Contact bypass attempt blocked',
+      description: `${options.actorRole.toLowerCase()} tried to move contact off Drape on ${options.surface}.`,
+      recommendedAction: 'Review the blocked content, decide whether this needs a warning or trust follow-up, and mark the attempt reviewed in ops.',
+      dedupeKey: `contact-bypass:${(insertedLog as { id?: string } | null)?.id ?? `${options.actorId}:${options.surface}:${attempt}`}`,
+      metadata: {
         surface: options.surface,
         attempt,
         content_length: content.length,

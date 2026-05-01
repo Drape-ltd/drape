@@ -117,109 +117,109 @@ Use this with:
 
 ## G. Custom Pre-Quote and Consultation
 
-- [ ] Confirm the default custom path works with no consultation required.
-- [ ] Finalize whether consultations can be free, paid, or both.
-- [ ] If paid consultation is supported, define whether the fee is creditable toward the final order.
-- [ ] Define consultation payment timing.
-- [ ] Define consultation reschedule policy.
-- [ ] Define consultation no-show policy.
-- [ ] Define consultation expiry policy if the customer pays but does not proceed.
-- [ ] Define how a tailor requests consultation in chat.
-- [ ] Define how the customer sees the consultation fee and terms before paying.
-- [ ] Define how the tailor starts the consultation only after payment confirmation.
+- [x] Confirm the default custom path works with no consultation required.
+- [x] Finalize whether consultations can be free, paid, or both.
+- [x] If paid consultation is supported, define whether the fee is creditable toward the final order.
+- [x] Define consultation payment timing.
+- [x] Define consultation reschedule policy.
+- [x] Define consultation no-show policy.
+- [x] Define consultation expiry policy if the customer pays but does not proceed.
+- [x] Define how a tailor requests consultation in chat.
+- [x] Define how the customer sees the consultation fee and terms before paying.
+- [x] Define how the tailor starts the consultation only after payment confirmation.
 - [ ] Define whether Drape should send reminders for booked consultations.
 
 ## H. Custom Quote and Acceptance
 
-- [ ] Confirm quote flow clearly separates commercial negotiation from production stages.
-- [ ] Confirm quote breakdown can explain labor, sourcing, rush, and fulfillment components clearly.
-- [ ] Confirm customers understand what is included and not included before payment.
-- [ ] Confirm quote acceptance leads into the right production stage instead of vague status language.
+- [x] Confirm quote flow clearly separates commercial negotiation from production stages.
+- [x] Confirm quote breakdown can explain labor, sourcing, rush, and fulfillment components clearly.
+- [x] Confirm customers understand what is included and not included before payment.
+- [x] Confirm quote acceptance leads into the right production stage instead of vague status language.
 
 ## I. Fabric Sourcing and Fabric Handoff
 
-- [ ] Finalize the rule set for `TAILOR_SOURCES`.
-- [ ] Finalize the rule set for `CUSTOMER_SUPPLIES`.
+- [x] Finalize the rule set for `TAILOR_SOURCES`.
+- [x] Finalize the rule set for `CUSTOMER_SUPPLIES`.
 - [ ] Define acceptable fabric handoff modes:
-  - [ ] shipped by customer
-  - [ ] local dropoff
-  - [ ] local pickup
-  - [ ] brought to consultation
-- [ ] Define when customer approval is needed for tailor-sourced fabric.
-- [ ] Define when fabric receipt must be confirmed before production can advance.
-- [ ] Define explicit reasons a tailor can reject customer-supplied fabric before cutting.
-- [ ] Add policy language for poor quality, wrong drape, wrong composition, and insufficient quantity.
-- [ ] Add policy language for non-continuous remnants and unusable width.
-- [ ] Add policy language for fabric prep requirements such as prewash, pressing, or stabilization.
-- [ ] Define what happens when the fabric is late.
-- [ ] Define what happens when the fabric never arrives.
-- [ ] Define what happens when the tailor wants to source replacement fabric after rejecting customer material.
-- [ ] Define what happens when the customer disagrees with the fabric rejection.
+  - [x] shipped by customer
+  - [x] local dropoff
+  - [x] local pickup
+  - [x] brought to consultation
+- [x] Define when customer approval is needed for tailor-sourced fabric.
+- [x] Define when fabric receipt must be confirmed before production can advance.
+- [x] Define explicit reasons a tailor can reject customer-supplied fabric before cutting.
+- [x] Add policy language for poor quality, wrong drape, wrong composition, and insufficient quantity.
+- [x] Add policy language for non-continuous remnants and unusable width.
+- [x] Add policy language for fabric prep requirements such as prewash, pressing, or stabilization.
+- [x] Define what happens when the fabric is late.
+- [x] Define what happens when the fabric never arrives.
+- [x] Define what happens when the tailor wants to source replacement fabric after rejecting customer material.
+- [x] Define what happens when the customer disagrees with the fabric rejection.
 
 ## J. Bulk Custom Orders
 
-- [ ] Decide whether V1 bulk custom stays an ops-managed special case.
-- [ ] Define whether bulk custom uses one parent order or linked child orders operationally.
+- [x] Decide whether V1 bulk custom stays an ops-managed special case.
+- [x] Define whether bulk custom uses one parent order or linked child orders operationally.
 - [ ] Define how measurements are collected for multiple recipients.
-- [ ] Define how measurement privacy is protected when one payer coordinates several people.
-- [ ] Define how payment works when one person pays for all garments.
-- [ ] Define how status works when one recipient is ready and another is delayed.
-- [ ] Define how fabric consistency and dye-lot consistency are managed across the group.
+- [x] Define how measurement privacy is protected when one payer coordinates several people.
+- [x] Define how payment works when one person pays for all garments.
+- [x] Define how status works when one recipient is ready and another is delayed.
+- [x] Define how fabric consistency and dye-lot consistency are managed across the group.
 - [ ] Define how quote changes work if the group grows or shrinks.
 
 ## K. Dispatch and Ops Ownership
 
-- [ ] Confirm Drape ops is the owner of standard delivery and shipping after the tailor marks `Ready for Drape dispatch`.
-- [ ] Confirm ops has a usable queue for dispatch-ready orders.
-- [ ] Confirm ops can see the customer destination clearly enough to book dispatch correctly.
-- [ ] Confirm ops can see the tailor origin clearly enough to book dispatch correctly.
+- [x] Confirm Drape ops is the owner of standard delivery and shipping after the tailor marks `Ready for Drape dispatch`.
+- [x] Confirm ops has a usable queue for dispatch-ready orders.
+- [x] Confirm ops can see the customer destination clearly enough to book dispatch correctly.
+- [x] Confirm ops can see the tailor origin clearly enough to book dispatch correctly.
 - [ ] Decide whether ops needs a richer dispatch record:
-  - [ ] provider used
-  - [ ] booked by
-  - [ ] booked at
+  - [x] provider used
+  - [x] booked by
+  - [x] booked at
   - [ ] actual cost
-  - [ ] service level
+  - [x] service level
   - [ ] failure reason
-- [ ] Define when a standard flat-fee order becomes a premium or exception dispatch case.
-- [ ] Define how urgent or rush fulfillment should be quoted and approved.
+- [x] Define when a standard flat-fee order becomes a premium or exception dispatch case.
+- [x] Define how urgent or rush fulfillment should be quoted and approved.
 
 ## L. Cancellation, Refund, and Escrow Rules
 
-- [ ] Define a stage-based cancellation policy for ready-made.
-- [ ] Define a stage-based cancellation policy for custom.
-- [ ] Define when customer self-cancel is allowed.
-- [ ] Define when tailor-initiated cancel is allowed.
-- [ ] Define when Drape review is required.
-- [ ] Define what part of the money is refundable at each stage:
-  - [ ] item or quote amount
-  - [ ] consultation fee
-  - [ ] standard fulfillment fee
-  - [ ] rush or premium logistics fee
-- [ ] Define how refund math works when ops approves a post-payment fulfillment-method change instead of a full cancellation.
-- [ ] Define what happens if dispatch has already been booked.
-- [ ] Define what happens if irreversible custom work has started.
+- [x] Define a stage-based cancellation policy for ready-made.
+- [x] Define a stage-based cancellation policy for custom.
+- [x] Define when customer self-cancel is allowed.
+- [x] Define when tailor-initiated cancel is allowed.
+- [x] Define when Drape review is required.
+- [x] Define what part of the money is refundable at each stage:
+  - [x] item or quote amount
+  - [x] consultation fee
+  - [x] standard fulfillment fee
+  - [x] rush or premium logistics fee
+- [x] Define how refund math works when ops approves a post-payment fulfillment-method change instead of a full cancellation.
+- [x] Define what happens if dispatch has already been booked.
+- [x] Define what happens if irreversible custom work has started.
 - [ ] Confirm escrow and payout rules align with the actual ops reality of delivery and shipping.
 
 ## M. Notifications, Communication, and Handoff Support
 
-- [ ] Confirm notifications route to the correct surface for both customer and tailor.
-- [ ] Confirm back from a notification-opened screen returns somewhere sensible.
-- [ ] Confirm call or handoff notifications are deliberate and not confusing.
-- [ ] Confirm both sides know when the other is trying to reach them for live handoff help.
-- [ ] Confirm support escalation paths exist for pickup failure, dispatch delay, and delivery failure.
+- [x] Confirm notifications route to the correct surface for both customer and tailor.
+- [x] Confirm back from a notification-opened screen returns somewhere sensible.
+- [x] Confirm call or handoff notifications are deliberate and not confusing.
+- [x] Confirm both sides know when the other is trying to reach them for live handoff help.
+- [x] Confirm support escalation paths exist for pickup failure, dispatch delay, and delivery failure.
 
 ## N. Admin, FAQ, and Ops Documentation
 
-- [ ] Keep the ops runbook aligned with the actual product rules.
-- [ ] Keep customer FAQ aligned with the actual product rules.
-- [ ] Keep tailor FAQ aligned with the actual product rules.
-- [ ] Add customer FAQ entries for cancellation, dispatch ownership, and delivery failure.
-- [ ] Add tailor FAQ entries for consultation fees, fabric rejection, and Drape-managed dispatch.
-- [ ] Add ops answers for exceptions, urgent fulfillment, and special-case routing.
+- [x] Keep the ops runbook aligned with the actual product rules.
+- [x] Keep customer FAQ aligned with the actual product rules.
+- [x] Keep tailor FAQ aligned with the actual product rules.
+- [x] Add customer FAQ entries for cancellation, dispatch ownership, and delivery failure.
+- [x] Add tailor FAQ entries for consultation fees, fabric rejection, and Drape-managed dispatch.
+- [x] Add ops answers for exceptions, urgent fulfillment, and special-case routing.
 
 ## O. Multi-Item and Multi-Tailor Checkout
 
-- [ ] Finish the standard single-order dispatch model before touching multi-checkout.
+- [x] Finish the standard single-order dispatch model before touching multi-checkout.
 - [ ] Define the maximum number of tailors in one checkout.
 - [ ] Define whether multiple items from one tailor share one fulfillment fee or not.
 - [ ] Define how mixed-tailor checkout groups fees by tailor and geography.

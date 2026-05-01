@@ -99,12 +99,12 @@ export function handoffHelpCardTitle(role: HandoffActorRole, deliveryMethod: str
 export function handoffHelpCardBody(role: HandoffActorRole, deliveryMethod: string | null | undefined) {
   if (deliveryMethod === 'LOCAL_COLLECTION') {
     return role === 'CUSTOMER'
-      ? 'Keep pickup communication inside Drape. Message the seller, start a Drape call, or log a pickup issue without exposing personal phone numbers.'
-      : 'Keep pickup communication inside Drape. Message the customer, start a Drape call, or log a pickup issue without exposing personal phone numbers.'
+      ? 'Keep pickup communication inside Drape. Log pickup help first when you need Drape to step in, then use a Drape call only if you need to coordinate directly with the seller.'
+      : 'Keep pickup communication inside Drape. Log pickup help first when you need Drape to step in, then use a Drape call only if you need to coordinate directly with the customer.'
   }
   return role === 'CUSTOMER'
-    ? 'Keep delivery communication inside Drape. Message the seller, start a Drape call, or log a delivery issue without exposing personal phone numbers.'
-    : 'Keep delivery communication inside Drape. Message the customer, start a Drape call, or log a delivery issue without exposing personal phone numbers.'
+    ? 'Keep delivery communication inside Drape. Contact Drape dispatch first when the handoff stalls, then use a Drape call only if you need to coordinate directly with the seller.'
+    : 'Keep delivery communication inside Drape. Contact Drape dispatch first when the handoff stalls, then use a Drape call only if you need to coordinate directly with the customer.'
 }
 
 export function handoffIssueStatusLabel(status: HandoffIssueStatus) {

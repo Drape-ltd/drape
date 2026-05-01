@@ -151,28 +151,28 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
   },
   backBtn: {
-    width: 38, height: 38, borderRadius: Radius.full,
+    width: 44, height: 44, borderRadius: Radius.full,
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
 
-  body: { padding: Spacing.xl, paddingBottom: 64, gap: Spacing.md },
+  body: { padding: Spacing.lg, paddingBottom: 32, gap: Spacing.sm },
   group: {
     backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm,
   },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginLeft: Spacing.xl + 24 },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginLeft: Spacing.lg + 24 },
   row: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.lg,
-    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.md, paddingVertical: 12,
   },
   rowPending: { opacity: 0.88 },
   rowLast: { borderBottomWidth: 0 },
   rowTitleWrap: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  rowLabel: { fontSize: FontSize.md, color: Colors.ink },
+  rowLabel: { fontSize: FontSize.md, color: Colors.ink, fontFamily: 'Georgia' },
   rowSub: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
   pendingPill: {
     fontSize: FontSize.xs,
@@ -183,5 +183,5 @@ const styles = StyleSheet.create({
     borderRadius: Radius.full,
   },
 
-  version: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'center', marginTop: Spacing.sm },
+  version: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'center', marginTop: Spacing.xs },
 })

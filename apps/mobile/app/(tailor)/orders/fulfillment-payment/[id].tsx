@@ -71,7 +71,7 @@ export default function FulfillmentPaymentRequestScreen() {
         .from('orders')
         .select(`
           id, reference, garment_type, order_kind, stage, delivery_method,
-          quoted_amount, item_subtotal, fulfillment_fee, quoted_currency,
+          quoted_amount, item_subtotal, fulfillment_fee, currency, quoted_currency,
           delivery_address, recipient_name, recipient_phone,
           fulfillment_payment_requested_at, fulfillment_payment_paid_at,
           customer_profiles!customer_id(display_name)
@@ -99,7 +99,7 @@ export default function FulfillmentPaymentRequestScreen() {
         quotedAmount: row.quoted_amount ?? null,
         itemSubtotal: row.item_subtotal ?? null,
         fulfillmentFee: row.fulfillment_fee ?? 0,
-        quotedCurrency: (row.quoted_currency ?? 'USD') as CurrencyCode,
+        quotedCurrency: (row.currency ?? row.quoted_currency ?? 'USD') as CurrencyCode,
         deliveryAddress: row.delivery_address ?? null,
         recipientName: row.recipient_name ?? null,
         recipientPhone: row.recipient_phone ?? null,

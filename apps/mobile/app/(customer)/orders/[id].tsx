@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Image, ActivityIndicator, Alert, Linking, Modal, KeyboardAvoidingView, Platform, TextInput, RefreshControl,
+  ActivityIndicator, Alert, Linking, Modal, KeyboardAvoidingView, Platform, TextInput, RefreshControl,
 } from 'react-native'
 import { useFocusEffect, useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { Image as ExpoImage } from 'expo-image'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { openConsultationCallUrl } from '@/lib/consultation'
@@ -14,9 +15,14 @@ import { openTrackingPage } from '@/lib/shipping'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import {
   CANCELLATION_REVIEW_REASON_LABELS,
+  CONSULTATION_EXPIRY_POLICY_LABELS,
+  CONSULTATION_NO_SHOW_POLICY_LABELS,
+  CONSULTATION_PAYMENT_TIMING_LABELS,
+  CONSULTATION_RESCHEDULE_POLICY_LABELS,
   COVERAGE_PREFERENCE_LABELS,
   DELIVERY_REVIEW_REASON_LABELS,
   enrichMeasurementSnapshot,
+  DISPATCH_SERVICE_LEVEL_LABELS,
   FABRIC_HANDOFF_LABELS,
   FABRIC_STRETCH_LABELS,
   FIT_CONFIDENCE_LABELS,
@@ -55,8 +61,13 @@ import { Button, HandoffSupportModal, Input } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { type OrderStage } from '@drape/shared/order-machine'
 import { filterContactInfo } from '@drape/shared/contact-filter'
-import { useCurrency, formatAmount, STATIC_FALLBACK_RATES, SUPPORTED_CURRENCIES, type CurrencyCode } from '@/lib/currency'
+import {
+  CANCELLATION_REFUND_COMPONENT_LABELS,
+  deriveCancellationPolicy,
+} from '@drape/shared/cancellation-policy'
+import { useCurrency, formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { useOrderPaymentFlow } from '@/lib/payments'
+import { isTerminalOrderStage, purgeTerminalOrderClientState } from '@/lib/order-client-state'
 
 type StageUpdate = {
   id: string
@@ -81,6 +92,17 @@ type OrderDetail = {
   itemQuantity: number
   itemSubtotal: number | null
   fulfillmentFee: number
+  subtotalAmount: number
+  platformFeeAmount: number
+  taxAmount: number
+  taxRateBps: number
+  taxRegion: string | null
+  taxFallback: boolean
+  taxFallbackReason: string | null
+  shippingAmount: number
+  totalAmount: number
+  sourceCurrency: CurrencyCode | null
+  sourceAmount: number | null
   stage: OrderStage
   tailorId: string
   tailorName: string
@@ -117,13 +139,35 @@ type OrderDetail = {
 }
 
 const SUPPORT_EMAIL = 'support@drapeon.co'
+type AftercareSupportType =
+  | 'FIT_ISSUE'
+  | 'FINISH_ISSUE'
+  | 'DAMAGE_OR_DEFECT'
+  | 'ALTERATION_FOLLOW_UP'
+  | 'OTHER'
+
+const AFTERCARE_SUPPORT_OPTIONS: AftercareSupportType[] = [
+  'FIT_ISSUE',
+  'FINISH_ISSUE',
+  'DAMAGE_OR_DEFECT',
+  'ALTERATION_FOLLOW_UP',
+  'OTHER',
+]
+
+const AFTERCARE_SUPPORT_LABELS: Record<AftercareSupportType, string> = {
+  FIT_ISSUE: 'Fit issue',
+  FINISH_ISSUE: 'Finish issue',
+  DAMAGE_OR_DEFECT: 'Damage or defect',
+  ALTERATION_FOLLOW_UP: 'Alteration follow-up',
+  OTHER: 'Other aftercare issue',
+}
 
 // The 5 production stages shown in the progress bar
 const CUSTOM_PROGRESS_STAGES: OrderStage[] = ['CONFIRMED', 'CUTTING', 'SEWING', 'READY_FOR_DRAPE_DISPATCH', 'SHIPPED']
 const READY_MADE_PROGRESS_STAGES: OrderStage[] = ['CONFIRMED', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH', 'SHIPPED']
 
 // Stages that are before production starts — show a "Waiting" pre-step
-const PRE_PRODUCTION_STAGES: OrderStage[] = ['CONSULTATION', 'PAYMENT_PENDING']
+const PRE_PRODUCTION_STAGES: OrderStage[] = ['CONSULTATION', 'PAYMENT_PENDING', 'PAYMENT_FAILED']
 const CUSTOM_PROGRESS_LABELS: Record<string, string> = {
   CONFIRMED: 'Confirmed', CUTTING: 'Cutting', SEWING: 'Sewing',
   FINISHING: 'Finishing', READY_FOR_DRAPE_DISPATCH: 'Dispatch', SHIPPED: 'Shipped',
@@ -162,6 +206,13 @@ function stageIndex(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): numb
   return progressStagesForOrder(orderKind).indexOf(normalised as OrderStage)
 }
 
+function handoffOpsButtonLabel(deliveryMethod: string, hasOpenIssue: boolean) {
+  if (deliveryMethod === 'LOCAL_COLLECTION') {
+    return hasOpenIssue ? 'Update pickup help for Drape' : 'Log pickup help for Drape'
+  }
+  return hasOpenIssue ? 'Update Drape dispatch help' : 'Contact Drape dispatch'
+}
+
 function stageGuidance(stage: OrderStage, deliveryMethod: string, orderKind: 'CUSTOM' | 'READY_MADE'): string | null {
   if (stage === 'CONSULTATION') {
     return 'Consultation comes before the quote. You and the tailor are next to clarify the work before pricing is final.'
@@ -170,6 +221,11 @@ function stageGuidance(stage: OrderStage, deliveryMethod: string, orderKind: 'CU
     return orderKind === 'READY_MADE'
       ? 'You are next. Finish checkout to place this order.'
       : 'You are next. Your quote is accepted, but production cannot start until payment is completed.'
+  }
+  if (stage === 'PAYMENT_FAILED') {
+    return orderKind === 'READY_MADE'
+      ? 'Checkout did not complete. You are next to retry payment before this checkout is cancelled automatically.'
+      : 'Payment did not complete. You are next to retry payment before this order is cancelled automatically.'
   }
   if (stage === 'CONFIRMED') {
     return orderKind === 'READY_MADE'
@@ -227,20 +283,34 @@ function stageGuidance(stage: OrderStage, deliveryMethod: string, orderKind: 'CU
   return null
 }
 
+function refundCoverageLabel(components: string[]) {
+  return components.map((component) => CANCELLATION_REFUND_COMPONENT_LABELS[component as keyof typeof CANCELLATION_REFUND_COMPONENT_LABELS]).join(', ')
+}
+
 function preProductionLabel(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE') {
   if (stage === 'CONSULTATION') return 'Consultation in progress'
   if (stage === 'PAYMENT_PENDING') {
     return orderKind === 'READY_MADE' ? 'Waiting for payment' : 'Awaiting payment'
   }
+  if (stage === 'PAYMENT_FAILED') {
+    return orderKind === 'READY_MADE' ? 'Payment failed' : 'Retry payment'
+  }
   return 'Awaiting confirmation'
 }
 
-function baseAmount(order: Pick<OrderDetail, 'orderKind' | 'itemSubtotal' | 'quotedAmount' | 'fulfillmentFee'>) {
+function baseAmount(order: Pick<OrderDetail, 'orderKind' | 'itemSubtotal' | 'subtotalAmount' | 'quotedAmount' | 'fulfillmentFee' | 'taxAmount'>) {
+  if (typeof order.subtotalAmount === 'number' && order.subtotalAmount > 0) {
+    return order.subtotalAmount
+  }
   if (order.orderKind === 'READY_MADE') {
     return order.itemSubtotal ?? (order.quotedAmount != null ? Math.max(order.quotedAmount - order.fulfillmentFee, 0) : null)
   }
   if (order.quotedAmount == null) return null
-  return Math.max(order.quotedAmount - order.fulfillmentFee, 0)
+  return Math.max(order.quotedAmount - order.fulfillmentFee - (order.taxAmount ?? 0), 0)
+}
+
+function taxLabelForOrder(order: Pick<OrderDetail, 'taxRegion'>) {
+  return order.taxRegion?.trim() ? `Tax (${order.taxRegion.trim()})` : 'Tax'
 }
 
 function fulfillmentFeeLabel(order: Pick<OrderDetail, 'orderKind' | 'deliveryMethod' | 'fulfillmentOption'>) {
@@ -304,6 +374,7 @@ export default function OrderTrackingScreen() {
   const [showDeliveryReview, setShowDeliveryReview] = useState(false)
   const [showMaterialIssueResponse, setShowMaterialIssueResponse] = useState(false)
   const [showHandoffSupport, setShowHandoffSupport] = useState(false)
+  const [showAftercareSupport, setShowAftercareSupport] = useState(false)
   const [fabricTracking, setFabricTracking] = useState('')
   const [savingFabric, setSavingFabric] = useState(false)
   const [confirmingMeasurements, setConfirmingMeasurements] = useState(false)
@@ -312,6 +383,7 @@ export default function OrderTrackingScreen() {
   const [startingHandoffCall, setStartingHandoffCall] = useState<'audio' | 'video' | null>(null)
   const [resolvingHandoffIssue, setResolvingHandoffIssue] = useState(false)
   const { startOrderPayment } = useOrderPaymentFlow()
+  const purgedTerminalOrderRef = useRef<string | null>(null)
 
   async function openCallUrl(url: string) {
     await openConsultationCallUrl(url, 'customer')
@@ -344,7 +416,8 @@ export default function OrderTrackingScreen() {
           .from('orders')
           .select(`
             id, reference, order_kind, seller_item_id, fulfillment_option, garment_type, garment_description, item_title, item_size, item_quantity, item_subtotal, stage,
-            tailor_id, tailor_profile_id, quoted_amount, quoted_currency, consultation_fee, fulfillment_fee, quoted_completion_date,
+            tailor_id, tailor_profile_id, quoted_amount, currency, quoted_currency, consultation_fee, fulfillment_fee, quoted_completion_date,
+            source_currency, source_amount, subtotal_amount, platform_fee_amount, tax_amount, tax_rate_bps, tax_region, tax_fallback, tax_fallback_reason, shipping_amount, total_amount,
             fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_payment_provider, fulfillment_payment_intent_id, fulfillment_payment_checkout_url,
             fabric_source, delivery_method, delivery_address, recipient_name, recipient_phone, fabric_tracking, tracking_number, carrier,
             fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone,
@@ -414,6 +487,17 @@ export default function OrderTrackingScreen() {
           itemQuantity: d.item_quantity ?? 1,
           itemSubtotal: d.item_subtotal ?? null,
           fulfillmentFee: d.fulfillment_fee ?? 0,
+          subtotalAmount: d.subtotal_amount ?? d.item_subtotal ?? 0,
+          platformFeeAmount: d.platform_fee_amount ?? 0,
+          taxAmount: d.tax_amount ?? 0,
+          taxRateBps: d.tax_rate_bps ?? 0,
+          taxRegion: d.tax_region ?? null,
+          taxFallback: d.tax_fallback ?? false,
+          taxFallbackReason: d.tax_fallback_reason ?? null,
+          shippingAmount: d.shipping_amount ?? d.fulfillment_fee ?? 0,
+          totalAmount: d.total_amount ?? d.quoted_amount ?? 0,
+          sourceCurrency: (d.source_currency ?? null) as CurrencyCode | null,
+          sourceAmount: d.source_amount ?? null,
           stage: d.stage,
           tailorId: d.tailor_id,
           tailorName: d.tailor_profiles?.display_name ?? '',
@@ -421,7 +505,7 @@ export default function OrderTrackingScreen() {
           pickupAddress,
           pickupInstructions,
           quotedAmount: d.quoted_amount,
-          quotedCurrency: (d.quoted_currency ?? 'USD') as CurrencyCode,
+          quotedCurrency: (d.currency ?? d.quoted_currency ?? 'USD') as CurrencyCode,
           consultationFee: d.consultation_fee ?? null,
           quotedCompletionDate: d.quoted_completion_date,
           fulfillmentPaymentRequestedAt: d.fulfillment_payment_requested_at ?? null,
@@ -479,6 +563,18 @@ export default function OrderTrackingScreen() {
 
   useEffect(() => { void fetchOrder() }, [fetchOrder])
 
+  useEffect(() => {
+    if (!order || !isTerminalOrderStage(order.stage)) return
+    const purgeKey = `${order.id}:${order.stage}`
+    if (purgedTerminalOrderRef.current === purgeKey) return
+    purgedTerminalOrderRef.current = purgeKey
+    void purgeTerminalOrderClientState({
+      orderId: order.id,
+      customerId: user?.id ?? null,
+      sellerItemId: order.sellerItemId,
+    })
+  }, [order, user?.id])
+
   useFocusEffect(
     useCallback(() => {
       void fetchOrder()
@@ -502,8 +598,8 @@ export default function OrderTrackingScreen() {
     if (!order || startingHandoffCall) return
     if (order.videoCallUrl) {
       Alert.alert(
-        'Join Drape call',
-        `Open the current Drape call with ${order.tailorName}.`,
+        'Join seller call in Drape',
+        `Open the current Drape call with ${order.tailorName}. Use the Drape dispatch help action on this order if you need ops to step in.`,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Video', onPress: () => { void openDrapeCallUrl(order.videoCallUrl!) } },
@@ -514,8 +610,8 @@ export default function OrderTrackingScreen() {
     }
 
     Alert.alert(
-      'Start Drape call',
-      `Start a Drape call with ${order.tailorName} without exposing personal phone numbers.`,
+      'Call seller in Drape',
+      `Start a Drape call with ${order.tailorName} without exposing personal phone numbers. If you need Drape to step into pickup, delivery, or dispatch, use the Drape help action on this order instead.`,
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Video', onPress: () => { void startHandoffCall('video') } },
@@ -596,6 +692,7 @@ export default function OrderTrackingScreen() {
   async function continuePayment() {
     if (!order || paying) return
     const payingFulfillmentNow = hasPendingFulfillmentPayment(order)
+    const payingConsultationNow = consultationPaymentRequired
 
     setPaying(true)
     const result = await startOrderPayment({
@@ -608,10 +705,14 @@ export default function OrderTrackingScreen() {
 
     if (result.ok) {
       Alert.alert(
-        payingFulfillmentNow
+        payingConsultationNow
+          ? 'Consultation fee confirmed'
+          : payingFulfillmentNow
           ? 'Extra dispatch payment confirmed'
           : order.orderKind === 'READY_MADE' ? 'Order placed' : 'Payment confirmed',
-        payingFulfillmentNow
+        payingConsultationNow
+          ? 'Your consultation fee is confirmed. Your tailor can now start the consultation when ready.'
+          : payingFulfillmentNow
           ? order.deliveryMethod === 'LOCAL_DELIVERY'
             ? 'The extra delivery payment is confirmed. Drape can now finish arranging this handoff.'
             : 'The extra shipping payment is confirmed. Drape can now finish arranging this shipment.'
@@ -626,11 +727,21 @@ export default function OrderTrackingScreen() {
       if (result.reason === 'cancelled') {
         Alert.alert(
           'Payment not finished',
-          payingFulfillmentNow
+          payingConsultationNow
+            ? 'Your consultation fee is still open. You can finish it from this order any time.'
+            : payingFulfillmentNow
             ? `Your extra ${order.deliveryMethod === 'LOCAL_DELIVERY' ? 'delivery' : 'shipping'} payment is still open. You can finish it from this order any time.`
             : order.orderKind === 'READY_MADE'
               ? 'Your checkout is still saved. You can finish payment from this order any time.'
               : 'Your quote is still saved. You can finish payment from this order any time.',
+        )
+        return
+      }
+
+      if (result.stage === 'PAYMENT_FAILED') {
+        Alert.alert(
+          order.orderKind === 'READY_MADE' ? 'Checkout failed' : 'Payment failed',
+          `${result.message}\n\nRetry within 30 minutes or this order will cancel automatically.`,
         )
         return
       }
@@ -757,6 +868,11 @@ export default function OrderTrackingScreen() {
   const fitConfidence = order.measurementSnapshot?.fitConfidence
   const measurementConfirmationNeeded = order.measurementSnapshot?.needsConfirmation === true
   const fitProfile = order.supportMeta.fitProfile ?? null
+  const consultationMeta = order.supportMeta.consultation ?? null
+  const quoteBreakdown = order.supportMeta.quoteBreakdown ?? null
+  const fabricPolicy = order.supportMeta.fabricPolicy ?? null
+  const bulkOrder = order.supportMeta.bulkOrder ?? null
+  const dispatchRecord = order.supportMeta.dispatchRecord ?? null
   const fabricHandoffMode = order.supportMeta.fabricHandoffMode ?? null
   const fabricHandoffLabel =
     order.supportMeta.fabricHandoffLabel ??
@@ -779,10 +895,27 @@ export default function OrderTrackingScreen() {
   const cancellationReasonLabel =
     cancellationReview?.reasonLabel ??
     (cancellationReview?.reason ? CANCELLATION_REVIEW_REASON_LABELS[cancellationReview.reason] : null)
-  const canRequestCancellationReview =
-    order.orderKind === 'READY_MADE' &&
-    !cancellationReviewOpen &&
-    ['CONFIRMED', 'DESIGNING', 'SOURCING', 'FINISHING'].includes(order.stage)
+  const cancellationPolicy = deriveCancellationPolicy({
+    orderKind: order.orderKind,
+    stage: order.stage,
+    deliveryMethod: order.deliveryMethod,
+    consultationFee: order.consultationFee,
+    consultationPaidAt: consultationMeta?.paidAt ?? null,
+    consultationFeeCreditable: consultationMeta?.feeCreditable ?? null,
+    fulfillmentFee: order.fulfillmentFee,
+    fulfillmentPaymentRequestedAt: order.fulfillmentPaymentRequestedAt,
+    fulfillmentPaymentPaidAt: order.fulfillmentPaymentPaidAt,
+    dispatchBookedAt: dispatchRecord?.bookedAt ?? null,
+    premiumDispatch: dispatchRecord?.premiumException ?? null,
+  })
+  const canRequestCancellationReview = !cancellationReviewOpen && cancellationPolicy.customerCanRequestReview
+  const canSelfCancelOrder = cancellationPolicy.customerCanSelfCancel
+  const showCancellationPolicyCard =
+    cancellationReviewOpen ||
+    (order.orderKind === 'CUSTOM'
+      ? ['PENDING_QUOTE', 'CONSULTATION', 'PAYMENT_PENDING', 'PAYMENT_FAILED', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'].includes(order.stage)
+      : ['PAYMENT_PENDING', 'PAYMENT_FAILED', 'CONFIRMED', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH'].includes(order.stage))
+  const cancellationCardTitle = canSelfCancelOrder ? 'Cancellation options' : 'Cancellation and refund review'
   const deliveryReview = order.supportMeta.deliveryReview ?? null
   const deliveryReviewOpen = hasOpenDeliveryReview(order.supportMeta)
   const deliveryReasonLabel =
@@ -792,6 +925,48 @@ export default function OrderTrackingScreen() {
     !cancellationReviewOpen &&
     !deliveryReviewOpen &&
     ['READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED'].includes(order.stage)
+  const consultationPaymentRequired =
+    order.stage === 'CONSULTATION' &&
+    !!consultationMeta?.feeAmount &&
+    consultationMeta.paymentTiming === 'BEFORE_CALL_STARTS' &&
+    !consultationMeta.paidAt
+  const consultationPaymentPaid =
+    order.stage === 'CONSULTATION' &&
+    !!consultationMeta?.feeAmount &&
+    !!consultationMeta.paidAt
+
+  async function cancelOrderDirectly() {
+    if (!order) return
+    Alert.alert(
+      'Cancel this order?',
+      cancellationPolicy.customerMessage,
+      [
+        { text: 'Keep order', style: 'cancel' },
+        {
+          text: 'Cancel order',
+          style: 'destructive',
+          onPress: async () => {
+            const { error } = await invokeFunction('customer-order-action', {
+              body: { orderId: order.id, action: 'cancel-order' },
+            })
+            if (error) {
+              const message = isLikelyConnectivityIssue(error)
+                ? 'Connection looks weak. We could not cancel this order yet. Retry when the signal improves.'
+                : await readFunctionErrorMessage(error, 'Could not cancel this order right now. Please try again.')
+              Alert.alert('Cancellation unavailable', message)
+              return
+            }
+            await purgeTerminalOrderClientState({
+              orderId: order.id,
+              customerId: user?.id ?? null,
+              sellerItemId: order.sellerItemId,
+            })
+            await fetchOrder()
+          },
+        },
+      ],
+    )
+  }
 
   // ── QUOTE_SENT state — dedicated accept / decline view ──────────────────
   if (order.stage === 'QUOTE_SENT') {
@@ -862,6 +1037,13 @@ export default function OrderTrackingScreen() {
             <Button
               label="Continue to checkout"
               onPress={() => router.navigate(`/(customer)/tailor/item/checkout/${order.sellerItemId}`)}
+              />
+            ) : null}
+          {order.orderKind === 'CUSTOM' && canSelfCancelOrder ? (
+            <Button
+              label="Cancel request"
+              variant="ghost"
+              onPress={() => { void cancelOrderDirectly() }}
             />
           ) : null}
         </View>
@@ -938,7 +1120,13 @@ export default function OrderTrackingScreen() {
               <Text style={styles.statusNote}>"{latestUpdate.note}"</Text>
             )}
             {latestUpdate?.photoUrl && (
-              <Image source={{ uri: latestUpdate.photoUrl }} style={styles.progressPhoto} resizeMode="cover" />
+              <ExpoImage
+                source={latestUpdate.photoUrl}
+                style={styles.progressPhoto}
+                contentFit="cover"
+                cachePolicy="memory-disk"
+                transition={120}
+              />
             )}
             {order.quotedCompletionDate && order.stage !== 'COMPLETE' && order.stage !== 'DELIVERED' && order.stage !== 'COLLECTED' && order.stage !== 'IN_DISPUTE' && (
               <Text style={styles.statusEta}>
@@ -947,9 +1135,9 @@ export default function OrderTrackingScreen() {
             )}
           </View>
 
-          {(cancellationReviewOpen || canRequestCancellationReview) && (
+          {showCancellationPolicyCard && (
             <View style={styles.supportCard}>
-              <Text style={styles.supportCardTitle}>Cancellation and refund review</Text>
+              <Text style={styles.supportCardTitle}>{cancellationCardTitle}</Text>
               {cancellationReviewOpen ? (
                 <>
                   <View style={[styles.supportStatusBadge, styles.supportStatusWarning]}>
@@ -964,17 +1152,49 @@ export default function OrderTrackingScreen() {
                   {cancellationReview?.note ? (
                     <Text style={styles.supportHint}>{cancellationReview.note}</Text>
                   ) : null}
+                  {cancellationPolicy.refundableNow.length > 0 ? (
+                    <Text style={styles.supportHint}>Likely refundable now: {refundCoverageLabel(cancellationPolicy.refundableNow)}</Text>
+                  ) : null}
+                  {cancellationPolicy.conditionalRefunds.length > 0 ? (
+                    <Text style={styles.supportHint}>Case-by-case: {refundCoverageLabel(cancellationPolicy.conditionalRefunds)}</Text>
+                  ) : null}
                 </>
-              ) : (
+              ) : canSelfCancelOrder ? (
                 <>
-                  <Text style={styles.supportHint}>
-                    Need to cancel this ready-made order or change how it gets to you before dispatch starts? Ask Drape to review it here first.
-                  </Text>
+                  <Text style={styles.supportHint}>{cancellationPolicy.customerMessage}</Text>
+                  {cancellationPolicy.conditionalRefunds.length > 0 ? (
+                    <Text style={styles.supportHint}>Check the order terms for: {refundCoverageLabel(cancellationPolicy.conditionalRefunds)}</Text>
+                  ) : null}
+                  {cancellationPolicy.nonRefundableNow.length > 0 ? (
+                    <Text style={styles.supportHint}>Not normally refunded: {refundCoverageLabel(cancellationPolicy.nonRefundableNow)}</Text>
+                  ) : null}
+                  <Button
+                    label="Cancel this order"
+                    variant="secondary"
+                    onPress={() => { void cancelOrderDirectly() }}
+                  />
+                </>
+              ) : canRequestCancellationReview ? (
+                <>
+                  <Text style={styles.supportHint}>{cancellationPolicy.customerMessage}</Text>
+                  {cancellationPolicy.refundableNow.length > 0 ? (
+                    <Text style={styles.supportHint}>Likely refundable now: {refundCoverageLabel(cancellationPolicy.refundableNow)}</Text>
+                  ) : null}
+                  {cancellationPolicy.conditionalRefunds.length > 0 ? (
+                    <Text style={styles.supportHint}>Case-by-case: {refundCoverageLabel(cancellationPolicy.conditionalRefunds)}</Text>
+                  ) : null}
                   <Button
                     label="Request cancellation review"
                     variant="secondary"
                     onPress={() => setShowCancellationReview(true)}
                   />
+                </>
+              ) : (
+                <>
+                  <Text style={styles.supportHint}>{cancellationPolicy.customerMessage}</Text>
+                  {cancellationPolicy.conditionalRefunds.length > 0 ? (
+                    <Text style={styles.supportHint}>Case-by-case: {refundCoverageLabel(cancellationPolicy.conditionalRefunds)}</Text>
+                  ) : null}
                 </>
               )}
             </View>
@@ -1013,18 +1233,32 @@ export default function OrderTrackingScreen() {
             </View>
           )}
 
-          {order.stage === 'PAYMENT_PENDING' && (
+          {(order.stage === 'PAYMENT_PENDING' || order.stage === 'PAYMENT_FAILED') && (
             <View style={styles.videoCallCard}>
               <Text style={styles.videoCallTitle}>
-                {order.orderKind === 'READY_MADE' ? 'Complete checkout' : 'Finish payment'}
+                {order.stage === 'PAYMENT_FAILED'
+                  ? (order.orderKind === 'READY_MADE' ? 'Checkout failed' : 'Payment failed')
+                  : (order.orderKind === 'READY_MADE' ? 'Complete checkout' : 'Finish payment')}
               </Text>
               <Text style={styles.videoCallHint}>
-                {order.orderKind === 'READY_MADE'
-                  ? 'Your checkout is saved for now. Payment must succeed before this becomes a placed order.'
-                  : 'Your tailor will only see this order as confirmed after payment succeeds.'}
+                {order.stage === 'PAYMENT_FAILED'
+                  ? (
+                    order.orderKind === 'READY_MADE'
+                      ? 'This checkout did not complete. Retry within 30 minutes or it will cancel automatically.'
+                      : 'This payment did not complete. Retry within 30 minutes or the order will cancel automatically.'
+                  )
+                  : (
+                    order.orderKind === 'READY_MADE'
+                      ? 'Your checkout is saved for now. Payment must succeed before this becomes a placed order.'
+                      : 'Your tailor will only see this order as confirmed after payment succeeds.'
+                  )}
               </Text>
               <Button
-                label={order.orderKind === 'READY_MADE' ? 'Complete checkout' : 'Continue payment'}
+                label={
+                  order.stage === 'PAYMENT_FAILED'
+                    ? (order.orderKind === 'READY_MADE' ? 'Retry checkout' : 'Retry payment')
+                    : (order.orderKind === 'READY_MADE' ? 'Complete checkout' : 'Continue payment')
+                }
                 onPress={continuePayment}
                 loading={paying}
                 disabled={paying}
@@ -1062,19 +1296,59 @@ export default function OrderTrackingScreen() {
           {order.stage === 'CONSULTATION' && (
             <View style={styles.videoCallCard}>
               <Text style={styles.videoCallTitle}>
-                {order.videoCallUrl ? 'Consultation call ready' : 'Consultation requested'}
+                {consultationPaymentRequired
+                  ? 'Consultation payment required'
+                  : order.videoCallUrl
+                    ? 'Consultation call ready'
+                    : 'Consultation requested'}
               </Text>
               {order.consultationFee != null && (
                 <Text style={styles.consultationFeeText}>
                   Consultation fee: {formatAmount(order.consultationFee, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)}
                 </Text>
               )}
+              {consultationMeta ? (
+                <View style={styles.timelineContent}>
+                  {consultationMeta.feeAmount ? (
+                    <SummaryLine
+                      label="Fee treatment"
+                      value={consultationMeta.feeCreditable ? 'Counts toward the final order if you go ahead' : 'Separate consultation fee'}
+                    />
+                  ) : null}
+                  {consultationMeta.paymentTiming ? (
+                    <SummaryLine label="Payment timing" value={CONSULTATION_PAYMENT_TIMING_LABELS[consultationMeta.paymentTiming]} />
+                  ) : null}
+                  {consultationMeta.reschedulePolicy ? (
+                    <SummaryLine label="Rescheduling" value={CONSULTATION_RESCHEDULE_POLICY_LABELS[consultationMeta.reschedulePolicy]} />
+                  ) : null}
+                  {consultationMeta.noShowPolicy ? (
+                    <SummaryLine label="No-show policy" value={CONSULTATION_NO_SHOW_POLICY_LABELS[consultationMeta.noShowPolicy]} />
+                  ) : null}
+                  {consultationMeta.expiryPolicy ? (
+                    <SummaryLine label="Request window" value={CONSULTATION_EXPIRY_POLICY_LABELS[consultationMeta.expiryPolicy]} />
+                  ) : null}
+                  {consultationPaymentPaid ? (
+                    <SummaryLine label="Payment status" value="Paid and ready for the tailor to start the call" />
+                  ) : null}
+                </View>
+              ) : null}
               <Text style={styles.videoCallHint}>
-                {order.videoCallUrl
-                  ? 'Your tailor has started a call. Join with video or audio only.'
-                  : `Your tailor wants to speak before production starts. Keep chatting here and ${order.tailorName.split(' ')[0]} will share the call link when ready.`}
+                {consultationPaymentRequired
+                  ? 'Your tailor charges for this consultation. Pay the consultation fee here first, then they can start the call.'
+                  : order.videoCallUrl
+                    ? 'Your tailor has started a call. Join with video or audio only.'
+                    : consultationPaymentPaid
+                      ? `Your consultation fee is paid. Keep chatting here and ${order.tailorName.split(' ')[0]} will share the call link when ready.`
+                      : `Your tailor wants to speak before production starts. Keep chatting here and ${order.tailorName.split(' ')[0]} will share the call link when ready.`}
               </Text>
-              {order.videoCallUrl ? (
+              {consultationPaymentRequired ? (
+                <Button
+                  label="Pay consultation fee"
+                  onPress={continuePayment}
+                  loading={paying}
+                  disabled={paying}
+                />
+              ) : order.videoCallUrl ? (
                 <View style={{ flexDirection: 'row', gap: Spacing.md }}>
                   <View style={{ flex: 1 }}>
                     <Button label="📹 Join video" onPress={() => { void openCallUrl(order.videoCallUrl!) }} />
@@ -1160,15 +1434,14 @@ export default function OrderTrackingScreen() {
               ) : null}
               <View style={{ gap: Spacing.md }}>
                 <Button
-                  label={startingHandoffCall ? 'Starting Drape call...' : order.videoCallUrl ? 'Join Drape call' : 'Start Drape call'}
+                  label={handoffOpsButtonLabel(order.deliveryMethod, !!handoffIssue)}
+                  onPress={() => setShowHandoffSupport(true)}
+                />
+                <Button
+                  label={startingHandoffCall ? 'Starting seller call...' : order.videoCallUrl ? 'Join seller call in Drape' : 'Call seller in Drape'}
                   variant="secondary"
                   onPress={openHandoffCallOptions}
                   disabled={!!startingHandoffCall}
-                />
-                <Button
-                  label={handoffIssue ? 'Log another help issue' : 'Log handoff help'}
-                  variant="secondary"
-                  onPress={() => setShowHandoffSupport(true)}
                 />
               </View>
             </View>
@@ -1211,6 +1484,9 @@ export default function OrderTrackingScreen() {
                 <Text style={styles.trackingLabel}>
                   {order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Delivery details' : 'Shipment details'}
                 </Text>
+                {dispatchRecord?.serviceLevel ? (
+                  <Text style={styles.fabricSavedNote}>Service level: {DISPATCH_SERVICE_LEVEL_LABELS[dispatchRecord.serviceLevel]}</Text>
+                ) : null}
                 {order.fulfillmentProvider ? <Text style={styles.trackingNumber}>{order.fulfillmentProvider}</Text> : null}
                 {order.trackingNumber ? <Text style={styles.fabricSavedNote}>Tracking: {order.trackingNumber}</Text> : null}
                 {order.fulfillmentReference ? <Text style={styles.fabricSavedNote}>Reference: {order.fulfillmentReference}</Text> : null}
@@ -1362,7 +1638,110 @@ export default function OrderTrackingScreen() {
             </View>
           ) : null}
 
-          {(order.fabricSource === 'CUSTOMER_SUPPLIES' || fabricHandoffLabel || materialIssue) && (
+          {order.orderKind === 'CUSTOM' && (consultationMeta || quoteBreakdown || bulkOrder) ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Quote setup</Text>
+              {consultationMeta ? (
+                <View style={styles.supportCard}>
+                  <Text style={styles.supportCardTitle}>Consultation terms</Text>
+                  <View style={styles.supportMetaList}>
+                    <SummaryLine
+                      label="Status"
+                      value={consultationMeta.status === 'COMPLETED' ? 'Consultation completed' : 'Consultation requested'}
+                    />
+                    <SummaryLine
+                      label="Fee"
+                      value={
+                        consultationMeta.feeAmount && consultationMeta.feeCurrency
+                          ? formatAmount(
+                              consultationMeta.feeAmount,
+                              consultationMeta.feeCurrency as CurrencyCode,
+                              consultationMeta.feeCurrency as CurrencyCode,
+                              STATIC_FALLBACK_RATES,
+                            )
+                          : 'Free'
+                      }
+                    />
+                    {consultationMeta.feeAmount ? (
+                      <SummaryLine
+                        label="Fee treatment"
+                        value={consultationMeta.feeCreditable ? 'Counts toward the final order' : 'Separate consultation fee'}
+                      />
+                    ) : null}
+                    {consultationMeta.paymentTiming ? (
+                      <SummaryLine label="Payment timing" value={CONSULTATION_PAYMENT_TIMING_LABELS[consultationMeta.paymentTiming]} />
+                    ) : null}
+                    {consultationMeta.reschedulePolicy ? (
+                      <SummaryLine label="Rescheduling" value={CONSULTATION_RESCHEDULE_POLICY_LABELS[consultationMeta.reschedulePolicy]} />
+                    ) : null}
+                    {consultationMeta.noShowPolicy ? (
+                      <SummaryLine label="No-show" value={CONSULTATION_NO_SHOW_POLICY_LABELS[consultationMeta.noShowPolicy]} />
+                    ) : null}
+                    {consultationMeta.expiryPolicy ? (
+                      <SummaryLine label="Window" value={CONSULTATION_EXPIRY_POLICY_LABELS[consultationMeta.expiryPolicy]} />
+                    ) : null}
+                  </View>
+                  {consultationMeta.requestNote ? <Text style={styles.supportHint}>{consultationMeta.requestNote}</Text> : null}
+                </View>
+              ) : null}
+
+              {quoteBreakdown ? (
+                <View style={styles.supportCard}>
+                  <Text style={styles.supportCardTitle}>Pricing breakdown</Text>
+                  <View style={styles.supportMetaList}>
+                    {typeof quoteBreakdown.laborAmount === 'number' ? (
+                      <SummaryLine label="Labour" value={formatAmount(quoteBreakdown.laborAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)} />
+                    ) : null}
+                    {typeof quoteBreakdown.sourcingAmount === 'number' ? (
+                      <SummaryLine label="Sourcing" value={formatAmount(quoteBreakdown.sourcingAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)} />
+                    ) : null}
+                    {typeof quoteBreakdown.rushAmount === 'number' ? (
+                      <SummaryLine label="Rush fee" value={formatAmount(quoteBreakdown.rushAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)} />
+                    ) : null}
+                    {typeof quoteBreakdown.consultationCreditAmount === 'number' && quoteBreakdown.consultationCreditAmount > 0 ? (
+                      <SummaryLine
+                        label="Consultation credit"
+                        value={`-${formatAmount(quoteBreakdown.consultationCreditAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)}`}
+                      />
+                    ) : null}
+                  </View>
+                  {quoteBreakdown.summary ? <Text style={styles.supportBodyText}>{quoteBreakdown.summary}</Text> : null}
+                  {quoteBreakdown.included && quoteBreakdown.included.length > 0 ? (
+                    <Text style={styles.supportHint}>Included: {quoteBreakdown.included.join(', ')}</Text>
+                  ) : null}
+                  {quoteBreakdown.excluded && quoteBreakdown.excluded.length > 0 ? (
+                    <Text style={styles.supportHint}>Not included: {quoteBreakdown.excluded.join(', ')}</Text>
+                  ) : null}
+                </View>
+              ) : null}
+
+              {bulkOrder?.enabled ? (
+                <View style={styles.supportCard}>
+                  <Text style={styles.supportCardTitle}>Bulk order note</Text>
+                  <View style={styles.supportMetaList}>
+                    {bulkOrder.label ? <SummaryLine label="Group" value={bulkOrder.label} /> : null}
+                    {bulkOrder.recipientCount ? <SummaryLine label="Recipients" value={`${bulkOrder.recipientCount}`} /> : null}
+                    <SummaryLine
+                      label="Handling"
+                      value={bulkOrder.statusPolicy === 'OPS_MANAGED_LINKED_CHILDREN' ? 'Drape manages linked recipient timelines for this order.' : 'Drape manages linked recipients and status flow for this order.'}
+                    />
+                    <SummaryLine
+                      label="Measurement privacy"
+                      value={bulkOrder.measurementPrivacy === 'TAILOR_ONLY' ? 'Recipient measurements stay tailor-only.' : 'Measurements stay private to the tailor.'}
+                    />
+                    <SummaryLine
+                      label="Payer model"
+                      value={bulkOrder.payerModel === 'SINGLE_PAYER' ? 'One payer covers the whole group order' : 'Single payer'}
+                    />
+                    <SummaryLine label="Dye-lot consistency" value={bulkOrder.dyeLotConsistencyRequired ? 'Keep fabrics matched across the whole group' : 'Not flagged'} />
+                  </View>
+                  {bulkOrder.notes ? <Text style={styles.supportHint}>{bulkOrder.notes}</Text> : null}
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
+          {(order.fabricSource === 'CUSTOMER_SUPPLIES' || fabricHandoffLabel || fabricPolicy || materialIssue) && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Fabric handoff</Text>
               <View style={styles.supportCard}>
@@ -1403,6 +1782,24 @@ export default function OrderTrackingScreen() {
                     The tailor will source materials from the accepted quote instead of waiting on a customer handoff.
                   </Text>
                 )}
+                {fabricPolicy?.rejectionReasons && fabricPolicy.rejectionReasons.length > 0 ? (
+                  <Text style={styles.supportHint}>Tailor can reject before cutting for: {fabricPolicy.rejectionReasons.join(' · ')}</Text>
+                ) : null}
+                {fabricPolicy?.prepRequirements && fabricPolicy.prepRequirements.length > 0 ? (
+                  <Text style={styles.supportHint}>Prep: {fabricPolicy.prepRequirements.join(' · ')}</Text>
+                ) : null}
+                {fabricPolicy?.lateFabricRule ? (
+                  <Text style={styles.supportHint}>If fabric is late: {fabricPolicy.lateFabricRule}</Text>
+                ) : null}
+                {fabricPolicy?.missingFabricRule ? (
+                  <Text style={styles.supportHint}>If fabric never arrives: {fabricPolicy.missingFabricRule}</Text>
+                ) : null}
+                {fabricPolicy?.replacementRule ? (
+                  <Text style={styles.supportHint}>Replacement rule: {fabricPolicy.replacementRule}</Text>
+                ) : null}
+                {fabricPolicy?.disagreementRule ? (
+                  <Text style={styles.supportHint}>If fabric suitability is disputed: {fabricPolicy.disagreementRule}</Text>
+                ) : null}
               </View>
             </View>
           )}
@@ -1472,9 +1869,8 @@ export default function OrderTrackingScreen() {
                   alteration receipts in Drape.
                 </Text>
                 <Button
-                  label="Contact support about aftercare"
-                  variant="secondary"
-                  onPress={() => { void contactSupport('aftercare') }}
+                  label="Log aftercare issue in Drape"
+                  onPress={() => setShowAftercareSupport(true)}
                 />
               </View>
             </View>
@@ -1525,36 +1921,34 @@ export default function OrderTrackingScreen() {
                 {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.deliveryAddress ? (
                   <SummaryLine label={order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Deliver to' : 'Ship to'} value={order.deliveryAddress} />
                 ) : null}
-                {order.itemSubtotal != null && !(order.deliveryMethod !== 'LOCAL_COLLECTION' && order.fulfillmentFee > 0) ? (
-                  <SummaryLine label="Subtotal" value={formatAmount(order.itemSubtotal, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)} />
+                <SummaryLine
+                  label={order.orderKind === 'READY_MADE' ? 'Item subtotal' : 'Quote amount'}
+                  value={formatAmount(order.subtotalAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)}
+                />
+                {order.platformFeeAmount > 0 ? (
+                  <SummaryLine
+                    label="Platform fee"
+                    value={formatAmount(order.platformFeeAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)}
+                  />
                 ) : null}
-                {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.fulfillmentFee > 0 ? (
-                  <>
-                    {baseAmount(order) != null ? (
-                      <SummaryLine
-                        label={order.orderKind === 'READY_MADE' ? 'Item subtotal' : 'Quote amount'}
-                        value={formatAmount(baseAmount(order) ?? 0, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)}
-                      />
-                    ) : null}
-                    <SummaryLine
-                      label={fulfillmentFeeLabel(order)}
-                      value={formatAmount(order.fulfillmentFee, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)}
-                    />
-                    {order.quotedAmount != null ? (
-                      <SummaryLine label="Total" value={formatAmount(order.quotedAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)} />
-                    ) : null}
-                  </>
-                ) : (
-                  <>
-                    <SummaryLine
-                      label={fulfillmentFeeLabel(order)}
-                      value={order.fulfillmentFee > 0 ? formatAmount(order.fulfillmentFee, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES) : 'Free'}
-                    />
-                    {order.quotedAmount != null ? (
-                      <SummaryLine label="Total" value={formatAmount(order.quotedAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)} />
-                    ) : null}
-                  </>
-                )}
+                <SummaryLine
+                  label={fulfillmentFeeLabel(order)}
+                  value={order.shippingAmount > 0 ? formatAmount(order.shippingAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES) : 'Free'}
+                />
+                <SummaryLine
+                  label={taxLabelForOrder(order)}
+                  value={formatAmount(order.taxAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)}
+                />
+                {order.totalAmount > 0 ? (
+                  <SummaryLine label="Total" value={formatAmount(order.totalAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)} />
+                ) : order.quotedAmount != null ? (
+                  <SummaryLine label="Total" value={formatAmount(order.quotedAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)} />
+                ) : null}
+                {order.taxFallback ? (
+                  <Text style={styles.helperText}>
+                    Tax was estimated because live tax lookup was unavailable for this delivery address.
+                  </Text>
+                ) : null}
               </View>
             </View>
           )}
@@ -1649,11 +2043,20 @@ export default function OrderTrackingScreen() {
           </TouchableOpacity>
         )}
         {['DELIVERED', 'COLLECTED', 'COMPLETE', 'IN_DISPUTE'].includes(order.stage) && (
-          <TouchableOpacity style={styles.disputeEntry} onPress={() => { void contactSupport() }}>
+          <TouchableOpacity
+            style={styles.disputeEntry}
+            onPress={() => {
+              if (['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(order.stage)) {
+                setShowAftercareSupport(true)
+                return
+              }
+              void contactSupport()
+            }}
+          >
             <Text style={styles.disputeEntryText}>
               {order.stage === 'IN_DISPUTE'
                 ? 'Need help with this concern? Contact support'
-                : 'Need help with this order? Contact support'}
+                : 'Need aftercare help? Log it in Drape'}
             </Text>
           </TouchableOpacity>
         )}
@@ -1683,6 +2086,16 @@ export default function OrderTrackingScreen() {
         onClose={() => setShowDeliveryReview(false)}
         onSubmitted={() => {
           setShowDeliveryReview(false)
+          void fetchOrder()
+        }}
+      />
+
+      <AftercareSupportModal
+        visible={showAftercareSupport}
+        orderId={order.id}
+        onClose={() => setShowAftercareSupport(false)}
+        onSubmitted={() => {
+          setShowAftercareSupport(false)
           void fetchOrder()
         }}
       />
@@ -2037,6 +2450,156 @@ function DeliveryReviewModal({ visible, orderId, onClose, onSubmitted }: {
               onPress={submit}
               loading={submitting}
               disabled={submitting || !reason}
+            />
+          </ScrollView>
+        </SafeAreaView>
+      </KeyboardAvoidingView>
+    </Modal>
+  )
+}
+
+function AftercareSupportModal({ visible, orderId, onClose, onSubmitted }: {
+  visible: boolean
+  orderId: string
+  onClose: () => void
+  onSubmitted: () => void
+}) {
+  const [issueType, setIssueType] = useState<AftercareSupportType | null>(null)
+  const [note, setNote] = useState('')
+  const [noteError, setNoteError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState('')
+
+  useEffect(() => {
+    if (!visible) return
+    setIssueType(null)
+    setNote('')
+    setNoteError('')
+    setSubmitError('')
+    setSubmitting(false)
+  }, [visible, orderId])
+
+  function validateNote(value: string) {
+    if (!value.trim()) {
+      setNoteError('Please describe the issue so Drape can review it.')
+      return false
+    }
+    if (value.trim().length < 10) {
+      setNoteError('Add a little more detail so Drape can understand the issue.')
+      return false
+    }
+    const result = filterContactInfo(value)
+    if (result.blocked) {
+      setNoteError(result.userMessage)
+      return false
+    }
+    setNoteError('')
+    return true
+  }
+
+  async function submit() {
+    if (submitting) return
+    if (!issueType) {
+      Alert.alert('Choose an issue type', 'Tell Drape what kind of aftercare help you need before sending this request.')
+      return
+    }
+    if (!validateNote(note)) return
+
+    setSubmitting(true)
+    setSubmitError('')
+
+    const { error } = await invokeFunction('customer-order-action', {
+      body: {
+        orderId,
+        action: 'request-aftercare-support',
+        aftercareType: issueType,
+        note: note.trim(),
+      },
+    })
+
+    setSubmitting(false)
+    if (error) {
+      Sentry.captureException(error, { extra: { context: 'request_aftercare_support', orderId, issueType } })
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. Your aftercare request stayed here, so retry when the signal improves.'
+        : await readFunctionErrorMessage(error, 'Could not send this aftercare request right now. Please try again.')
+      setSubmitError(message)
+      return
+    }
+
+    Alert.alert('Aftercare issue logged', 'Drape can now follow this from the order timeline and ops workflow.')
+    onSubmitted()
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <SafeAreaView style={disputeStyles.safe}>
+          <View style={disputeStyles.header}>
+            <TouchableOpacity onPress={onClose} disabled={submitting}>
+              <Text style={disputeStyles.cancel}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={disputeStyles.title}>Aftercare help</Text>
+            <View style={{ width: 60 }} />
+          </View>
+
+          <ScrollView style={disputeStyles.scroll} contentContainerStyle={disputeStyles.content}>
+            <View style={disputeStyles.infoCard}>
+              <Text style={disputeStyles.infoText}>
+                Keep fit, finish, and workmanship follow-up inside Drape so support and ops can review one clean timeline.
+              </Text>
+            </View>
+
+            <View>
+              <Text style={disputeStyles.label}>Issue type <Text style={{ color: Colors.error }}>*</Text></Text>
+              {AFTERCARE_SUPPORT_OPTIONS.map((option) => (
+                <TouchableOpacity
+                  key={option}
+                  style={[disputeStyles.reasonRow, issueType === option && disputeStyles.reasonRowActive]}
+                  disabled={submitting}
+                  onPress={() => setIssueType(option)}
+                >
+                  <View style={[disputeStyles.radio, issueType === option && disputeStyles.radioActive]} />
+                  <Text style={[disputeStyles.reasonText, issueType === option && disputeStyles.reasonTextActive]}>
+                    {AFTERCARE_SUPPORT_LABELS[option]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Input
+              label="What happened? *"
+              placeholder="Describe the fit, finish, or workmanship issue and tell Drape what you need help with."
+              value={note}
+              onChangeText={(value) => {
+                setNote(value)
+                if (noteError) validateNote(value)
+              }}
+              onBlur={() => validateNote(note)}
+              error={noteError}
+              multiline
+              numberOfLines={5}
+              maxLength={400}
+              filterContact
+            />
+
+            <View style={disputeStyles.warningCard}>
+              <Text style={disputeStyles.warningText}>
+                Add photos and any alteration notes in the live order thread too, so Drape can follow the full aftercare record.
+              </Text>
+            </View>
+
+            {submitError ? (
+              <View style={disputeStyles.submitErrorCard}>
+                <Text style={disputeStyles.submitErrorText}>{submitError}</Text>
+              </View>
+            ) : null}
+
+            <Button
+              label="Send to Drape support"
+              onPress={submit}
+              loading={submitting}
+              disabled={submitting || !issueType}
             />
           </ScrollView>
         </SafeAreaView>
@@ -2441,14 +3004,20 @@ function QuoteReviewScreen({
 }) {
   const [accepting, setAccepting] = useState(false)
   const [declining, setDeclining] = useState(false)
-  const { currency, rates, setCurrency } = useCurrency()
+  const { currency: accountCurrency } = useCurrency()
   const navigation = useNavigation()
   const { startOrderPayment } = useOrderPaymentFlow()
-  const payNowLabel = baseAmount(order) != null ? formatAmount(baseAmount(order) ?? 0, order.quotedCurrency, currency, rates) : 'Not available'
-  const totalLabel = order.quotedAmount ? formatAmount(order.quotedAmount, order.quotedCurrency, currency, rates) : 'Not available'
+  const orderCurrency = order.quotedCurrency
+  const payNowLabel = baseAmount(order) != null ? formatAmount(baseAmount(order) ?? 0, orderCurrency, orderCurrency, STATIC_FALLBACK_RATES) : 'Not available'
+  const totalLabel = order.quotedAmount ? formatAmount(order.quotedAmount, orderCurrency, orderCurrency, STATIC_FALLBACK_RATES) : 'Not available'
   const feeLabel = order.fulfillmentFee > 0
-    ? formatAmount(order.fulfillmentFee, order.quotedCurrency, currency, rates)
+    ? formatAmount(order.fulfillmentFee, orderCurrency, orderCurrency, STATIC_FALLBACK_RATES)
     : null
+  const accountCurrencyNote = accountCurrency === orderCurrency
+    ? `This order is locked in ${orderCurrency}.`
+    : `This order stays locked in ${orderCurrency}, even though your account default is now ${accountCurrency}.`
+  const consultationMeta = order.supportMeta.consultation ?? null
+  const quoteBreakdown = order.supportMeta.quoteBreakdown ?? null
   function goBack() {
     if (navigation.canGoBack()) router.back()
     else router.replace({
@@ -2467,7 +3036,7 @@ function QuoteReviewScreen({
       'Accept and pay',
       feeLabel
         ? `Accept the quote from ${order.tailorName}? You will pay the full total of ${totalLabel} now, including the ${fulfillmentFeeLabel(order).toLowerCase()} of ${feeLabel}.\n\nProduction starts after payment succeeds.`
-        : `Accept the quote of ${payNowLabel} from ${order.tailorName}?\n\nYou’ll be taken to secure payment now. Production starts after payment succeeds.`,
+        : `Accept the quote of ${payNowLabel} from ${order.tailorName}?\n\nYou’ll be taken to secure payment now. Standard dispatch is already reflected here when it applies. Extra delivery or shipping payments should only appear later for rush or exception handling.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -2485,6 +3054,15 @@ function QuoteReviewScreen({
             if (!result.ok) {
               if (result.reason === 'cancelled') {
                 Alert.alert('Payment not finished', 'Your quote is still saved. Finish payment from the order screen any time.')
+                router.replace({
+                  pathname: `/(customer)/orders/${order.id}` as any,
+                  params: { tab: preferredTab === 'completed' ? 'completed' : 'active' },
+                })
+                return
+              }
+
+              if (result.stage === 'PAYMENT_FAILED') {
+                Alert.alert('Payment failed', `${result.message}\n\nRetry from the order screen within 30 minutes to keep this quote alive.`)
                 router.replace({
                   pathname: `/(customer)/orders/${order.id}` as any,
                   params: { tab: preferredTab === 'completed' ? 'completed' : 'active' },
@@ -2533,6 +3111,10 @@ function QuoteReviewScreen({
               Alert.alert('Error', message)
               return
             }
+            await purgeTerminalOrderClientState({
+              orderId: order.id,
+              sellerItemId: order.sellerItemId,
+            })
             router.replace({
               pathname: '/(customer)/orders',
               params: { tab: preferredTab === 'completed' ? 'completed' : 'active' },
@@ -2560,56 +3142,57 @@ function QuoteReviewScreen({
           <View style={[styles.statusCard, { borderWidth: 1.5, borderColor: Colors.needleGreen + '40' }]} testID="quote-received-card">
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
               <Text style={styles.sectionTitle}>Quote received</Text>
-              {/* Currency picker */}
-              <View style={{ flexDirection: 'row', gap: 4, flexWrap: 'wrap' }}>
-                {SUPPORTED_CURRENCIES.slice(0, 5).map((c) => (
-                  <TouchableOpacity
-                    key={c.code}
-                    onPress={() => setCurrency(c.code as CurrencyCode)}
-                    style={{
-                      paddingHorizontal: 8, paddingVertical: 3,
-                      borderRadius: 12, borderWidth: 1,
-                      borderColor: currency === c.code ? Colors.needleGreen : Colors.lightGrey,
-                      backgroundColor: currency === c.code ? Colors.needleGreenLight : Colors.white,
-                    }}
-                  >
-                    <Text style={{ fontSize: 11, color: currency === c.code ? Colors.needleGreen : Colors.midGrey, fontWeight: currency === c.code ? '600' : '400' }}>
-                      {c.code}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
+              <Text style={styles.stateEyebrow}>{orderCurrency}</Text>
             </View>
+            <Text style={styles.statusNote}>{accountCurrencyNote}</Text>
 
             {baseAmount(order) != null && (
               <View style={quoteDetailRow}>
                 <Text style={quoteLabel}>{order.orderKind === 'READY_MADE' ? 'Item subtotal' : 'Quote amount'}</Text>
-                <Text style={quoteAmount}>{formatAmount(baseAmount(order) ?? 0, order.quotedCurrency, currency, rates)}</Text>
+                <Text style={quoteAmount}>{formatAmount(baseAmount(order) ?? 0, orderCurrency, orderCurrency, STATIC_FALLBACK_RATES)}</Text>
               </View>
             )}
 
             <View style={quoteDetailRow}>
-              <Text style={quoteLabel}>{fulfillmentFeeLabel(order)}</Text>
-              <Text style={quoteValue}>
-                {order.fulfillmentFee > 0
-                  ? formatAmount(order.fulfillmentFee, order.quotedCurrency, currency, rates)
+                <Text style={quoteLabel}>{fulfillmentFeeLabel(order)}</Text>
+                <Text style={quoteValue}>
+                  {order.fulfillmentFee > 0
+                  ? formatAmount(order.fulfillmentFee, orderCurrency, orderCurrency, STATIC_FALLBACK_RATES)
                   : 'Free'}
-              </Text>
+                </Text>
+              </View>
+
+            <View style={quoteDetailRow}>
+              <Text style={quoteLabel}>{taxLabelForOrder(order)}</Text>
+              <Text style={quoteValue}>{formatAmount(order.taxAmount, orderCurrency, orderCurrency, STATIC_FALLBACK_RATES)}</Text>
             </View>
 
             {order.quotedAmount != null && (
               <View style={quoteDetailRow}>
                 <Text style={quoteLabel}>Total</Text>
-                <Text style={quoteAmount}>{formatAmount(order.quotedAmount, order.quotedCurrency, currency, rates)}</Text>
+                <Text style={quoteAmount}>{formatAmount(order.quotedAmount, orderCurrency, orderCurrency, STATIC_FALLBACK_RATES)}</Text>
               </View>
             )}
+
+            {order.taxFallback ? (
+              <Text style={styles.quoteFootnote}>
+                Tax was estimated because live tax lookup was unavailable for this delivery address.
+              </Text>
+            ) : null}
 
             {order.consultationFee != null && (
               <View style={quoteDetailRow}>
                 <Text style={quoteLabel}>Consultation fee</Text>
-                <Text style={quoteValue}>{formatAmount(order.consultationFee, order.quotedCurrency, currency, rates)}</Text>
+                <Text style={quoteValue}>{formatAmount(order.consultationFee, orderCurrency, orderCurrency, STATIC_FALLBACK_RATES)}</Text>
               </View>
             )}
+
+            {typeof quoteBreakdown?.consultationCreditAmount === 'number' && quoteBreakdown.consultationCreditAmount > 0 ? (
+              <View style={quoteDetailRow}>
+                <Text style={quoteLabel}>Consultation credit</Text>
+                <Text style={quoteValue}>-{formatAmount(quoteBreakdown.consultationCreditAmount, orderCurrency, orderCurrency, STATIC_FALLBACK_RATES)}</Text>
+              </View>
+            ) : null}
 
             {order.quotedCompletionDate && (
               <View style={quoteDetailRow}>
@@ -2622,6 +3205,36 @@ function QuoteReviewScreen({
               </View>
             )}
 
+            {quoteBreakdown ? (
+              <View style={{ gap: 6 }}>
+                {typeof quoteBreakdown.laborAmount === 'number' ? (
+                  <View style={quoteDetailRow}>
+                    <Text style={quoteLabel}>Labour</Text>
+                    <Text style={quoteValue}>{formatAmount(quoteBreakdown.laborAmount, orderCurrency, orderCurrency, STATIC_FALLBACK_RATES)}</Text>
+                  </View>
+                ) : null}
+                {typeof quoteBreakdown.sourcingAmount === 'number' ? (
+                  <View style={quoteDetailRow}>
+                    <Text style={quoteLabel}>Sourcing</Text>
+                    <Text style={quoteValue}>{formatAmount(quoteBreakdown.sourcingAmount, orderCurrency, orderCurrency, STATIC_FALLBACK_RATES)}</Text>
+                  </View>
+                ) : null}
+                {typeof quoteBreakdown.rushAmount === 'number' ? (
+                  <View style={quoteDetailRow}>
+                    <Text style={quoteLabel}>Rush fee</Text>
+                    <Text style={quoteValue}>{formatAmount(quoteBreakdown.rushAmount, orderCurrency, orderCurrency, STATIC_FALLBACK_RATES)}</Text>
+                  </View>
+                ) : null}
+                {quoteBreakdown.summary ? <Text style={styles.statusNote}>{quoteBreakdown.summary}</Text> : null}
+                {quoteBreakdown.included && quoteBreakdown.included.length > 0 ? (
+                  <Text style={styles.escrowNoteText}>Included: {quoteBreakdown.included.join(', ')}</Text>
+                ) : null}
+                {quoteBreakdown.excluded && quoteBreakdown.excluded.length > 0 ? (
+                  <Text style={styles.escrowNoteText}>Not included: {quoteBreakdown.excluded.join(', ')}</Text>
+                ) : null}
+              </View>
+            ) : null}
+
             {quoteUpdate?.note && (
               <View style={{ gap: 4 }}>
                 <Text style={quoteLabel}>Note from {order.tailorName.split(' ')[0]}</Text>
@@ -2631,9 +3244,9 @@ function QuoteReviewScreen({
 
             <View style={styles.escrowNote}>
               <Text style={styles.escrowNoteText}>
-                {feeLabel
-                  ? 'Accepting locks in the base quote now. Your tailor can request the shipping or delivery payment later, once dispatch is actually being arranged.'
-                  : 'Accepting locks in the price and delivery date. Raise a dispute any time if something goes wrong.'}
+                {consultationMeta?.feeCreditable && order.consultationFee
+                  ? 'Your consultation fee is set to count toward this order if you go ahead. Accepting locks in the price and target completion date shown here.'
+                  : 'Accepting locks in the price and target completion date shown here. Raise a dispute inside Drape any time if something goes wrong.'}
               </Text>
             </View>
           </View>
@@ -2688,70 +3301,73 @@ const quoteAmount: import('react-native').TextStyle = {
 const quoteValue: import('react-native').TextStyle = {
   fontSize: 14, fontWeight: '600', color: Colors.ink,
 }
+const quoteFootnote: import('react-native').TextStyle = {
+  fontSize: 12, color: Colors.midGrey, lineHeight: 18,
+}
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   back: { paddingHorizontal: Spacing.xl, paddingTop: Spacing.md, paddingBottom: Spacing.sm },
   backText: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
   scroll: { flex: 1 },
-  content: { padding: Spacing.xl, gap: Spacing.xl },
+  content: { padding: Spacing.xl, gap: Spacing.md },
 
-  heading: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
+  heading: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
   subheading: { fontSize: FontSize.sm, color: Colors.midGrey, marginTop: 4 },
   guideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    padding: Spacing.md,
     gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
-  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   // Progress bar
   progressBar: { flexDirection: 'row', alignItems: 'flex-start', gap: 0 },
-  progressStep: { flex: 1, alignItems: 'center', gap: Spacing.xs, position: 'relative' },
+  progressStep: { flex: 1, alignItems: 'center', gap: 4, position: 'relative' },
   progressDot: {
-    width: 24, height: 24, borderRadius: 12,
+    width: 18, height: 18, borderRadius: 9,
     backgroundColor: Colors.lightGrey, alignItems: 'center', justifyContent: 'center',
     borderWidth: 2, borderColor: Colors.lightGrey,
   },
   progressDotDone: { backgroundColor: Colors.needleGreen, borderColor: Colors.needleGreen },
   progressDotActive: { backgroundColor: Colors.white, borderColor: Colors.needleGreen, borderWidth: 3 },
-  progressCheck: { fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold },
+  progressCheck: { fontSize: 9, color: Colors.white, fontWeight: FontWeight.bold },
   progressLine: {
-    position: 'absolute', top: 11, left: '50%', right: '-50%', height: 2,
+    position: 'absolute', top: 8, left: '50%', right: '-50%', height: 2,
     backgroundColor: Colors.lightGrey, zIndex: -1,
   },
   progressLineDone: { backgroundColor: Colors.needleGreen },
-  progressLabel: { fontSize: 10, color: Colors.midGrey, textAlign: 'center' },
+  progressLabel: { fontSize: 8, color: Colors.midGrey, textAlign: 'center', lineHeight: 11 },
   progressLabelDone: { color: Colors.needleGreen, fontWeight: FontWeight.medium },
 
   // Status card
-  statusCard: { backgroundColor: Colors.white, borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.md, ...Shadow.sm },
-  statusStage: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
-  statusNote: { fontSize: FontSize.md, color: Colors.inkLight, fontStyle: 'italic' },
+  statusCard: { backgroundColor: Colors.white, borderRadius: Radius.lg, padding: 10, gap: 5, ...Shadow.sm },
+  statusStage: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  statusNote: { fontSize: FontSize.xs, color: Colors.inkLight, fontStyle: 'italic', lineHeight: 18 },
 
   nextStepsCard: {
     backgroundColor: Colors.needleGreenLight, borderRadius: Radius.lg,
-    padding: Spacing.lg, gap: Spacing.sm,
+    padding: Spacing.md, gap: Spacing.xs,
     borderWidth: 1, borderColor: Colors.needleGreen + '30',
   },
-  nextStepsTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.needleGreen, marginBottom: Spacing.xs },
-  nextStepsItem: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
-  progressPhoto: { width: '100%', height: 200, borderRadius: Radius.md },
-  statusHelp: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
-  statusEta: { fontSize: FontSize.sm, color: Colors.midGrey },
+  nextStepsTitle: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen, marginBottom: 4, fontFamily: 'Georgia' },
+  nextStepsItem: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  progressPhoto: { width: '100%', height: 156, borderRadius: Radius.md },
+  statusHelp: { fontSize: 11, color: Colors.inkLight, lineHeight: 17 },
+  statusEta: { fontSize: 11, color: Colors.midGrey },
 
   // Video call card
   videoCallCard: {
     backgroundColor: Colors.boneDeep, borderRadius: Radius.lg,
-    padding: Spacing.xl, gap: Spacing.md,
+    padding: Spacing.lg, gap: Spacing.sm,
     borderWidth: 1.5, borderColor: Colors.needleGreen,
   },
-  videoCallTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  videoCallTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   consultationFeeText: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
   orderTypePill: {
     marginTop: Spacing.sm,
@@ -2767,10 +3383,10 @@ const styles = StyleSheet.create({
   // Collection code
   collectionCard: {
     backgroundColor: Colors.needleGreenLight, borderRadius: Radius.lg,
-    padding: Spacing.xl, gap: Spacing.lg, alignItems: 'center',
+    padding: Spacing.lg, gap: Spacing.md, alignItems: 'center',
     borderWidth: 1, borderColor: Colors.needleGreen + '40',
   },
-  collectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  collectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center', fontFamily: 'Georgia' },
   collectionHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 20 },
   codeBox: { flexDirection: 'row', gap: Spacing.md },
   codeDigit: {
@@ -2783,23 +3399,23 @@ const styles = StyleSheet.create({
   disputeLink: { fontSize: FontSize.sm, color: Colors.kanteRust, fontWeight: FontWeight.medium },
 
   // Timeline
-  section: { gap: Spacing.md },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
-  timeline: { gap: 0, paddingLeft: Spacing.sm },
-  timelineItem: { flexDirection: 'row', gap: Spacing.md, paddingBottom: Spacing.lg },
+  section: { gap: Spacing.sm },
+  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  timeline: { gap: 0, paddingLeft: Spacing.xs },
+  timelineItem: { flexDirection: 'row', gap: 9, paddingBottom: 10 },
   timelineDot: {
-    width: 10, height: 10, borderRadius: 5,
-    backgroundColor: Colors.needleGreen, marginTop: 4, flexShrink: 0,
+    width: 8, height: 8, borderRadius: 4,
+    backgroundColor: Colors.needleGreen, marginTop: 5, flexShrink: 0,
   },
   timelineContent: { flex: 1, gap: 2 },
-  timelineStage: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-  timelineNote: { fontSize: FontSize.sm, color: Colors.inkLight, fontStyle: 'italic' },
-  timelineDate: { fontSize: FontSize.xs, color: Colors.midGrey },
+  timelineStage: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  timelineNote: { fontSize: 11, color: Colors.inkLight, fontStyle: 'italic', lineHeight: 16 },
+  timelineDate: { fontSize: 10, color: Colors.midGrey },
 
   // Tracking
   trackingRow: {
     backgroundColor: Colors.white, borderRadius: Radius.md,
-    padding: Spacing.lg, flexDirection: 'row', justifyContent: 'space-between',
+    padding: Spacing.md, flexDirection: 'row', justifyContent: 'space-between',
     alignItems: 'center', ...Shadow.sm,
   },
   trackingAction: {
@@ -2811,19 +3427,21 @@ const styles = StyleSheet.create({
   summaryLine: { flexDirection: 'row', justifyContent: 'space-between', gap: Spacing.md },
   summaryLineLabel: { fontSize: FontSize.sm, color: Colors.midGrey },
   summaryLineValue: { flex: 1, textAlign: 'right', fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.medium },
+  helperText: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20 },
+  quoteFootnote,
   supportCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: Spacing.md,
+    padding: 10,
+    gap: 6,
     ...Shadow.sm,
   },
-  supportCardTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  supportCardTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   supportCardWarning: {
     borderWidth: 1,
     borderColor: Colors.kanteRust + '40',
   },
-  supportMetaList: { gap: Spacing.sm },
+  supportMetaList: { gap: 6 },
   supportStatusBadge: {
     alignSelf: 'flex-start',
     borderRadius: Radius.full,
@@ -2835,8 +3453,8 @@ const styles = StyleSheet.create({
   supportStatusText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   supportStatusTextWarning: { color: Colors.kanteRust },
   supportStatusTextSuccess: { color: Colors.needleGreen },
-  supportBodyText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 21 },
-  supportHint: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20 },
+  supportBodyText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  supportHint: { fontSize: 11, color: Colors.midGrey, lineHeight: 17 },
   handoffIssueCard: {
     gap: Spacing.sm,
     padding: Spacing.md,
@@ -2891,20 +3509,20 @@ const styles = StyleSheet.create({
 
   reviewCta: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.lg, flexDirection: 'row', justifyContent: 'space-between',
+    padding: Spacing.md, flexDirection: 'row', justifyContent: 'space-between',
     alignItems: 'center', ...Shadow.sm,
     borderWidth: 1, borderColor: '#F59E0B40',
   },
   reviewCtaInner: { gap: 3 },
-  reviewCtaTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  reviewCtaTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   reviewCtaHint: { fontSize: FontSize.sm, color: Colors.inkLight },
   reviewCtaArrow: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: '#F59E0B' },
 
   messageCta: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
-    backgroundColor: Colors.white, padding: Spacing.xl,
+    backgroundColor: Colors.white, padding: Spacing.lg,
     borderTopWidth: 1, borderTopColor: Colors.lightGrey,
-    paddingBottom: Spacing.xxxl,
+    paddingBottom: Spacing.xxl,
   },
 
   sentBanner: {
@@ -2919,8 +3537,8 @@ const styles = StyleSheet.create({
     maxWidth: 440,
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.lg,
+    padding: Spacing.lg,
+    gap: Spacing.md,
     alignItems: 'center',
     ...Shadow.lg,
   },
@@ -2931,13 +3549,13 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.8,
   },
-  stateTitle: { fontSize: FontSize.lg, color: Colors.ink, fontWeight: FontWeight.bold, textAlign: 'center' },
+  stateTitle: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.bold, textAlign: 'center', fontFamily: 'Georgia' },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
   stateGuideCard: {
     alignSelf: 'stretch',
     backgroundColor: Colors.bone,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    padding: Spacing.md,
     gap: 4,
   },
   stateGuideTitle: {

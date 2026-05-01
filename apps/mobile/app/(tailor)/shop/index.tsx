@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Image, Alert } from 'react-native'
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native'
+import { Image as ExpoImage } from 'expo-image'
 import { Feather } from '@expo/vector-icons'
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
@@ -403,7 +404,7 @@ export default function TailorShopScreen() {
                   return (
                     <View key={item.id} style={styles.itemCard}>
                     {item.photoUrls[0] ? (
-                      <Image source={{ uri: item.photoUrls[0] }} style={styles.itemThumb} resizeMode="cover" />
+                      <ExpoImage source={{ uri: item.photoUrls[0] }} style={styles.itemThumb} contentFit="cover" transition={180} />
                     ) : (
                       <View style={[styles.itemThumb, styles.itemThumbPlaceholder]}>
                         <Feather name="image" size={18} color={Colors.midGrey} />
@@ -525,7 +526,7 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   content: { padding: Spacing.lg, gap: Spacing.md, paddingBottom: Spacing.xxl },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  title: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.ink },
+  title: { fontSize: 28, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
   addBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -587,9 +588,9 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   itemThumb: {
-    width: 52,
-    height: 52,
-    borderRadius: Radius.md,
+    width: 60,
+    height: 60,
+    borderRadius: Radius.sm,
     backgroundColor: Colors.lightGrey,
   },
   itemThumbPlaceholder: {
@@ -600,7 +601,7 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 6,
   },
-  itemTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.ink },
+  itemTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   itemMeta: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 1, lineHeight: 18 },
   itemActions: {
     flexDirection: 'row',

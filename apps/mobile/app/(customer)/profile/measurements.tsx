@@ -9,7 +9,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
-import { goBackOrReturnTo } from '@/lib/navigation'
+import { goBackOrReturnToIfNeeded } from '@/lib/navigation'
 import {
   deriveMeasurementFitConfidence,
   MEASUREMENT_SOURCE_LABELS,
@@ -412,7 +412,7 @@ async function loadMeasurements() {
       )
     } else {
       capture('measurements_saved', { unit, measurement_source: measurementSource })
-      goBackOrReturnTo(router, navigation, returnTo, '/(customer)/profile')
+      goBackOrReturnToIfNeeded(router, navigation, returnTo, '/(customer)/profile')
     }
   }
 
@@ -428,7 +428,7 @@ async function loadMeasurements() {
 
   function back() {
     if (step > 0) setStep(step - 1)
-    else goBackOrReturnTo(router, navigation, returnTo, '/(customer)/profile')
+    else goBackOrReturnToIfNeeded(router, navigation, returnTo, '/(customer)/profile')
   }
 
   if (fetchError) {
@@ -741,11 +741,11 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  stateTitle: { fontSize: 16, fontWeight: FontWeight.bold, color: CHARCOAL, textAlign: 'center' },
+  stateTitle: { fontSize: 16, fontWeight: FontWeight.bold, color: CHARCOAL, textAlign: 'center', fontFamily: 'Georgia' },
   stateHint: { fontSize: 13, color: Colors.inkLight, textAlign: 'center', lineHeight: 18 },
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: Spacing.lg, paddingVertical: 8,
+    paddingHorizontal: Spacing.lg, paddingVertical: 6,
     minHeight: 44,
   },
   backButton: { minWidth: 44, minHeight: 44, justifyContent: 'center' },
@@ -784,12 +784,12 @@ const styles = StyleSheet.create({
   },
 
   scroll: { flex: 1 },
-  scrollContent: { paddingBottom: 88 },
-  content: { paddingHorizontal: Spacing.lg, gap: Spacing.md, paddingBottom: Spacing.md },
+  scrollContent: { paddingBottom: 80 },
+  content: { paddingHorizontal: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.md },
   guideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    padding: 14,
+    padding: 12,
     gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -812,7 +812,7 @@ const styles = StyleSheet.create({
   },
 
   stepHeading: { gap: 6 },
-  stepTitle: { fontSize: 22, fontWeight: FontWeight.bold, color: CHARCOAL },
+  stepTitle: { fontSize: 20, fontWeight: FontWeight.bold, color: CHARCOAL, fontFamily: 'Georgia' },
   stepSub: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
 
   // Layer 1 — measurements
@@ -829,7 +829,7 @@ const styles = StyleSheet.create({
   measureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'space-between' },
   measureField: { width: '48%' },
   measureInput: { marginBottom: 0 },
-  fieldLabel: { fontSize: 13, fontWeight: FontWeight.semibold, color: CHARCOAL, marginBottom: 6 },
+  fieldLabel: { fontSize: 13, fontWeight: FontWeight.semibold, color: CHARCOAL, marginBottom: 6, fontFamily: 'Georgia' },
 
   fitStyleSection: { gap: 6 },
   fitStyleRow: { flexDirection: 'row', gap: 8 },
@@ -869,7 +869,7 @@ const styles = StyleSheet.create({
   optionCard: {
     flexDirection: 'row', alignItems: 'flex-start', gap: 10,
     backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12,
-    borderWidth: 1.5, borderColor: Colors.lightGrey, ...Shadow.sm,
+    borderWidth: 1, borderColor: Colors.lightGrey, ...Shadow.sm,
   },
   optionCardActive: { borderColor: PRIMARY_GREEN, backgroundColor: Colors.needleGreenLight },
   optionRadio: {
@@ -884,7 +884,7 @@ const styles = StyleSheet.create({
   },
   optionCheckActive: { borderColor: PRIMARY_GREEN, backgroundColor: PRIMARY_GREEN },
   optionCheckMark: { color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold },
-  optionLabel: { fontSize: 14, fontWeight: FontWeight.semibold, color: Colors.inkLight },
+  optionLabel: { fontSize: 14, fontWeight: FontWeight.semibold, color: Colors.inkLight, fontFamily: 'Georgia' },
   optionLabelActive: { color: PRIMARY_GREEN },
   optionHint: { fontSize: 12, color: MUTED_GREY, marginTop: 2, lineHeight: 16 },
 
@@ -893,7 +893,7 @@ const styles = StyleSheet.create({
   flagCard: {
     flexDirection: 'row', alignItems: 'flex-start', gap: 10,
     backgroundColor: Colors.white, borderRadius: Radius.md, padding: Spacing.md,
-    borderWidth: 1.5, borderColor: Colors.lightGrey,
+    borderWidth: 1, borderColor: Colors.lightGrey,
   },
   flagCardActive: { borderColor: Colors.kanteRust, backgroundColor: Colors.kanteRustLight },
   flagCheck: {
@@ -903,14 +903,14 @@ const styles = StyleSheet.create({
   },
   flagCheckActive: { borderColor: Colors.kanteRust, backgroundColor: Colors.kanteRust },
   flagCheckMark: { color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold },
-  flagLabel: { fontSize: 13, fontWeight: FontWeight.semibold, color: Colors.inkLight },
+  flagLabel: { fontSize: 13, fontWeight: FontWeight.semibold, color: Colors.inkLight, fontFamily: 'Georgia' },
   flagLabelActive: { color: Colors.kanteRust },
   flagHint: { fontSize: 12, color: MUTED_GREY, marginTop: 2, lineHeight: 16 },
 
   // CTA
   cta: {
     paddingHorizontal: Spacing.lg,
-    paddingTop: 10,
+    paddingTop: 8,
     paddingBottom: 8,
     gap: Spacing.sm,
     backgroundColor: Colors.white, borderTopWidth: 1, borderTopColor: Colors.lightGrey,

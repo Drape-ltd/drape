@@ -228,7 +228,7 @@ export default function TailorOrdersScreen() {
                 profileId={tailorProfile?.id ?? null}
                 displayName={tailorProfile?.displayName ?? ''}
                 onSetupPress={() => router.navigate('/(tailor)/profile/setup')}
-                onPayoutPress={() => router.navigate('/(tailor)/earnings')}
+                onPayoutPress={() => router.navigate({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/orders' } } as never)}
                 onReviewProfilePress={() => router.navigate('/(tailor)/profile/edit')}
               />
             ) : (
@@ -366,11 +366,11 @@ function ActiveEmptyState({
             </TouchableOpacity>
           )}
         </>
-      ) : readiness.actionLabel === 'Review payout status' ? (
+      ) : !readiness.payoutReady && readiness.identityVerified ? (
         <>
           <Text style={emptyStyles.sub}>{readiness.body}</Text>
           <TouchableOpacity style={emptyStyles.cta} onPress={onPayoutPress}>
-            <Text style={emptyStyles.ctaText}>Review payout status</Text>
+            <Text style={emptyStyles.ctaText}>{readiness.actionLabel ?? 'Set up payout account'}</Text>
           </TouchableOpacity>
         </>
       ) : readiness.actionLabel === 'Review live profile' ? (
@@ -397,7 +397,7 @@ function ActiveEmptyState({
 const ghostStyles = StyleSheet.create({
   card: {
     backgroundColor: Colors.white, borderRadius: Radius.md,
-    padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12,
+    padding: 12, flexDirection: 'row', alignItems: 'center', gap: 12,
     ...Shadow.sm,
   },
   iconBox: { width: 42, height: 42, borderRadius: Radius.md, backgroundColor: Colors.lightGrey },
@@ -406,9 +406,9 @@ const ghostStyles = StyleSheet.create({
 })
 
 const emptyStyles = StyleSheet.create({
-  wrap: { paddingTop: Spacing.xl, paddingHorizontal: Spacing.lg, alignItems: 'center' },
-  heading: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
-  sub: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20, marginTop: 6 },
+  wrap: { paddingTop: Spacing.lg, paddingHorizontal: Spacing.lg, alignItems: 'center' },
+  heading: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center', fontFamily: 'Georgia' },
+  sub: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 19, marginTop: 4 },
   cta: {
     marginTop: Spacing.xl,
     backgroundColor: Colors.needleGreen,
@@ -423,14 +423,14 @@ const emptyStyles = StyleSheet.create({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
-  header: { paddingHorizontal: Spacing.lg, paddingTop: 10, paddingBottom: 8, gap: Spacing.sm },
-  title: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.ink },
+  header: { paddingHorizontal: Spacing.lg, paddingTop: 8, paddingBottom: 6, gap: Spacing.xs },
+  title: { fontSize: 28, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
   guideCard: {
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.sm,
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    padding: 14,
+    padding: 12,
     gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -455,27 +455,27 @@ const styles = StyleSheet.create({
   tabLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.midGrey },
   tabLabelActive: { color: Colors.ink, fontWeight: FontWeight.semibold },
 
-  searchWrap: { paddingHorizontal: Spacing.lg, paddingBottom: Spacing.sm },
+  searchWrap: { paddingHorizontal: Spacing.lg, paddingBottom: Spacing.xs },
   search: {
     backgroundColor: Colors.white, borderRadius: Radius.full,
-    paddingHorizontal: 14, paddingVertical: 10,
+    paddingHorizontal: 14, paddingVertical: 9,
     fontSize: FontSize.sm, color: Colors.ink,
     borderWidth: 1, borderColor: Colors.lightGrey,
     minHeight: 44,
   },
 
-  list: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.xxl },
-  card: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: Spacing.sm, ...Shadow.sm },
+  list: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.xl },
+  card: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: Spacing.xs, ...Shadow.sm },
   cardPending: { borderWidth: 1.5, borderColor: Colors.warning },
   cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
-  garment: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.ink },
+  garment: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   customer: { fontSize: FontSize.sm, color: Colors.inkLight, marginTop: 2 },
   stagePill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.full },
   stageText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   cardMeta: { flexDirection: 'row', gap: 12, alignItems: 'center' },
   ref: { fontSize: FontSize.xs, color: Colors.midGrey },
   due: { fontSize: FontSize.xs, color: Colors.midGrey },
-  amount: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginLeft: 'auto' },
+  amount: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginLeft: 'auto', fontFamily: 'Georgia' },
   pendingCta: { fontSize: FontSize.sm, color: Colors.warning, fontWeight: FontWeight.medium },
   statusHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   statusHintDispute: { fontSize: FontSize.xs, color: Colors.kanteRust, lineHeight: 18 },

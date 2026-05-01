@@ -192,7 +192,7 @@ export default function TailorTrustAccessScreen() {
             </Text>
             <TouchableOpacity
               style={styles.reviewBtn}
-              onPress={() => router.push('/(tailor)/profile/payout-setup' as never)}
+              onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/profile/trust-access' } } as never)}
             >
               <Text style={styles.reviewBtnText}>Start payout setup</Text>
             </TouchableOpacity>
@@ -287,20 +287,20 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
   },
   backBtn: {
-    width: 38, height: 38, borderRadius: Radius.full,
+    width: 44, height: 44, borderRadius: Radius.full,
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
-  body: { padding: Spacing.xl, paddingBottom: 64, gap: Spacing.md },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  body: { padding: Spacing.lg, paddingBottom: 32, gap: Spacing.md },
   heroCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.sm,
     ...Shadow.sm,
   },
   badge: {
@@ -316,12 +316,12 @@ const styles = StyleSheet.create({
   badgeTextClear: { color: Colors.needleGreen },
   badgeTextReview: { color: Colors.warning },
   badgeTextFix: { color: Colors.kanteRust },
-  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 30 },
-  heroBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 22 },
+  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 28, fontFamily: 'Georgia' },
+  heroBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   infoCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    padding: Spacing.md,
     gap: Spacing.sm,
     ...Shadow.sm,
   },
@@ -332,8 +332,8 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.4,
   },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
-  sectionBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 22 },
+  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  sectionBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   list: { gap: Spacing.sm },
   listRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   listText: { flex: 1, fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
@@ -344,7 +344,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.lg,
     backgroundColor: Colors.needleGreen,
     paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
+    paddingVertical: 12,
   },
   reviewBtnText: {
     color: Colors.white,
@@ -354,7 +354,7 @@ const styles = StyleSheet.create({
   cautionCard: {
     backgroundColor: Colors.boneDeep,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    padding: Spacing.md,
     gap: Spacing.xs,
     borderLeftWidth: 3,
     borderLeftColor: Colors.needleGreen,
@@ -383,8 +383,8 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 440,
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
     gap: Spacing.lg,
     alignItems: 'center',
     ...Shadow.lg,
@@ -396,12 +396,12 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  stateTitle: { fontSize: FontSize.lg, color: Colors.ink, fontWeight: FontWeight.semibold, textAlign: 'center' },
+  stateTitle: { fontSize: FontSize.lg, color: Colors.ink, fontWeight: FontWeight.semibold, textAlign: 'center', fontFamily: 'Georgia' },
   stateHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
   primaryBtn: {
     backgroundColor: Colors.needleGreen,
     paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.md,
+    paddingVertical: 12,
     borderRadius: Radius.full,
   },
   primaryBtnText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
@@ -410,7 +410,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.lightGrey,
     borderWidth: 1,
     paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.md,
+    paddingVertical: 12,
     borderRadius: Radius.full,
   },
   secondaryBtnText: { color: Colors.ink, fontSize: FontSize.sm, fontWeight: FontWeight.medium },

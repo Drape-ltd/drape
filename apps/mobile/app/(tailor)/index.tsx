@@ -114,11 +114,12 @@ export default function TailorDashboard() {
   }
 
   async function setAvailability(value: Availability) {
+    if (!user?.id) return
     setAvailSaving(true)
     const { error } = await supabase
       .from('tailor_profiles')
       .update({ availability: value })
-      .eq('user_id', user?.id)
+      .eq('user_id', user.id)
     if (error) {
       Alert.alert(
         'Error',
@@ -241,9 +242,9 @@ export default function TailorDashboard() {
             {readiness.payoutProviderLabel ? (
               <Text style={styles.readinessMeta}>Payout path detected: {readiness.payoutProviderLabel}</Text>
             ) : null}
-            {readiness.actionLabel === 'Review payout status' ? (
-              <TouchableOpacity style={styles.readinessLink} onPress={() => router.push('/(tailor)/earnings')}>
-                <Text style={styles.readinessLinkText}>Review payout status</Text>
+            {!readiness.payoutReady && readiness.identityVerified ? (
+              <TouchableOpacity style={styles.readinessLink} onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)' } } as never)}>
+                <Text style={styles.readinessLinkText}>{readiness.actionLabel ?? 'Set up payout account'}</Text>
               </TouchableOpacity>
             ) : readiness.actionLabel === 'Review live profile' ? (
               <TouchableOpacity style={styles.readinessLink} onPress={() => router.push('/(tailor)/profile/edit')}>
@@ -410,11 +411,11 @@ export default function TailorDashboard() {
                     </View>
                   )}
                 </>
-              ) : readiness.actionLabel === 'Review payout status' ? (
+              ) : !readiness.payoutReady && readiness.identityVerified ? (
                 <>
                   <Text style={styles.emptyHint}>{readiness.body}</Text>
-                  <TouchableOpacity style={styles.shareBtn} onPress={() => router.push('/(tailor)/earnings')}>
-                    <Text style={styles.shareBtnText}>Review payout status</Text>
+                  <TouchableOpacity style={styles.shareBtn} onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)' } } as never)}>
+                    <Text style={styles.shareBtnText}>{readiness.actionLabel ?? 'Set up payout account'}</Text>
                   </TouchableOpacity>
                 </>
               ) : stats?.idVerificationStatus === 'PENDING' ? (
@@ -544,7 +545,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   scroll: { flex: 1 },
-  content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, gap: Spacing.lg, paddingBottom: 32 },
+  content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, gap: Spacing.md, paddingBottom: Spacing.xxl },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,
@@ -580,8 +581,8 @@ const styles = StyleSheet.create({
   guideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    padding: 14,
-    gap: 6,
+    padding: 12,
+    gap: 4,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
@@ -595,18 +596,18 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   guideClose: { fontSize: 18, lineHeight: 18, color: MUTED_GREY, paddingHorizontal: 4, minWidth: 44, minHeight: 44, textAlign: 'center', textAlignVertical: 'center', includeFontPadding: false },
-  guideTitle: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, lineHeight: 18 },
+  guideTitle: { fontSize: 13, fontWeight: FontWeight.semibold, color: CHARCOAL, lineHeight: 17 },
   guideText: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
   readinessCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    padding: 14,
-    gap: 6,
+    padding: 12,
+    gap: 5,
     ...Shadow.sm,
   },
   readinessCardWarning: { borderWidth: 1, borderColor: Colors.warning + '35' },
   readinessCardSuccess: { borderWidth: 1, borderColor: Colors.success + '30' },
-  readinessTitle: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, lineHeight: 18 },
+  readinessTitle: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, lineHeight: 18, fontFamily: 'Georgia' },
   readinessBody: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
   readinessMeta: { fontSize: 11, color: MUTED_GREY, lineHeight: 16 },
   readinessLink: { alignSelf: 'flex-start', paddingTop: 2 },
@@ -617,12 +618,12 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: Spacing.md },
   headerRight: { alignItems: 'flex-end', gap: 8 },
   greeting: { fontSize: 13, color: Colors.inkLight },
-  greetingName: { fontSize: 30, fontWeight: FontWeight.bold, color: CHARCOAL, letterSpacing: -0.5, lineHeight: 34 },
+  greetingName: { fontSize: 24, fontWeight: FontWeight.bold, color: CHARCOAL, letterSpacing: -0.3, lineHeight: 28, fontFamily: 'Georgia' },
 
   availPill: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
     backgroundColor: Colors.white, borderRadius: Radius.full,
-    paddingHorizontal: 14, paddingVertical: 5, minHeight: 44, ...Shadow.sm,
+    paddingHorizontal: 12, paddingVertical: 4, minHeight: 40, ...Shadow.sm,
   },
   availDot: { width: 7, height: 7, borderRadius: 4 },
   availLabel: { fontSize: 12, fontWeight: FontWeight.medium, color: Colors.inkLight },
@@ -630,18 +631,18 @@ const styles = StyleSheet.create({
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   modalSheet: {
     backgroundColor: Colors.white, borderTopLeftRadius: Radius.md, borderTopRightRadius: Radius.md,
-    padding: Spacing.lg, gap: Spacing.md, paddingBottom: Spacing.xxxl,
+    padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.xxl,
   },
   modalHandle: {
     width: 36, height: 4, borderRadius: 2, backgroundColor: Colors.lightGrey,
     alignSelf: 'center', marginBottom: Spacing.sm,
   },
-  modalTitle: { fontSize: 20, fontWeight: FontWeight.bold, color: CHARCOAL },
+  modalTitle: { fontSize: 18, fontWeight: FontWeight.bold, color: CHARCOAL, fontFamily: 'Georgia' },
   modalSub: { fontSize: 13, color: Colors.inkLight, marginTop: -4, lineHeight: 18 },
   availOption: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
     minHeight: 44,
-    padding: 14, borderRadius: Radius.md, borderWidth: 1.5, borderColor: Colors.lightGrey,
+    padding: 12, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.lightGrey,
   },
   availOptionActive: { borderColor: PRIMARY_GREEN, backgroundColor: Colors.needleGreenLight },
   availOptionDot: { width: 10, height: 10, borderRadius: 5 },
@@ -661,8 +662,8 @@ const styles = StyleSheet.create({
   stockWatchCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    padding: 14,
-    gap: 10,
+    padding: 12,
+    gap: 8,
     borderWidth: 1,
     borderColor: Colors.warning + '30',
     ...Shadow.sm,
@@ -709,22 +710,22 @@ const styles = StyleSheet.create({
   },
   secondaryErrorBtnText: { color: CHARCOAL, fontSize: 13, fontWeight: FontWeight.medium },
 
-  statsGrid: { gap: 10 },
-  statsRow: { flexDirection: 'row', gap: 10 },
+  statsGrid: { gap: 8 },
+  statsRow: { flexDirection: 'row', gap: 8 },
   statCard: {
     flex: 1, backgroundColor: Colors.white,
-    borderRadius: Radius.md, padding: 14, gap: 2, ...Shadow.sm,
-    minHeight: 96,
+    borderRadius: Radius.md, padding: 12, gap: 2, ...Shadow.sm,
+    minHeight: 84,
     justifyContent: 'center',
   },
   statCardAccent: { backgroundColor: Colors.warning + '15', borderWidth: 1, borderColor: Colors.warning + '40' },
-  statValue: { fontSize: 22, fontWeight: FontWeight.bold, color: CHARCOAL },
+  statValue: { fontSize: 20, fontWeight: FontWeight.bold, color: CHARCOAL, fontFamily: 'Georgia' },
   statValueAccent: { color: Colors.warning },
   statLabel: { fontSize: 11, color: MUTED_GREY, lineHeight: 15 },
 
-  section: { gap: 10 },
+  section: { gap: 8 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  sectionTitle: { fontSize: 18, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  sectionTitle: { fontSize: 16, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   sectionLink: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium, minHeight: 44, includeFontPadding: false },
 
   emptyOrders: { gap: 8, alignItems: 'center', paddingVertical: Spacing.lg },
@@ -768,7 +769,7 @@ const styles = StyleSheet.create({
 
   orderRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, minHeight: 88, ...Shadow.sm,
+    backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, minHeight: 78, ...Shadow.sm,
   },
   orderRowLeft: { gap: 2 },
   orderGarment: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL, lineHeight: 19 },

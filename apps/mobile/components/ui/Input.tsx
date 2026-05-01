@@ -82,21 +82,22 @@ export function Input({
 }
 
 const styles = StyleSheet.create({
-  container: { gap: Spacing.sm },
+  container: { gap: 6 },
   label: {
-    fontSize: FontSize.sm,
+    fontSize: FontSize.xs,
     fontWeight: FontWeight.medium,
-    color: Colors.ink,
+    color: Colors.midGrey,
   },
   required: { color: Colors.kanteRust },
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1.5,
+    borderWidth: 1,
     borderColor: Colors.lightGrey,
-    borderRadius: Radius.md,
+    borderRadius: Radius.lg,
     backgroundColor: Colors.white,
-    paddingHorizontal: Spacing.lg,
+    paddingHorizontal: Spacing.md,
+    minHeight: 44,
   },
   focused: { borderColor: Colors.needleGreen },
   errorBorder: { borderColor: Colors.error },
@@ -104,8 +105,8 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: FontSize.md,
     color: Colors.ink,
-    paddingVertical: Spacing.md,
-    minHeight: 50,
+    paddingVertical: 10,
+    minHeight: 44,
   },
   right: { marginLeft: Spacing.sm },
   errorText: {
