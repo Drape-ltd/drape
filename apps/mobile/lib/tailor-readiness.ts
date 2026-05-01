@@ -11,8 +11,14 @@ export type TailorReadinessInput = {
   profileCompleted?: boolean | null
   idVerificationStatus?: string | null
   isLive?: boolean | null
+  payoutCurrency?: string | null
   stripeAccountId?: string | null
   paystackAccountId?: string | null
+  stripeConnectAccountId?: string | null
+  paystackRecipientCode?: string | null
+  payoutAccountVerified?: boolean | null
+  payoutReverificationRequired?: boolean | null
+  payoutAccountType?: 'PAYSTACK' | 'STRIPE_CONNECT' | null
   shipsInternationally?: boolean | null
 }
 
@@ -43,7 +49,7 @@ function isIdentityVerifiedStatus(status: string | null | undefined) {
 
 export function suggestedPayoutProvider(currency: string | null | undefined): PayoutProviderLabel {
   const normalized = (currency ?? '').trim().toUpperCase()
-  if (normalized === 'NGN' || normalized === 'GHS') return 'Paystack'
+  if (normalized === 'NGN' || normalized === 'GHS' || normalized === 'KES') return 'Paystack'
   return 'Stripe'
 }
 
@@ -73,17 +79,32 @@ export function deriveTailorReadiness(input: TailorReadinessInput | null | undef
   const profileCompleted = input?.profileCompleted === true
   const idVerificationStatus = input?.idVerificationStatus ?? 'NOT_SUBMITTED'
   const identityVerified = isIdentityVerifiedStatus(idVerificationStatus)
-  const providers = [
-    hasValue(input?.stripeAccountId) ? 'Stripe' : null,
-    hasValue(input?.paystackAccountId) ? 'Paystack' : null,
-  ].filter((value): value is 'Stripe' | 'Paystack' => value != null)
+  const payoutVerified = input?.payoutAccountVerified === true
+  const needsReverification = input?.payoutReverificationRequired === true
+  const payoutCurrency =
+    ((input as { payoutCurrency?: string | null; payout_currency?: string | null } | null)?.payoutCurrency
+      ?? (input as { payoutCurrency?: string | null; payout_currency?: string | null } | null)?.payout_currency
+      ?? null)
   const payoutProviderLabel =
-    providers.length === 0
-      ? null
-      : providers.length === 2
-        ? 'Stripe and Paystack'
-        : providers[0]
-  const payoutReady = identityVerified && providers.length > 0
+    hasValue(payoutCurrency)
+      ? suggestedPayoutProvider(payoutCurrency)
+      : input?.payoutAccountType === 'STRIPE_CONNECT'
+        || hasValue(input?.stripeConnectAccountId)
+        || hasValue(input?.stripeAccountId)
+        ? 'Stripe'
+        : input?.payoutAccountType === 'PAYSTACK'
+          || hasValue(input?.paystackRecipientCode)
+          || hasValue(input?.paystackAccountId)
+          ? 'Paystack'
+          : null
+  const explicitPayoutStateKnown =
+    typeof input?.payoutAccountVerified === 'boolean'
+    || typeof input?.payoutReverificationRequired === 'boolean'
+  const payoutReady = identityVerified && (
+    explicitPayoutStateKnown
+      ? (payoutVerified && !needsReverification)
+      : payoutProviderLabel != null
+  )
   const publicDiscoveryReady = profileCompleted && identityVerified
   const canAcceptPaidOrders = payoutReady
   const canPublishPaidItems = payoutReady
@@ -140,6 +161,7 @@ export function deriveTailorReadiness(input: TailorReadinessInput | null | undef
   }
 
   if (!payoutReady) {
+    const reconnect = needsReverification
     return {
       sellerStage: 'IDENTITY_VERIFIED',
       identityVerified,
@@ -149,9 +171,11 @@ export function deriveTailorReadiness(input: TailorReadinessInput | null | undef
       canPublishPaidItems,
       payoutProviderLabel,
       blockers,
-      title: 'Connect payout before taking paid orders',
-      body: 'Identity review is complete, but paid quotes and live shop items should stay blocked until a payout account is connected and ready. Open Payments & payouts for the next step.',
-      actionLabel: 'Review payout status',
+      title: reconnect ? 'Reconnect your payout account' : 'Set up your payout account',
+      body: reconnect
+        ? 'Your payout details changed or need review again. Reconnect your payout account to start receiving earnings and unlock paid work again. It takes about 2 minutes.'
+        : 'Set up your payout account to start receiving earnings. Paid quotes and live shop items stay blocked until a verified payout path is connected. It takes about 2 minutes.',
+      actionLabel: reconnect ? 'Reconnect payout account' : 'Set up payout account',
       tone: 'warning',
     }
   }

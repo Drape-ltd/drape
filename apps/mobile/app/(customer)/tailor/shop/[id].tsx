@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Image } from 'react-native'
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native'
+import { Image as ExpoImage } from 'expo-image'
 import { Feather } from '@expo/vector-icons'
 import { useRefreshOnFocus, useTailorShop } from '@/lib/queries'
 import { Button } from '@/components/ui'
@@ -51,7 +52,11 @@ export default function TailorShopScreen() {
               label="Start custom order"
               onPress={() => router.push({
                 pathname: `/(customer)/brief/${id}` as any,
-                params: { returnTo: `/(customer)/tailor/shop/${id}` },
+                params: {
+                  returnTo: `/(customer)/tailor/shop/${id}`,
+                  draftSession: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+                  freshStart: '1',
+                },
               })}
             />
           </View>
@@ -70,7 +75,7 @@ export default function TailorShopScreen() {
                 }
               >
                 {item.photoUrls[0] ? (
-                  <Image source={{ uri: item.photoUrls[0] }} style={styles.itemImage} resizeMode="cover" />
+                  <ExpoImage source={{ uri: item.photoUrls[0] }} style={styles.itemImage} contentFit="cover" transition={180} />
                 ) : (
                   <View style={[styles.itemImage, styles.itemPlaceholder]}>
                     <Feather name="shopping-bag" size={24} color={Colors.midGrey} />
@@ -106,24 +111,24 @@ function Chip({ label }: { label: string }) {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   scroll: { flex: 1 },
-  content: { padding: Spacing.xl, gap: Spacing.lg, paddingBottom: Spacing.xxxl },
-  header: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
-  headerTitle: { flex: 1, textAlign: 'center', fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
-  bestUseCard: { backgroundColor: Colors.white, borderRadius: Radius.xl, padding: Spacing.lg, gap: 6, ...Shadow.sm },
+  content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, gap: Spacing.md, paddingBottom: Spacing.xxxl },
+  header: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  headerTitle: { flex: 1, textAlign: 'center', fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  bestUseCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 4, ...Shadow.sm },
   bestUseEyebrow: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.6 },
-  bestUseText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
-  emptyCard: { backgroundColor: Colors.white, borderRadius: Radius.xl, padding: Spacing.xl, gap: Spacing.md, ...Shadow.sm },
-  emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
-  emptyHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  bestUseText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
+  emptyCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 16, gap: Spacing.sm, ...Shadow.sm },
+  emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  emptyHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
   itemList: { gap: Spacing.md },
-  itemCard: { backgroundColor: Colors.white, borderRadius: Radius.xl, overflow: 'hidden', ...Shadow.sm },
-  itemImage: { width: '100%', height: 180, backgroundColor: Colors.lightGrey },
+  itemCard: { backgroundColor: Colors.white, borderRadius: Radius.md, overflow: 'hidden', ...Shadow.sm },
+  itemImage: { width: '100%', height: 168, backgroundColor: Colors.lightGrey },
   itemPlaceholder: { alignItems: 'center', justifyContent: 'center' },
-  itemBody: { padding: Spacing.lg, gap: 6 },
-  itemTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-  itemCategory: { fontSize: FontSize.sm, color: Colors.midGrey },
-  itemPrice: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.needleGreen },
+  itemBody: { padding: 14, gap: 4 },
+  itemTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  itemCategory: { fontSize: FontSize.xs, color: Colors.midGrey },
+  itemPrice: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.needleGreen, fontFamily: 'Georgia' },
   chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs, marginTop: Spacing.xs },
-  chip: { backgroundColor: Colors.bone, borderRadius: Radius.full, paddingHorizontal: Spacing.sm, paddingVertical: 6 },
+  chip: { backgroundColor: Colors.bone, borderRadius: Radius.full, paddingHorizontal: Spacing.sm, paddingVertical: 5 },
   chipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
 })

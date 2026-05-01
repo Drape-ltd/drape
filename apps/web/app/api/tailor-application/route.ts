@@ -1,6 +1,63 @@
 import { NextResponse } from 'next/server'
 import { createServiceRoleClient } from '../../../lib/server-supabase'
 import { sendTailorApplicationNotification } from '../../../lib/lead-notifications'
+
+async function createOrRefreshApplicationOpsIssue(
+  client: ReturnType<typeof createServiceRoleClient>,
+  input: {
+    applicationId: string
+    displayName: string
+    email: string
+    location: string
+    specialty: string
+    status: string
+    source: string
+  },
+) {
+  if (!client) return
+
+  const dedupeKey = `tailor-application:${input.applicationId}`
+  const existing = await client
+    .from('ops_issues')
+    .select('id, status')
+    .eq('dedupe_key', dedupeKey)
+    .maybeSingle()
+
+  const payload = {
+    issue_type: 'TAILOR_APPLICATION',
+    severity: 'MEDIUM',
+    status: 'OPEN',
+    source: 'tailor-application-web',
+    actor_role: 'SYSTEM',
+    related_entity_type: 'tailor_application',
+    related_entity_id: input.applicationId,
+    title: 'New tailor application',
+    description: `${input.displayName} submitted or updated a tailor application from the public site.`,
+    recommended_action: 'Review the application details, proof of work, and contact context before moving the intake status forward.',
+    dedupe_key: dedupeKey,
+    metadata: {
+      display_name: input.displayName,
+      email: input.email,
+      location: input.location,
+      specialty: input.specialty,
+      status: input.status,
+      source: input.source,
+    },
+    resolved_at: null,
+    last_seen_at: new Date().toISOString(),
+  }
+
+  if (existing.data?.id) {
+    await client
+      .from('ops_issues')
+      .update(payload)
+      .eq('id', existing.data.id)
+  } else {
+    await client
+      .from('ops_issues')
+      .insert(payload)
+  }
+}
 import {
   checkPublicRateLimit,
   getClientIp,
@@ -168,7 +225,7 @@ export async function POST(request: Request) {
     .upsert(application, {
       onConflict: 'email',
     })
-    .select('created_at, status')
+    .select('id, created_at, status')
     .single()
 
   if (error) {
@@ -194,6 +251,18 @@ export async function POST(request: Request) {
     if (!notification.ok && !notification.skipped) {
       console.error('[tailor-application] Application saved but lead email failed.', { email })
     }
+  }
+
+  if (savedApplication?.id) {
+    await createOrRefreshApplicationOpsIssue(client, {
+      applicationId: savedApplication.id,
+      displayName,
+      email,
+      location,
+      specialty,
+      status: savedApplication.status ?? application.status,
+      source: application.source,
+    })
   }
 
   return NextResponse.json({ ok: true })

@@ -94,6 +94,12 @@ export default function CustomerReviewsScreen() {
         </View>
       ) : (
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          <View style={styles.introCard}>
+            <Text style={styles.introEyebrow}>Reputation</Text>
+            <Text style={styles.introTitle}>This is the feedback history tailors have left on your orders.</Text>
+            <Text style={styles.introCopy}>Keep this view honest and readable. It should help you spot recurring fit or communication patterns at a glance.</Text>
+          </View>
+
           <View style={styles.summaryCard}>
             <Text style={styles.summaryValue}>{averageRating ? averageRating.toFixed(1) : 'No rating'}</Text>
             <Text style={styles.summaryLabel}>
@@ -154,19 +160,42 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.lightGrey,
   },
   backBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   content: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: 36 },
+  introCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    padding: 14,
+    gap: 4,
+    ...Shadow.sm,
+  },
+  introEyebrow: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  introTitle: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    fontFamily: 'Georgia',
+    lineHeight: 22,
+  },
+  introCopy: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
-  stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia', textAlign: 'center' },
   summaryCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    padding: Spacing.lg,
+    paddingVertical: 18,
+    paddingHorizontal: 16,
     alignItems: 'center',
     gap: 4,
     ...Shadow.sm,
   },
-  summaryValue: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.ink },
+  summaryValue: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
   summaryLabel: { fontSize: FontSize.sm, color: Colors.midGrey },
   reviewCard: {
     backgroundColor: Colors.white,
@@ -185,9 +214,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   avatarText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.needleGreen },
-  reviewerName: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  reviewerName: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   reviewDate: { fontSize: FontSize.xs, color: Colors.midGrey },
-  reviewStars: { fontSize: FontSize.sm, color: Colors.warning },
+  reviewStars: { fontSize: FontSize.sm, color: Colors.warning, letterSpacing: 0.4 },
   tags: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   tag: {
     backgroundColor: Colors.bone,

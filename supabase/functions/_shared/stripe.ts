@@ -16,6 +16,38 @@ export type StripePaymentIntent = {
   } | null
 }
 
+export type StripeRefund = {
+  id: string
+  status?: string | null
+  amount?: number | null
+  payment_intent?: string | null
+  metadata?: Record<string, string> | null
+}
+
+export type StripeConnectAccount = {
+  id: string
+  charges_enabled: boolean
+  payouts_enabled: boolean
+  details_submitted?: boolean
+  country?: string | null
+  email?: string | null
+}
+
+export type StripeAccountLink = {
+  object: 'account_link'
+  created: number
+  expires_at: number
+  url: string
+}
+
+export type StripeTransfer = {
+  id: string
+  amount: number
+  currency: string
+  destination?: string | null
+  metadata?: Record<string, string> | null
+}
+
 function authHeaders() {
   return {
     Authorization: `Bearer ${getStripeSecretKey()}`,
@@ -35,6 +67,7 @@ export async function createStripePaymentIntent(options: {
   amount: number
   currency: string
   description: string
+  idempotencyKey?: string
   metadata?: Record<string, string>
 }): Promise<StripePaymentIntent> {
   const body = new URLSearchParams()
@@ -52,6 +85,7 @@ export async function createStripePaymentIntent(options: {
     headers: {
       ...authHeaders(),
       'Content-Type': 'application/x-www-form-urlencoded',
+      ...(options.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : {}),
     },
     body,
   })
@@ -83,6 +117,144 @@ export async function cancelStripePaymentIntent(
   const response = await fetch(`${STRIPE_API_BASE}/payment_intents/${paymentIntentId}/cancel`, {
     method: 'POST',
     headers: authHeaders(),
+  })
+
+  if (!response.ok) {
+    await parseStripeError(response)
+  }
+
+  return response.json()
+}
+
+export async function refundStripePaymentIntent(options: {
+  paymentIntentId: string
+  amount?: number
+  idempotencyKey?: string
+  reasonNote?: string | null
+}): Promise<StripeRefund> {
+  const body = new URLSearchParams()
+  body.set('payment_intent', options.paymentIntentId)
+  if (typeof options.amount === 'number' && options.amount > 0) {
+    body.set('amount', String(options.amount))
+  }
+  body.set('reason', 'requested_by_customer')
+  if (options.reasonNote?.trim()) {
+    body.set('metadata[drape_reason]', options.reasonNote.trim())
+  }
+
+  const response = await fetch(`${STRIPE_API_BASE}/refunds`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(),
+      'Content-Type': 'application/x-www-form-urlencoded',
+      ...(options.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : {}),
+    },
+    body,
+  })
+
+  if (!response.ok) {
+    await parseStripeError(response)
+  }
+
+  return response.json()
+}
+
+export async function createStripeConnectAccount(options: {
+  email: string
+  countryCode: string
+  metadata?: Record<string, string>
+}): Promise<StripeConnectAccount> {
+  const body = new URLSearchParams()
+  body.set('type', 'express')
+  body.set('country', options.countryCode.trim().toUpperCase())
+  body.set('email', options.email.trim())
+  body.set('capabilities[transfers][requested]', 'true')
+
+  for (const [key, value] of Object.entries(options.metadata ?? {})) {
+    body.set(`metadata[${key}]`, value)
+  }
+
+  const response = await fetch(`${STRIPE_API_BASE}/accounts`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(),
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  })
+
+  if (!response.ok) {
+    await parseStripeError(response)
+  }
+
+  return response.json()
+}
+
+export async function retrieveStripeConnectAccount(accountId: string): Promise<StripeConnectAccount> {
+  const response = await fetch(`${STRIPE_API_BASE}/accounts/${accountId}`, {
+    headers: authHeaders(),
+  })
+
+  if (!response.ok) {
+    await parseStripeError(response)
+  }
+
+  return response.json()
+}
+
+export async function createStripeAccountLink(options: {
+  accountId: string
+  refreshUrl: string
+  returnUrl: string
+}): Promise<StripeAccountLink> {
+  const body = new URLSearchParams()
+  body.set('account', options.accountId)
+  body.set('refresh_url', options.refreshUrl)
+  body.set('return_url', options.returnUrl)
+  body.set('type', 'account_onboarding')
+
+  const response = await fetch(`${STRIPE_API_BASE}/account_links`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(),
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  })
+
+  if (!response.ok) {
+    await parseStripeError(response)
+  }
+
+  return response.json()
+}
+
+export async function createStripeTransfer(options: {
+  amount: number
+  currency: string
+  destinationAccountId: string
+  transferGroup?: string | null
+  metadata?: Record<string, string>
+}): Promise<StripeTransfer> {
+  const body = new URLSearchParams()
+  body.set('amount', String(options.amount))
+  body.set('currency', options.currency.trim().toLowerCase())
+  body.set('destination', options.destinationAccountId.trim())
+  if (options.transferGroup?.trim()) {
+    body.set('transfer_group', options.transferGroup.trim())
+  }
+
+  for (const [key, value] of Object.entries(options.metadata ?? {})) {
+    body.set(`metadata[${key}]`, value)
+  }
+
+  const response = await fetch(`${STRIPE_API_BASE}/transfers`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(),
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
   })
 
   if (!response.ok) {

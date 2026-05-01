@@ -61,8 +61,11 @@ export default function RoleSelectScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.content}>
         <View style={styles.heroCard}>
+          <View style={styles.heroBadge}>
+            <Text style={styles.heroBadgeText}>Choose your side</Text>
+          </View>
           <Text style={styles.heading}>How will you use Drape first?</Text>
-          <Text style={styles.sub}>Choose the side you want first.</Text>
+          <Text style={styles.sub}>Pick the side you want to start with now. You’ll go straight into setup for that experience and can switch later inside your account.</Text>
         </View>
 
         <View style={styles.roleRow}>
@@ -105,6 +108,7 @@ export default function RoleSelectScreen() {
 
         <View style={styles.actionCard}>
           <View style={styles.nextCard}>
+            <Text style={styles.nextEyebrow}>Next</Text>
             <Text style={styles.nextTitle}>You’ll go into setup for this side of Drape.</Text>
           </View>
           <TouchableOpacity
@@ -133,20 +137,34 @@ export default function RoleSelectScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.bone },
-  content: { flex: 1, padding: Spacing.xl, gap: Spacing.xl, justifyContent: 'center' },
+  content: { flex: 1, padding: Spacing.xl, gap: Spacing.lg, justifyContent: 'center' },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,
     padding: Spacing.xl,
-    gap: Spacing.lg,
+    gap: Spacing.md,
   },
-  heading: { fontSize: 34, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 40, letterSpacing: -0.6 },
-  sub: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 24 },
+  heroBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+  },
+  heroBadgeText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  heading: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 34, letterSpacing: -0.4, fontFamily: 'Georgia' },
+  sub: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 22 },
   roleRow: { gap: Spacing.md },
   roleCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: Spacing.lg,
+    padding: Spacing.md,
     borderRadius: Radius.lg,
     borderWidth: 1.5,
     borderColor: Colors.lightGrey,
@@ -167,7 +185,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#EAF6F1',
   },
   roleTextWrap: { flex: 1, gap: 2 },
-  roleLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  roleLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   roleLabelActive: { color: Colors.needleGreen },
   roleHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   roleCheck: {
@@ -204,12 +222,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
     marginBottom: Spacing.sm,
+    gap: 4,
+  },
+  nextEyebrow: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   nextTitle: {
     fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
     lineHeight: 21,
+    fontFamily: 'Georgia',
   },
   btn: {
     backgroundColor: Colors.needleGreen,

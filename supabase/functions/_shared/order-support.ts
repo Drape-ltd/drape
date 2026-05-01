@@ -56,6 +56,94 @@ export type FabricHandoffMode =
   | 'BRINGS_TO_CONSULTATION'
   | 'NO_CUSTOMER_HANDOFF_REQUIRED'
 
+export type ConsultationFeeMode = 'FREE' | 'PAID'
+
+export type ConsultationPaymentTiming =
+  | 'BEFORE_CALL_STARTS'
+  | 'WAIVED_OR_FREE'
+
+export type ConsultationReschedulePolicy =
+  | 'ONE_FREE_RESCHEDULE'
+  | 'FLEXIBLE_WITH_NOTICE'
+  | 'CASE_BY_CASE'
+
+export type ConsultationNoShowPolicy =
+  | 'FEE_FORFEITED'
+  | 'ONE_REBOOK_ALLOWED'
+  | 'CASE_BY_CASE'
+
+export type ConsultationExpiryPolicy =
+  | 'EXPIRES_IN_7_DAYS'
+  | 'EXPIRES_IN_14_DAYS'
+  | 'NO_EXPIRY'
+
+export type QuoteBreakdownMeta = {
+  laborAmount?: number | null
+  sourcingAmount?: number | null
+  rushAmount?: number | null
+  consultationCreditAmount?: number | null
+  included?: string[] | null
+  excluded?: string[] | null
+  summary?: string | null
+}
+
+export type ConsultationMeta = {
+  status?: 'REQUESTED' | 'COMPLETED' | null
+  feeMode?: ConsultationFeeMode | null
+  feeAmount?: number | null
+  feeCurrency?: string | null
+  feeCreditable?: boolean | null
+  feeCreditedTowardQuote?: boolean | null
+  paymentProvider?: 'STRIPE' | 'PAYSTACK' | null
+  paymentIntentId?: string | null
+  paymentCheckoutUrl?: string | null
+  paymentTiming?: ConsultationPaymentTiming | null
+  paidAt?: string | null
+  reschedulePolicy?: ConsultationReschedulePolicy | null
+  noShowPolicy?: ConsultationNoShowPolicy | null
+  expiryPolicy?: ConsultationExpiryPolicy | null
+  reminderEnabled?: boolean | null
+  requestNote?: string | null
+  requestedAt?: string | null
+}
+
+export type FabricPolicyMeta = {
+  approvalRequiredForTailorSourcing?: boolean | null
+  rejectionReasons?: string[] | null
+  lateFabricRule?: string | null
+  missingFabricRule?: string | null
+  replacementRule?: string | null
+  disagreementRule?: string | null
+  prepRequirements?: string[] | null
+}
+
+export type BulkOrderMeta = {
+  enabled?: boolean | null
+  mode?: 'OPS_MANAGED_SPECIAL_CASE' | null
+  label?: string | null
+  recipientCount?: number | null
+  payerModel?: 'SINGLE_PAYER' | null
+  measurementPrivacy?: 'TAILOR_ONLY' | null
+  statusPolicy?: 'OPS_MANAGED_LINKED_CHILDREN' | null
+  dyeLotConsistencyRequired?: boolean | null
+  notes?: string | null
+}
+
+export type DispatchRecordMeta = {
+  providerUsed?: string | null
+  bookedBy?: string | null
+  bookedAt?: string | null
+  serviceLevel?:
+    | 'STANDARD'
+    | 'SAME_DAY'
+    | 'NEXT_DAY'
+    | 'INTERNATIONAL_STANDARD'
+    | 'INTERNATIONAL_EXPRESS'
+    | 'CUSTOM'
+    | null
+  premiumException?: boolean | null
+}
+
 export type MaterialIssueReason =
   | 'POOR_FABRIC_QUALITY'
   | 'INSUFFICIENT_YARDAGE'
@@ -166,6 +254,11 @@ export type OrderSupportMeta = {
   fabricHandoffLabel?: string | null
   fabricReceivedAt?: string | null
   fabricReceivedNote?: string | null
+  consultation?: ConsultationMeta | null
+  quoteBreakdown?: QuoteBreakdownMeta | null
+  fabricPolicy?: FabricPolicyMeta | null
+  bulkOrder?: BulkOrderMeta | null
+  dispatchRecord?: DispatchRecordMeta | null
   fitProfile?: FitProfileMeta | null
   materialIssue?: MaterialIssueMeta | null
   cancellationReview?: CancellationReviewMeta | null
@@ -191,6 +284,38 @@ export const FABRIC_HANDOFF_LABELS: Record<FabricHandoffMode, string> = {
   TAILOR_PICKS_UP_LOCALLY: 'Tailor picks fabric up locally',
   BRINGS_TO_CONSULTATION: 'Customer brings fabric to consultation or fitting',
   NO_CUSTOMER_HANDOFF_REQUIRED: 'No customer fabric handoff needed',
+}
+
+export const CONSULTATION_PAYMENT_TIMING_LABELS: Record<ConsultationPaymentTiming, string> = {
+  BEFORE_CALL_STARTS: 'Due before the consultation starts',
+  WAIVED_OR_FREE: 'No separate consultation payment is due',
+}
+
+export const CONSULTATION_RESCHEDULE_POLICY_LABELS: Record<ConsultationReschedulePolicy, string> = {
+  ONE_FREE_RESCHEDULE: 'One free reschedule with notice',
+  FLEXIBLE_WITH_NOTICE: 'Flexible when notice is given',
+  CASE_BY_CASE: 'Case by case',
+}
+
+export const CONSULTATION_NO_SHOW_POLICY_LABELS: Record<ConsultationNoShowPolicy, string> = {
+  FEE_FORFEITED: 'No-show forfeits the consultation fee',
+  ONE_REBOOK_ALLOWED: 'One rebook allowed after a missed session',
+  CASE_BY_CASE: 'Case by case',
+}
+
+export const CONSULTATION_EXPIRY_POLICY_LABELS: Record<ConsultationExpiryPolicy, string> = {
+  EXPIRES_IN_7_DAYS: 'Expires if not used within 7 days',
+  EXPIRES_IN_14_DAYS: 'Expires if not used within 14 days',
+  NO_EXPIRY: 'No expiry before the tailor re-quotes',
+}
+
+export const DISPATCH_SERVICE_LEVEL_LABELS: Record<NonNullable<DispatchRecordMeta['serviceLevel']>, string> = {
+  STANDARD: 'Standard',
+  SAME_DAY: 'Same day',
+  NEXT_DAY: 'Next day',
+  INTERNATIONAL_STANDARD: 'International standard',
+  INTERNATIONAL_EXPRESS: 'International express',
+  CUSTOM: 'Custom service level',
 }
 
 export const MATERIAL_ISSUE_REASON_LABELS: Record<MaterialIssueReason, string> = {

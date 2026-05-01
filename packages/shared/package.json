@@ -8,7 +8,10 @@
     "./order-machine": "./src/order-machine.ts",
     "./constants": "./src/constants.ts",
     "./auth-security": "./src/auth-security.ts",
-    "./phone": "./src/phone.ts"
+    "./phone": "./src/phone.ts",
+    "./cancellation-policy": "./src/cancellation-policy.ts",
+    "./sms-copy": "./src/sms-copy.ts",
+    "./order-terminal": "./src/order-terminal.ts"
   },
   "scripts": {
     "test": "jest --watchman=false"

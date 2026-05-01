@@ -301,6 +301,7 @@ export type TailorPublicProfile = {
   bio: string | null
   specialtyTags: string[]
   languages: string[]
+  currency: string
   priceRangeMin: number | null
   priceRangeMax: number | null
   portfolioPhotos: string[]
@@ -484,7 +485,7 @@ async function fetchCustomerOrders(
   const { data, error } = await supabase
     .from('orders')
     .select(`
-      id, reference, garment_type, order_kind, stage, quoted_completion_date, created_at, quoted_amount, quoted_currency,
+      id, reference, garment_type, order_kind, stage, quoted_completion_date, created_at, quoted_amount, currency, quoted_currency,
       tailor_profiles!tailor_profile_id(id, display_name),
       reviews!order_id(id)
     `)
@@ -508,7 +509,7 @@ async function fetchCustomerOrders(
     estimatedDate: o.quoted_completion_date,
     createdAt: o.created_at,
     quotedAmount: o.quoted_amount,
-    quotedCurrency: o.quoted_currency ?? 'USD',
+    quotedCurrency: o.currency ?? o.quoted_currency ?? 'USD',
     hasReview: (o.reviews ?? []).length > 0,
   }))
 }
@@ -521,7 +522,7 @@ async function fetchTailorOrders(
   const { data, error } = await supabase
     .from('orders')
     .select(`
-      id, reference, garment_type, order_kind, seller_item_id, customer_id, stage, quoted_completion_date, quoted_amount, quoted_currency, video_call_url, created_at,
+      id, reference, garment_type, order_kind, seller_item_id, customer_id, stage, quoted_completion_date, quoted_amount, currency, quoted_currency, video_call_url, created_at,
       customer_profiles!customer_id(display_name)
     `)
     .eq('tailor_id', userId)
@@ -566,7 +567,7 @@ async function fetchTailorOrders(
     customerName: o.customer_profiles?.display_name ?? 'Customer',
     estimatedDate: o.quoted_completion_date,
     quotedAmount: o.quoted_amount,
-    quotedCurrency: o.quoted_currency ?? 'USD',
+    quotedCurrency: o.currency ?? o.quoted_currency ?? 'USD',
     videoCallUrl: o.video_call_url ?? null,
     createdAt: o.created_at,
   }))
@@ -580,7 +581,7 @@ async function fetchCustomerOrderDetail(
     .from('orders')
     .select(`
       id, reference, garment_type, garment_description, stage,
-      tailor_id, tailor_profile_id, quoted_amount, quoted_currency, quoted_completion_date,
+      tailor_id, tailor_profile_id, quoted_amount, currency, quoted_currency, quoted_completion_date,
       fabric_source, delivery_method, fabric_tracking,
       collection_code, video_call_url, created_at,
       tailor_profiles!tailor_profile_id(display_name),
@@ -603,7 +604,7 @@ async function fetchCustomerOrderDetail(
     tailorId: d.tailor_id,
     tailorName: d.tailor_profiles?.display_name ?? '',
     quotedAmount: d.quoted_amount,
-    quotedCurrency: (d.quoted_currency ?? 'USD') as CurrencyCode,
+    quotedCurrency: (d.currency ?? d.quoted_currency ?? 'USD') as CurrencyCode,
     quotedCompletionDate: d.quoted_completion_date,
     fabricSource: d.fabric_source,
     deliveryMethod: d.delivery_method,
@@ -712,7 +713,7 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
   const queries = [
     supabase
       .from('tailor_profiles')
-      .select('id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, bio, specialty_tags, languages, price_range_min, price_range_max, portfolio_photo_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available')
+      .select('id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, bio, specialty_tags, languages, currency, price_range_min, price_range_max, portfolio_photo_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available')
       .eq('id', tailorId)
       .maybeSingle(),
     supabase
@@ -791,6 +792,7 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
           bio: profileData.bio ?? null,
           specialtyTags: asStringList(profileData.specialty_tags),
           languages: asStringList(profileData.languages),
+          currency: profileData.currency ?? 'USD',
           priceRangeMin: profileData.price_range_min ?? null,
           priceRangeMax: profileData.price_range_max ?? null,
           portfolioPhotos:
@@ -1071,7 +1073,7 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
   let monthEarnings = 0
   const { data: monthOrders, error: monthOrdersError } = await supabase
     .from('orders')
-    .select('quoted_amount, quoted_currency')
+    .select('quoted_amount, currency, quoted_currency')
     .eq('tailor_id', userId)
     .in('stage', ['COMPLETE', 'DELIVERED', 'COLLECTED'])
     .gte('updated_at', monthStart.toISOString())
@@ -1079,7 +1081,7 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
   if (!monthOrdersError) {
     monthEarnings = (monthOrders ?? []).reduce((sum: number, o: any) => {
       const amountMinorUnits = o.quoted_amount ?? 0
-      const fromCurrency = (o.quoted_currency ?? displayCurrency) as CurrencyCode
+      const fromCurrency = (o.currency ?? o.quoted_currency ?? displayCurrency) as CurrencyCode
       return sum + normalizeMinorAmount(amountMinorUnits, fromCurrency, displayCurrency, liveRates)
     }, 0)
   }

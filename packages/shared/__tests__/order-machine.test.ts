@@ -15,10 +15,18 @@ describe('canTransition — valid paths', () => {
     ['DRAFT', 'PENDING_QUOTE', 'CUSTOMER'],
     ['PENDING_QUOTE', 'QUOTE_SENT', 'TAILOR'],
     ['PENDING_QUOTE', 'DECLINED', 'TAILOR'],
+    ['PENDING_QUOTE', 'CANCELLED', 'CUSTOMER'],
+    ['CONSULTATION', 'CANCELLED', 'CUSTOMER'],
     ['QUOTE_SENT', 'PAYMENT_PENDING', 'CUSTOMER'],
     ['QUOTE_SENT', 'DECLINED', 'CUSTOMER'],
     ['QUOTE_SENT', 'EXPIRED', 'SYSTEM'],
     ['PAYMENT_PENDING', 'CONFIRMED', 'SYSTEM'],
+    ['PAYMENT_PENDING', 'PAYMENT_FAILED', 'SYSTEM'],
+    ['PAYMENT_PENDING', 'CANCELLED', 'CUSTOMER'],
+    ['PAYMENT_FAILED', 'PAYMENT_PENDING', 'CUSTOMER'],
+    ['PAYMENT_FAILED', 'CONFIRMED', 'SYSTEM'],
+    ['PAYMENT_FAILED', 'CANCELLED', 'CUSTOMER'],
+    ['PAYMENT_FAILED', 'CANCELLED', 'SYSTEM'],
     ['CONFIRMED', 'DESIGNING', 'TAILOR'],
     ['CONFIRMED', 'SOURCING', 'TAILOR'],
     ['CONFIRMED', 'CUTTING', 'TAILOR'],
@@ -123,10 +131,23 @@ describe('validNextStages', () => {
     expect(stages).not.toContain('CONFIRMED')
   })
 
+  it('customer can cancel before quote payment settles', () => {
+    expect(validNextStages('PENDING_QUOTE', 'CUSTOMER')).toContain('CANCELLED')
+    expect(validNextStages('CONSULTATION', 'CUSTOMER')).toContain('CANCELLED')
+    expect(validNextStages('PAYMENT_PENDING', 'CUSTOMER')).toContain('CANCELLED')
+    expect(validNextStages('PAYMENT_FAILED', 'CUSTOMER')).toContain('CANCELLED')
+  })
+
   it('customer at QUOTE_SENT can accept or decline', () => {
     const stages = validNextStages('QUOTE_SENT', 'CUSTOMER')
     expect(stages).toContain('PAYMENT_PENDING')
     expect(stages).toContain('DECLINED')
+  })
+
+  it('customer at PAYMENT_FAILED can retry or cancel', () => {
+    const stages = validNextStages('PAYMENT_FAILED', 'CUSTOMER')
+    expect(stages).toContain('PAYMENT_PENDING')
+    expect(stages).toContain('CANCELLED')
   })
 
   it('tailor at FINISHING has drape-dispatch and collection paths', () => {
@@ -153,7 +174,7 @@ describe('isTerminal', () => {
     expect(isTerminal(stage)).toBe(true)
   })
 
-  const nonTerminal: OrderStage[] = ['PENDING_QUOTE', 'QUOTE_SENT', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED', 'COLLECTED']
+  const nonTerminal: OrderStage[] = ['PENDING_QUOTE', 'QUOTE_SENT', 'PAYMENT_FAILED', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED', 'COLLECTED']
   it.each(nonTerminal)('%s is NOT terminal', (stage) => {
     expect(isTerminal(stage)).toBe(false)
   })
@@ -164,7 +185,7 @@ describe('isTerminal', () => {
 describe('ORDER_TRANSITIONS integrity', () => {
   it('every "from" stage in transitions is a valid OrderStage', () => {
     const validStages = new Set<string>([
-      'DRAFT', 'PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING',
+      'DRAFT', 'PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING', 'PAYMENT_FAILED',
       'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING',
       'READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'READY_FOR_COLLECTION', 'DELIVERED', 'COLLECTED',
       'COMPLETE', 'DECLINED', 'EXPIRED', 'IN_DISPUTE', 'REFUNDED', 'CANCELLED',

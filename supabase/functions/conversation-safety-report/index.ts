@@ -3,6 +3,7 @@ import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
+import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { parseBody, uuid, z } from '../_shared/validate.ts'
 
@@ -96,6 +97,27 @@ Deno.serve(async (req) => {
       severity: 'warn',
       payload: {
         function: FN,
+        category,
+        surface,
+        order_stage: order.stage,
+        reported_party_role: actorRole === 'CUSTOMER' ? 'TAILOR' : 'CUSTOMER',
+      },
+    })
+
+    await createOrRefreshOpsIssue(supabase, {
+      issueType: 'CONVERSATION_SAFETY',
+      severity: 'HIGH',
+      source: FN,
+      actorId: caller.id,
+      actorRole,
+      orderId: order.id,
+      userId: caller.id,
+      stage: order.stage,
+      title: 'Conversation safety report',
+      description: `A ${actorRole.toLowerCase()} reported ${category.replace(/_/gu, ' ').toLowerCase()} inside the order conversation.`,
+      recommendedAction: 'Review the message thread, decide whether the chat should stay paused, and log the trust decision.',
+      dedupeKey: `conversation-safety:${order.id}`,
+      metadata: {
         category,
         surface,
         order_stage: order.stage,

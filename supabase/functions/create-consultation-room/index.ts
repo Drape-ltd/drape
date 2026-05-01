@@ -22,6 +22,7 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getDailyApiKey, getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
+import { parseOrderSupportMeta } from '../_shared/order-support.ts'
 
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
@@ -98,7 +99,7 @@ Deno.serve(async (req) => {
     // Check for existing room URL — also fetch tailor ownership fields
     const { data: order } = await supabase
       .from('orders')
-      .select('id, reference, stage, video_call_url, tailor_id, customer_id, tailor_profiles!tailor_profile_id(user_id)')
+      .select('id, reference, stage, video_call_url, tailor_id, customer_id, consultation_fee, special_note, tailor_profiles!tailor_profile_id(user_id)')
       .eq('id', orderId)
       .single()
 
@@ -112,6 +113,23 @@ Deno.serve(async (req) => {
 
     if (order.stage !== 'CONSULTATION') {
       return jsonError(corsHeaders, 409, 'CONSULTATION_NOT_READY', 'This order is no longer in the consultation stage.')
+    }
+
+    const supportMeta = parseOrderSupportMeta((order as { special_note?: string | null }).special_note)
+    const consultationMeta = supportMeta.consultation ?? null
+    const consultationPaymentRequired =
+      typeof (order as { consultation_fee?: number | null }).consultation_fee === 'number'
+      && ((order as { consultation_fee?: number | null }).consultation_fee ?? 0) > 0
+      && consultationMeta?.paymentTiming === 'BEFORE_CALL_STARTS'
+      && !consultationMeta?.paidAt
+
+    if (consultationPaymentRequired) {
+      return jsonError(
+        corsHeaders,
+        409,
+        'CONSULTATION_PAYMENT_REQUIRED',
+        'The customer still needs to pay the consultation fee before you can start the consultation call.',
+      )
     }
 
     // Reuse only rooms that still fall within the app TTL. Old Daily rooms can expire

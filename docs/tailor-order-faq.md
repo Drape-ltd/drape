@@ -44,13 +44,15 @@ If you offer pickup:
 
 ## Can I charge for consultation?
 
-The product direction should allow this as an optional tailor-level choice later.
+Yes.
 
 That means:
 
 - some consultations can stay free
 - some can be paid
-- if paid, the customer should pay before the slot is confirmed
+- if paid, the customer pays before the consultation can start
+- you can choose whether the fee stays separate or credits toward the later order
+- the reschedule, no-show, and expiry rule should be set when you request the consultation
 
 ## When should I request a consultation?
 
@@ -66,7 +68,7 @@ Consultation is best for high-ambiguity custom work, including:
 
 You should not feel forced to accept unsuitable fabric.
 
-If the customer's fabric is low-quality, the wrong type, or not enough, Drape should let you say so clearly before cutting begins.
+If the customer's fabric is low-quality, the wrong type, not enough, badly damaged, or made up of unusable remnants, Drape should let you say so clearly before cutting begins.
 
 ## What if I need to source fabric?
 
@@ -75,6 +77,7 @@ The safest model is:
 - include sourcing cost in the quote
 - get paid before buying the material
 - do not front major fabric cost unless you deliberately choose to take that risk
+- if you need replacement fabric later, get customer approval inside Drape before buying it
 
 ## What if the customer-supplied fabric is not enough?
 
@@ -121,6 +124,12 @@ Use the in-order cancellation review path so Drape can review:
 - whether dispatch has already started
 - and whether the issue is stock, damage, timing, or another fulfilment blocker
 
+For launch, the working rule is:
+
+- if checkout is still `Payment pending`, wait for the customer to finish or abandon it
+- once the paid order is `Confirmed` or `Preparing order`, use cancellation review
+- once the order is `Ready for Drape dispatch`, only Drape should decide whether to stop, rebook, or refund the order
+
 ## What if the item is damaged or unavailable after the customer already paid?
 
 Do not improvise that in chat.
@@ -130,6 +139,15 @@ Open cancellation review with the real reason, so Drape can decide whether to:
 - refund
 - keep the order active with a remedy
 - or move the case into a fuller dispute path
+
+## What if I need to cancel a custom order after work has started?
+
+The stage matters.
+
+- before the order is paid, decline it directly if it should not move forward
+- in `Confirmed`, `Designing`, or `Sourcing`, use cancellation review if the paid order cannot continue
+- once the order has reached `Cutting` or beyond, do not promise a full refund casually
+- if you truly cannot complete the order after irreversible work has started, ask Drape to review the order and the payout impact case by case
 
 ## What if dispatch is delayed or fails after the order is ready?
 

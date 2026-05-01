@@ -126,6 +126,12 @@ export default function TailorMessagesScreen() {
   }
 
   const fetchOrder = useCallback(async () => {
+    if (!orderId || !user?.id) {
+      setFetchErrorMessage(null)
+      setLoading(false)
+      setOrderInfo(null)
+      return
+    }
     setFetchErrorMessage(null)
     setLoading(true)
     setOrderInfo(null)
@@ -138,7 +144,7 @@ export default function TailorMessagesScreen() {
           tailor_profiles!tailor_profile_id(display_name)
         `)
         .eq('id', orderId)
-        .eq('tailor_id', user?.id)
+        .eq('tailor_id', user.id)
         .maybeSingle()
 
       if (error) {

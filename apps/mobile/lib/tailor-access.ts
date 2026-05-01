@@ -92,11 +92,11 @@ export function deriveTailorAccessGuidance(input: TailorReadinessInput | null | 
   if (!readiness.payoutReady) {
     return {
       state: 'FIX_REQUIRED',
-      title: 'Payout setup is the last blocker before paid work',
-      body: 'This is an operational hold. Identity checks look good, but Drape should not route paid work to a seller whose payout path is not actually ready.',
+      title: 'Set up your payout account before paid work opens',
+      body: 'This is an operational hold, not a trust strike. Identity checks look good, but Drape should not route paid work to a seller whose payout path is not actually ready.',
       reasonCategory: 'Payout readiness',
       blockedCapabilities,
-      nextStep: 'Open payout setup, submit the payout path Drape should link, and use the payouts inbox only if the in-app path still gets stuck.',
+      nextStep: 'Open payout setup, verify the payout path Drape should use, and use the payouts inbox only if the in-app path still gets stuck.',
       supportEmail: CONTACTS.payouts,
       supportLabel: 'Payouts',
       supportSubject: 'Drape payout readiness question',

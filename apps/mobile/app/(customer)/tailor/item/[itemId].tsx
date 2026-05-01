@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, Alert } from 'react-native'
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native'
+import { Image as ExpoImage } from 'expo-image'
 import { Feather } from '@expo/vector-icons'
 import { useCustomerMeasurements, useRefreshOnFocus, useSellerItem } from '@/lib/queries'
 import { quantityForSize } from '@/lib/ready-made-stock'
@@ -128,7 +129,13 @@ export default function SellerItemDetailScreen() {
           <>
             <View style={styles.mediaCard}>
               {item.photoUrls[imageIndex] ? (
-                <Image source={{ uri: item.photoUrls[imageIndex] }} style={styles.heroImage} resizeMode="cover" />
+                <ExpoImage
+                  source={item.photoUrls[imageIndex]}
+                  style={styles.heroImage}
+                  contentFit="cover"
+                  cachePolicy="memory-disk"
+                  transition={120}
+                />
               ) : (
                 <View style={[styles.heroImage, styles.placeholder]}>
                   <Feather name="shopping-bag" size={28} color={Colors.midGrey} />
@@ -142,7 +149,13 @@ export default function SellerItemDetailScreen() {
                       onPress={() => setImageIndex(index)}
                       style={[styles.thumbWrap, index === imageIndex && styles.thumbWrapActive]}
                     >
-                      <Image source={{ uri: url }} style={styles.thumb} resizeMode="cover" />
+                      <ExpoImage
+                        source={url}
+                        style={styles.thumb}
+                        contentFit="cover"
+                        cachePolicy="memory-disk"
+                        transition={120}
+                      />
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
@@ -317,7 +330,11 @@ export default function SellerItemDetailScreen() {
             size="sm"
             onPress={() => router.push({
               pathname: `/(customer)/brief/${item.tailorProfileId}` as any,
-              params: { returnTo: `/(customer)/tailor/${item.tailorProfileId}` },
+              params: {
+                returnTo: `/(customer)/tailor/${item.tailorProfileId}`,
+                draftSession: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+                freshStart: '1',
+              },
             })}
           />
         </View>
@@ -337,7 +354,7 @@ function Chip({ label, muted = false }: { label: string; muted?: boolean }) {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: HOME_BG },
   scroll: { flex: 1 },
-  content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, gap: Spacing.md, paddingBottom: Spacing.lg },
+  content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, gap: Spacing.sm, paddingBottom: Spacing.lg },
   header: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, minHeight: 44 },
   headerBackButton: {
     width: 44,
@@ -346,22 +363,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   headerSpacer: { width: 44, height: 44 },
-  headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   loadingCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: Spacing.lg, alignItems: 'center', gap: Spacing.sm, ...Shadow.sm },
   loadingText: { fontSize: 14, color: Colors.inkLight },
   emptyCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: Spacing.lg, gap: Spacing.sm, ...Shadow.sm },
   emptyTitle: { fontSize: 16, fontWeight: FontWeight.semibold, color: CHARCOAL },
   emptyText: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
-  mediaCard: { gap: Spacing.sm },
-  heroImage: { width: '100%', height: 264, borderRadius: Radius.md, backgroundColor: Colors.lightGrey },
+  mediaCard: { gap: Spacing.xs },
+  heroImage: { width: '100%', height: 244, borderRadius: Radius.md, backgroundColor: Colors.lightGrey },
   placeholder: { alignItems: 'center', justifyContent: 'center' },
   thumbRow: { gap: Spacing.sm },
   thumbWrap: { width: 60, height: 60, borderRadius: Radius.sm, overflow: 'hidden', borderWidth: 1.5, borderColor: 'transparent' },
   thumbWrapActive: { borderColor: PRIMARY_GREEN },
   thumb: { width: '100%', height: '100%' },
-  summaryCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 4, ...Shadow.sm },
+  summaryCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: 4, ...Shadow.sm },
   sellerName: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
-  title: { fontSize: 28, lineHeight: 32, fontWeight: FontWeight.bold, color: CHARCOAL },
+  title: { fontSize: 24, lineHeight: 28, fontWeight: FontWeight.bold, color: CHARCOAL, fontFamily: 'Georgia' },
   category: { fontSize: 13, color: MUTED_GREY },
   availabilityPill: {
     alignSelf: 'flex-start',
@@ -372,23 +389,23 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   availabilityText: { fontSize: 12, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
-  price: { marginTop: 4, fontSize: 22, fontWeight: FontWeight.bold, color: PRIMARY_GREEN },
-  sectionCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 8, ...Shadow.sm },
-  sectionTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  price: { marginTop: 4, fontSize: 22, fontWeight: FontWeight.bold, color: PRIMARY_GREEN, fontFamily: 'Georgia' },
+  sectionCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: 8, ...Shadow.sm },
+  sectionTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   recommendationCard: {
     backgroundColor: Colors.needleGreenLight,
     borderRadius: Radius.md,
-    padding: 14,
+    padding: 12,
     gap: 4,
   },
   recommendationEyebrow: { fontSize: 11, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.6 },
-  recommendationTitle: { fontSize: 24, color: CHARCOAL, fontWeight: FontWeight.bold },
+  recommendationTitle: { fontSize: 22, color: CHARCOAL, fontWeight: FontWeight.bold, fontFamily: 'Georgia' },
   recommendationBody: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
   recommendationSecondary: { fontSize: 12, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
   fitPromptCard: {
     backgroundColor: HOME_BG,
     borderRadius: Radius.md,
-    padding: 14,
+    padding: 12,
     gap: 8,
   },
   fitPromptTitle: { fontSize: 14, color: CHARCOAL, fontWeight: FontWeight.semibold },

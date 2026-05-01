@@ -137,7 +137,9 @@ export default function ViewProfileScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 36, gap: Spacing.lg }}>
         <View style={styles.nextCard}>
+          <Text style={styles.nextEyebrow}>Profile preview</Text>
           <Text style={styles.nextTitle}>This is what tailors see when you place a brief.</Text>
+          <Text style={styles.nextBody}>Keep this clean and current so fit conversations start from the right baseline.</Text>
         </View>
 
         {/* Identity card */}
@@ -192,6 +194,10 @@ export default function ViewProfileScreen() {
           )}
         </View>
 
+        <TouchableOpacity style={styles.primaryAction} onPress={() => router.push('/(customer)/profile/measurements')}>
+          <Text style={styles.primaryActionText}>{measurements ? 'Update measurements' : 'Add measurements'}</Text>
+        </TouchableOpacity>
+
       </ScrollView>
     </SafeAreaView>
   )
@@ -208,19 +214,29 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
   nextCard: {
     backgroundColor: Colors.boneDeep,
     borderRadius: Radius.md,
     paddingHorizontal: 14,
     paddingVertical: 12,
+    gap: 4,
+  },
+  nextEyebrow: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   nextTitle: {
     fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
     lineHeight: 21,
+    fontFamily: 'Georgia',
   },
+  nextBody: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
 
   card: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: Spacing.sm, ...Shadow.sm },
   identityRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
@@ -229,12 +245,12 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreenLight, alignItems: 'center', justifyContent: 'center',
   },
   avatarText: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.needleGreen },
-  name: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  name: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   meta: { fontSize: FontSize.sm, color: Colors.midGrey, marginTop: 2 },
   infoNote: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
 
   section: { gap: Spacing.sm },
-  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
 
   emptyCard: {
     backgroundColor: Colors.white, borderRadius: Radius.md,
@@ -253,7 +269,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  emptyText: { fontSize: FontSize.md, color: Colors.midGrey },
+  emptyText: { fontSize: FontSize.md, color: Colors.midGrey, fontFamily: 'Georgia' },
   emptyHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 21 },
   emptyLink: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
   secondaryLink: { fontSize: FontSize.sm, color: Colors.midGrey },
@@ -275,7 +291,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  stateTitle: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.bold, textAlign: 'center' },
+  stateTitle: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.bold, textAlign: 'center', fontFamily: 'Georgia' },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 19 },
 
   measureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'space-between' },
@@ -285,4 +301,13 @@ const styles = StyleSheet.create({
   },
   measureLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
   measureValue: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  primaryAction: {
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  primaryActionText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.white },
 })

@@ -11,6 +11,7 @@ import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
+import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { deriveTailorReadiness } from '../_shared/tailor-readiness.ts'
 import { parseBody, z } from '../_shared/validate.ts'
@@ -126,6 +127,27 @@ Deno.serve(async (req) => {
         id_verification_status: idStatus,
         is_live: profile.is_live ?? false,
         ships_internationally: profile.ships_internationally ?? false,
+        payout_ready: readiness.payoutReady,
+      },
+    })
+
+    await createOrRefreshOpsIssue(supabase, {
+      issueType: 'SELLER_ACCESS_REVIEW',
+      severity: readiness.code === 'PAYOUT_SETUP_REQUIRED' ? 'MEDIUM' : 'HIGH',
+      source: FN,
+      actorId: caller.id,
+      actorRole: 'TAILOR',
+      userId: caller.id,
+      tailorProfileId: profile.id,
+      title: 'Seller access review requested',
+      description: `Tailor asked Drape to review a blocked seller state: ${requestCategory ?? readiness.code ?? idStatus}.`,
+      recommendedAction: 'Review identity verification, payout readiness, and live-access blockers before deciding whether seller access can be restored.',
+      dedupeKey: `seller-access-review:${caller.id}`,
+      metadata: {
+        request_category: requestCategory,
+        readiness_code: readiness.code,
+        id_verification_status: idStatus,
+        is_live: profile.is_live ?? false,
         payout_ready: readiness.payoutReady,
       },
     })

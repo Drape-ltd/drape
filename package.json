@@ -12,7 +12,19 @@
     "db:generate": "pnpm --filter @drape/db generate",
     "db:push": "pnpm --filter @drape/db db:push",
     "db:migrate": "pnpm --filter @drape/db migrate",
-    "db:studio": "pnpm --filter @drape/db studio"
+    "db:studio": "pnpm --filter @drape/db studio",
+    "supabase:status": "node scripts/supabase-target-guard.mjs status",
+    "supabase:link:dev": "node scripts/supabase-target-guard.mjs link development",
+    "supabase:link:prod": "node scripts/supabase-target-guard.mjs link production",
+    "supabase:db:push:dev": "node scripts/supabase-target-guard.mjs db:push development",
+    "supabase:db:push:prod": "node scripts/supabase-target-guard.mjs db:push production",
+    "supabase:secrets:manifest": "node scripts/supabase-target-guard.mjs secrets:manifest",
+    "supabase:secrets:set:dev": "node scripts/supabase-target-guard.mjs secrets:set development",
+    "supabase:secrets:set:prod": "node scripts/supabase-target-guard.mjs secrets:set production",
+    "supabase:functions:deploy:dev": "node scripts/supabase-target-guard.mjs functions:deploy development",
+    "supabase:functions:deploy:prod": "node scripts/supabase-target-guard.mjs functions:deploy production",
+    "supabase:functions:deploy:all:dev": "node scripts/supabase-target-guard.mjs functions:deploy-all development",
+    "supabase:functions:deploy:all:prod": "node scripts/supabase-target-guard.mjs functions:deploy-all production"
   },
   "devDependencies": {
     "prettier": "^3.4.2",

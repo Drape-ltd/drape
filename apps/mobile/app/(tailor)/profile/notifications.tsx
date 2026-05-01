@@ -41,6 +41,7 @@ type NotifItem = {
 
 function stageIcon(stage: OrderStage): React.ComponentProps<typeof Feather>['name'] {
   if (stage === 'PENDING_QUOTE') return 'inbox'
+  if (stage === 'PAYMENT_FAILED') return 'alert-circle'
   if (stage === 'CONFIRMED') return 'check-circle'
   if (stage === 'DESIGNING') return 'edit-3'
   if (stage === 'SOURCING') return 'shopping-bag'
@@ -56,6 +57,7 @@ function stageIcon(stage: OrderStage): React.ComponentProps<typeof Feather>['nam
 function stageColor(stage: OrderStage): string {
   if (stage === 'PENDING_QUOTE') return Colors.warning
   if (stage === 'IN_DISPUTE') return Colors.kanteRust
+  if (stage === 'PAYMENT_FAILED') return Colors.kanteRust
   if (stage === 'CANCELLED' || stage === 'DECLINED' || stage === 'EXPIRED') return Colors.midGrey
   if (stage === 'COMPLETE' || stage === 'COLLECTED' || stage === 'DELIVERED') return Colors.success
   if (stage === 'CONFIRMED') return Colors.needleGreen
@@ -114,6 +116,12 @@ export default function TailorNotificationsScreen() {
   useFocusEffect(
     useCallback(() => {
       async function load() {
+        if (!user?.id) {
+          setItems([])
+          setFetchError(false)
+          setLoading(false)
+          return
+        }
         setLoading(true)
         setFetchError(false)
         const lastCheck: string | null = user?.user_metadata?.last_tailor_notif_check ?? null
@@ -123,7 +131,7 @@ export default function TailorNotificationsScreen() {
             supabase
               .from('orders')
               .select(`id, reference, garment_type, order_kind, stage, created_at, customer_profiles!customer_id(display_name)`)
-              .eq('tailor_id', user?.id)
+              .eq('tailor_id', user.id)
               .eq('stage', 'PENDING_QUOTE')
               .gte('created_at', since)
               .order('created_at', { ascending: false }),
@@ -132,11 +140,11 @@ export default function TailorNotificationsScreen() {
               .select(`
                 id, stage, note, created_at, order_id,
                 orders!inner(
-                  id, reference, garment_type, order_kind, tailor_id,
-                  customer_profiles!customer_id(display_name)
-                )
-              `)
-              .eq('orders.tailor_id', user?.id)
+                id, reference, garment_type, order_kind, tailor_id,
+                customer_profiles!customer_id(display_name)
+              )
+            `)
+              .eq('orders.tailor_id', user.id)
               .in('stage', ['CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'SHIPPED', 'READY_FOR_COLLECTION', 'COMPLETE', 'COLLECTED', 'DELIVERED', 'IN_DISPUTE', 'CANCELLED', 'EXPIRED', 'CONSULTATION'])
               .gte('created_at', since)
               .order('created_at', { ascending: false })
@@ -349,7 +357,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg, paddingVertical: 6,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.lightGrey,
     backgroundColor: Colors.bone,
   },
@@ -358,12 +366,12 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
+  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
   guideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: 4,
+    padding: 10,
+    gap: 3,
     marginBottom: Spacing.sm,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -384,29 +392,30 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
   guideTitle: {
-    fontSize: FontSize.sm,
+    fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
-    lineHeight: 20,
+    lineHeight: 17,
+    fontFamily: 'Georgia',
   },
   card: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: 14, flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm,
+    padding: 9, flexDirection: 'row', alignItems: 'flex-start', gap: 9,
     ...Shadow.sm, position: 'relative', overflow: 'hidden',
   },
   cardNew: { borderLeftWidth: 3, borderLeftColor: Colors.needleGreen },
   unreadDot: {
-    position: 'absolute', top: 12, right: 12,
+    position: 'absolute', top: 11, right: 11,
     width: 8, height: 8, borderRadius: 4,
     backgroundColor: Colors.needleGreen,
   },
   iconWrap: {
-    width: 36, height: 36, borderRadius: Radius.sm,
+    width: 32, height: 32, borderRadius: Radius.sm,
     alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
-  itemTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: 2 },
+  itemTitle: { fontSize: 12, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: 1, fontFamily: 'Georgia', lineHeight: 16 },
   ref: { fontWeight: FontWeight.regular, color: Colors.midGrey },
-  stageLine: { fontSize: FontSize.xs, color: Colors.inkLight, marginBottom: 2 },
-  note: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 16, marginTop: 2 },
-  time: { fontSize: 11, color: Colors.midGrey, flexShrink: 0, marginTop: 2 },
+  stageLine: { fontSize: 10, color: Colors.inkLight, marginBottom: 1, lineHeight: 14 },
+  note: { fontSize: 10, color: Colors.midGrey, lineHeight: 14, marginTop: 1 },
+  time: { fontSize: 10, color: Colors.midGrey, flexShrink: 0, marginTop: 1 },
 })

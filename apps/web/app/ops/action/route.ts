@@ -1,6 +1,20 @@
 import { NextResponse } from 'next/server'
 import { createServiceRoleClient } from '../../../lib/server-supabase'
-import { hasOpsAccess } from '../../../lib/ops-auth'
+import { getSupabaseServiceRoleKey, getSupabaseUrl } from '../../../lib/supabase-config'
+import { getOpsSession } from '../../../lib/ops-auth'
+import { canPerformOpsAction, type OpsActionKind } from '../../../lib/ops-console'
+import { sendOpsCustomerRefundEmail } from '../../../lib/ops-customer-email'
+import { sendSmsToUser } from '../../../lib/sms'
+import { buildOrderReviewRefundTerminalRequest } from '@drape/shared'
+import { OPS_ISSUE_SEVERITIES, OPS_ISSUE_TYPES } from '@drape/shared'
+import { normalizeAccountCurrency, resolvePaymentProviderForCurrency } from '@drape/shared'
+import {
+  buildCustomerReviewResolutionSms,
+  buildCustomerStageSms,
+  buildTailorReviewResolutionSms,
+  buildTailorStageSms,
+} from '@drape/shared/sms-copy'
+import { sendCriticalOpsIssueEmail } from '../../../lib/ops-notifications'
 
 const APPLICATION_STATUSES = new Set(['PENDING', 'REVIEWING', 'CONTACTED', 'APPROVED', 'REJECTED'])
 const DISPUTE_STATUSES = new Set(['OPEN', 'UNDER_REVIEW'])
@@ -12,6 +26,10 @@ const CONVERSATION_ACCESS_ACTIONS = new Set(['BLOCK', 'UNBLOCK'])
 const DISPATCH_TARGETS = new Set(['OUT_FOR_DELIVERY', 'SHIPPED'])
 const ORDER_REVIEW_TYPES = new Set(['CANCELLATION', 'DELIVERY'])
 const ORDER_REVIEW_OUTCOMES = new Set(['REFUND', 'CONTINUE'])
+const OPS_ISSUE_STATUSES = new Set(['OPEN', 'IN_REVIEW', 'RESOLVED', 'ESCALATED'])
+const MANUAL_OPS_ISSUE_TYPES = new Set<string>(OPS_ISSUE_TYPES)
+const MANUAL_OPS_ISSUE_SEVERITIES = new Set<string>(OPS_ISSUE_SEVERITIES)
+const PAYOUT_RESOLUTION_MODES = new Set(['ORIGINAL_CURRENCY', 'CONVERT_TO_CURRENT', 'REFUND_CUSTOMER'])
 
 type OrderReviewMeta = {
   status?: 'OPEN' | 'RESOLVED' | null
@@ -22,7 +40,24 @@ type OrderReviewMeta = {
 type OrderSupportMeta = {
   cancellationReview?: OrderReviewMeta | null
   deliveryReview?: OrderReviewMeta | null
+  dispatchRecord?: {
+    providerUsed?: string | null
+    bookedBy?: string | null
+    bookedAt?: string | null
+    serviceLevel?:
+      | 'STANDARD'
+      | 'SAME_DAY'
+      | 'NEXT_DAY'
+      | 'INTERNATIONAL_STANDARD'
+      | 'INTERNATIONAL_EXPRESS'
+      | 'CUSTOM'
+      | null
+    premiumException?: boolean | null
+  } | null
 }
+
+type DispatchServiceLevel =
+  NonNullable<NonNullable<OrderSupportMeta['dispatchRecord']>['serviceLevel']>
 
 function sanitizeRedirect(value: FormDataEntryValue | null) {
   if (typeof value !== 'string' || !value.startsWith('/ops')) return '/ops'
@@ -32,6 +67,30 @@ function sanitizeRedirect(value: FormDataEntryValue | null) {
 function readString(formData: FormData, key: string) {
   const value = formData.get(key)
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function parseMajorAmountToMinor(value: string) {
+  if (!value) return Number.NaN
+  const normalized = value.replace(/,/g, '').trim()
+  if (!/^\d+(\.\d{1,2})?$/.test(normalized)) return Number.NaN
+  const numeric = Number.parseFloat(normalized)
+  if (!Number.isFinite(numeric) || numeric <= 0) return Number.NaN
+  return Math.round(numeric * 100)
+}
+
+function formatMinorMoney(amount: number, currency: string | null | undefined) {
+  const normalizedCurrency = typeof currency === 'string' && currency.trim().length > 0 ? currency.trim().toUpperCase() : null
+  if (!normalizedCurrency) return `${amount}`
+
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: normalizedCurrency,
+      maximumFractionDigits: 2,
+    }).format(amount / 100)
+  } catch {
+    return `${normalizedCurrency} ${(amount / 100).toFixed(2)}`
+  }
 }
 
 function isConflictError(error: unknown) {
@@ -80,12 +139,271 @@ function redirectWithMessage(
   return NextResponse.redirect(url)
 }
 
+async function syncEntityOpsIssue(options: {
+  client: NonNullable<ReturnType<typeof createServiceRoleClient>>
+  issueType: string
+  relatedEntityType: string
+  relatedEntityId: string
+  status: 'OPEN' | 'IN_REVIEW' | 'RESOLVED' | 'ESCALATED'
+  performedBy: string
+  performedRole: string
+  actionTaken: string
+  reason: string | null
+}) {
+  const { client, issueType, relatedEntityType, relatedEntityId, status, performedBy, performedRole, actionTaken, reason } = options
+
+  const { data: issue } = await client
+    .from('ops_issues')
+    .select('id, status, assigned_to, resolved_at')
+    .eq('issue_type', issueType)
+    .eq('related_entity_type', relatedEntityType)
+    .eq('related_entity_id', relatedEntityId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (!issue?.id) return
+
+  const resolvedAt = status === 'RESOLVED' ? new Date().toISOString() : null
+  await client
+    .from('ops_issues')
+    .update({
+      status,
+      assigned_to: performedBy,
+      resolved_at: resolvedAt,
+    })
+    .eq('id', issue.id)
+
+  await client.from('ops_audit_logs').insert({
+    issue_id: issue.id,
+    action_taken: actionTaken,
+    performed_by: performedBy,
+    performed_role: performedRole,
+    reason,
+    before_state: {
+      status: issue.status,
+      assigned_to: issue.assigned_to ?? null,
+      resolved_at: issue.resolved_at ?? null,
+    },
+    after_state: {
+      status,
+      assigned_to: performedBy,
+      resolved_at: resolvedAt,
+    },
+  })
+}
+
+async function syncOpsIssueById(options: {
+  client: NonNullable<ReturnType<typeof createServiceRoleClient>>
+  issueId: string
+  status: 'OPEN' | 'IN_REVIEW' | 'RESOLVED' | 'ESCALATED'
+  performedBy: string
+  performedRole: string
+  actionTaken: string
+  reason: string | null
+}) {
+  const { client, issueId, status, performedBy, performedRole, actionTaken, reason } = options
+
+  const { data: issue } = await client
+    .from('ops_issues')
+    .select('id, status, assigned_to, resolved_at')
+    .eq('id', issueId)
+    .maybeSingle()
+
+  if (!issue?.id) return
+
+  const resolvedAt = status === 'RESOLVED' ? new Date().toISOString() : null
+  await client
+    .from('ops_issues')
+    .update({
+      status,
+      assigned_to: performedBy,
+      resolved_at: resolvedAt,
+    })
+    .eq('id', issueId)
+
+  await client.from('ops_audit_logs').insert({
+    issue_id: issueId,
+    action_taken: actionTaken,
+    performed_by: performedBy,
+    performed_role: performedRole,
+    reason,
+    before_state: {
+      status: issue.status,
+      assigned_to: issue.assigned_to ?? null,
+      resolved_at: issue.resolved_at ?? null,
+    },
+    after_state: {
+      status,
+      assigned_to: performedBy,
+      resolved_at: resolvedAt,
+    },
+  })
+}
+
+function lockedOrderPayoutAmount(order: {
+  source_amount?: number | null
+  subtotal_amount?: number | null
+}) {
+  if (typeof order.source_amount === 'number' && order.source_amount > 0) return order.source_amount
+  if (typeof order.subtotal_amount === 'number' && order.subtotal_amount > 0) return order.subtotal_amount
+  return 0
+}
+
+function lockedOrderPayoutCurrency(order: {
+  tailor_payout_currency_locked?: string | null
+  source_currency?: string | null
+  currency?: string | null
+}) {
+  return normalizeAccountCurrency(order.tailor_payout_currency_locked ?? order.source_currency ?? order.currency)
+}
+
+async function fetchFxQuoteForOps(from: string, to: string) {
+  if (from === to) {
+    return { rate: 1, timestamp: new Date().toISOString() }
+  }
+
+  const response = await fetch(`https://api.frankfurter.app/latest?from=${from}&to=${to}`, {
+    signal: AbortSignal.timeout(5000),
+  })
+
+  if (!response.ok) {
+    throw new Error(`FX quote request failed with ${response.status}`)
+  }
+
+  const payload = await response.json()
+  const rate = Number(payload?.rates?.[to])
+  if (!Number.isFinite(rate) || rate <= 0) {
+    throw new Error(`FX quote for ${from}/${to} is unavailable`)
+  }
+
+  return {
+    rate,
+    timestamp: typeof payload?.date === 'string' && payload.date.length > 0
+      ? new Date(`${payload.date}T00:00:00.000Z`).toISOString()
+      : new Date().toISOString(),
+  }
+}
+
+async function refundOrderPaymentsForReview(orderId: string, input: {
+  reason: string | null
+  amount?: number | null
+}) {
+  const supabaseUrl = getSupabaseUrl()
+  const serviceRoleKey = getSupabaseServiceRoleKey()
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    return { ok: false as const, error: 'missing-service-role-config' }
+  }
+
+  const response = await fetch(`${supabaseUrl.replace(/\/+$/u, '')}/functions/v1/refund-order-payments`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      orderId,
+      reason: input.reason,
+      ...(typeof input.amount === 'number' && input.amount > 0 ? { amount: input.amount } : {}),
+    }),
+  })
+
+  const payload = await response.json().catch(() => null) as {
+    ok?: boolean
+    error?: string
+    refundMode?: 'FULL' | 'PARTIAL'
+    totalRefundedAmount?: number
+    remainingRefundableAmount?: number
+    refundedAttempts?: Array<Record<string, unknown>>
+  } | null
+
+  if (!response.ok || !payload?.ok) {
+    return {
+      ok: false as const,
+      error: payload?.error ?? `refund-function-${response.status}`,
+    }
+  }
+
+  return {
+    ok: true as const,
+    refundMode: payload?.refundMode ?? 'FULL',
+    totalRefundedAmount: payload?.totalRefundedAmount ?? 0,
+    remainingRefundableAmount: payload?.remainingRefundableAmount ?? 0,
+    refundedAttempts: payload?.refundedAttempts ?? [],
+  }
+}
+
+async function triggerOrderPayoutRelease(orderId: string) {
+  const supabaseUrl = getSupabaseUrl()
+  const serviceRoleKey = getSupabaseServiceRoleKey()
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    return { ok: false as const, error: 'missing-service-role-config' }
+  }
+
+  const response = await fetch(`${supabaseUrl.replace(/\/+$/u, '')}/functions/v1/release-order-payouts`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ orderId }),
+  })
+
+  const payload = await response.json().catch(() => null) as {
+    ok?: boolean
+    error?: string
+    results?: Array<{ result?: string; reason?: string }>
+  } | null
+
+  if (!response.ok || !payload?.ok) {
+    return {
+      ok: false as const,
+      error: payload?.error ?? `payout-release-function-${response.status}`,
+    }
+  }
+
+  const result = payload.results?.[0]
+  if (result?.result === 'blocked') {
+    return {
+      ok: false as const,
+      error: result.reason ?? 'payout-blocked',
+    }
+  }
+
+  return { ok: true as const }
+}
+
+function ensureAuthorizedAction(kind: string): OpsActionKind | null {
+  switch (kind) {
+    case 'dispute-status':
+    case 'dispute-resolution':
+    case 'bypass-review':
+    case 'application-status':
+    case 'verification-decision':
+    case 'deletion-status':
+    case 'review-visibility':
+    case 'conversation-access':
+    case 'dispatch-stage':
+    case 'order-review-resolution':
+    case 'order-partial-refund':
+    case 'payout-release':
+    case 'payout-block-resolution':
+    case 'ops-issue-status':
+    case 'manual-issue-create':
+      return kind
+    default:
+      return null
+  }
+}
+
 export async function POST(request: Request) {
-  const access = await hasOpsAccess()
+  const session = await getOpsSession()
   const formData = await request.formData()
   const redirectTo = sanitizeRedirect(formData.get('redirectTo'))
 
-  if (!access) {
+  if (!session) {
     return redirectWithMessage(request, redirectTo, 'error', 'locked')
   }
 
@@ -95,6 +413,11 @@ export async function POST(request: Request) {
   }
 
   const kind = readString(formData, 'kind')
+  const actionKind = ensureAuthorizedAction(kind)
+
+  if (!actionKind || !canPerformOpsAction(session.role, actionKind)) {
+    return redirectWithMessage(request, redirectTo, 'error', 'forbidden')
+  }
 
   try {
     if (kind === 'dispute-status') {
@@ -179,6 +502,18 @@ export async function POST(request: Request) {
         payload: { log_id: logId, reviewed },
       })
 
+      await syncEntityOpsIssue({
+        client,
+        issueType: 'CONTACT_BYPASS',
+        relatedEntityType: 'contact_bypass_log',
+        relatedEntityId: logId,
+        status: reviewed ? 'RESOLVED' : 'OPEN',
+        performedBy: session.email ?? session.role,
+        performedRole: session.role.toUpperCase(),
+        actionTaken: reviewed ? 'CONTACT_BYPASS_REVIEWED' : 'CONTACT_BYPASS_REOPENED',
+        reason: null,
+      })
+
       return redirectWithMessage(request, redirectTo, 'notice', 'bypass-saved')
     }
 
@@ -206,18 +541,31 @@ export async function POST(request: Request) {
         payload: { application_id: applicationId, status },
       })
 
+      await syncEntityOpsIssue({
+        client,
+        issueType: 'TAILOR_APPLICATION',
+        relatedEntityType: 'tailor_application',
+        relatedEntityId: applicationId,
+        status: status === 'APPROVED' || status === 'REJECTED' ? 'RESOLVED' : status === 'PENDING' ? 'OPEN' : 'IN_REVIEW',
+        performedBy: session.email ?? session.role,
+        performedRole: session.role.toUpperCase(),
+        actionTaken: 'TAILOR_APPLICATION_STATUS_UPDATED',
+        reason: status,
+      })
+
       return redirectWithMessage(request, redirectTo, 'notice', 'application-saved')
     }
 
     if (kind === 'verification-decision') {
       const tailorUserId = readString(formData, 'tailorUserId')
       const decision = readString(formData, 'decision').toUpperCase()
+      const note = readString(formData, 'note')
 
       if (!tailorUserId || !VERIFICATION_DECISIONS.has(decision)) {
         return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
       }
 
-      const { error } = await client.rpc('ops_decide_verification', {
+      const { data, error } = await client.rpc('ops_decide_verification', {
         p_tailor_user_id: tailorUserId,
         p_decision: decision,
       })
@@ -230,6 +578,65 @@ export async function POST(request: Request) {
           isConflictError(error) ? 'conflict' : 'save-failed',
         )
       }
+
+      const verificationDecision = Array.isArray(data) ? data[0] : null
+      const verificationProfileId =
+        verificationDecision && typeof verificationDecision === 'object' && 'profile_id' in verificationDecision
+          ? String(verificationDecision.profile_id)
+          : null
+
+      const { data: verificationIssue } = await client
+        .from('ops_issues')
+        .select('id, status, assigned_to, resolved_at')
+        .eq('issue_type', 'TAILOR_VERIFICATION')
+        .eq('user_id', tailorUserId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (verificationIssue?.id) {
+        const resolvedAt = new Date().toISOString()
+        await client
+          .from('ops_issues')
+          .update({
+            status: 'RESOLVED',
+            assigned_to: session.email ?? session.role,
+            resolved_at: resolvedAt,
+            tailor_profile_id: verificationProfileId ?? undefined,
+          })
+          .eq('id', verificationIssue.id)
+
+        await client.from('ops_audit_logs').insert({
+          issue_id: verificationIssue.id,
+          action_taken: decision === 'APPROVE' ? 'VERIFICATION_APPROVED' : 'VERIFICATION_REJECTED',
+          performed_by: session.email ?? 'ops-session',
+          performed_role: session.role.toUpperCase(),
+          reason: note.length > 0 ? note : null,
+          before_state: {
+            status: verificationIssue.status,
+            assigned_to: verificationIssue.assigned_to ?? null,
+            resolved_at: verificationIssue.resolved_at ?? null,
+          },
+          after_state: {
+            status: 'RESOLVED',
+            assigned_to: session.email ?? session.role,
+            resolved_at: resolvedAt,
+            decision,
+          },
+        })
+      }
+
+      await client.from('audit_logs').insert({
+        actor_role: 'OPS',
+        event: 'ops.verification_decision_logged',
+        severity: decision === 'APPROVE' ? 'info' : 'warn',
+        payload: {
+          tailor_user_id: tailorUserId,
+          tailor_profile_id: verificationProfileId,
+          decision,
+          note: note.length > 0 ? note : null,
+        },
+      })
 
       return redirectWithMessage(
         request,
@@ -295,6 +702,18 @@ export async function POST(request: Request) {
         },
       })
 
+      await syncEntityOpsIssue({
+        client,
+        issueType: 'ACCOUNT_DELETION_REQUEST',
+        relatedEntityType: 'account_deletion_request',
+        relatedEntityId: deletionRequestId,
+        status: status === 'COMPLETED' || status === 'REJECTED' ? 'RESOLVED' : status === 'ACKNOWLEDGED' ? 'IN_REVIEW' : 'OPEN',
+        performedBy: session.email ?? session.role,
+        performedRole: session.role.toUpperCase(),
+        actionTaken: 'ACCOUNT_DELETION_STATUS_UPDATED',
+        reason: status,
+      })
+
       return redirectWithMessage(request, redirectTo, 'notice', 'deletion-saved')
     }
 
@@ -328,6 +747,18 @@ export async function POST(request: Request) {
           review_id: reviewId,
           visibility: publishNow ? 'PUBLISHED' : 'HELD',
         },
+      })
+
+      await syncEntityOpsIssue({
+        client,
+        issueType: 'CONTENT_FLAG',
+        relatedEntityType: 'review',
+        relatedEntityId: reviewId,
+        status: 'RESOLVED',
+        performedBy: session.email ?? session.role,
+        performedRole: session.role.toUpperCase(),
+        actionTaken: publishNow ? 'REVIEW_PUBLISHED' : 'REVIEW_HELD',
+        reason: publishNow ? 'PUBLISHED' : 'HELD',
       })
 
       return redirectWithMessage(
@@ -394,7 +825,7 @@ export async function POST(request: Request) {
 
       const { data: existingOrder, error: orderError } = await client
         .from('orders')
-        .select('id, reference, stage, special_note')
+        .select('id, reference, stage, order_kind, garment_type, item_title, item_size, delivery_method, customer_id, tailor_id, recipient_phone, special_note')
         .eq('id', orderId)
         .maybeSingle()
 
@@ -440,48 +871,128 @@ export async function POST(request: Request) {
                 resolvedAt: now,
               },
             }
+      const nextSpecialNote = serializeOrderSupportMeta(nextMeta)
 
-      const { error: updateError } = await client
-        .from('orders')
-        .update({
-          stage: nextStage,
-          stage_updated_at: now,
-          special_note: serializeOrderSupportMeta(nextMeta),
+      if (outcome === 'REFUND') {
+        const refund = await refundOrderPaymentsForReview(orderId, {
+          reason: resolution.length > 0 ? resolution : null,
         })
-        .eq('id', orderId)
 
-      if (updateError) {
-        return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+        if (!refund.ok) {
+          return redirectWithMessage(request, redirectTo, 'error', 'refund-failed')
+        }
+
+        const requestPayload = buildOrderReviewRefundTerminalRequest({
+          reviewType: reviewType as 'CANCELLATION' | 'DELIVERY',
+          resolution,
+          restoreStage,
+          specialNote: nextSpecialNote ?? '{}',
+        })
+
+        const { error: updateError } = await client.rpc('finalize_order_terminal', {
+          p_order_id: orderId,
+          p_target_stage: requestPayload.p_target_stage,
+          p_actor_id: requestPayload.p_actor_id ?? null,
+          p_actor_role: requestPayload.p_actor_role ?? null,
+          p_event: requestPayload.p_event,
+          p_note: requestPayload.p_note,
+          p_payload: requestPayload.p_payload ?? {},
+          p_expected_stages: requestPayload.p_expected_stages ?? null,
+          p_special_note: requestPayload.p_special_note ?? null,
+          p_replace_special_note: requestPayload.p_replace_special_note ?? false,
+          p_clear_payment_session: requestPayload.p_clear_payment_session ?? false,
+          p_reset_fulfillment_payment: requestPayload.p_reset_fulfillment_payment ?? false,
+          p_release_ready_made_inventory: requestPayload.p_release_ready_made_inventory ?? false,
+        })
+
+        if (updateError) {
+          return redirectWithMessage(
+            request,
+            redirectTo,
+            'error',
+            isConflictError(updateError) ? 'conflict' : 'save-failed',
+          )
+        }
+      } else {
+        const reviewLabel = reviewType === 'CANCELLATION' ? 'cancellation review' : 'delivery review'
+        const stageNote =
+          `Drape reviewed the ${reviewLabel}. The order will continue from ${restoreStage}.`
+          + (resolution ? ` Note: ${resolution}` : '')
+
+        const { error: updateError } = await client
+          .from('orders')
+          .update({
+            stage: nextStage,
+            stage_updated_at: now,
+            special_note: nextSpecialNote,
+          })
+          .eq('id', orderId)
+
+        if (updateError) {
+          return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+        }
+
+        const { error: stageUpdateError } = await client.from('order_stage_updates').insert({
+          order_id: orderId,
+          stage: nextStage,
+          note: stageNote,
+        })
+
+        if (stageUpdateError) {
+          return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+        }
+
+        await client.from('audit_logs').insert({
+          actor_role: 'OPS',
+          order_id: orderId,
+          event: 'ops.order_review_resolved',
+          severity: 'info',
+          payload: {
+            review_type: reviewType,
+            outcome,
+            restored_stage: restoreStage,
+            resolution: resolution.length > 0 ? resolution : null,
+          },
+        })
       }
 
-      const reviewLabel = reviewType === 'CANCELLATION' ? 'cancellation review' : 'delivery review'
-      const stageNote =
-        outcome === 'REFUND'
-          ? `Drape approved the ${reviewLabel}. This order will be refunded.${resolution ? ` Note: ${resolution}` : ''}`
-          : `Drape reviewed the ${reviewLabel}. The order will continue from ${restoreStage}.${resolution ? ` Note: ${resolution}` : ''}`
-
-      const { error: stageUpdateError } = await client.from('order_stage_updates').insert({
-        order_id: orderId,
-        stage: nextStage,
-        note: stageNote,
-      })
-
-      if (stageUpdateError) {
-        return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+      if (existingOrder.customer_id) {
+        await sendSmsToUser({
+          client,
+          userId: existingOrder.customer_id,
+          audience: 'CUSTOMER',
+          orderId,
+          event: outcome === 'REFUND' ? 'order.review_refunded' : 'order.review_continued',
+          body: buildCustomerReviewResolutionSms({
+            id: existingOrder.id,
+            reference: existingOrder.reference,
+            orderKind: existingOrder.order_kind,
+            garmentType: existingOrder.garment_type,
+            itemTitle: existingOrder.item_title,
+            itemSize: existingOrder.item_size,
+            deliveryMethod: existingOrder.delivery_method,
+          }, reviewType as 'CANCELLATION' | 'DELIVERY', outcome as 'REFUND' | 'CONTINUE', outcome === 'CONTINUE' ? restoreStage : null),
+        })
       }
 
-      await client.from('audit_logs').insert({
-        actor_role: 'OPS',
-        order_id: orderId,
-        event: 'ops.order_review_resolved',
-        severity: outcome === 'REFUND' ? 'warn' : 'info',
-        payload: {
-          review_type: reviewType,
-          outcome,
-          restored_stage: outcome === 'CONTINUE' ? restoreStage : null,
-          resolution: resolution.length > 0 ? resolution : null,
-        },
-      })
+      if (existingOrder.tailor_id) {
+        await sendSmsToUser({
+          client,
+          userId: existingOrder.tailor_id,
+          audience: 'TAILOR',
+          orderId,
+          event: outcome === 'REFUND' ? 'order.review_refunded' : 'order.review_continued',
+          body: buildTailorReviewResolutionSms({
+            id: existingOrder.id,
+            reference: existingOrder.reference,
+            orderKind: existingOrder.order_kind,
+            garmentType: existingOrder.garment_type,
+            itemTitle: existingOrder.item_title,
+            itemSize: existingOrder.item_size,
+            deliveryMethod: existingOrder.delivery_method,
+          }, reviewType as 'CANCELLATION' | 'DELIVERY', outcome as 'REFUND' | 'CONTINUE', outcome === 'CONTINUE' ? restoreStage : null),
+        })
+      }
 
       return redirectWithMessage(
         request,
@@ -489,6 +1000,520 @@ export async function POST(request: Request) {
         'notice',
         outcome === 'REFUND' ? 'order-review-refunded' : 'order-review-continued',
       )
+    }
+
+    if (kind === 'order-partial-refund') {
+      const issueId = readString(formData, 'issueId')
+      const orderId = readString(formData, 'orderId')
+      const note = readString(formData, 'note')
+      const amountMinor = parseMajorAmountToMinor(readString(formData, 'amount'))
+      const maxRefundableAmount = Number.parseInt(readString(formData, 'maxRefundableAmount'), 10)
+      const notifyCustomer = readString(formData, 'notifyCustomer') === 'yes'
+
+      if (!orderId || note.length === 0 || !Number.isFinite(amountMinor) || amountMinor <= 0) {
+        return redirectWithMessage(request, redirectTo, 'error', 'partial-refund-invalid')
+      }
+
+      if (Number.isFinite(maxRefundableAmount) && (amountMinor >= maxRefundableAmount || maxRefundableAmount <= 0)) {
+        return redirectWithMessage(request, redirectTo, 'error', 'partial-refund-invalid')
+      }
+
+      const { data: order, error: orderError } = await client
+        .from('orders')
+        .select('id, reference, stage, customer_id, currency')
+        .eq('id', orderId)
+        .maybeSingle()
+
+      if (orderError || !order?.id) {
+        return redirectWithMessage(request, redirectTo, 'error', 'conflict')
+      }
+
+      const refund = await refundOrderPaymentsForReview(orderId, {
+        reason: note,
+        amount: amountMinor,
+      })
+
+      if (!refund.ok) {
+        return redirectWithMessage(request, redirectTo, 'error', 'refund-failed')
+      }
+
+      const nextStage = refund.remainingRefundableAmount <= 0 ? 'REFUNDED' : 'PARTIALLY_REFUNDED'
+
+      const { error: orderUpdateError } = await client
+        .from('orders')
+        .update({
+          stage: nextStage,
+          stage_updated_at: new Date().toISOString(),
+        })
+        .eq('id', orderId)
+
+      if (orderUpdateError) {
+        return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+      }
+
+      await client.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: nextStage,
+        note: `Ops issued a partial refund of ${formatMinorMoney(amountMinor, order.currency)}. ${note}`,
+      })
+
+      await client.from('audit_logs').insert({
+        actor_role: 'OPS',
+        order_id: orderId,
+        event: 'ops.order_partial_refund_issued',
+        severity: 'warn',
+        payload: {
+          issue_id: issueId || null,
+          refunded_amount: amountMinor,
+          currency: order.currency,
+          refund_mode: refund.refundMode,
+          remaining_refundable_amount: refund.remainingRefundableAmount,
+          refunded_attempts: refund.refundedAttempts,
+          note,
+          notify_customer: notifyCustomer,
+        },
+      })
+
+      if (issueId) {
+        await syncOpsIssueById({
+          client,
+          issueId,
+          status: 'RESOLVED',
+          performedBy: session.email ?? session.role,
+          performedRole: session.role.toUpperCase(),
+          actionTaken: 'ORDER_PARTIAL_REFUND_ISSUED',
+          reason: note,
+        })
+      }
+
+      if (notifyCustomer && order.customer_id) {
+        const [{ data: authUser }, { data: customerProfile }] = await Promise.all([
+          client.auth.admin.getUserById(order.customer_id),
+          client
+            .from('customer_profiles')
+            .select('display_name')
+            .eq('user_id', order.customer_id)
+            .maybeSingle(),
+        ])
+
+        const customerEmail = authUser.user?.email?.trim() ?? null
+        if (customerEmail) {
+          await sendOpsCustomerRefundEmail({
+            to: customerEmail,
+            customerName: customerProfile?.display_name?.trim() || 'there',
+            orderReference: order.reference,
+            amount: amountMinor,
+            currency: order.currency,
+            reason: note,
+            partial: true,
+          })
+        }
+      }
+
+      return redirectWithMessage(request, redirectTo, 'notice', 'partial-refund-issued')
+    }
+
+    if (kind === 'payout-block-resolution') {
+      const issueId = readString(formData, 'issueId')
+      const orderId = readString(formData, 'orderId')
+      const resolutionMode = readString(formData, 'resolutionMode').toUpperCase()
+      const note = readString(formData, 'note')
+
+      if (!orderId || !PAYOUT_RESOLUTION_MODES.has(resolutionMode) || note.length === 0) {
+        return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+      }
+
+      const { data: order, error: orderError } = await client
+        .from('orders')
+        .select(`
+          id,
+          reference,
+          stage,
+          tailor_id,
+          customer_id,
+          currency,
+          source_currency,
+          source_amount,
+          subtotal_amount,
+          tailor_payout_currency_locked,
+          tailor_payout_provider_locked
+        `)
+        .eq('id', orderId)
+        .maybeSingle()
+
+      if (orderError || !order?.id || !order.tailor_id) {
+        return redirectWithMessage(request, redirectTo, 'error', 'conflict')
+      }
+
+      const lockedCurrency = lockedOrderPayoutCurrency(order)
+      const lockedAmount = lockedOrderPayoutAmount(order)
+
+      if (!lockedCurrency || lockedAmount <= 0) {
+        return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+      }
+
+      const { data: tailorProfile, error: tailorProfileError } = await client
+        .from('tailor_profiles')
+        .select('id, user_id, payout_currency, payout_account_verified, payout_reverification_required, paystack_recipient_code, stripe_connect_account_id')
+        .eq('user_id', order.tailor_id)
+        .maybeSingle()
+
+      if (tailorProfileError || !tailorProfile?.id) {
+        return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+      }
+
+      const now = new Date().toISOString()
+
+      if (resolutionMode === 'REFUND_CUSTOMER') {
+        const refund = await refundOrderPaymentsForReview(orderId, { reason: note })
+        if (!refund.ok) {
+          return redirectWithMessage(request, redirectTo, 'error', 'refund-failed')
+        }
+
+        const { error: orderUpdateError } = await client
+          .from('orders')
+          .update({
+            stage: 'REFUNDED',
+            stage_updated_at: now,
+            ops_payout_resolution_mode: 'REFUND_CUSTOMER',
+            ops_payout_override_currency: null,
+            ops_payout_override_provider: null,
+            ops_payout_override_amount: null,
+            ops_payout_override_fx_rate: null,
+            ops_payout_override_fx_rate_timestamp: null,
+            ops_payout_override_note: note,
+            ops_payout_override_set_at: now,
+            ops_payout_override_set_by: session.email ?? session.role,
+          })
+          .eq('id', orderId)
+
+        if (orderUpdateError) {
+          return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+        }
+
+        await client.from('order_stage_updates').insert({
+          order_id: orderId,
+          stage: 'REFUNDED',
+          note: `Ops refunded the customer after payout review. ${note}`,
+        })
+
+        await client.from('audit_logs').insert({
+          actor_role: 'OPS',
+          order_id: orderId,
+          event: 'ops.payout_block_refund_executed',
+          severity: 'warn',
+          payload: {
+            issue_id: issueId || null,
+            resolution_mode: resolutionMode,
+            locked_currency: lockedCurrency,
+            locked_amount: lockedAmount,
+            note,
+          },
+        })
+
+        if (issueId) {
+          await syncOpsIssueById({
+            client,
+            issueId,
+            status: 'RESOLVED',
+            performedBy: session.email ?? session.role,
+            performedRole: session.role.toUpperCase(),
+            actionTaken: 'PAYOUT_BLOCK_REFUNDED_CUSTOMER',
+            reason: note,
+          })
+        }
+
+        return redirectWithMessage(request, redirectTo, 'notice', 'payout-resolution-refunded')
+      }
+
+      if (resolutionMode === 'ORIGINAL_CURRENCY') {
+        const lockedProvider =
+          order.tailor_payout_provider_locked
+          ?? resolvePaymentProviderForCurrency(lockedCurrency)
+
+        const { error: orderUpdateError } = await client
+          .from('orders')
+          .update({
+            ops_payout_resolution_mode: 'ORIGINAL_CURRENCY',
+            ops_payout_override_currency: lockedCurrency,
+            ops_payout_override_provider: lockedProvider,
+            ops_payout_override_amount: lockedAmount,
+            ops_payout_override_fx_rate: 1,
+            ops_payout_override_fx_rate_timestamp: now,
+            ops_payout_override_note: note,
+            ops_payout_override_set_at: now,
+            ops_payout_override_set_by: session.email ?? session.role,
+          })
+          .eq('id', orderId)
+
+        if (orderUpdateError) {
+          return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+        }
+      }
+
+      if (resolutionMode === 'CONVERT_TO_CURRENT') {
+        const currentPayoutCurrency = normalizeAccountCurrency(tailorProfile.payout_currency)
+        if (!currentPayoutCurrency) {
+          return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+        }
+
+        const quote = await fetchFxQuoteForOps(lockedCurrency, currentPayoutCurrency)
+        const convertedAmount = Math.round(lockedAmount * quote.rate)
+        if (convertedAmount <= 0) {
+          return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+        }
+
+        const { error: orderUpdateError } = await client
+          .from('orders')
+          .update({
+            ops_payout_resolution_mode: 'CONVERT_TO_CURRENT',
+            ops_payout_override_currency: currentPayoutCurrency,
+            ops_payout_override_provider: resolvePaymentProviderForCurrency(currentPayoutCurrency),
+            ops_payout_override_amount: convertedAmount,
+            ops_payout_override_fx_rate: quote.rate,
+            ops_payout_override_fx_rate_timestamp: quote.timestamp,
+            ops_payout_override_note: note,
+            ops_payout_override_set_at: now,
+            ops_payout_override_set_by: session.email ?? session.role,
+          })
+          .eq('id', orderId)
+
+        if (orderUpdateError) {
+          return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+        }
+      }
+
+      const release = await triggerOrderPayoutRelease(orderId)
+      if (!release.ok) {
+        return redirectWithMessage(request, redirectTo, 'error', 'payout-release-failed')
+      }
+
+      await client.from('audit_logs').insert({
+        actor_role: 'OPS',
+        order_id: orderId,
+        event: 'ops.payout_block_resolution_applied',
+        severity: 'info',
+        payload: {
+          issue_id: issueId || null,
+          resolution_mode: resolutionMode,
+          note,
+          locked_currency: lockedCurrency,
+          locked_amount: lockedAmount,
+        },
+      })
+
+      if (issueId) {
+        await syncOpsIssueById({
+          client,
+          issueId,
+          status: 'RESOLVED',
+          performedBy: session.email ?? session.role,
+          performedRole: session.role.toUpperCase(),
+          actionTaken: 'PAYOUT_BLOCK_RESOLUTION_APPLIED',
+          reason: note,
+        })
+      }
+
+      return redirectWithMessage(request, redirectTo, 'notice', 'payout-resolution-applied')
+    }
+
+    if (kind === 'payout-release') {
+      const orderId = readString(formData, 'orderId')
+
+      if (!orderId) {
+        return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+      }
+
+      const release = await triggerOrderPayoutRelease(orderId)
+      if (!release.ok) {
+        return redirectWithMessage(request, redirectTo, 'error', 'payout-release-failed')
+      }
+
+      await client.from('audit_logs').insert({
+        actor_role: 'OPS',
+        order_id: orderId,
+        event: 'ops.payout_release_triggered',
+        severity: 'info',
+        payload: {
+          source: 'ops-dashboard',
+          order_id: orderId,
+        },
+      })
+
+      return redirectWithMessage(request, redirectTo, 'notice', 'payout-release-triggered')
+    }
+
+    if (kind === 'ops-issue-status') {
+      const issueId = readString(formData, 'issueId')
+      const status = readString(formData, 'status').toUpperCase()
+      const note = readString(formData, 'note')
+
+      if (!issueId || !OPS_ISSUE_STATUSES.has(status)) {
+        return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+      }
+
+      const { data: currentIssue, error: currentIssueError } = await client
+        .from('ops_issues')
+        .select('id, status, issue_type, source, assigned_to, resolved_at')
+        .eq('id', issueId)
+        .maybeSingle()
+
+      if (currentIssueError || !currentIssue?.id) {
+        return redirectWithMessage(request, redirectTo, 'error', 'workflow-issue-save-failed')
+      }
+
+      const resolvedAt = status === 'RESOLVED' ? new Date().toISOString() : null
+      const { error: updateError } = await client
+        .from('ops_issues')
+        .update({
+          status,
+          assigned_to: session.email ?? session.role,
+          resolved_at: resolvedAt,
+        })
+        .eq('id', issueId)
+
+      if (updateError) {
+        return redirectWithMessage(request, redirectTo, 'error', 'workflow-issue-save-failed')
+      }
+
+      await client.from('ops_audit_logs').insert({
+        issue_id: issueId,
+        action_taken: 'ISSUE_STATUS_UPDATED',
+        performed_by: session.email ?? 'ops-session',
+        performed_role: session.role.toUpperCase(),
+        reason: note.length > 0 ? note : null,
+        before_state: {
+          status: currentIssue.status,
+          assigned_to: currentIssue.assigned_to ?? null,
+          resolved_at: currentIssue.resolved_at ?? null,
+        },
+        after_state: {
+          status,
+          assigned_to: session.email ?? session.role,
+          resolved_at: resolvedAt,
+        },
+      })
+
+      await client.from('audit_logs').insert({
+        actor_role: 'OPS',
+        severity: 'info',
+        event: 'ops.workflow_issue_status_updated',
+        payload: {
+          issue_id: issueId,
+          issue_type: currentIssue.issue_type,
+          source: currentIssue.source ?? null,
+          from_status: currentIssue.status,
+          status,
+          note: note.length > 0 ? note : null,
+        },
+      })
+
+      return redirectWithMessage(request, redirectTo, 'notice', 'workflow-issue-saved')
+    }
+
+    if (kind === 'manual-issue-create') {
+      const issueType = readString(formData, 'issueType').toUpperCase()
+      const severity = readString(formData, 'severity').toUpperCase()
+      const title = readString(formData, 'title')
+      const description = readString(formData, 'description')
+      const recommendedAction = readString(formData, 'recommendedAction')
+      const orderId = readString(formData, 'orderId')
+      const userId = readString(formData, 'userId')
+      const tailorProfileId = readString(formData, 'tailorProfileId')
+      const provider = readString(formData, 'provider')
+      const stage = readString(formData, 'stage')
+      const relatedEntityType = readString(formData, 'relatedEntityType')
+      const relatedEntityId = readString(formData, 'relatedEntityId')
+      const note = readString(formData, 'note')
+
+      if (
+        !MANUAL_OPS_ISSUE_TYPES.has(issueType) ||
+        !MANUAL_OPS_ISSUE_SEVERITIES.has(severity) ||
+        !title ||
+        !description ||
+        !recommendedAction
+      ) {
+        return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+      }
+
+      const { data: createdIssue, error: createError } = await client
+        .from('ops_issues')
+        .insert({
+          issue_type: issueType,
+          severity,
+          status: 'OPEN',
+          source: 'ops-dashboard-manual',
+          actor_id: session.email ?? session.role,
+          actor_role: session.role.toUpperCase(),
+          order_id: orderId || null,
+          user_id: userId || null,
+          tailor_profile_id: tailorProfileId || null,
+          related_entity_type: relatedEntityType || null,
+          related_entity_id: relatedEntityId || null,
+          provider: provider || null,
+          stage: stage || null,
+          title,
+          description,
+          recommended_action: recommendedAction,
+          dedupe_key: `manual:${crypto.randomUUID()}`,
+          metadata: note ? { note } : {},
+          last_seen_at: new Date().toISOString(),
+        })
+        .select('id, issue_number')
+        .single()
+
+      if (createError || !createdIssue?.id) {
+        return redirectWithMessage(request, redirectTo, 'error', 'workflow-issue-save-failed')
+      }
+
+      await client.from('ops_audit_logs').insert({
+        issue_id: createdIssue.id,
+        action_taken: 'ISSUE_CREATED_MANUAL',
+        performed_by: session.email ?? 'ops-session',
+        performed_role: session.role.toUpperCase(),
+        reason: note || null,
+        before_state: null,
+        after_state: {
+          status: 'OPEN',
+          severity,
+          title,
+          issue_type: issueType,
+        },
+      })
+
+      await client.from('audit_logs').insert({
+        actor_role: 'OPS',
+        severity: severity === 'CRITICAL' ? 'warn' : 'info',
+        event: 'ops.manual_issue_created',
+        payload: {
+          issue_id: createdIssue.id,
+          issue_number: createdIssue.issue_number,
+          issue_type: issueType,
+          severity,
+          order_id: orderId || null,
+          user_id: userId || null,
+          tailor_profile_id: tailorProfileId || null,
+        },
+      })
+
+      if (severity === 'CRITICAL') {
+        await sendCriticalOpsIssueEmail({
+          issueNumber: createdIssue.issue_number,
+          issueType,
+          severity,
+          title,
+          description,
+          recommendedAction,
+          source: 'ops-dashboard-manual',
+          orderId: orderId || null,
+          relatedEntityType: relatedEntityType || null,
+          relatedEntityId: relatedEntityId || null,
+          provider: provider || null,
+          stage: stage || null,
+        })
+      }
+
+      return redirectWithMessage(request, redirectTo, 'notice', 'manual-issue-created')
     }
 
     if (kind === 'dispatch-stage') {
@@ -499,15 +1524,25 @@ export async function POST(request: Request) {
       const contactName = readString(formData, 'contactName')
       const contactPhone = readString(formData, 'contactPhone')
       const trackingNumber = readString(formData, 'trackingNumber')
+      const serviceLevel = readString(formData, 'serviceLevel').toUpperCase()
+      const premiumException = formData.get('premiumException') === 'on'
       const note = readString(formData, 'note')
 
       if (!orderId || !DISPATCH_TARGETS.has(targetStage) || !provider || !contactName || !contactPhone) {
         return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
       }
 
+      if (
+        serviceLevel &&
+        !['STANDARD', 'SAME_DAY', 'NEXT_DAY', 'INTERNATIONAL_STANDARD', 'INTERNATIONAL_EXPRESS', 'CUSTOM'].includes(serviceLevel)
+      ) {
+        return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+      }
+      const normalizedServiceLevel = serviceLevel ? (serviceLevel as DispatchServiceLevel) : null
+
       const { data: existingOrder, error: orderError } = await client
         .from('orders')
-        .select('id, stage, delivery_method, recipient_name, recipient_phone, delivery_address')
+        .select('id, reference, stage, order_kind, garment_type, item_title, item_size, delivery_method, recipient_name, recipient_phone, delivery_address, customer_id, tailor_id, special_note')
         .eq('id', orderId)
         .maybeSingle()
 
@@ -544,6 +1579,17 @@ export async function POST(request: Request) {
         (targetStage === 'OUT_FOR_DELIVERY'
           ? `${provider} is handling this local delivery now.`
           : `${provider} accepted this shipment for dispatch.`)
+      const supportMeta = parseOrderSupportMeta(existingOrder.special_note)
+      const nextSupportMeta = {
+        ...supportMeta,
+        dispatchRecord: {
+          providerUsed: provider,
+          bookedBy: session.email ?? session.role,
+          bookedAt: now,
+          serviceLevel: normalizedServiceLevel,
+          premiumException,
+        },
+      }
 
       const updatePayload: Record<string, string | null> = {
         stage: targetStage,
@@ -554,6 +1600,7 @@ export async function POST(request: Request) {
         fulfillment_contact_phone: contactPhone,
         tracking_number: isShipping ? trackingNumber || null : null,
         carrier: isShipping ? provider : null,
+        special_note: serializeOrderSupportMeta(nextSupportMeta),
       }
 
       const { error } = await client
@@ -586,8 +1633,57 @@ export async function POST(request: Request) {
           provider,
           reference: reference || null,
           tracking_number: isShipping ? trackingNumber || null : null,
+          service_level: normalizedServiceLevel,
+          premium_exception: premiumException,
         },
       })
+
+      const customerSms = buildCustomerStageSms({
+        id: existingOrder.id,
+        reference: existingOrder.reference,
+        orderKind: existingOrder.order_kind,
+        garmentType: existingOrder.garment_type,
+        itemTitle: existingOrder.item_title,
+        itemSize: existingOrder.item_size,
+        deliveryMethod: existingOrder.delivery_method,
+        fulfillmentProvider: provider,
+        carrier: isShipping ? provider : null,
+      }, targetStage)
+
+      if (customerSms && existingOrder.customer_id) {
+        await sendSmsToUser({
+          client,
+          userId: existingOrder.customer_id,
+          audience: 'CUSTOMER',
+          orderId,
+          event: `order.stage_${targetStage.toLowerCase()}`,
+          body: customerSms,
+          fallbackPhone: existingOrder.recipient_phone ?? null,
+        })
+      }
+
+      const tailorSms = buildTailorStageSms({
+        id: existingOrder.id,
+        reference: existingOrder.reference,
+        orderKind: existingOrder.order_kind,
+        garmentType: existingOrder.garment_type,
+        itemTitle: existingOrder.item_title,
+        itemSize: existingOrder.item_size,
+        deliveryMethod: existingOrder.delivery_method,
+        fulfillmentProvider: provider,
+        carrier: isShipping ? provider : null,
+      }, targetStage)
+
+      if (tailorSms && existingOrder.tailor_id) {
+        await sendSmsToUser({
+          client,
+          userId: existingOrder.tailor_id,
+          audience: 'TAILOR',
+          orderId,
+          event: `order.stage_${targetStage.toLowerCase()}`,
+          body: tailorSms,
+        })
+      }
 
       return redirectWithMessage(request, redirectTo, 'notice', 'dispatch-saved')
     }

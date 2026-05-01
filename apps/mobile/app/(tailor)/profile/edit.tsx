@@ -56,7 +56,7 @@ const CURRENCY_OPTIONS: { value: Currency; label: string }[] = [
   { value: 'GBP', label: '£ GBP' },
   { value: 'USD', label: '$ USD' },
   { value: 'EUR', label: '€ EUR' },
-  { value: 'CAD', label: 'C$ CAD' },
+  { value: 'CAD', label: 'CA$ CAD' },
   { value: 'NGN', label: '₦ NGN' },
   { value: 'GHS', label: '₵ GHS' },
   { value: 'KES', label: 'KSh KES' },
@@ -844,16 +844,16 @@ const styles = StyleSheet.create({
 
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.sm,
     borderBottomWidth: 1, borderBottomColor: Colors.boneDeep,
     backgroundColor: Colors.bone,
   },
-  headerTitle: { flex: 1, fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  headerTitle: { flex: 1, fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
+    padding: Spacing.lg,
+    gap: Spacing.sm,
     ...Shadow.sm,
   },
   heroBadge: {
@@ -871,15 +871,16 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   heroTitle: {
-    fontSize: FontSize.xxl,
+    fontSize: FontSize.xl,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
-    lineHeight: 38,
+    lineHeight: 30,
+    fontFamily: 'Georgia',
   },
   heroSub: {
-    fontSize: FontSize.md,
+    fontSize: FontSize.sm,
     color: Colors.inkLight,
-    lineHeight: 24,
+    lineHeight: 20,
   },
   saveBtn: {
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
@@ -894,8 +895,8 @@ const styles = StyleSheet.create({
     maxWidth: 440,
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.lg,
+    padding: Spacing.lg,
+    gap: Spacing.md,
     alignItems: 'center',
     ...Shadow.lg,
   },
@@ -906,10 +907,10 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center', fontFamily: 'Georgia' },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
 
-  scroll: { padding: Spacing.xl, gap: Spacing.xl, paddingBottom: 60 },
+  scroll: { padding: Spacing.xl, gap: Spacing.md, paddingBottom: 48 },
 
   // Avatar
   avatarSection: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.md },
@@ -934,9 +935,9 @@ const styles = StyleSheet.create({
   // Inputs
   input: {
     backgroundColor: Colors.white, borderRadius: Radius.md,
-    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg, paddingVertical: 10,
     fontSize: FontSize.md, color: Colors.ink, ...Shadow.sm,
-    borderWidth: 1.5, borderColor: 'transparent',
+    borderWidth: 1, borderColor: 'transparent',
   },
   inputError: { borderColor: Colors.error },
   multiline: { minHeight: 100, textAlignVertical: 'top' },
@@ -972,7 +973,7 @@ const styles = StyleSheet.create({
   currencyRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   currencyChip: {
     paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
-    borderRadius: Radius.full, borderWidth: 1.5, borderColor: Colors.lightGrey,
+    borderRadius: Radius.full, borderWidth: 1, borderColor: Colors.lightGrey,
     backgroundColor: Colors.white,
   },
   currencyChipActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
@@ -983,7 +984,7 @@ const styles = StyleSheet.create({
   availCard: {
     flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
     backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.lg, borderWidth: 1.5, borderColor: Colors.lightGrey,
+    padding: Spacing.md, borderWidth: 1, borderColor: Colors.lightGrey,
   },
   availCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
   availRadio: {
@@ -991,20 +992,20 @@ const styles = StyleSheet.create({
     borderWidth: 2, borderColor: Colors.lightGrey, backgroundColor: Colors.white,
   },
   availRadioActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreen },
-  availLabel: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
+  availLabel: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight, fontFamily: 'Georgia' },
   availLabelActive: { color: Colors.needleGreen },
   availHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
   choiceGroup: { gap: Spacing.sm },
   choiceCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    borderWidth: 1.5,
+    padding: Spacing.md,
+    borderWidth: 1,
     borderColor: Colors.lightGrey,
     gap: 4,
   },
   choiceCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
-  choiceTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
+  choiceTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight, fontFamily: 'Georgia' },
   choiceTitleActive: { color: Colors.needleGreen },
   choiceHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   fulfillmentFeeBlock: { gap: Spacing.md, marginTop: Spacing.md },
@@ -1013,17 +1014,17 @@ const styles = StyleSheet.create({
   portfolioLink: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
     backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.lg, ...Shadow.sm,
+    padding: Spacing.md, ...Shadow.sm,
   },
   portfolioLinkLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
-  portfolioLinkTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  portfolioLinkTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   portfolioLinkSub: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
 
   // Verification
   verifyCard: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
     backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.lg, borderLeftWidth: 4, ...Shadow.sm,
+    padding: Spacing.md, borderLeftWidth: 4, ...Shadow.sm,
   },
   verifyDot: { width: 8, height: 8, borderRadius: 4 },
   verifyText: { flex: 1, fontSize: FontSize.sm, fontWeight: FontWeight.medium },

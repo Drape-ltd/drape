@@ -15,6 +15,7 @@ export const CUSTOMER_ACTIVE_ORDER_STAGES: OrderStage[] = [
   'CONSULTATION',
   'QUOTE_SENT',
   'PAYMENT_PENDING',
+  'PAYMENT_FAILED',
   'CONFIRMED',
   'DESIGNING',
   'SOURCING',
@@ -32,6 +33,7 @@ export const CUSTOMER_ACTIVE_ORDER_STAGES: OrderStage[] = [
 
 export const CUSTOMER_COMPLETED_ORDER_STAGES: OrderStage[] = [
   'COMPLETE',
+  'PARTIALLY_REFUNDED',
   'DECLINED',
   'EXPIRED',
   'REFUNDED',
@@ -43,6 +45,7 @@ export const TAILOR_ACTIVE_ORDER_STAGES: OrderStage[] = [
   'CONSULTATION',
   'QUOTE_SENT',
   'PAYMENT_PENDING',
+  'PAYMENT_FAILED',
   'CONFIRMED',
   'DESIGNING',
   'SOURCING',
@@ -60,6 +63,7 @@ export const TAILOR_COMPLETED_ORDER_STAGES: OrderStage[] = [
   'DELIVERED',
   'COLLECTED',
   'COMPLETE',
+  'PARTIALLY_REFUNDED',
   'DECLINED',
   'EXPIRED',
   'REFUNDED',
@@ -85,6 +89,7 @@ export function customerOrderStageLabel(stage: OrderStage, orderKind: MobileOrde
   if (orderKind === 'READY_MADE') {
     if (stage === 'PENDING_QUOTE') return 'Inquiry open'
     if (stage === 'PAYMENT_PENDING') return 'Checkout open'
+    if (stage === 'PAYMENT_FAILED') return 'Checkout failed'
     if (stage === 'CONFIRMED') return 'Order placed'
     if (isReadyMadePreparationStage(stage)) return 'Preparing order'
     if (stage === 'READY_FOR_DRAPE_DISPATCH') return 'Awaiting Drape dispatch'
@@ -99,6 +104,7 @@ export function tailorOrderStageLabel(stage: OrderStage, orderKind: MobileOrderK
   if (orderKind === 'READY_MADE') {
     if (stage === 'PENDING_QUOTE') return 'Inquiry open'
     if (stage === 'PAYMENT_PENDING') return 'Checkout open'
+    if (stage === 'PAYMENT_FAILED') return 'Checkout failed'
     if (stage === 'CONFIRMED') return 'Paid order'
     if (isReadyMadePreparationStage(stage)) return 'Preparing order'
     if (stage === 'READY_FOR_DRAPE_DISPATCH') return 'Ready for Drape dispatch'
@@ -119,6 +125,8 @@ export function customerOrderHint(stage: OrderStage, orderKind: MobileOrderKind)
       return 'Waiting for you'
     case 'PAYMENT_PENDING':
       return orderKind === 'READY_MADE' ? 'Complete checkout' : 'Complete payment'
+    case 'PAYMENT_FAILED':
+      return orderKind === 'READY_MADE' ? 'Retry checkout' : 'Retry payment'
     case 'CONFIRMED':
       return orderKind === 'READY_MADE' ? 'Order placed' : 'Confirmed'
     case 'DESIGNING':
@@ -159,6 +167,8 @@ export function tailorOrderHint(stage: OrderStage, orderKind: MobileOrderKind): 
       return 'Waiting for customer'
     case 'PAYMENT_PENDING':
       return orderKind === 'READY_MADE' ? 'Checkout open' : 'Awaiting payment'
+    case 'PAYMENT_FAILED':
+      return orderKind === 'READY_MADE' ? 'Retry checkout' : 'Payment failed'
     case 'CONFIRMED':
       return orderKind === 'READY_MADE' ? 'Prepare order' : 'Ready to start'
     case 'DESIGNING':

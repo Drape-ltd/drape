@@ -41,18 +41,17 @@ export default function CustomerTabLayout() {
           backgroundColor: Colors.white,
           borderTopColor: Colors.lightGrey,
           borderTopWidth: 1,
-          paddingTop: 4,
         },
         tabBarItemStyle: {
           minHeight: 49,
-          paddingVertical: 2,
+          paddingVertical: 0,
         },
         tabBarIconStyle: {
-          marginTop: 1,
+          marginTop: 0,
         },
         tabBarLabelStyle: {
           fontSize: 11,
-          marginTop: -1,
+          marginTop: 0,
         },
       }}
     >

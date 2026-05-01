@@ -1,11 +1,12 @@
 import { useCallback, useState, useRef, useEffect } from 'react'
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  RefreshControl, Image, TextInput, ActivityIndicator,
+  RefreshControl, TextInput, ActivityIndicator,
   Keyboard, FlatList, useWindowDimensions,
 } from 'react-native'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { Image as ExpoImage } from 'expo-image'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Feather } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
@@ -30,11 +31,12 @@ const MUTED_GREY           = '#8F8D88'
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const STAGE_PILL_COLOR: Partial<Record<OrderStage, { bg: string; text: string }>> = {
-  PENDING_QUOTE:   { bg: '#FFF3CD', text: '#856404' },
-  CONSULTATION:    { bg: '#FFF3CD', text: '#856404' },
-  QUOTE_SENT:      { bg: '#D1ECF1', text: '#0C5460' },
-  PAYMENT_PENDING: { bg: '#D1ECF1', text: '#0C5460' },
-  IN_DISPUTE:      { bg: '#F8D7DA', text: '#721C24' },
+  PENDING_QUOTE:   { bg: Colors.boneDeep, text: PRIMARY_GREEN },
+  CONSULTATION:    { bg: Colors.boneDeep, text: PRIMARY_GREEN },
+  QUOTE_SENT:      { bg: Colors.needleGreenLight, text: PRIMARY_GREEN },
+  PAYMENT_PENDING: { bg: Colors.needleGreenLight, text: PRIMARY_GREEN },
+  PAYMENT_FAILED:  { bg: Colors.kanteRustLight, text: Colors.kanteRust },
+  IN_DISPUTE:      { bg: Colors.kanteRustLight, text: Colors.kanteRust },
 }
 
 // Ordered by broadest appeal first. Globally understandable.
@@ -92,6 +94,8 @@ function orderPriority(stage: OrderStage): number {
     case 'IN_DISPUTE':
       return 3
     case 'SHIPPED':
+      return 4
+    case 'PAYMENT_FAILED':
       return 4
     default:
       return 5
@@ -759,7 +763,7 @@ export default function CustomerHomeScreen() {
                   </Text>
                 </View>
                 {lastSearch.thumbnail ? (
-                  <Image source={{ uri: lastSearch.thumbnail }} style={styles.continueThumbnail} resizeMode="cover" />
+                  <ExpoImage source={{ uri: lastSearch.thumbnail }} style={styles.continueThumbnail} contentFit="cover" cachePolicy="memory-disk" transition={120} />
                 ) : (
                   <View style={[styles.continueThumbnail, styles.continueThumbnailPlaceholder]}>
                     <Text style={{ fontSize: 22 }}>🧵</Text>
@@ -906,10 +910,12 @@ function GridCard({ tailor, onPress }: { tailor: TailorCard; onPress: () => void
     <TouchableOpacity style={[styles.gridCard, { width: CARD_WIDTH }]} onPress={onPress} activeOpacity={0.88}>
       <View style={styles.gridImageWrap}>
         {tailor.portfolioPhoto && !imageFailed ? (
-          <Image
+          <ExpoImage
             source={{ uri: tailor.portfolioPhoto }}
             style={styles.gridImage}
-            resizeMode="cover"
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            transition={120}
             onError={() => setImageFailed(true)}
           />
         ) : (
@@ -969,10 +975,12 @@ function SearchResultCard({ tailor, onPress }: { tailor: TailorCard; onPress: ()
     <TouchableOpacity style={styles.resultCard} onPress={onPress} activeOpacity={0.88}>
       <View style={styles.resultThumb}>
         {tailor.portfolioPhoto && !imageFailed ? (
-          <Image
+          <ExpoImage
             source={{ uri: tailor.portfolioPhoto }}
             style={styles.resultThumbImg}
-            resizeMode="cover"
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            transition={120}
             onError={() => setImageFailed(true)}
           />
         ) : (
@@ -1026,10 +1034,12 @@ function RecentCard({ tailor, onPress }: { tailor: TailorCard; onPress: () => vo
     <TouchableOpacity style={styles.recentCard} onPress={onPress} activeOpacity={0.88}>
       <View style={styles.recentImageWrap}>
         {tailor.portfolioPhoto && !imageFailed ? (
-          <Image
+          <ExpoImage
             source={{ uri: tailor.portfolioPhoto }}
             style={styles.recentImage}
-            resizeMode="cover"
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            transition={120}
             onError={() => setImageFailed(true)}
           />
         ) : (
@@ -1053,8 +1063,8 @@ const styles = StyleSheet.create({
   stickyHeader: {
     backgroundColor: HOME_BG,
     paddingHorizontal: Spacing.lg,
-    paddingTop: 6,
-    paddingBottom: 6,
+    paddingTop: 4,
+    paddingBottom: 4,
     borderBottomWidth: 1,
     borderBottomColor: Colors.lightGrey,
   },
@@ -1062,7 +1072,7 @@ const styles = StyleSheet.create({
   searchBar: {
     flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
     backgroundColor: Colors.white, borderRadius: Radius.full,
-    paddingVertical: 10, paddingHorizontal: 14, ...Shadow.sm,
+    minHeight: 44, paddingVertical: 8, paddingHorizontal: 12, ...Shadow.sm,
   },
   searchInput: { flex: 1, fontSize: 14, color: CHARCOAL, padding: 0 },
   clearBtn: { minWidth: 24, minHeight: 24, alignItems: 'center', justifyContent: 'center' },
@@ -1071,7 +1081,7 @@ const styles = StyleSheet.create({
 
   // Scroll areas
   scroll: { flex: 1 },
-  content: { paddingBottom: 32 },
+  content: { paddingBottom: 24 },
   heroBadge: {
     alignSelf: 'flex-start',
     paddingHorizontal: 10,
@@ -1088,11 +1098,11 @@ const styles = StyleSheet.create({
   },
   guideCard: {
     marginHorizontal: Spacing.lg,
-    marginTop: Spacing.md,
-    marginBottom: Spacing.md,
+    marginTop: Spacing.sm,
+    marginBottom: Spacing.sm,
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    padding: 14,
+    padding: 12,
     gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -1106,7 +1116,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  guideTitle: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, lineHeight: 18 },
+  guideTitle: { fontSize: 13, fontWeight: FontWeight.semibold, color: CHARCOAL, lineHeight: 17 },
   errorBanner: {
     marginHorizontal: Spacing.lg, marginTop: Spacing.md,
     backgroundColor: Colors.kanteRustLight, borderRadius: Radius.md,
@@ -1156,14 +1166,14 @@ const styles = StyleSheet.create({
   resultCard: {
     flexDirection: 'row', gap: Spacing.sm,
     backgroundColor: Colors.white, borderRadius: Radius.md,
-    padding: 12, ...Shadow.sm,
+    padding: 10, ...Shadow.sm,
   },
   resultThumb: { width: 76, height: 86, borderRadius: Radius.md, overflow: 'hidden' },
   resultThumbImg: { width: '100%', height: '100%' },
   resultThumbPlaceholder: { backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center' },
   resultInfo: { flex: 1, gap: 3, justifyContent: 'center' },
   resultNameRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  resultName: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, flex: 1, marginRight: 4 },
+  resultName: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, flex: 1, marginRight: 4, fontFamily: 'Georgia' },
   resultLocation: { fontSize: 12, color: MUTED_GREY },
   resultTags: { fontSize: 12, color: Colors.inkLight },
   resultHint: { fontSize: 12, color: PRIMARY_GREEN, marginTop: 3, fontWeight: FontWeight.medium },
@@ -1189,7 +1199,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingHorizontal: Spacing.lg, marginBottom: Spacing.sm,
   },
-  sectionTitle: { fontSize: 16, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  sectionTitle: { fontSize: 16, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   sectionLink: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
 
   // Continue searching card
@@ -1199,7 +1209,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md, padding: 12, ...Shadow.sm,
   },
   continueLabel: { fontSize: 11, color: MUTED_GREY, fontWeight: FontWeight.medium },
-  continueQuery: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  continueQuery: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   continueMeta: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
   continueThumbnail: { width: 52, height: 52, borderRadius: Radius.md, overflow: 'hidden' },
   continueThumbnailPlaceholder: { backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center' },
@@ -1219,21 +1229,21 @@ const styles = StyleSheet.create({
   ordersRow: { flexDirection: 'row', gap: Spacing.sm, paddingRight: Spacing.lg },
   orderCard: {
     width: 126, backgroundColor: Colors.white, borderRadius: Radius.md,
-    padding: 12, gap: 4, ...Shadow.sm,
+    padding: 10, gap: 4, ...Shadow.sm,
   },
   orderStagePill: {
     alignSelf: 'flex-start', paddingHorizontal: Spacing.sm,
     paddingVertical: 3, borderRadius: Radius.full, marginBottom: Spacing.xs,
   },
   orderStageText: { fontSize: 10, fontWeight: FontWeight.bold },
-  orderGarment: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  orderGarment: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   orderTailor: { fontSize: 12, color: MUTED_GREY },
   orderEta: { fontSize: 12, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
   firstOrderCard: {
     marginHorizontal: Spacing.lg,
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    padding: 12,
+    padding: 10,
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.sm,
@@ -1249,7 +1259,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   firstOrderIconText: { fontSize: 20 },
-  firstOrderTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  firstOrderTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   firstOrderHint: { fontSize: 13, color: MUTED_GREY, lineHeight: 18, marginTop: 2 },
 
   // Browse styles
@@ -1280,9 +1290,9 @@ const styles = StyleSheet.create({
   availDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: Colors.success },
   availText: { fontSize: 10, fontWeight: FontWeight.semibold, color: Colors.ink },
   availTextFull: { color: Colors.white },
-  gridInfo: { padding: 12, gap: 4 },
+  gridInfo: { padding: 10, gap: 4 },
   gridTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  gridName: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, flex: 1, marginRight: 4 },
+  gridName: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, flex: 1, marginRight: 4, fontFamily: 'Georgia' },
   gridLocation: { fontSize: 12, color: MUTED_GREY },
   gridTags: { fontSize: 12, color: Colors.inkLight, marginTop: 2 },
   gridHint: { fontSize: 12, color: PRIMARY_GREEN, marginTop: 3, fontWeight: FontWeight.medium },

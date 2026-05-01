@@ -11,6 +11,7 @@ import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
+import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { optionalNote, parseBody, z } from '../_shared/validate.ts'
 
@@ -76,15 +77,19 @@ Deno.serve(async (req) => {
 
     const role = tailorProfile ? 'TAILOR' : customerProfile ? 'CUSTOMER' : 'UNKNOWN'
 
-    const { error: insertError } = await supabase.from('account_deletion_requests').insert({
-      user_id: caller.id,
-      email: caller.email ?? null,
-      role,
-      reason: parsed.data.reason ?? null,
-      metadata: {
-        source: 'MOBILE_APP',
-      },
-    })
+    const { data: insertedRequest, error: insertError } = await supabase
+      .from('account_deletion_requests')
+      .insert({
+        user_id: caller.id,
+        email: caller.email ?? null,
+        role,
+        reason: parsed.data.reason ?? null,
+        metadata: {
+          source: 'MOBILE_APP',
+        },
+      })
+      .select('id')
+      .single()
 
     if (insertError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: insertError.message })
@@ -96,6 +101,26 @@ Deno.serve(async (req) => {
       actor_id: caller.id,
       actor_role: role,
       payload: { function: FN },
+    })
+
+    await createOrRefreshOpsIssue(supabase, {
+      issueType: 'ACCOUNT_DELETION_REQUEST',
+      severity: 'HIGH',
+      source: FN,
+      actorId: caller.id,
+      actorRole: role,
+      userId: caller.id,
+      relatedEntityType: 'account_deletion_request',
+      relatedEntityId: (insertedRequest as { id?: string } | null)?.id ?? null,
+      title: 'Account deletion request',
+      description: `${role.toLowerCase()} requested permanent account deletion inside Drape.`,
+      recommendedAction: 'Acknowledge the request, verify identity if needed, and move the deletion workflow through privacy review to completion.',
+      dedupeKey: `account-deletion:${caller.id}`,
+      metadata: {
+        account_email: caller.email ?? null,
+        reason: parsed.data.reason ?? null,
+        source: 'MOBILE_APP',
+      },
     })
 
     log('info', FN, 'account_deletion.requested', { actor_id: caller.id, actor_role: role })

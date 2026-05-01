@@ -126,6 +126,19 @@ export default function ClientDetailScreen() {
   const notesRef = useRef<TextInput>(null)
 
   async function fetchData() {
+    if (!user?.id) {
+      setFetchError(false)
+      setProfile(null)
+      setOrders([])
+      setNotesRowId(null)
+      setNotes('')
+      setNotesInput('')
+      setNotesDirty(false)
+      setContactWarning(false)
+      setReviews([])
+      setLoading(false)
+      return
+    }
     setFetchError(false)
     setProfile(null)
     setOrders([])
@@ -144,14 +157,14 @@ export default function ClientDetailScreen() {
           .maybeSingle(),
         supabase
           .from('orders')
-          .select('id, reference, garment_type, order_kind, seller_item_id, stage, created_at, quoted_amount, quoted_currency')
-          .eq('tailor_id', user?.id)
+          .select('id, reference, garment_type, order_kind, seller_item_id, stage, created_at, quoted_amount, currency, quoted_currency')
+          .eq('tailor_id', user.id)
           .eq('customer_id', clientId)
           .order('created_at', { ascending: false }),
         supabase
           .from('tailor_client_notes')
           .select('id, notes')
-          .eq('tailor_id', user?.id)
+          .eq('tailor_id', user.id)
           .eq('customer_id', clientId)
           .order('updated_at', { ascending: false })
           .limit(1)
@@ -231,7 +244,7 @@ export default function ClientDetailScreen() {
             stage: o.stage,
             createdAt: o.created_at,
             quotedAmount: o.quoted_amount,
-            quotedCurrency: (o.quoted_currency ?? 'USD') as CurrencyCode,
+            quotedCurrency: (o.currency ?? o.quoted_currency ?? 'USD') as CurrencyCode,
           })),
       )
 
@@ -324,7 +337,7 @@ export default function ClientDetailScreen() {
         const existingResult = await supabase
           .from('tailor_client_notes')
           .select('id')
-          .eq('tailor_id', user?.id)
+          .eq('tailor_id', user.id)
           .eq('customer_id', clientId)
           .order('updated_at', { ascending: false })
           .limit(1)

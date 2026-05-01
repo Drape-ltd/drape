@@ -1,6 +1,6 @@
 create table if not exists public.order_handoff_issues (
   id uuid primary key default gen_random_uuid(),
-  order_id text not null references public.orders(id) on delete cascade,
+  order_id uuid not null references public.orders(id) on delete cascade,
   reporter_id uuid not null references auth.users(id) on delete cascade,
   reporter_role text not null check (reporter_role in ('CUSTOMER', 'TAILOR')),
   issue_type text not null check (

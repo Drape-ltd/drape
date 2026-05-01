@@ -91,7 +91,7 @@ export default function TailorPrivacyScreen() {
         {saving && <ActivityIndicator size="small" color={Colors.midGrey} style={{ marginLeft: 'auto' }} />}
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.xl, paddingBottom: 64, gap: Spacing.xl }}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 32, gap: Spacing.md }}>
         <View style={styles.heroCard}>
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Privacy control</Text>
@@ -231,19 +231,19 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
   },
   backBtn: {
-    width: 38, height: 38, borderRadius: Radius.full,
+    width: 44, height: 44, borderRadius: Radius.full,
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
   heroCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.sm,
     ...Shadow.sm,
   },
   heroBadge: {
@@ -261,17 +261,18 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   heroTitle: {
-    fontSize: FontSize.xxl,
+    fontSize: FontSize.xl,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
-    lineHeight: 38,
+    lineHeight: 28,
+    fontFamily: 'Georgia',
   },
-  intro: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 24 },
-  section: { gap: Spacing.md },
-  sectionTitle: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.semibold },
+  intro: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  section: { gap: Spacing.sm },
+  sectionTitle: { fontSize: FontSize.lg, color: Colors.ink, fontWeight: FontWeight.semibold, fontFamily: 'Georgia' },
   card: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.lg },
-  toggleRow: { flexDirection: 'row', gap: Spacing.md, padding: Spacing.lg, alignItems: 'flex-start' },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.md },
+  toggleRow: { flexDirection: 'row', gap: Spacing.md, padding: 12, alignItems: 'flex-start' },
   toggleTitle: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.medium },
   toggleDesc: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 20, marginTop: 2 },
   hint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 20 },
@@ -280,7 +281,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: Spacing.md,
-    padding: Spacing.lg,
+    padding: 12,
   },
   linkRowLeft: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md, flex: 1 },
   linkTitle: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.medium },

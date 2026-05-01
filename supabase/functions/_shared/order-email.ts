@@ -49,13 +49,13 @@ function escapeHtml(value: string) {
 
 function moneySymbol(currency: string) {
   const normalized = currency.trim().toUpperCase()
-  if (normalized === 'GBP') return 'GBP '
+  if (normalized === 'GBP') return '£'
   if (normalized === 'USD') return '$'
-  if (normalized === 'EUR') return 'EUR '
-  if (normalized === 'NGN') return 'NGN '
-  if (normalized === 'GHS') return 'GHS '
-  if (normalized === 'KES') return 'KES '
-  if (normalized === 'CAD') return 'CAD '
+  if (normalized === 'EUR') return '€'
+  if (normalized === 'NGN') return '₦'
+  if (normalized === 'GHS') return '₵'
+  if (normalized === 'KES') return 'KSh '
+  if (normalized === 'CAD') return 'CA$'
   return normalized || 'USD'
 }
 
@@ -94,7 +94,7 @@ function customerOrderConfirmationEmail(input: {
   const ref = orderReference(input.order)
   const label = orderLabel(input.order)
   const appUrl = getSiteUrl()
-  const currency = input.order.quoted_currency ?? input.order.currency ?? 'USD'
+  const currency = input.order.currency ?? input.order.quoted_currency ?? 'USD'
   const amount =
     input.phase === 'FULFILLMENT'
       ? formatMoney(input.order.fulfillment_fee, currency)
@@ -142,7 +142,7 @@ function tailorOrderConfirmationEmail(input: {
   const ref = orderReference(input.order)
   const label = orderLabel(input.order)
   const appUrl = getSiteUrl()
-  const currency = input.order.quoted_currency ?? input.order.currency ?? 'USD'
+  const currency = input.order.currency ?? input.order.quoted_currency ?? 'USD'
   const amount =
     input.phase === 'FULFILLMENT'
       ? formatMoney(input.order.fulfillment_fee, currency)

@@ -3,6 +3,11 @@ export type TailorReadinessInput = {
   id_verification_status?: string | null
   stripe_account_id?: string | null
   paystack_account_id?: string | null
+  stripe_connect_account_id?: string | null
+  paystack_recipient_code?: string | null
+  payout_account_verified?: boolean | null
+  payout_reverification_required?: boolean | null
+  payout_account_type?: string | null
   is_live?: boolean | null
 }
 
@@ -27,7 +32,20 @@ export function deriveTailorReadiness(input: TailorReadinessInput | null | undef
   const profileCompleted = input?.profile_completed === true
   const idStatus = input?.id_verification_status ?? 'NOT_SUBMITTED'
   const identityVerified = isIdentityVerifiedStatus(idStatus)
-  const payoutReady = identityVerified && (hasValue(input?.stripe_account_id) || hasValue(input?.paystack_account_id))
+  const legacyProviderLinked = hasValue(input?.stripe_account_id)
+    || hasValue(input?.paystack_account_id)
+    || hasValue(input?.stripe_connect_account_id)
+    || hasValue(input?.paystack_recipient_code)
+  const payoutVerified = input?.payout_account_verified === true
+  const needsReverification = input?.payout_reverification_required === true
+  const explicitPayoutStateKnown =
+    typeof input?.payout_account_verified === 'boolean'
+    || typeof input?.payout_reverification_required === 'boolean'
+  const payoutReady = identityVerified && (
+    explicitPayoutStateKnown
+      ? (payoutVerified && !needsReverification)
+      : legacyProviderLinked
+  )
 
   if (!profileCompleted) {
     return {
@@ -61,7 +79,7 @@ export function deriveTailorReadiness(input: TailorReadinessInput | null | undef
       canAcceptPaidOrders: false,
       canPublishPaidItems: false,
       code: 'PAYOUT_SETUP_REQUIRED',
-      message: 'Connect a payout account in Payments & payouts before sending paid quotes or publishing live paid items.',
+      message: 'Set up a verified payout account in Payments & payouts before sending paid quotes or publishing live paid items.',
     }
   }
 

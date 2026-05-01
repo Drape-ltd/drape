@@ -23,6 +23,11 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
+import { sendSmsToUser } from '../_shared/sms.ts'
+import {
+  buildCustomerStageSms,
+  buildTailorStageSms,
+} from '../../../packages/shared/src/sms-copy.ts'
 
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
@@ -300,7 +305,7 @@ Deno.serve(async (req) => {
   // Find the matching order
   const { data: order } = await supabase
     .from('orders')
-    .select('id, stage, reference, customer_id, tailor_id, carrier')
+    .select('id, stage, reference, order_kind, garment_type, item_title, item_size, delivery_method, recipient_phone, fulfillment_provider, customer_id, tailor_id, carrier')
     .eq('tracking_number', trackingNumber)
     .single()
 
@@ -341,6 +346,8 @@ Deno.serve(async (req) => {
   const updates: Record<string, unknown> = {
     stage: 'DELIVERED',
     stage_updated_at: new Date().toISOString(),
+    handoff_completed_at: new Date().toISOString(),
+    handoff_confirmation_source: 'CARRIER_WEBHOOK',
   }
   if (!order.carrier && carrier) {
     updates.carrier = carrier
@@ -384,6 +391,30 @@ Deno.serve(async (req) => {
         data: { orderId: order.id },
       })
     )
+    const customerSms = buildCustomerStageSms({
+      id: order.id,
+      reference: order.reference ?? null,
+      orderKind: order.order_kind ?? null,
+      garmentType: order.garment_type ?? null,
+      itemTitle: order.item_title ?? null,
+      itemSize: order.item_size ?? null,
+      deliveryMethod: order.delivery_method ?? null,
+      fulfillmentProvider: order.fulfillment_provider ?? null,
+      carrier: carrier ?? order.carrier ?? null,
+    }, 'DELIVERED')
+    if (customerSms) {
+      EdgeRuntime.waitUntil(
+        sendSmsToUser({
+          supabase,
+          userId: order.customer_id.toString(),
+          audience: 'CUSTOMER',
+          orderId: order.id,
+          event: 'order.stage_delivered',
+          body: customerSms,
+          fallbackPhone: order.recipient_phone ?? null,
+        }),
+      )
+    }
   }
 
   if (order.tailor_id) {
@@ -394,6 +425,29 @@ Deno.serve(async (req) => {
         data: { orderId: order.id },
       })
     )
+    const tailorSms = buildTailorStageSms({
+      id: order.id,
+      reference: order.reference ?? null,
+      orderKind: order.order_kind ?? null,
+      garmentType: order.garment_type ?? null,
+      itemTitle: order.item_title ?? null,
+      itemSize: order.item_size ?? null,
+      deliveryMethod: order.delivery_method ?? null,
+      fulfillmentProvider: order.fulfillment_provider ?? null,
+      carrier: carrier ?? order.carrier ?? null,
+    }, 'DELIVERED')
+    if (tailorSms) {
+      EdgeRuntime.waitUntil(
+        sendSmsToUser({
+          supabase,
+          userId: order.tailor_id.toString(),
+          audience: 'TAILOR',
+          orderId: order.id,
+          event: 'order.stage_delivered',
+          body: tailorSms,
+        }),
+      )
+    }
   }
 
   log('info', FN, 'delivery.confirmed', {

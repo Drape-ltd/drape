@@ -111,7 +111,7 @@ export default function TailorClientsScreen() {
           customer_id, garment_type, created_at,
           customer_profiles!customer_id(display_name)
         `)
-        .eq('tailor_id', user?.id)
+        .eq('tailor_id', user.id)
         .order('created_at', { ascending: false })
 
       if (error) throw error

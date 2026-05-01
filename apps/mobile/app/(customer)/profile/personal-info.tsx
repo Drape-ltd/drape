@@ -343,26 +343,26 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
   },
   backBtn: {
-    width: 38, height: 38, borderRadius: Radius.full,
+    width: 44, height: 44, borderRadius: Radius.full,
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
-  body: { padding: Spacing.xl, paddingBottom: 64, gap: Spacing.lg },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  body: { padding: Spacing.lg, paddingBottom: 32, gap: Spacing.md },
   card: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
   verifyCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
     gap: Spacing.md,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
   },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.lg },
-  field: { padding: Spacing.lg, gap: 6 },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.md },
+  field: { padding: Spacing.md, gap: 6 },
   label: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.inkLight },
   readOnly: {
     backgroundColor: Colors.bone, borderRadius: Radius.md,
@@ -376,7 +376,7 @@ const styles = StyleSheet.create({
     padding: Spacing.md, fontSize: FontSize.md, color: Colors.ink,
     borderWidth: 1, borderColor: Colors.lightGrey,
   },
-  verifyTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  verifyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   verifyCopy: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 21 },
   verifyBtn: {
     flexDirection: 'row',
@@ -390,7 +390,7 @@ const styles = StyleSheet.create({
   verifyBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
   saveBtn: {
     backgroundColor: Colors.needleGreen, borderRadius: Radius.lg,
-    padding: Spacing.lg, alignItems: 'center',
+    padding: 12, alignItems: 'center',
   },
   saveBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.white },
 })

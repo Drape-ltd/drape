@@ -260,7 +260,7 @@ Deno.serve(async (req) => {
 
     const { data: profile, error: profileError } = await supabase
       .from('tailor_profiles')
-      .select('id, supports_ready_made, profile_completed, id_verification_status, stripe_account_id, paystack_account_id')
+      .select('id, supports_ready_made, profile_completed, id_verification_status, stripe_account_id, paystack_account_id, stripe_connect_account_id, paystack_recipient_code, payout_account_verified, payout_reverification_required, payout_account_type')
       .eq('user_id', caller.id)
       .maybeSingle()
 

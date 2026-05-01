@@ -9,9 +9,9 @@ import { Image as ExpoImage } from 'expo-image'
 import { Feather } from '@expo/vector-icons'
 import { useRefreshOnFocus, useTailorPublic } from '@/lib/queries'
 import { supabase, invokeFunction } from '@/lib/supabase'
-import { useAuth } from '@/lib/auth'
+import { useAuth, useUserRole } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
-import { useCurrency, formatAmount } from '@/lib/currency'
+import { useCurrency, formatAmount, type CurrencyCode } from '@/lib/currency'
 import { TierBadgeChip, StarRating, Tag, Button } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { AvatarImage } from '@/components/ui/AvatarImage'
@@ -36,6 +36,7 @@ type TailorProfile = {
   bio: string | null
   specialtyTags: string[]
   languages: string[]
+  currency: string
   priceRangeMin: number | null
   priceRangeMax: number | null
   portfolioPhotos: string[]
@@ -79,6 +80,7 @@ export default function TailorProfileScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
+  const role = useUserRole()
   const scrollRef = useRef<ScrollView | null>(null)
   const portfolioPreviewRef = useRef<FlatList<string> | null>(null)
   const [savedOverride, setSavedOverride] = useState<boolean | null>(null)
@@ -97,7 +99,7 @@ export default function TailorProfileScreen() {
     isError,
     isFetching,
     refetch,
-  } = useTailorPublic(id, user?.id)
+  } = useTailorPublic(role === 'CUSTOMER' ? id : undefined, role === 'CUSTOMER' ? user?.id : undefined)
   const profile = (data?.profile ?? null) as TailorProfile | null
   const reviews = (data?.reviews ?? []) as Review[]
   const isSaved = savedOverride ?? data?.isSaved ?? false
@@ -226,9 +228,14 @@ export default function TailorProfileScreen() {
 
   const portfolioImages = Array.from(new Set(profile.portfolioPhotos.filter((url) => typeof url === 'string' && url.length > 0)))
   const heroImages = portfolioImages.filter((url) => !failedHeroImages.includes(url))
+  const pricingCurrency = (profile.currency ?? 'USD') as CurrencyCode
   const priceLabel = (profile.priceRangeMin && profile.priceRangeMax)
-    ? `${formatAmount(profile.priceRangeMin, 'USD', currency, rates)} to ${formatAmount(profile.priceRangeMax, 'USD', currency, rates)}`
+    ? `${formatAmount(profile.priceRangeMin, pricingCurrency, currency, rates)} to ${formatAmount(profile.priceRangeMax, pricingCurrency, currency, rates)}`
     : null
+  const originalPriceLabel =
+    priceLabel && pricingCurrency !== currency
+      ? `${formatAmount(profile.priceRangeMin ?? 0, pricingCurrency, pricingCurrency, rates)} to ${formatAmount(profile.priceRangeMax ?? 0, pricingCurrency, pricingCurrency, rates)}`
+      : null
   const isFullyBooked = profile.availability === 'FULLY_BOOKED'
   const portfolioCount = profile.portfolioPhotos.length
   const reviewSummary: ReviewSummary = {
@@ -362,6 +369,9 @@ export default function TailorProfileScreen() {
                 <View style={styles.detailCard}>
                   <Text style={styles.detailLabel}>Typical price</Text>
                   <Text style={styles.detailValue}>{priceLabel}</Text>
+                  {originalPriceLabel ? (
+                    <Text style={styles.detailSubvalue}>Original range: {originalPriceLabel}</Text>
+                  ) : null}
                 </View>
               ) : null}
               {profile.languages.length > 0 ? (
@@ -457,7 +467,11 @@ export default function TailorProfileScreen() {
                     text: 'Custom order',
                     onPress: () => router.push({
                       pathname: `/(customer)/brief/${profile.id}` as any,
-                      params: { returnTo: `/(customer)/tailor/${profile.id}` },
+                      params: {
+                        returnTo: `/(customer)/tailor/${profile.id}`,
+                        draftSession: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+                        freshStart: '1',
+                      },
                     }),
                   },
                 ]
@@ -472,7 +486,11 @@ export default function TailorProfileScreen() {
             label={isFullyBooked ? 'Fully booked' : 'Custom order'}
             onPress={() => router.push({
               pathname: `/(customer)/brief/${profile.id}` as any,
-              params: { returnTo: `/(customer)/tailor/${profile.id}` },
+              params: {
+                returnTo: `/(customer)/tailor/${profile.id}`,
+                draftSession: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+                freshStart: '1',
+              },
             })}
             style={{ flex: profile.supportsReadyMade ? 1.35 : 1.6 }}
             disabled={isFullyBooked}
@@ -734,9 +752,9 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.lightGrey,
   },
   modalClose: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
-  modalTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  modalTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   modalScroll: { flex: 1 },
-  modalContent: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.xxl },
+  modalContent: { padding: Spacing.lg, gap: Spacing.xs, paddingBottom: Spacing.xl },
   portfolioGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   portfolioTile: {
     width: PORTFOLIO_SIZE,
@@ -803,17 +821,17 @@ const styles = StyleSheet.create({
   },
   photoCountText: { fontSize: FontSize.xs, color: Colors.white, fontWeight: FontWeight.semibold },
 
-  body: { padding: Spacing.lg, gap: Spacing.lg, marginTop: -Spacing.lg },
+  body: { padding: Spacing.lg, gap: Spacing.md, marginTop: -Spacing.md },
   identityRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: Spacing.md,
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    padding: 16,
+    padding: 14,
     ...Shadow.md,
   },
-  name: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink },
+  name: { fontSize: 24, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia', lineHeight: 28 },
   location: { fontSize: FontSize.sm, color: Colors.midGrey, marginTop: 2 },
   identityMetaRow: { marginTop: Spacing.sm, flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   availRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginTop: -Spacing.md, marginBottom: -Spacing.sm },
@@ -835,7 +853,7 @@ const styles = StyleSheet.create({
     width: '48%',
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    paddingVertical: 12,
+    paddingVertical: 10,
     paddingHorizontal: 12,
     alignItems: 'center',
     gap: 2,
@@ -877,22 +895,22 @@ const styles = StyleSheet.create({
   statSubvalue: { fontSize: FontSize.xs, color: Colors.warning, fontWeight: FontWeight.semibold, textAlign: 'center' },
   statLabel: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'center' },
 
-  section: { gap: Spacing.sm },
-  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  section: { gap: Spacing.xs },
+  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   styleGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: Spacing.xs,
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    padding: 14,
+    padding: 12,
     ...Shadow.sm,
   },
   detailGrid: { gap: Spacing.sm },
   detailCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    padding: 14,
+    padding: 12,
     gap: Spacing.xs,
     ...Shadow.sm,
   },
@@ -904,6 +922,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   detailValue: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.semibold },
+  detailSubvalue: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   languageWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   languageChip: {
     backgroundColor: Colors.bone,
@@ -913,11 +932,11 @@ const styles = StyleSheet.create({
   },
   languageChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
 
-  bio: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  bio: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 19 },
   aboutCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    padding: 16,
+    padding: 14,
     gap: Spacing.xs,
     ...Shadow.sm,
   },
@@ -931,7 +950,7 @@ const styles = StyleSheet.create({
 
   reviewCard: {
     backgroundColor: Colors.white, borderRadius: Radius.md,
-    padding: 14, gap: Spacing.sm, ...Shadow.sm,
+    padding: 12, gap: Spacing.xs, ...Shadow.sm,
   },
   reviewHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   reviewAvatar: {
@@ -957,7 +976,7 @@ const styles = StyleSheet.create({
   emptyReviewCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    padding: 14,
+    padding: 12,
     gap: Spacing.xs,
     ...Shadow.sm,
   },
@@ -982,7 +1001,7 @@ const styles = StyleSheet.create({
   cta: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     flexDirection: 'row', gap: 8,
-    backgroundColor: Colors.white, paddingHorizontal: Spacing.lg, paddingTop: 12,
+    backgroundColor: Colors.white, paddingHorizontal: Spacing.lg, paddingTop: 10,
     borderTopWidth: 1, borderTopColor: Colors.lightGrey,
     paddingBottom: 8,
   },

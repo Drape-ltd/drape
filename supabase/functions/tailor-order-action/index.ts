@@ -27,12 +27,17 @@ import {
 import { rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
 import { checkRateLimit } from '../_shared/rateLimit.ts'
 import { log, audit } from '../_shared/logger.ts'
+import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import {
   customerFulfillmentPaymentRequestedNotification,
   fulfillmentPaymentRequestedStageNote,
 } from '../_shared/payment-copy.ts'
 import { normalizeStoredPhone, validateDispatchPhone, validateRecipientPhone } from '../_shared/phone.ts'
+import { sendSmsToUser } from '../_shared/sms.ts'
+import {
+  buildTailorOrderDeclineTerminalRequest,
+} from '../../../packages/shared/src/order-terminal.ts'
 import {
   buildCancellationReviewNote,
   buildDeliveryReviewNote,
@@ -51,11 +56,18 @@ import {
   parseOrderSupportMeta,
   serializeOrderSupportMeta,
 } from '../_shared/order-support.ts'
+import { finalizeOrderTerminal } from '../_shared/order-terminal.ts'
+import { refundSettledOrderPayments } from '../_shared/payment-refunds.ts'
 import { deriveTailorReadiness } from '../_shared/tailor-readiness.ts'
 import { z, parseBody, uuid, isoDate } from '../_shared/validate.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { resolveDrapeManagedFulfillmentFee } from '../../../packages/shared/src/fulfillment-fees.ts'
+import { deriveCancellationPolicy } from '../../../packages/shared/src/cancellation-policy.ts'
+import { buildCustomerStageSms } from '../../../packages/shared/src/sms-copy.ts'
+import { normalizeAccountCurrency } from '../../../packages/shared/src/currency-config.ts'
+import { normalizeTaxCountryCode } from '../../../packages/shared/src/tax.ts'
+import { calculateLockedOrderAmountsWithTaxBase, resolveOrderTax } from '../_shared/tax.ts'
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
@@ -65,6 +77,14 @@ const BodySchema = z.discriminatedUnion('action', [
     fulfillmentFee: z.number().int().nonnegative().max(100_000_00).optional(),
     currency:       z.string().trim().min(2).max(5),
     completionDate: isoDate,
+    breakdown: z.object({
+      laborAmount: z.number().int().nonnegative().max(100_000_00).optional(),
+      sourcingAmount: z.number().int().nonnegative().max(100_000_00).optional(),
+      rushAmount: z.number().int().nonnegative().max(100_000_00).optional(),
+      included: z.array(z.string().trim().min(1).max(120)).max(6).optional(),
+      excluded: z.array(z.string().trim().min(1).max(120)).max(6).optional(),
+      summary: z.string().trim().max(300).optional(),
+    }).optional(),
     note:           z.string().trim().max(300).optional(),
   }),
   z.object({
@@ -76,6 +96,13 @@ const BodySchema = z.discriminatedUnion('action', [
     orderId:         uuid,
     action:          z.literal('request-consultation'),
     consultationFee: z.number().int().nonnegative().max(100_000_00).nullable().optional(),
+    currency: z.string().trim().min(2).max(5).optional(),
+    creditFeeTowardOrder: z.boolean().optional(),
+    paymentTiming: z.enum(['BEFORE_CALL_STARTS', 'WAIVED_OR_FREE']).optional(),
+    reschedulePolicy: z.enum(['ONE_FREE_RESCHEDULE', 'FLEXIBLE_WITH_NOTICE', 'CASE_BY_CASE']).optional(),
+    noShowPolicy: z.enum(['FEE_FORFEITED', 'ONE_REBOOK_ALLOWED', 'CASE_BY_CASE']).optional(),
+    expiryPolicy: z.enum(['EXPIRES_IN_7_DAYS', 'EXPIRES_IN_14_DAYS', 'NO_EXPIRY']).optional(),
+    reminderEnabled: z.boolean().optional(),
     note:            z.string().trim().max(300).optional(),
   }),
   z.object({
@@ -180,21 +207,34 @@ type Action =
   | 'request-delivery-review'
 type OrderRow = {
   id: string
+  reference?: string | null
   stage: string
   order_kind?: string | null
   tailor_id?: string | null
   customer_id?: string | null
   deadline?: string | null
   fabric_source?: string | null
+  garment_type?: string | null
+  item_title?: string | null
+  item_size?: string | null
   special_note?: string | null
   customer_measurements_snapshot?: unknown
   delivery_method?: string | null
   delivery_address?: string | null
+  delivery_city?: string | null
+  delivery_region?: string | null
+  delivery_postal_code?: string | null
+  delivery_country_code?: string | null
   recipient_name?: string | null
   recipient_phone?: string | null
+  currency?: string | null
   quoted_amount?: number | null
   quoted_currency?: string | null
+  consultation_fee?: number | null
   fulfillment_fee?: number | null
+  tax_region?: string | null
+  tax_fallback?: boolean | null
+  tax_fallback_reason?: string | null
   fulfillment_payment_requested_at?: string | null
   fulfillment_payment_paid_at?: string | null
   fulfillment_provider?: string | null
@@ -350,7 +390,7 @@ Deno.serve(async (req) => {
     if (action === 'send-quote') {
       const { data: profile, error: profileError } = await supabase
         .from('tailor_profiles')
-        .select('profile_completed, id_verification_status, stripe_account_id, paystack_account_id, location')
+        .select('profile_completed, id_verification_status, stripe_account_id, paystack_account_id, stripe_connect_account_id, paystack_recipient_code, payout_account_verified, payout_reverification_required, payout_account_type, location')
         .eq('user_id', caller.id)
         .maybeSingle()
 
@@ -380,7 +420,7 @@ Deno.serve(async (req) => {
     // Only collection confirmation needs the collection code fields.
     const orderSelect = action === 'confirm-collection'
       ? 'id, stage, tailor_id, customer_id, collection_code, collection_code_attempts, collection_code_last_attempt_at, updated_at'
-      : 'id, stage, order_kind, tailor_id, customer_id, deadline, fabric_source, special_note, customer_measurements_snapshot, delivery_method, delivery_address, recipient_name, recipient_phone, quoted_amount, quoted_currency, fulfillment_fee, fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone, tracking_number, carrier'
+      : 'id, reference, stage, order_kind, tailor_id, customer_id, deadline, fabric_source, garment_type, item_title, item_size, special_note, customer_measurements_snapshot, delivery_method, delivery_address, delivery_city, delivery_region, delivery_postal_code, delivery_country_code, recipient_name, recipient_phone, currency, quoted_amount, quoted_currency, consultation_fee, fulfillment_fee, tax_region, tax_fallback, tax_fallback_reason, fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone, tracking_number, carrier'
 
     // Fetch order — verify tailor ownership and current stage
     const { data: orderData, error: orderError } = await supabase
@@ -711,7 +751,21 @@ Deno.serve(async (req) => {
         )
       }
 
-      if (!['PAYMENT_PENDING', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH'].includes(order.stage)) {
+      const cancellationPolicy = deriveCancellationPolicy({
+        orderKind: order.order_kind === 'READY_MADE' ? 'READY_MADE' : 'CUSTOM',
+        stage: order.stage as any,
+        deliveryMethod: order.delivery_method ?? null,
+        consultationFee: order.consultation_fee ?? null,
+        consultationPaidAt: meta.consultation?.paidAt ?? null,
+        consultationFeeCreditable: meta.consultation?.feeCreditable ?? null,
+        fulfillmentFee: order.fulfillment_fee ?? null,
+        fulfillmentPaymentRequestedAt: order.fulfillment_payment_requested_at ?? null,
+        fulfillmentPaymentPaidAt: order.fulfillment_payment_paid_at ?? null,
+        dispatchBookedAt: meta.dispatchRecord?.bookedAt ?? null,
+        premiumDispatch: meta.dispatchRecord?.premiumException ?? null,
+      })
+
+      if (!cancellationPolicy.tailorCanRequestReview) {
         return new Response(
           JSON.stringify({ error: `Cannot request cancellation review from stage ${order.stage}` }),
           { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
@@ -759,6 +813,27 @@ Deno.serve(async (req) => {
         order_id: orderId,
         severity: 'warn',
         payload: { reason: body.reason, from_stage: order.stage },
+      })
+
+      await createOrRefreshOpsIssue(supabase, {
+        issueType: 'ORDER_REVIEW',
+        severity: 'HIGH',
+        source: FN,
+        actorId: caller.id,
+        actorRole: 'TAILOR',
+        orderId,
+        userId: caller.id,
+        stage: order.stage,
+        title: 'Cancellation review requested',
+        description: `Tailor asked Drape to review a cancellation from ${order.stage}.`,
+        recommendedAction: 'Review the order timeline, tailor note, and refund implications before ruling.',
+        dedupeKey: `order-review:cancellation:${orderId}`,
+        metadata: {
+          review_type: 'CANCELLATION',
+          requested_by: 'TAILOR',
+          reason: body.reason,
+          from_stage: order.stage,
+        },
       })
 
       if (order.customer_id) {
@@ -834,6 +909,27 @@ Deno.serve(async (req) => {
         payload: { reason: body.reason, from_stage: order.stage },
       })
 
+      await createOrRefreshOpsIssue(supabase, {
+        issueType: 'DELIVERY_REVIEW',
+        severity: 'HIGH',
+        source: FN,
+        actorId: caller.id,
+        actorRole: 'TAILOR',
+        orderId,
+        userId: caller.id,
+        stage: order.stage,
+        title: 'Delivery review requested',
+        description: `Tailor asked Drape to review a dispatch or delivery issue from ${order.stage}.`,
+        recommendedAction: 'Check dispatch evidence, courier handoff context, and the current delivery stage before deciding the next step.',
+        dedupeKey: `order-review:delivery:${orderId}`,
+        metadata: {
+          review_type: 'DELIVERY',
+          requested_by: 'TAILOR',
+          reason: body.reason,
+          from_stage: order.stage,
+        },
+      })
+
       if (order.customer_id) {
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.customer_id.toString(), {
@@ -864,9 +960,41 @@ Deno.serve(async (req) => {
       }
 
       // Zod already validated: amount, currency, completionDate — extract safely
-      const { amount, currency, completionDate } = body as Extract<typeof body, { action: 'send-quote' }>
+      const { amount, currency, completionDate, breakdown } = body as Extract<typeof body, { action: 'send-quote' }>
+      const quoteCurrency = normalizeAccountCurrency(currency)
+      if (!quoteCurrency) {
+        return new Response(
+          JSON.stringify({ error: 'This quote currency is not supported.' }),
+          { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
       const parsedDate = new Date(completionDate)
       const customerDeadline = order.deadline ? new Date(order.deadline) : null
+      const supportMeta = parseOrderSupportMeta(order.special_note)
+      const { data: customerUserRow, error: customerUserError } = await supabase
+        .from('users')
+        .select('region_code')
+        .eq('id', order.customer_id)
+        .maybeSingle()
+
+      if (customerUserError) {
+        log('error', FN, 'db.error', {
+          actor_id: caller.id,
+          order_id: orderId,
+          action,
+          error: customerUserError.message,
+          surface: 'users.region_code',
+        })
+        return new Response('Could not resolve the customer tax region.', {
+          status: 500,
+          headers: { ...cors, 'Content-Type': 'application/json' },
+        })
+      }
+
+      const customerRegionCode =
+        typeof (customerUserRow as any)?.region_code === 'string' && (customerUserRow as any).region_code.trim().length > 0
+          ? (customerUserRow as any).region_code.trim().toUpperCase()
+          : 'ZZ'
       const fulfillmentFee = order.delivery_method === 'LOCAL_COLLECTION'
         ? 0
         : resolveDrapeManagedFulfillmentFee({
@@ -874,10 +1002,43 @@ Deno.serve(async (req) => {
               order.delivery_method === 'LOCAL_DELIVERY'
                 ? 'DELIVERY'
                 : 'SHIPPING',
-            orderCurrency: currency.trim().toUpperCase() as 'USD' | 'GBP' | 'EUR' | 'NGN' | 'GHS' | 'KES' | 'CAD',
+            orderCurrency: quoteCurrency,
             sellerLocation: sellerProfileLocation,
             destinationAddress: order.delivery_address ?? null,
           }).feeMinorUnits
+      let resolvedTax
+      try {
+        resolvedTax = await resolveOrderTax({
+          supabase,
+          orderId,
+          currency: quoteCurrency,
+          regionCode: customerRegionCode,
+          countryCode: normalizeTaxCountryCode(order.delivery_country_code) ?? customerRegionCode,
+          address: order.delivery_address ?? null,
+          postalCode: order.delivery_postal_code ?? null,
+          stateRegion: order.delivery_region ?? null,
+          city: order.delivery_city ?? null,
+        })
+      } catch (error) {
+        log('warn', FN, 'tax.lookup_unavailable', {
+          actor_id: caller.id,
+          order_id: orderId,
+          action,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        return new Response(
+          JSON.stringify({ error: 'We could not calculate tax for this quote right now. Please try again in a moment.' }),
+          { status: 503, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+      const lockedAmounts = calculateLockedOrderAmountsWithTaxBase({
+        subtotalAmount: amount,
+        platformFeeAmount: 0,
+        shippingAmount: fulfillmentFee,
+        taxRateBps: resolvedTax.rateBps,
+        shippingTaxable: resolvedTax.shippingTaxable,
+        platformFeeTaxable: resolvedTax.platformFeeTaxable,
+      })
 
       if (customerDeadline && parsedDate.getTime() > customerDeadline.getTime()) {
         return new Response(
@@ -886,21 +1047,66 @@ Deno.serve(async (req) => {
         )
       }
 
+      const cleanBreakdown = breakdown
+        ? {
+            laborAmount: typeof breakdown.laborAmount === 'number' ? breakdown.laborAmount : null,
+            sourcingAmount: typeof breakdown.sourcingAmount === 'number' ? breakdown.sourcingAmount : null,
+            rushAmount: typeof breakdown.rushAmount === 'number' ? breakdown.rushAmount : null,
+            consultationCreditAmount:
+              supportMeta.consultation?.feeCreditable && typeof order.consultation_fee === 'number' && order.consultation_fee > 0
+                ? Math.min(order.consultation_fee, amount)
+                : null,
+            included: breakdown.included?.map((value) => value.trim()).filter(Boolean) ?? [],
+            excluded: breakdown.excluded?.map((value) => value.trim()).filter(Boolean) ?? [],
+            summary: breakdown.summary?.trim() || null,
+          }
+        : null
+
+      const nextSupportMeta = {
+        ...supportMeta,
+        consultation: supportMeta.consultation
+          ? {
+              ...supportMeta.consultation,
+              status: supportMeta.consultation.status === 'REQUESTED' ? 'COMPLETED' as const : supportMeta.consultation.status ?? null,
+              feeCreditedTowardQuote:
+                supportMeta.consultation.feeCreditable === true
+                && typeof order.consultation_fee === 'number'
+                && order.consultation_fee > 0,
+            }
+          : supportMeta.consultation ?? null,
+        quoteBreakdown: cleanBreakdown,
+      }
+
       const { error } = await supabase
         .from('orders')
         .update({
           stage: 'QUOTE_SENT',
-          quoted_amount: amount + fulfillmentFee,
+          quoted_amount: lockedAmounts.totalAmount,
           fulfillment_fee: fulfillmentFee,
           fulfillment_payment_requested_at: null,
           fulfillment_payment_paid_at: null,
           fulfillment_payment_provider: null,
           fulfillment_payment_intent_id: null,
           fulfillment_payment_checkout_url: null,
-          quoted_currency: currency,
+          currency: quoteCurrency,
+          quoted_currency: quoteCurrency,
+          source_currency: quoteCurrency,
+          source_amount: amount,
+          fx_rate: 1,
+          fx_rate_timestamp: new Date().toISOString(),
+          subtotal_amount: lockedAmounts.subtotalAmount,
+          platform_fee_amount: lockedAmounts.platformFeeAmount,
+          tax_amount: lockedAmounts.taxAmount,
+          tax_rate_bps: lockedAmounts.taxRateBps,
+          tax_region: resolvedTax.taxRegion,
+          tax_fallback: resolvedTax.fallback,
+          tax_fallback_reason: resolvedTax.fallbackReason,
+          shipping_amount: lockedAmounts.shippingAmount,
+          total_amount: lockedAmounts.totalAmount,
           quoted_completion_date: parsedDate.toISOString(),
           quote_note: body.note?.trim() || null,
           quote_expires_at: nextQuoteExpiryIso(),
+          special_note: serializeOrderSupportMeta(nextSupportMeta),
           stage_updated_at: new Date().toISOString(),
         })
         .eq('id', orderId)
@@ -921,7 +1127,7 @@ Deno.serve(async (req) => {
         actor_id: caller.id,
         actor_role: 'TAILOR',
         order_id: orderId,
-        payload: { amount: body.amount, currency: body.currency, from_stage: order.stage },
+        payload: { amount: body.amount, currency: quoteCurrency, from_stage: order.stage },
       })
 
       log('info', FN, 'quote.sent', { actor_id: caller.id, order_id: orderId })
@@ -964,31 +1170,50 @@ Deno.serve(async (req) => {
         )
       }
 
-      const { error } = await supabase
-        .from('orders')
-        .update({ stage: 'DECLINED', stage_updated_at: new Date().toISOString() })
-        .eq('id', orderId)
+      let refundResult: Awaited<ReturnType<typeof refundSettledOrderPayments>> | null = null
 
-      if (error) {
-        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
-        return new Response('Database error', { status: 500, headers: cors })
+      try {
+        refundResult = await refundSettledOrderPayments(supabase, {
+          orderId,
+          reason: `Tailor declined order from ${order.stage}`,
+          actorId: caller.id,
+          actorRole: 'TAILOR',
+          allowedPhases: ['INITIAL_ORDER', 'CONSULTATION', 'FULFILLMENT'],
+        })
+      } catch (error) {
+        log('error', FN, 'refund.error', {
+          actor_id: caller.id,
+          order_id: orderId,
+          action,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        return new Response(
+          JSON.stringify({
+            error: 'We could not safely decline this order because the payment refund did not complete. Please try again or contact Drape support.',
+          }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
       }
 
-      await supabase.from('order_stage_updates').insert({
-        order_id: orderId,
-        stage: 'DECLINED',
-        note: body.note?.trim() || 'Tailor declined this order.',
-      })
-
-      await audit(supabase, {
-        event: 'order.stage_changed',
-        actor_id: caller.id,
-        actor_role: 'TAILOR',
-        order_id: orderId,
-        payload: { action, from_stage: order.stage, to_stage: 'DECLINED' },
-      })
-
-      log('info', FN, 'order.stage_changed', { actor_id: caller.id, order_id: orderId, from_stage: order.stage, to_stage: 'DECLINED' })
+      try {
+        await finalizeOrderTerminal(
+          supabase,
+          orderId,
+          buildTailorOrderDeclineTerminalRequest({
+            actorId: caller.id,
+            fromStage: order.stage as any,
+            note: body.note?.trim() || 'Tailor declined this order.',
+          }),
+        )
+      } catch (error) {
+        log('error', FN, 'db.error', {
+          actor_id: caller.id,
+          order_id: orderId,
+          action,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        return new Response('Database error', { status: 500, headers: cors })
+      }
 
       if (order.customer_id) {
         EdgeRuntime.waitUntil(
@@ -999,7 +1224,7 @@ Deno.serve(async (req) => {
         )
       }
 
-      return new Response(JSON.stringify({ ok: true }), {
+      return new Response(JSON.stringify({ ok: true, refundedAttempts: refundResult?.refundedAttempts ?? [] }), {
         headers: { ...cors, 'Content-Type': 'application/json' },
       })
     }
@@ -1019,13 +1244,53 @@ Deno.serve(async (req) => {
       }
 
       // Zod already validated consultationFee — extract safely
-      const { consultationFee = null } = body as Extract<typeof body, { action: 'request-consultation' }>
+      const {
+        consultationFee = null,
+        currency,
+        creditFeeTowardOrder,
+        paymentTiming,
+        reschedulePolicy,
+        noShowPolicy,
+        expiryPolicy,
+        reminderEnabled,
+      } = body as Extract<typeof body, { action: 'request-consultation' }>
+      const supportMeta = parseOrderSupportMeta(order.special_note)
+      const feeAmount = typeof consultationFee === 'number' && consultationFee > 0 ? consultationFee : null
+      const feeCurrency = feeAmount
+        ? normalizeAccountCurrency(currency ?? order.currency ?? order.quoted_currency) ?? 'USD'
+        : normalizeAccountCurrency(order.currency ?? order.quoted_currency)
+      const consultationMeta = {
+        ...(supportMeta.consultation ?? {}),
+        status: 'REQUESTED' as const,
+        feeMode: feeAmount ? 'PAID' as const : 'FREE' as const,
+        feeAmount,
+        feeCurrency,
+        feeCreditable: feeAmount ? creditFeeTowardOrder === true : false,
+        feeCreditedTowardQuote: false,
+        paymentProvider: null,
+        paymentIntentId: null,
+        paymentCheckoutUrl: null,
+        paymentTiming: feeAmount ? (paymentTiming ?? 'BEFORE_CALL_STARTS') : 'WAIVED_OR_FREE' as const,
+        paidAt: null,
+        reschedulePolicy: reschedulePolicy ?? 'ONE_FREE_RESCHEDULE',
+        noShowPolicy: noShowPolicy ?? (feeAmount ? 'FEE_FORFEITED' : 'CASE_BY_CASE'),
+        expiryPolicy: expiryPolicy ?? 'EXPIRES_IN_14_DAYS',
+        reminderEnabled: reminderEnabled ?? true,
+        requestNote: body.note?.trim() || null,
+        requestedAt: new Date().toISOString(),
+      }
 
       const { error } = await supabase
         .from('orders')
         .update({
           stage: 'CONSULTATION',
-          consultation_fee: consultationFee,
+          consultation_fee: feeAmount,
+          currency: feeAmount ? feeCurrency : normalizeAccountCurrency(order.currency) ?? normalizeAccountCurrency(order.quoted_currency) ?? 'USD',
+          quoted_currency: feeAmount ? feeCurrency : normalizeAccountCurrency(order.quoted_currency) ?? null,
+          special_note: serializeOrderSupportMeta({
+            ...supportMeta,
+            consultation: consultationMeta,
+          }),
           stage_updated_at: new Date().toISOString(),
         })
         .eq('id', orderId)
@@ -1279,6 +1544,32 @@ Deno.serve(async (req) => {
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.customer_id.toString(), { ...stageNotif, data: { orderId } })
         )
+
+        const stageSms = buildCustomerStageSms({
+          id: order.id,
+          reference: order.reference ?? null,
+          orderKind: order.order_kind ?? null,
+          garmentType: order.garment_type ?? null,
+          itemTitle: order.item_title ?? null,
+          itemSize: order.item_size ?? null,
+          deliveryMethod: order.delivery_method ?? null,
+          fulfillmentProvider: targetStage === 'READY_FOR_DRAPE_DISPATCH' ? 'Drape' : null,
+          carrier: null,
+        }, targetStage)
+
+        if (stageSms) {
+          EdgeRuntime.waitUntil(
+            sendSmsToUser({
+              supabase,
+              userId: order.customer_id.toString(),
+              audience: 'CUSTOMER',
+              orderId,
+              event: `order.stage_${targetStage.toLowerCase()}`,
+              body: stageSms,
+              fallbackPhone: targetStage === 'READY_FOR_COLLECTION' ? null : order.recipient_phone ?? null,
+            }),
+          )
+        }
       }
 
       // Return the collection_code so the UI can display it immediately
@@ -1373,6 +1664,9 @@ Deno.serve(async (req) => {
           collection_code_attempts: 0,
           collection_code_last_attempt_at: null,
           stage_updated_at: new Date().toISOString(),
+          handoff_completed_at: new Date().toISOString(),
+          customer_handoff_confirmed_at: new Date().toISOString(),
+          handoff_confirmation_source: 'COLLECTION_CODE_VERIFIED',
         })
         .eq('id', orderId)
 

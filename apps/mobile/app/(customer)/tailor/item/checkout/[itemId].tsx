@@ -5,7 +5,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator
 import { Feather } from '@expo/vector-icons'
 import { qk, useCustomerMeasurements, useRefreshOnFocus, useSellerItem } from '@/lib/queries'
 import { quantityForSize } from '@/lib/ready-made-stock'
-import { readFunctionErrorPayload } from '@/lib/function-errors'
+import { readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import { composeStructuredAddress, parseNominatimSuggestion } from '@/lib/address'
 import { invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
@@ -13,7 +13,6 @@ import { Button } from '@/components/ui'
 import { goBackOrReturnToIfNeeded } from '@/lib/navigation'
 import { normalizePhoneForStorage, validatePhoneForProfile } from '@drape/shared/phone'
 import { phoneHintForContext } from '@/lib/phone-context'
-import { resolveDrapeManagedFulfillmentFee } from '@drape/shared'
 import { READY_MADE_CHECKOUT_REMINDER, READY_MADE_POLICY_ROWS } from '@/lib/ready-made-policy'
 import {
   normalizeReadyMadeSizeGuide,
@@ -23,9 +22,27 @@ import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constan
 import { useOrderPaymentFlow } from '@/lib/payments'
 import { queryClient } from '@/lib/queryClient'
 import type { SellerItemDetail as ItemDetail } from '@/lib/queries'
+import { formatAmount, useCurrency, type CurrencyCode } from '@/lib/currency'
 
 type FulfillmentOption = 'PICKUP' | 'DELIVERY' | 'SHIPPING'
 type RecipientMode = 'SELF' | 'OTHER'
+type CheckoutPricingPreview = {
+  currency: CurrencyCode
+  sourceCurrency: CurrencyCode
+  sourceSubtotal: number
+  fxRate: number
+  fxRateTimestamp: string | null
+  subtotalAmount: number
+  platformFeeAmount: number
+  taxAmount: number
+  taxRateBps: number
+  taxRegion: string
+  taxFallback: boolean
+  taxFallbackReason: string | null
+  shippingAmount: number
+  totalAmount: number
+  taxLabel: string
+}
 
 const MAX_READY_MADE_CHECKOUT_QUANTITY = 3
 const HOME_BG = '#F9F7F3'
@@ -85,10 +102,14 @@ export default function ReadyMadeCheckoutScreen() {
   const [recipientPhone, setRecipientPhone] = useState('')
   const [addressError, setAddressError] = useState('')
   const [recipientError, setRecipientError] = useState('')
+  const [checkoutPricing, setCheckoutPricing] = useState<CheckoutPricingPreview | null>(null)
+  const [pricingLoading, setPricingLoading] = useState(false)
+  const [pricingError, setPricingError] = useState('')
   const suppressNextAddressLookup = useRef(false)
   const { data: item, isLoading, refetch } = useSellerItem(itemId)
   const { data: measurements } = useCustomerMeasurements(user?.id)
   const { startOrderPayment } = useOrderPaymentFlow()
+  const { currency: accountCurrency, rates } = useCurrency()
   const activeItem = item ?? (checkoutInFlight ? checkoutItemSnapshot : null)
 
   useRefreshOnFocus(() => { void refetch() }, 0)
@@ -237,17 +258,6 @@ export default function ReadyMadeCheckoutScreen() {
     return true
   }
 
-  const subtotal = useMemo(() => (activeItem ? activeItem.priceAmount * quantity : 0), [activeItem, quantity])
-  const fulfillmentFee = useMemo(() => {
-    if (!activeItem || !fulfillment) return 0
-    return resolveDrapeManagedFulfillmentFee({
-      fulfillment,
-      orderCurrency: activeItem.currency as 'USD' | 'GBP' | 'EUR' | 'NGN' | 'GHS' | 'KES' | 'CAD',
-      sellerLocation: activeItem.sellerLocation,
-      destinationAddress: fulfillment === 'PICKUP' ? null : composeAddress(),
-    }).feeMinorUnits
-  }, [fulfillment, activeItem, addressLine1, addressLine2, city, stateRegion, postcode, country])
-  const projectedTotal = subtotal + fulfillmentFee
   const selectedSizeInventory = activeItem
     ? quantityForSize(activeItem.sizeInventory, selectedSize || null, activeItem.inventoryQuantity)
     : 0
@@ -273,6 +283,107 @@ export default function ReadyMadeCheckoutScreen() {
     setQuantity((current) => Math.min(current, nextLimit))
   }, [activeItem, maxCheckoutQuantity])
 
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadPricingPreview() {
+      if (!activeItem || !fulfillment) {
+        setCheckoutPricing(null)
+        setPricingError('')
+        setPricingLoading(false)
+        return
+      }
+
+      if (activeItem.sizes.length > 0 && !selectedSize.trim()) {
+        setCheckoutPricing(null)
+        setPricingError('')
+        setPricingLoading(false)
+        return
+      }
+
+      const needsAddress = fulfillment !== 'PICKUP'
+      const composedAddress = needsAddress ? composeAddress() : ''
+      const trimmedCity = city.trim()
+      const trimmedRegion = stateRegion.trim()
+      const trimmedPostalCode = postcode.trim()
+      const trimmedCountry = country.trim()
+
+      if (needsAddress && (!addressLine1.trim() || !trimmedCity || !trimmedRegion || !trimmedCountry)) {
+        setCheckoutPricing(null)
+        setPricingError('Add the full delivery address to see your locked tax and total.')
+        setPricingLoading(false)
+        return
+      }
+
+      setPricingLoading(true)
+      setPricingError('')
+
+      try {
+        const { data, error } = await invokeFunction<{
+          ok: boolean
+          pricing?: CheckoutPricingPreview
+        }>('ready-made-order-action', {
+          body: {
+            action: 'preview-checkout',
+            sellerItemId: activeItem.id,
+            size: selectedSize.trim() || undefined,
+            quantity,
+            fulfillment,
+            address: needsAddress ? composedAddress : undefined,
+            city: needsAddress ? trimmedCity : undefined,
+            region: needsAddress ? trimmedRegion : undefined,
+            postalCode: needsAddress ? trimmedPostalCode || undefined : undefined,
+            countryCode: needsAddress ? trimmedCountry : undefined,
+          },
+        })
+
+        if (cancelled) return
+
+        if (error || !data?.pricing) {
+          const message = await readFunctionErrorMessage(
+            error,
+            'We could not calculate tax and totals for this checkout right now.',
+          )
+          setCheckoutPricing(null)
+          setPricingError(message)
+          setPricingLoading(false)
+          return
+        }
+
+        setCheckoutPricing(data.pricing)
+        setPricingError('')
+      } catch {
+        if (cancelled) return
+        setCheckoutPricing(null)
+        setPricingError('We could not calculate tax and totals for this checkout right now.')
+      } finally {
+        if (!cancelled) {
+          setPricingLoading(false)
+        }
+      }
+    }
+
+    const timeout = setTimeout(() => {
+      void loadPricingPreview()
+    }, 250)
+
+    return () => {
+      cancelled = true
+      clearTimeout(timeout)
+    }
+  }, [
+    activeItem,
+    fulfillment,
+    selectedSize,
+    quantity,
+    addressLine1,
+    addressLine2,
+    city,
+    stateRegion,
+    postcode,
+    country,
+  ])
+
   async function createOrder() {
     if (!user?.id || !activeItem || !fulfillment || saving) return
     if (!validate()) return
@@ -289,6 +400,10 @@ export default function ReadyMadeCheckoutScreen() {
           quantity,
           fulfillment,
           address: fulfillment === 'PICKUP' ? undefined : composeAddress(),
+          city: fulfillment === 'PICKUP' ? undefined : city.trim(),
+          region: fulfillment === 'PICKUP' ? undefined : stateRegion.trim(),
+          postalCode: fulfillment === 'PICKUP' ? undefined : postcode.trim() || undefined,
+          countryCode: fulfillment === 'PICKUP' ? undefined : country.trim(),
           recipientName: fulfillment === 'PICKUP' ? undefined : recipientName.trim(),
           recipientPhone: fulfillment === 'PICKUP' ? undefined : normalizePhoneForStorage(recipientPhone),
         },
@@ -384,7 +499,12 @@ export default function ReadyMadeCheckoutScreen() {
                   ? sizeStockHelperText(selectedSize, selectedSizeInventory)
                   : stockHelperText(activeItem.inventoryQuantity)}
               </Text>
-              <Text style={styles.itemPrice}>{activeItem.currency} {(activeItem.priceAmount / 100).toFixed(2)}</Text>
+              <Text style={styles.itemPrice}>{formatAmount(activeItem.priceAmount, activeItem.currency as CurrencyCode, accountCurrency, rates)}</Text>
+              {activeItem.currency !== accountCurrency ? (
+                <Text style={styles.stockSummary}>
+                  Original price: {formatAmount(activeItem.priceAmount, activeItem.currency as CurrencyCode, activeItem.currency as CurrencyCode, rates)}
+                </Text>
+              ) : null}
             </View>
 
             <View style={styles.infoCard}>
@@ -574,7 +694,6 @@ export default function ReadyMadeCheckoutScreen() {
 
             <View style={styles.breakdownCard}>
               <Text style={styles.sectionTitle}>Order summary</Text>
-              <SummaryRow label="Item subtotal" value={`${activeItem.currency} ${(subtotal / 100).toFixed(2)}`} />
               <SummaryRow label="Fulfillment" value={fulfillmentLabel(fulfillment)} />
               {fulfillment !== 'PICKUP' && recipientName.trim() ? (
                 <SummaryRow label={recipientMode === 'SELF' ? 'Receiving contact' : 'Recipient'} value={recipientName.trim()} />
@@ -582,14 +701,46 @@ export default function ReadyMadeCheckoutScreen() {
               {fulfillment !== 'PICKUP' && recipientPhone.trim() ? (
                 <SummaryRow label="Contact phone" value={normalizePhoneForStorage(recipientPhone)} />
               ) : null}
-              <SummaryRow
-                label={fulfillment === 'DELIVERY' ? 'Delivery fee' : fulfillment === 'SHIPPING' ? 'Shipping fee' : 'Fulfillment fee'}
-                value={fulfillmentFee > 0 ? `${activeItem.currency} ${(fulfillmentFee / 100).toFixed(2)}` : 'Free'}
-              />
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Total</Text>
-                <Text style={styles.totalValue}>{activeItem.currency} {(projectedTotal / 100).toFixed(2)}</Text>
-              </View>
+              {pricingLoading && !checkoutPricing ? (
+                <View style={styles.pricingStateRow}>
+                  <ActivityIndicator size="small" color={PRIMARY_GREEN} />
+                  <Text style={styles.helperText}>Calculating tax and locked total…</Text>
+                </View>
+              ) : pricingError ? (
+                <Text style={styles.errorText}>{pricingError}</Text>
+              ) : checkoutPricing ? (
+                <>
+                  <SummaryRow
+                    label="Item subtotal"
+                    value={formatAmount(checkoutPricing.subtotalAmount, checkoutPricing.currency, checkoutPricing.currency, rates)}
+                  />
+                  <SummaryRow
+                    label={fulfillment === 'DELIVERY' ? 'Delivery fee' : fulfillment === 'SHIPPING' ? 'Shipping fee' : 'Fulfillment fee'}
+                    value={checkoutPricing.shippingAmount > 0
+                      ? formatAmount(checkoutPricing.shippingAmount, checkoutPricing.currency, checkoutPricing.currency, rates)
+                      : 'Free'}
+                  />
+                  <SummaryRow
+                    label={checkoutPricing.taxLabel}
+                    value={formatAmount(checkoutPricing.taxAmount, checkoutPricing.currency, checkoutPricing.currency, rates)}
+                  />
+                  <View style={styles.totalRow}>
+                    <Text style={styles.totalLabel}>Total</Text>
+                    <Text style={styles.totalValue}>
+                      {formatAmount(checkoutPricing.totalAmount, checkoutPricing.currency, checkoutPricing.currency, rates)}
+                    </Text>
+                  </View>
+                  {checkoutPricing.taxFallback ? (
+                    <Text style={styles.helperText}>
+                      Tax was estimated because live tax lookup was unavailable for this address.
+                    </Text>
+                  ) : null}
+                </>
+              ) : (
+                <Text style={styles.helperText}>
+                  Add the final checkout details above to see the locked tax and total before you pay.
+                </Text>
+              )}
             </View>
 
             <View style={styles.bestUseCard}>
@@ -620,7 +771,14 @@ export default function ReadyMadeCheckoutScreen() {
             label={saving ? 'Preparing payment…' : 'Pay now'}
             size="md"
             onPress={createOrder}
-            disabled={saving || !fulfillment || (activeItem.sizes.length > 0 && selectedSizeInventory <= 0)}
+            disabled={
+              saving
+              || pricingLoading
+              || !checkoutPricing
+              || !!pricingError
+              || !fulfillment
+              || (activeItem.sizes.length > 0 && selectedSizeInventory <= 0)
+            }
           />
         </View>
       ) : null}
@@ -649,7 +807,7 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: HOME_BG },
   scroll: { flex: 1 },
-  content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, gap: Spacing.md, paddingBottom: Spacing.lg },
+  content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, gap: Spacing.sm, paddingBottom: Spacing.lg },
   header: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, minHeight: 44 },
   headerBackButton: {
     width: 44,
@@ -658,20 +816,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   headerSpacer: { width: 44, height: 44 },
-  headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   stateCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: Spacing.lg, gap: Spacing.sm, alignItems: 'center', ...Shadow.sm },
-  stateTitle: { fontSize: 16, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  stateTitle: { fontSize: 16, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   stateText: { fontSize: 13, color: Colors.inkLight, textAlign: 'center', lineHeight: 18 },
-  summaryCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 4, ...Shadow.sm },
+  summaryCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: 4, ...Shadow.sm },
   sellerName: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
-  itemTitle: { fontSize: 28, lineHeight: 32, fontWeight: FontWeight.bold, color: CHARCOAL },
+  itemTitle: { fontSize: 24, lineHeight: 28, fontWeight: FontWeight.bold, color: CHARCOAL, fontFamily: 'Georgia' },
   stockSummary: { fontSize: 12, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
-  itemPrice: { marginTop: 2, fontSize: 22, color: PRIMARY_GREEN, fontWeight: FontWeight.bold },
-  infoCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 4, ...Shadow.sm },
-  infoTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  itemPrice: { marginTop: 2, fontSize: 22, color: PRIMARY_GREEN, fontWeight: FontWeight.bold, fontFamily: 'Georgia' },
+  infoCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: 4, ...Shadow.sm },
+  infoTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   infoBody: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
-  sectionCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 8, ...Shadow.sm },
-  sectionTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  sectionCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: 8, ...Shadow.sm },
+  sectionTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   recommendationCard: {
     backgroundColor: Colors.needleGreenLight,
     borderRadius: Radius.md,
@@ -702,9 +860,9 @@ const styles = StyleSheet.create({
   quantityBtnText: { fontSize: 22, color: CHARCOAL, fontWeight: FontWeight.semibold },
   quantityValue: { minWidth: 28, textAlign: 'center', fontSize: 16, fontWeight: FontWeight.semibold, color: CHARCOAL },
   choiceGroup: { gap: 8 },
-  choiceCard: { backgroundColor: HOME_BG, borderRadius: Radius.md, padding: 12, gap: 4, borderWidth: 1.5, borderColor: Colors.lightGrey, minHeight: 72 },
+  choiceCard: { backgroundColor: HOME_BG, borderRadius: Radius.md, padding: 12, gap: 4, borderWidth: 1, borderColor: Colors.lightGrey, minHeight: 64 },
   choiceCardActive: { borderColor: PRIMARY_GREEN, backgroundColor: Colors.needleGreenLight },
-  choiceTitle: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  choiceTitle: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   choiceTitleActive: { color: PRIMARY_GREEN },
   choiceHint: { fontSize: 12, color: MUTED_GREY, lineHeight: 16 },
   input: {
@@ -723,25 +881,26 @@ const styles = StyleSheet.create({
   suggestionRowLast: { borderBottomWidth: 0 },
   suggestionText: { fontSize: 13, color: CHARCOAL },
   errorText: { fontSize: 12, color: Colors.error, marginTop: 2 },
-  breakdownCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 8, ...Shadow.sm },
+  breakdownCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: 8, ...Shadow.sm },
+  pricingStateRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   summaryLabel: { fontSize: 13, color: MUTED_GREY },
   summaryValue: { fontSize: 13, color: CHARCOAL, fontWeight: FontWeight.medium },
   totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, borderTopWidth: 1, borderTopColor: Colors.lightGrey },
   totalLabel: { fontSize: 15, color: CHARCOAL, fontWeight: FontWeight.semibold },
-  totalValue: { fontSize: 15, color: PRIMARY_GREEN, fontWeight: FontWeight.bold },
-  bestUseCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 4, ...Shadow.sm },
+  totalValue: { fontSize: 15, color: PRIMARY_GREEN, fontWeight: FontWeight.bold, fontFamily: 'Georgia' },
+  bestUseCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: 4, ...Shadow.sm },
   bestUseEyebrow: { fontSize: 11, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.6 },
   bestUseText: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
-  policyCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 8, ...Shadow.sm },
-  policyTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  policyCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: 8, ...Shadow.sm },
+  policyTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   policyList: { gap: 8 },
   policyRow: { gap: 4 },
   policyRowTitle: { fontSize: 13, fontWeight: FontWeight.semibold, color: CHARCOAL },
   policyRowBody: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
   footer: {
     paddingHorizontal: Spacing.lg,
-    paddingTop: 10,
+    paddingTop: 8,
     paddingBottom: 8,
     backgroundColor: Colors.white,
     borderTopWidth: 1,

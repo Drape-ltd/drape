@@ -7,12 +7,13 @@
 import { useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  Image, ActivityIndicator, RefreshControl, Alert,
+  ActivityIndicator, RefreshControl, Alert,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { Image as ExpoImage } from 'expo-image'
 import { invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
@@ -153,10 +154,11 @@ export default function SavedScreen() {
               {/* Image */}
               <View style={styles.imageWrap}>
                 {item.portfolioPhoto && !failedImages.includes(item.id) ? (
-                  <Image
+                  <ExpoImage
                     source={{ uri: item.portfolioPhoto }}
                     style={styles.image}
-                    resizeMode="cover"
+                    contentFit="cover"
+                    transition={120}
                     onError={() => {
                       setFailedImages((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]))
                     }}
@@ -376,7 +378,7 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.lg,
     paddingBottom: Spacing.md,
   },
-  title: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
+  title: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
   heroBadge: {
     alignSelf: 'flex-start',
     paddingHorizontal: Spacing.md,
@@ -409,7 +411,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
 
   list: { padding: Spacing.xl, gap: Spacing.md, paddingBottom: 100 },
   row: { gap: Spacing.md, justifyContent: 'space-between' },
@@ -440,7 +442,7 @@ const styles = StyleSheet.create({
 
   info: { padding: Spacing.md, gap: 4 },
   nameRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 4 },
-  name: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, flex: 1 },
+  name: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, flex: 1, fontFamily: 'Georgia' },
   location: { fontSize: FontSize.xs, color: Colors.midGrey },
   retryBtn: {
     backgroundColor: Colors.needleGreen,

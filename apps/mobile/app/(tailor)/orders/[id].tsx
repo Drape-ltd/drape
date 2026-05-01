@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, Image, TextInput, ActivityIndicator, Modal, KeyboardAvoidingView, Platform,
+  Alert, TextInput, ActivityIndicator, Modal, KeyboardAvoidingView, Platform,
 } from 'react-native'
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { Image as ExpoImage } from 'expo-image'
 import * as ImagePicker from 'expo-image-picker'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import { supabase, invokeFunction } from '@/lib/supabase'
@@ -24,8 +25,13 @@ import { createConsultationRoom, openConsultationCallUrl } from '@/lib/consultat
 import { createOrderCallRoom, openDrapeCallUrl } from '@/lib/order-call'
 import {
   CANCELLATION_REVIEW_REASON_LABELS,
+  CONSULTATION_EXPIRY_POLICY_LABELS,
+  CONSULTATION_NO_SHOW_POLICY_LABELS,
+  CONSULTATION_PAYMENT_TIMING_LABELS,
+  CONSULTATION_RESCHEDULE_POLICY_LABELS,
   COVERAGE_PREFERENCE_LABELS,
   DELIVERY_REVIEW_REASON_LABELS,
+  DISPATCH_SERVICE_LEVEL_LABELS,
   enrichMeasurementSnapshot,
   FABRIC_HANDOFF_LABELS,
   FABRIC_STRETCH_LABELS,
@@ -61,11 +67,17 @@ import {
   type HandoffIssue,
 } from '@/lib/handoff-support'
 import { Button, HandoffSupportModal, Input } from '@/components/ui'
+import { currencySymbol } from '@drape/shared'
 import { filterContactInfo, rejectPlaceholder } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
-import { formatAmount, STATIC_FALLBACK_RATES, SUPPORTED_CURRENCIES, type CurrencyCode } from '@/lib/currency'
+import {
+  CANCELLATION_REFUND_COMPONENT_LABELS,
+  deriveCancellationPolicy,
+} from '@drape/shared/cancellation-policy'
+import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { stageColor } from '@/lib/stageColors'
+import { isTerminalOrderStage, purgeTerminalOrderClientState } from '@/lib/order-client-state'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -123,6 +135,11 @@ function orderStatusGuidance(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MAD
     return orderKind === 'READY_MADE'
       ? 'Checkout is still open. The customer is next to finish payment before fulfilment can start.'
       : 'The customer has started payment. They are next to finish payment before production can start.'
+  }
+  if (stage === 'PAYMENT_FAILED') {
+    return orderKind === 'READY_MADE'
+      ? 'Checkout failed. The customer is next to retry within 30 minutes before this order is cancelled automatically.'
+      : 'Payment failed. The customer is next to retry within 30 minutes before this order is cancelled automatically.'
   }
   if (stage === 'CONFIRMED') {
     return orderKind === 'READY_MADE'
@@ -183,12 +200,14 @@ function quotedAmountLabel(
 ): string {
   if (orderKind === 'READY_MADE') {
     if (stage === 'PAYMENT_PENDING') return 'awaiting payment'
+    if (stage === 'PAYMENT_FAILED') return 'payment failed'
     if (fulfillmentPaymentPending) return 'item paid'
     if (stage === 'COMPLETE') return 'closed out'
     return 'paid'
   }
   if (fulfillmentPaymentPending) return 'base quote paid'
   if (stage === 'QUOTE_SENT') return 'quoted'
+  if (stage === 'PAYMENT_FAILED') return 'payment failed'
   if (stage === 'DELIVERED' || stage === 'COLLECTED') return 'awaiting finish'
   if (stage === 'COMPLETE') return 'closed out'
   return 'held'
@@ -198,6 +217,10 @@ function displayStageChoiceLabel(targetStage: OrderStage, orderKind: 'CUSTOM' | 
   if (orderKind === 'READY_MADE' && targetStage === 'FINISHING') return 'Preparing order'
   if (targetStage === 'READY_FOR_DRAPE_DISPATCH') return 'Ready for Drape dispatch'
   return STAGE_LABELS[targetStage]
+}
+
+function refundCoverageLabel(components: string[]) {
+  return components.map((component) => CANCELLATION_REFUND_COMPONENT_LABELS[component as keyof typeof CANCELLATION_REFUND_COMPONENT_LABELS]).join(', ')
 }
 
 function stageUpdateNotePlaceholder(order: Pick<OrderDetail, 'orderKind' | 'deliveryMethod'>, targetStage: OrderStage) {
@@ -318,6 +341,22 @@ const FLEXIBLE_NEXT_STAGES: Partial<Record<OrderStage, OrderStage[]>> = {
 
 const PRE_CUTTING_STAGES: OrderStage[] = ['PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING', 'CONFIRMED', 'DESIGNING', 'SOURCING']
 
+function parseMoneyToMinorUnits(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  const parsed = Number.parseFloat(trimmed)
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined
+  return Math.round(parsed * 100)
+}
+
+function parseListInput(value: string) {
+  return value
+    .split(/\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 6)
+}
+
 const GARMENT_CONTEXT_LABELS: Record<string, string> = {
   MENSWEAR: 'Menswear cuts', WOMENSWEAR: 'Womenswear cuts',
   BOTH: 'Both', PREFER_NOT: 'Prefer not to say', PREFER_NOT_TO_SAY: 'Prefer not to say',
@@ -371,8 +410,18 @@ export default function TailorOrderDetailScreen() {
   const [hasCustomerReview, setHasCustomerReview] = useState(false)
   const [handoffIssue, setHandoffIssue] = useState<HandoffIssue | null>(null)
   const [resolvingHandoffIssue, setResolvingHandoffIssue] = useState(false)
+  const purgedTerminalOrderRef = useRef<string | null>(null)
 
   async function fetchOrder() {
+    if (!id || !user?.id) {
+      setLoading(false)
+      setFetchErrorMessage('')
+      setOrder(null)
+      setHasCustomerReview(false)
+      setFailedReferencePhotos([])
+      setHandoffIssue(null)
+      return
+    }
     setLoading(true)
     setFetchErrorMessage('')
     setOrder(null)
@@ -392,7 +441,7 @@ export default function TailorOrderDetailScreen() {
         customer_profiles!customer_id(display_name)
       `)
       .eq('id', id)
-      .eq('tailor_id', user?.id)
+      .eq('tailor_id', user.id)
       .maybeSingle()
 
       if (error) throw error
@@ -407,7 +456,7 @@ export default function TailorOrderDetailScreen() {
           garmentDescription: d.garment_description, stage: d.stage,
           customerId: d.customer_id,
           customerName: d.customer_profiles?.display_name ?? 'Customer',
-          quotedAmount: d.quoted_amount, quotedCurrency: d.quoted_currency ?? 'USD', quotedCompletionDate: d.quoted_completion_date,
+          quotedAmount: d.quoted_amount, quotedCurrency: d.currency ?? d.quoted_currency ?? 'USD', quotedCompletionDate: d.quoted_completion_date,
           fulfillmentPaymentRequestedAt: d.fulfillment_payment_requested_at ?? null,
           fulfillmentPaymentPaidAt: d.fulfillment_payment_paid_at ?? null,
           fulfillmentPaymentProvider: d.fulfillment_payment_provider ?? null,
@@ -453,6 +502,17 @@ export default function TailorOrderDetailScreen() {
   }
 
   useEffect(() => { void fetchOrder() }, [id, user?.id])
+
+  useEffect(() => {
+    if (!order || !isTerminalOrderStage(order.stage)) return
+    const purgeKey = `${order.id}:${order.stage}`
+    if (purgedTerminalOrderRef.current === purgeKey) return
+    purgedTerminalOrderRef.current = purgeKey
+    void purgeTerminalOrderClientState({
+      orderId: order.id,
+      customerId: order.customerId,
+    })
+  }, [order])
 
   if (loading) {
     return (
@@ -541,6 +601,19 @@ export default function TailorOrderDetailScreen() {
   const fitConfidence = order.measurements?.fitConfidence
   const measurementConfirmationNeeded = order.measurements?.needsConfirmation === true
   const fitProfile = order.supportMeta.fitProfile ?? null
+  const consultationMeta = order.supportMeta.consultation ?? null
+  const quoteBreakdown = order.supportMeta.quoteBreakdown ?? null
+  const fabricPolicy = order.supportMeta.fabricPolicy ?? null
+  const bulkOrder = order.supportMeta.bulkOrder ?? null
+  const dispatchRecord = order.supportMeta.dispatchRecord ?? null
+  const consultationPaymentRequired =
+    order.stage === 'CONSULTATION' &&
+    !!consultationMeta?.feeAmount &&
+    consultationMeta.paymentTiming === 'BEFORE_CALL_STARTS'
+  const consultationPaymentPaid =
+    order.stage === 'CONSULTATION' &&
+    !!consultationMeta?.feeAmount &&
+    !!consultationMeta.paidAt
   const fitProfileReviewNeeded = fitProfileNeedsTailorReview(order.supportMeta)
   const fabricHandoffMode = order.supportMeta.fabricHandoffMode ?? null
   const fabricHandoffLabel =
@@ -562,9 +635,27 @@ export default function TailorOrderDetailScreen() {
   const cancellationReasonLabel =
     cancellationReview?.reasonLabel ??
     (cancellationReview?.reason ? CANCELLATION_REVIEW_REASON_LABELS[cancellationReview.reason] : null)
+  const cancellationPolicy = deriveCancellationPolicy({
+    orderKind: order.orderKind,
+    stage: order.stage,
+    deliveryMethod: order.deliveryMethod,
+    consultationFee: consultationMeta?.feeAmount ?? null,
+    consultationPaidAt: consultationMeta?.paidAt ?? null,
+    consultationFeeCreditable: consultationMeta?.feeCreditable ?? null,
+    fulfillmentFee: order.fulfillmentFee,
+    fulfillmentPaymentRequestedAt: order.fulfillmentPaymentRequestedAt,
+    fulfillmentPaymentPaidAt: order.fulfillmentPaymentPaidAt,
+    dispatchBookedAt: dispatchRecord?.bookedAt ?? null,
+    premiumDispatch: dispatchRecord?.premiumException ?? null,
+  })
   const canRequestCancellationReview =
     !cancellationReviewOpen &&
-    ['PAYMENT_PENDING', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH'].includes(order.stage)
+    cancellationPolicy.tailorCanRequestReview
+  const showCancellationPolicyCard =
+    cancellationReviewOpen ||
+    (order.orderKind === 'CUSTOM'
+      ? ['PAYMENT_PENDING', 'PAYMENT_FAILED', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH'].includes(order.stage)
+      : ['PAYMENT_PENDING', 'PAYMENT_FAILED', 'CONFIRMED', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH'].includes(order.stage))
   const deliveryReview = order.supportMeta.deliveryReview ?? null
   const deliveryReviewOpen = hasOpenDeliveryReview(order.supportMeta)
   const deliveryReasonLabel =
@@ -800,6 +891,10 @@ export default function TailorOrderDetailScreen() {
                               Alert.alert('Error', message)
                               return
                             }
+                            await purgeTerminalOrderClientState({
+                              orderId: order.id,
+                              customerId: order.customerId,
+                            })
                             router.replace('/(tailor)/orders')
                           },
                         },
@@ -816,15 +911,24 @@ export default function TailorOrderDetailScreen() {
             <View style={[styles.alertCard, styles.consultationCard]}>
               <Text style={styles.alertTitle}>Consultation requested</Text>
               <Text style={styles.alertSub}>
-                You've requested a consultation with this customer. Once done, send your quote or decline.
+                {consultationPaymentRequired && !consultationPaymentPaid
+                  ? "You've requested a paid consultation. Wait for the customer to pay before you start the call."
+                  : "You've requested a consultation with this customer. Once done, send your quote or decline."}
               </Text>
+              {consultationPaymentRequired ? (
+                <Text style={styles.supportHint}>
+                  {consultationPaymentPaid
+                    ? 'Consultation fee paid. You can start the consultation call when ready.'
+                    : 'The customer still needs to pay the consultation fee before the consultation can begin.'}
+                </Text>
+              ) : null}
               <View style={{ flexDirection: 'row', gap: Spacing.md }}>
                 <View style={{ flex: 1 }}>
                   <Button
                     label={order.videoCallUrl ? 'Rejoin call' : '📹 Video call'}
                     onPress={() => startCall('video')}
                     loading={startingCall === 'video'}
-                    disabled={!!startingCall}
+                    disabled={!!startingCall || (consultationPaymentRequired && !consultationPaymentPaid)}
                   />
                 </View>
                 <View style={{ flex: 1 }}>
@@ -833,7 +937,7 @@ export default function TailorOrderDetailScreen() {
                     variant="secondary"
                     onPress={() => startCall('audio')}
                     loading={startingCall === 'audio'}
-                    disabled={!!startingCall}
+                    disabled={!!startingCall || (consultationPaymentRequired && !consultationPaymentPaid)}
                   />
                 </View>
               </View>
@@ -857,6 +961,10 @@ export default function TailorOrderDetailScreen() {
                           Alert.alert('Error', message)
                           return
                         }
+                        await purgeTerminalOrderClientState({
+                          orderId: order.id,
+                          customerId: order.customerId,
+                        })
                         router.replace('/(tailor)/orders')
                       },
                     },
@@ -865,6 +973,120 @@ export default function TailorOrderDetailScreen() {
               />
             </View>
           )}
+
+          {order.orderKind === 'CUSTOM' && (consultationMeta || quoteBreakdown || bulkOrder) ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Commercial setup</Text>
+              {consultationMeta ? (
+                <View style={styles.supportCard}>
+                  <Text style={styles.supportCardTitle}>Consultation policy</Text>
+                  <View style={styles.supportMetaList}>
+                    <BriefRow label="Status" value={consultationMeta.status === 'COMPLETED' ? 'Consultation completed' : 'Consultation requested'} />
+                    <BriefRow
+                      label="Fee"
+                      value={
+                        consultationMeta.feeAmount && consultationMeta.feeCurrency
+                          ? formatAmount(
+                              consultationMeta.feeAmount,
+                              consultationMeta.feeCurrency as CurrencyCode,
+                              consultationMeta.feeCurrency as CurrencyCode,
+                              STATIC_FALLBACK_RATES,
+                            )
+                          : 'Free'
+                      }
+                    />
+                    {consultationMeta.feeAmount ? (
+                      <BriefRow label="Fee treatment" value={consultationMeta.feeCreditable ? 'Credits toward the final order' : 'Separate consultation fee'} />
+                    ) : null}
+                    {consultationMeta.paymentTiming ? (
+                      <BriefRow label="Payment timing" value={CONSULTATION_PAYMENT_TIMING_LABELS[consultationMeta.paymentTiming]} />
+                    ) : null}
+                    {consultationMeta.reschedulePolicy ? (
+                      <BriefRow label="Rescheduling" value={CONSULTATION_RESCHEDULE_POLICY_LABELS[consultationMeta.reschedulePolicy]} />
+                    ) : null}
+                    {consultationMeta.noShowPolicy ? (
+                      <BriefRow label="No-show" value={CONSULTATION_NO_SHOW_POLICY_LABELS[consultationMeta.noShowPolicy]} />
+                    ) : null}
+                    {consultationMeta.expiryPolicy ? (
+                      <BriefRow label="Offer window" value={CONSULTATION_EXPIRY_POLICY_LABELS[consultationMeta.expiryPolicy]} />
+                    ) : null}
+                    {consultationPaymentRequired ? (
+                      <BriefRow label="Payment status" value={consultationPaymentPaid ? 'Paid and ready to schedule' : 'Waiting for customer payment'} />
+                    ) : null}
+                    <BriefRow label="Reminder" value={consultationMeta.reminderEnabled === false ? 'No reminder planned' : 'Reminder enabled'} />
+                  </View>
+                  {consultationMeta.requestNote ? <Text style={styles.supportHint}>{consultationMeta.requestNote}</Text> : null}
+                </View>
+              ) : null}
+
+              {quoteBreakdown ? (
+                <View style={styles.supportCard}>
+                  <Text style={styles.supportCardTitle}>Quote breakdown</Text>
+                  <View style={styles.supportMetaList}>
+                    {typeof quoteBreakdown.laborAmount === 'number' ? (
+                      <BriefRow
+                        label="Labour"
+                        value={formatAmount(quoteBreakdown.laborAmount, order.quotedCurrency as CurrencyCode, order.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)}
+                      />
+                    ) : null}
+                    {typeof quoteBreakdown.sourcingAmount === 'number' ? (
+                      <BriefRow
+                        label="Sourcing"
+                        value={formatAmount(quoteBreakdown.sourcingAmount, order.quotedCurrency as CurrencyCode, order.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)}
+                      />
+                    ) : null}
+                    {typeof quoteBreakdown.rushAmount === 'number' ? (
+                      <BriefRow
+                        label="Rush fee"
+                        value={formatAmount(quoteBreakdown.rushAmount, order.quotedCurrency as CurrencyCode, order.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)}
+                      />
+                    ) : null}
+                    {typeof quoteBreakdown.consultationCreditAmount === 'number' && quoteBreakdown.consultationCreditAmount > 0 ? (
+                      <BriefRow
+                        label="Consultation credit"
+                        value={`-${formatAmount(quoteBreakdown.consultationCreditAmount, order.quotedCurrency as CurrencyCode, order.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)}`}
+                      />
+                    ) : null}
+                  </View>
+                  {quoteBreakdown.summary ? <Text style={styles.supportBodyText}>{quoteBreakdown.summary}</Text> : null}
+                  {quoteBreakdown.included && quoteBreakdown.included.length > 0 ? (
+                    <Text style={styles.supportHint}>Included: {quoteBreakdown.included.join(', ')}</Text>
+                  ) : null}
+                  {quoteBreakdown.excluded && quoteBreakdown.excluded.length > 0 ? (
+                    <Text style={styles.supportHint}>Not included: {quoteBreakdown.excluded.join(', ')}</Text>
+                  ) : null}
+                </View>
+              ) : null}
+
+              {bulkOrder?.enabled ? (
+                <View style={styles.supportCard}>
+                  <Text style={styles.supportCardTitle}>Bulk order handling</Text>
+                  <View style={styles.supportMetaList}>
+                    <BriefRow label="Mode" value="Ops-managed linked custom order" />
+                    {bulkOrder.recipientCount ? <BriefRow label="Recipients" value={`${bulkOrder.recipientCount}`} /> : null}
+                    {bulkOrder.label ? <BriefRow label="Group label" value={bulkOrder.label} /> : null}
+                    <BriefRow
+                      label="Measurement privacy"
+                      value={bulkOrder.measurementPrivacy === 'TAILOR_ONLY' ? 'Tailor only' : 'Tailor-private by default'}
+                    />
+                    <BriefRow
+                      label="Payer model"
+                      value={bulkOrder.payerModel === 'SINGLE_PAYER' ? 'One payer covers the full group order' : 'Single payer'}
+                    />
+                    <BriefRow
+                      label="Status policy"
+                      value={bulkOrder.statusPolicy === 'OPS_MANAGED_LINKED_CHILDREN' ? 'Ops manages linked recipient timelines' : 'Linked custom order'}
+                    />
+                    <BriefRow label="Dye-lot consistency" value={bulkOrder.dyeLotConsistencyRequired ? 'Required' : 'Not flagged'} />
+                  </View>
+                  <Text style={styles.supportHint}>
+                    Keep recipient-level measurements and any consistency notes inside Drape so ops can help manage the group cleanly.
+                  </Text>
+                  {bulkOrder.notes ? <Text style={styles.supportHint}>{bulkOrder.notes}</Text> : null}
+                </View>
+              ) : null}
+            </View>
+          ) : null}
 
           {/* Flexible stages: CONFIRMED / DESIGNING / SOURCING — tailor picks next stage */}
           {isFlexibleStage && flexibleNextStages && (
@@ -957,7 +1179,7 @@ export default function TailorOrderDetailScreen() {
             </View>
           )}
 
-          {(cancellationReviewOpen || canRequestCancellationReview) && (
+          {showCancellationPolicyCard && (
             <View style={styles.supportCard}>
               <Text style={styles.supportCardTitle}>Cancellation and refund review</Text>
               {cancellationReviewOpen ? (
@@ -974,17 +1196,34 @@ export default function TailorOrderDetailScreen() {
                   {cancellationReview?.note ? (
                     <Text style={styles.supportHint}>{cancellationReview.note}</Text>
                   ) : null}
+                  {cancellationPolicy.refundableNow.length > 0 ? (
+                    <Text style={styles.supportHint}>Likely refundable now: {refundCoverageLabel(cancellationPolicy.refundableNow)}</Text>
+                  ) : null}
+                  {cancellationPolicy.conditionalRefunds.length > 0 ? (
+                    <Text style={styles.supportHint}>Case-by-case: {refundCoverageLabel(cancellationPolicy.conditionalRefunds)}</Text>
+                  ) : null}
                 </>
-              ) : (
+              ) : canRequestCancellationReview ? (
                 <>
-                  <Text style={styles.supportHint}>
-                    If this order cannot move forward cleanly, ask Drape to review cancellation before pickup or dispatch starts.
-                  </Text>
+                  <Text style={styles.supportHint}>{cancellationPolicy.tailorMessage}</Text>
+                  {cancellationPolicy.refundableNow.length > 0 ? (
+                    <Text style={styles.supportHint}>Likely refundable now: {refundCoverageLabel(cancellationPolicy.refundableNow)}</Text>
+                  ) : null}
+                  {cancellationPolicy.conditionalRefunds.length > 0 ? (
+                    <Text style={styles.supportHint}>Case-by-case: {refundCoverageLabel(cancellationPolicy.conditionalRefunds)}</Text>
+                  ) : null}
                   <Button
                     label="Request cancellation review"
                     variant="secondary"
                     onPress={() => setShowCancellationReviewModal(true)}
                   />
+                </>
+              ) : (
+                <>
+                  <Text style={styles.supportHint}>{cancellationPolicy.tailorMessage}</Text>
+                  {cancellationPolicy.conditionalRefunds.length > 0 ? (
+                    <Text style={styles.supportHint}>Case-by-case: {refundCoverageLabel(cancellationPolicy.conditionalRefunds)}</Text>
+                  ) : null}
                 </>
               )}
             </View>
@@ -1136,7 +1375,7 @@ export default function TailorOrderDetailScreen() {
                 </View>
               ) : null}
 
-              {(order.fabricSource === 'CUSTOMER_SUPPLIES' || fabricHandoffLabel || materialIssue) && (
+              {(order.fabricSource === 'CUSTOMER_SUPPLIES' || fabricHandoffLabel || fabricPolicy || materialIssue) && (
                 <View style={styles.supportCard}>
                   <Text style={styles.supportCardTitle}>Fabric handoff</Text>
                   <View style={styles.supportMetaList}>
@@ -1158,6 +1397,24 @@ export default function TailorOrderDetailScreen() {
                   </View>
                   {order.supportMeta.fabricReceivedNote ? (
                     <Text style={styles.supportHint}>{order.supportMeta.fabricReceivedNote}</Text>
+                  ) : null}
+                  {fabricPolicy?.rejectionReasons && fabricPolicy.rejectionReasons.length > 0 ? (
+                    <Text style={styles.supportHint}>Tailor can reject before cutting for: {fabricPolicy.rejectionReasons.join(' · ')}</Text>
+                  ) : null}
+                  {fabricPolicy?.prepRequirements && fabricPolicy.prepRequirements.length > 0 ? (
+                    <Text style={styles.supportHint}>Prep: {fabricPolicy.prepRequirements.join(' · ')}</Text>
+                  ) : null}
+                  {fabricPolicy?.lateFabricRule ? (
+                    <Text style={styles.supportHint}>If fabric is late: {fabricPolicy.lateFabricRule}</Text>
+                  ) : null}
+                  {fabricPolicy?.missingFabricRule ? (
+                    <Text style={styles.supportHint}>If fabric never arrives: {fabricPolicy.missingFabricRule}</Text>
+                  ) : null}
+                  {fabricPolicy?.replacementRule ? (
+                    <Text style={styles.supportHint}>Replacement rule: {fabricPolicy.replacementRule}</Text>
+                  ) : null}
+                  {fabricPolicy?.disagreementRule ? (
+                    <Text style={styles.supportHint}>Disagreement rule: {fabricPolicy.disagreementRule}</Text>
                   ) : null}
                   {waitingOnTailorSourcing ? (
                     <View style={[styles.supportBadge, styles.supportBadgeSuccess]}>
@@ -1286,6 +1543,9 @@ export default function TailorOrderDetailScreen() {
               {order.deliveryMethod !== 'LOCAL_COLLECTION' && (order.fulfillmentProvider || order.carrier) ? (
                 <BriefRow label="Partner" value={order.fulfillmentProvider ?? order.carrier ?? ''} />
               ) : null}
+              {order.deliveryMethod !== 'LOCAL_COLLECTION' && dispatchRecord?.serviceLevel ? (
+                <BriefRow label="Service level" value={DISPATCH_SERVICE_LEVEL_LABELS[dispatchRecord.serviceLevel]} />
+              ) : null}
               {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.fulfillmentReference ? (
                 <BriefRow label="Reference" value={order.fulfillmentReference} />
               ) : null}
@@ -1390,11 +1650,13 @@ export default function TailorOrderDetailScreen() {
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 <View style={{ flexDirection: 'row', gap: Spacing.md }}>
                   {visibleReferencePhotos.map((url, i) => (
-                    <Image
+                    <ExpoImage
                       key={i}
-                      source={{ uri: url }}
+                      source={url}
                       style={styles.refPhoto}
-                      resizeMode="cover"
+                      contentFit="cover"
+                      cachePolicy="memory-disk"
+                      transition={120}
                       onError={() => {
                         setFailedReferencePhotos((prev) => prev.includes(url) ? prev : [...prev, url])
                       }}
@@ -2363,11 +2625,17 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, custome
   onClose: () => void
   onSent: () => void
 }) {
+  const currencyLabel = `${currencySymbol(defaultCurrency)} ${defaultCurrency}`
   const [amount, setAmount] = useState('')
-  const [currency, setCurrency] = useState<CurrencyCode>(defaultCurrency)
   const [completionDate, setCompletionDate] = useState('')
   const [completionDateValue, setCompletionDateValue] = useState<Date | null>(null)
   const [showDatePicker, setShowDatePicker] = useState(false)
+  const [laborAmount, setLaborAmount] = useState('')
+  const [sourcingAmount, setSourcingAmount] = useState('')
+  const [rushAmount, setRushAmount] = useState('')
+  const [includedText, setIncludedText] = useState('')
+  const [excludedText, setExcludedText] = useState('')
+  const [breakdownSummary, setBreakdownSummary] = useState('')
   const [note, setNote] = useState('')
   const [noteError, setNoteError] = useState('')
   const [sending, setSending] = useState(false)
@@ -2375,10 +2643,15 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, custome
   useEffect(() => {
     if (!visible) return
     setAmount('')
-    setCurrency(defaultCurrency)
     setCompletionDate('')
     setCompletionDateValue(null)
     setShowDatePicker(false)
+    setLaborAmount('')
+    setSourcingAmount('')
+    setRushAmount('')
+    setIncludedText('')
+    setExcludedText('')
+    setBreakdownSummary('')
     setNote('')
     setNoteError('')
     setSending(false)
@@ -2423,20 +2696,43 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, custome
     setSending(true)
     try {
       const amountPence = Math.round(parseFloat(amount) * 100)
+      const breakdown = {
+        laborAmount: parseMoneyToMinorUnits(laborAmount),
+        sourcingAmount: parseMoneyToMinorUnits(sourcingAmount),
+        rushAmount: parseMoneyToMinorUnits(rushAmount),
+        included: parseListInput(includedText),
+        excluded: parseListInput(excludedText),
+        summary: breakdownSummary.trim() || undefined,
+      }
+      const hasBreakdown =
+        breakdown.laborAmount != null ||
+        breakdown.sourcingAmount != null ||
+        breakdown.rushAmount != null ||
+        breakdown.included.length > 0 ||
+        breakdown.excluded.length > 0 ||
+        !!breakdown.summary
 
       const { data: efData, error: efError } = await invokeFunction('tailor-order-action', {
         body: {
           orderId,
           action: 'send-quote',
           amount: amountPence,
-          currency,
+          currency: defaultCurrency,
           completionDate: parsedDate.toISOString(),
+          breakdown: hasBreakdown ? breakdown : undefined,
           note: note.trim() || undefined,
         },
       })
 
       if (efError || !efData?.ok) {
-        const err = new Error(efData?.error ?? efError?.message ?? 'Edge Function error')
+        const errorPayload = efError ? await readFunctionErrorPayload(efError) : null
+        const errorMessage =
+          typeof efData?.error === 'string' && efData.error.length > 0
+            ? efData.error
+            : typeof errorPayload?.error === 'string' && errorPayload.error.length > 0
+              ? errorPayload.error
+              : await readFunctionErrorMessage(efError, 'Could not send this quote right now.')
+        const err = new Error(errorMessage)
         Sentry.captureException(err, { extra: { context: 'send_quote', orderId } })
         throw err
       }
@@ -2471,26 +2767,14 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, custome
           </View>
 
           <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
-            <View>
-              <Text style={styles.fieldLabel}>Currency <Text style={styles.required}>*</Text></Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: Spacing.sm }}>
-                <View style={{ flexDirection: 'row', gap: Spacing.sm, paddingBottom: 2 }}>
-                  {SUPPORTED_CURRENCIES.map((c) => (
-                    <TouchableOpacity
-                      key={c.code}
-                      style={[styles.currencyChip, currency === c.code && styles.currencyChipActive]}
-                      onPress={() => setCurrency(c.code)}
-                    >
-                      <Text style={[styles.currencyChipText, currency === c.code && styles.currencyChipTextActive]}>
-                        {c.symbol} {c.code}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </ScrollView>
+            <View style={styles.supportCard}>
+              <Text style={styles.supportCardTitle}>Quote currency</Text>
+              <Text style={styles.supportHint}>
+                This order is locked to {currencyLabel}. To quote in a different currency, update your pricing setup in account settings before starting a new order.
+              </Text>
             </View>
             <Input
-              label={`Your price (${SUPPORTED_CURRENCIES.find((c) => c.code === currency)?.symbol ?? currency})`}
+              label={`Your price (${currencyLabel})`}
               placeholder="e.g. 180"
               value={amount}
               onChangeText={setAmount}
@@ -2511,6 +2795,62 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, custome
                 </Text>
               </View>
             ) : null}
+            <View style={styles.supportCard}>
+              <Text style={styles.supportCardTitle}>Quote breakdown</Text>
+              <Text style={styles.supportHint}>
+                Add a clean breakdown when you want the customer to understand what is driving this price before they pay.
+              </Text>
+              <Input
+                label={`Labour (${currencyLabel}, optional)`}
+                placeholder="e.g. 120"
+                value={laborAmount}
+                onChangeText={setLaborAmount}
+                keyboardType="decimal-pad"
+              />
+              <Input
+                label={`Sourcing (${currencyLabel}, optional)`}
+                placeholder="e.g. 40"
+                value={sourcingAmount}
+                onChangeText={setSourcingAmount}
+                keyboardType="decimal-pad"
+                hint="Useful when the quote includes fabric, trims, or accessory sourcing."
+              />
+              <Input
+                label={`Rush fee (${currencyLabel}, optional)`}
+                placeholder="e.g. 25"
+                value={rushAmount}
+                onChangeText={setRushAmount}
+                keyboardType="decimal-pad"
+              />
+              <Input
+                label="What's included? (optional)"
+                placeholder="One per line or comma separated. e.g. pattern drafting, lining, basic alterations"
+                value={includedText}
+                onChangeText={setIncludedText}
+                multiline
+                numberOfLines={3}
+                maxLength={240}
+              />
+              <Input
+                label="What's not included? (optional)"
+                placeholder="One per line or comma separated. e.g. extra fabric changes, rush remake after approval"
+                value={excludedText}
+                onChangeText={setExcludedText}
+                multiline
+                numberOfLines={3}
+                maxLength={240}
+              />
+              <Input
+                label="Short pricing summary (optional)"
+                placeholder="e.g. Includes sourcing and construction for one fitted two-piece set."
+                value={breakdownSummary}
+                onChangeText={setBreakdownSummary}
+                multiline
+                numberOfLines={3}
+                maxLength={300}
+                filterContact
+              />
+            </View>
             <Input
               label="Estimated completion date"
               placeholder="Select a date"
@@ -2753,7 +3093,13 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
               <Text style={styles.photoHint}>{stageUpdatePhotoHint(order, nextStage)}</Text>
               {photoUri ? (
                 <View style={styles.photoPreviewWrap}>
-                  <Image source={{ uri: photoUri }} style={styles.photoPreview} resizeMode="cover" />
+                  <ExpoImage
+                    source={photoUri}
+                    style={styles.photoPreview}
+                    contentFit="cover"
+                    cachePolicy="memory-disk"
+                    transition={120}
+                  />
                   <TouchableOpacity style={styles.photoRemove} onPress={() => setPhotoUri(null)} disabled={updating}>
                     <Text style={styles.photoRemoveText}>Remove</Text>
                   </TouchableOpacity>
@@ -2864,14 +3210,31 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
 function ConsultationModal({ visible, orderId, defaultCurrency, onClose, onSent }: {
   visible: boolean; orderId: string; defaultCurrency: CurrencyCode; onClose: () => void; onSent: () => void
 }) {
+  const currencyLabel = `${currencySymbol(defaultCurrency)} ${defaultCurrency}`
   const [fee, setFee] = useState('')
+  const [creditFeeTowardOrder, setCreditFeeTowardOrder] = useState(true)
+  const [paymentTiming, setPaymentTiming] = useState<'BEFORE_CALL_STARTS' | 'WAIVED_OR_FREE'>('BEFORE_CALL_STARTS')
+  const [reschedulePolicy, setReschedulePolicy] = useState<'ONE_FREE_RESCHEDULE' | 'FLEXIBLE_WITH_NOTICE' | 'CASE_BY_CASE'>('ONE_FREE_RESCHEDULE')
+  const [noShowPolicy, setNoShowPolicy] = useState<'FEE_FORFEITED' | 'ONE_REBOOK_ALLOWED' | 'CASE_BY_CASE'>('FEE_FORFEITED')
+  const [expiryPolicy, setExpiryPolicy] = useState<'EXPIRES_IN_7_DAYS' | 'EXPIRES_IN_14_DAYS' | 'NO_EXPIRY'>('EXPIRES_IN_14_DAYS')
+  const [reminderEnabled, setReminderEnabled] = useState(true)
   const [note, setNote] = useState('')
   const [noteError, setNoteError] = useState('')
   const [sending, setSending] = useState(false)
+  const feeEnabled = fee.trim().length > 0
+  const noShowOptions: Array<'FEE_FORFEITED' | 'ONE_REBOOK_ALLOWED' | 'CASE_BY_CASE'> = feeEnabled
+    ? ['FEE_FORFEITED', 'ONE_REBOOK_ALLOWED', 'CASE_BY_CASE']
+    : ['CASE_BY_CASE']
 
   useEffect(() => {
     if (!visible) return
     setFee('')
+    setCreditFeeTowardOrder(true)
+    setPaymentTiming('BEFORE_CALL_STARTS')
+    setReschedulePolicy('ONE_FREE_RESCHEDULE')
+    setNoShowPolicy('FEE_FORFEITED')
+    setExpiryPolicy('EXPIRES_IN_14_DAYS')
+    setReminderEnabled(true)
     setNote('')
     setNoteError('')
     setSending(false)
@@ -2895,6 +3258,13 @@ function ConsultationModal({ visible, orderId, defaultCurrency, onClose, onSent 
         orderId,
         action: 'request-consultation',
         consultationFee: feePence,
+        currency: defaultCurrency,
+        creditFeeTowardOrder: feePence ? creditFeeTowardOrder : false,
+        paymentTiming: feePence ? paymentTiming : 'WAIVED_OR_FREE',
+        reschedulePolicy,
+        noShowPolicy: feePence ? noShowPolicy : 'CASE_BY_CASE',
+        expiryPolicy,
+        reminderEnabled,
         note: note.trim() || undefined,
       },
     })
@@ -2943,13 +3313,114 @@ function ConsultationModal({ visible, orderId, defaultCurrency, onClose, onSent 
               </Text>
             </View>
             <Input
-              label={`Consultation fee (${SUPPORTED_CURRENCIES.find((c) => c.code === defaultCurrency)?.symbol ?? defaultCurrency}, optional)`}
+              label={`Consultation fee (${currencyLabel}, optional)`}
               placeholder="e.g. 20"
               value={fee}
               onChangeText={setFee}
               keyboardType="decimal-pad"
-              hint={`Leave blank if you don't charge for consultations. This fee will be shown in ${defaultCurrency}.`}
+              hint={`Leave blank if you don't charge for consultations. This fee will be shown in ${currencyLabel}.`}
             />
+            <View style={styles.supportCard}>
+              <Text style={styles.supportCardTitle}>Consultation terms</Text>
+              <Text style={styles.supportHint}>
+                Set the expectations now so the customer knows how this consultation is paid, rescheduled, and timed before you quote.
+              </Text>
+              {feeEnabled ? (
+                <>
+                  <Text style={styles.fieldLabel}>Should this fee count toward the final order?</Text>
+                  <View style={{ flexDirection: 'row', gap: Spacing.sm, flexWrap: 'wrap' }}>
+                    <TouchableOpacity
+                      style={[styles.currencyChip, creditFeeTowardOrder && styles.currencyChipActive]}
+                      onPress={() => setCreditFeeTowardOrder(true)}
+                    >
+                      <Text style={[styles.currencyChipText, creditFeeTowardOrder && styles.currencyChipTextActive]}>Credit it later</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.currencyChip, !creditFeeTowardOrder && styles.currencyChipActive]}
+                      onPress={() => setCreditFeeTowardOrder(false)}
+                    >
+                      <Text style={[styles.currencyChipText, !creditFeeTowardOrder && styles.currencyChipTextActive]}>Separate fee</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <Text style={styles.fieldLabel}>When is payment due?</Text>
+                  <View style={{ flexDirection: 'row', gap: Spacing.sm, flexWrap: 'wrap' }}>
+                    {(['BEFORE_CALL_STARTS'] as const).map((value) => (
+                      <TouchableOpacity
+                        key={value}
+                        style={[styles.currencyChip, paymentTiming === value && styles.currencyChipActive]}
+                        onPress={() => setPaymentTiming(value)}
+                      >
+                        <Text style={[styles.currencyChipText, paymentTiming === value && styles.currencyChipTextActive]}>
+                          {CONSULTATION_PAYMENT_TIMING_LABELS[value]}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </>
+              ) : null}
+
+              <Text style={styles.fieldLabel}>Reschedule policy</Text>
+              <View style={{ flexDirection: 'row', gap: Spacing.sm, flexWrap: 'wrap' }}>
+                {(['ONE_FREE_RESCHEDULE', 'FLEXIBLE_WITH_NOTICE', 'CASE_BY_CASE'] as const).map((value) => (
+                  <TouchableOpacity
+                    key={value}
+                    style={[styles.currencyChip, reschedulePolicy === value && styles.currencyChipActive]}
+                    onPress={() => setReschedulePolicy(value)}
+                  >
+                    <Text style={[styles.currencyChipText, reschedulePolicy === value && styles.currencyChipTextActive]}>
+                      {CONSULTATION_RESCHEDULE_POLICY_LABELS[value]}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={styles.fieldLabel}>No-show policy</Text>
+              <View style={{ flexDirection: 'row', gap: Spacing.sm, flexWrap: 'wrap' }}>
+                {noShowOptions.map((value) => (
+                  <TouchableOpacity
+                    key={value}
+                    style={[styles.currencyChip, noShowPolicy === value && styles.currencyChipActive]}
+                    onPress={() => setNoShowPolicy(value)}
+                  >
+                    <Text style={[styles.currencyChipText, noShowPolicy === value && styles.currencyChipTextActive]}>
+                      {CONSULTATION_NO_SHOW_POLICY_LABELS[value]}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={styles.fieldLabel}>How long should this consultation hold?</Text>
+              <View style={{ flexDirection: 'row', gap: Spacing.sm, flexWrap: 'wrap' }}>
+                {(['EXPIRES_IN_7_DAYS', 'EXPIRES_IN_14_DAYS', 'NO_EXPIRY'] as const).map((value) => (
+                  <TouchableOpacity
+                    key={value}
+                    style={[styles.currencyChip, expiryPolicy === value && styles.currencyChipActive]}
+                    onPress={() => setExpiryPolicy(value)}
+                  >
+                    <Text style={[styles.currencyChipText, expiryPolicy === value && styles.currencyChipTextActive]}>
+                      {CONSULTATION_EXPIRY_POLICY_LABELS[value]}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={styles.fieldLabel}>Reminder support</Text>
+              <View style={{ flexDirection: 'row', gap: Spacing.sm, flexWrap: 'wrap' }}>
+                <TouchableOpacity
+                  style={[styles.currencyChip, reminderEnabled && styles.currencyChipActive]}
+                  onPress={() => setReminderEnabled(true)}
+                >
+                  <Text style={[styles.currencyChipText, reminderEnabled && styles.currencyChipTextActive]}>Send reminder</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.currencyChip, !reminderEnabled && styles.currencyChipActive]}
+                  onPress={() => setReminderEnabled(false)}
+                >
+                  <Text style={[styles.currencyChipText, !reminderEnabled && styles.currencyChipTextActive]}>No reminder</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
             <Input
               label="Note to customer (optional)"
               placeholder="Explain what you need from the consultation..."
@@ -3132,20 +3603,20 @@ const styles = StyleSheet.create({
   back: { paddingHorizontal: Spacing.xl, paddingTop: Spacing.md, paddingBottom: Spacing.sm },
   backText: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
   scroll: { flex: 1 },
-  content: { padding: Spacing.xl, gap: Spacing.xl },
+  content: { padding: Spacing.xl, gap: Spacing.md },
 
-  heading: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink },
+  heading: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
   subheading: { fontSize: FontSize.sm, color: Colors.midGrey, marginTop: 4 },
   guideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    padding: Spacing.md,
     gap: Spacing.xs,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
-  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   stageRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, marginTop: Spacing.sm },
   stagePill: { paddingHorizontal: Spacing.md, paddingVertical: 4, borderRadius: Radius.full },
@@ -3163,22 +3634,22 @@ const styles = StyleSheet.create({
 
   alertCard: {
     backgroundColor: Colors.needleGreenLight, borderRadius: Radius.lg,
-    padding: Spacing.xl, gap: Spacing.md, borderWidth: 1, borderColor: Colors.needleGreen + '40',
+    padding: Spacing.lg, gap: Spacing.sm, borderWidth: 1, borderColor: Colors.needleGreen + '40',
   },
-  alertTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
+  alertTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
   alertSub: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   stageCard: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.xl, gap: Spacing.md, ...Shadow.sm,
+    padding: 10, gap: 5, ...Shadow.sm,
   },
-  stageCardTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
-  stageCardSub: { fontSize: FontSize.sm, color: Colors.inkLight },
-  stageCardHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18, marginTop: -Spacing.sm },
+  stageCardTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  stageCardSub: { fontSize: 11, color: Colors.inkLight, lineHeight: 17 },
+  stageCardHint: { fontSize: 10, color: Colors.midGrey, lineHeight: 15, marginTop: -3 },
 
   consultationCard: { borderColor: Colors.kanteRust + '60', borderWidth: 1.5 },
   consultationInfo: {
-    backgroundColor: Colors.boneDeep, borderRadius: Radius.md, padding: Spacing.lg,
+    backgroundColor: Colors.boneDeep, borderRadius: Radius.md, padding: Spacing.md,
   },
   consultationInfoText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
@@ -3202,8 +3673,8 @@ const styles = StyleSheet.create({
   },
   bodyNoteText: { fontSize: FontSize.sm, color: Colors.inkLight, fontStyle: 'italic' },
 
-  section: { gap: Spacing.md },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
+  section: { gap: Spacing.sm },
+  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   fitStyleTag: { color: Colors.midGrey, fontWeight: FontWeight.regular },
 
   briefText: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 24 },
@@ -3214,29 +3685,29 @@ const styles = StyleSheet.create({
   supportCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: Spacing.md,
+    padding: 10,
+    gap: 5,
     ...Shadow.sm,
   },
   supportCardWarning: {
     borderWidth: 1,
     borderColor: Colors.kanteRust + '40',
   },
-  supportCardTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-  supportMetaList: { gap: Spacing.sm },
+  supportCardTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  supportMetaList: { gap: 6 },
   supportBadge: {
     alignSelf: 'flex-start',
     borderRadius: Radius.full,
     paddingHorizontal: Spacing.sm,
-    paddingVertical: 6,
+    paddingVertical: 5,
   },
   supportBadgeWarning: { backgroundColor: Colors.kanteRustLight },
   supportBadgeSuccess: { backgroundColor: Colors.needleGreenLight },
   supportBadgeText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   supportBadgeTextWarning: { color: Colors.kanteRust },
   supportBadgeTextSuccess: { color: Colors.needleGreen },
-  supportBodyText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 21 },
-  supportHint: { fontSize: FontSize.sm, color: Colors.midGrey, lineHeight: 20 },
+  supportBodyText: { fontSize: 11, color: Colors.inkLight, lineHeight: 17 },
+  supportHint: { fontSize: 10, color: Colors.midGrey, lineHeight: 16 },
   handoffIssueCard: {
     gap: Spacing.sm,
     padding: Spacing.md,
@@ -3274,7 +3745,7 @@ const styles = StyleSheet.create({
   supportWarningCard: {
     backgroundColor: Colors.kanteRustLight,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    padding: Spacing.md,
     gap: Spacing.xs,
   },
   supportWarningTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.kanteRust },
@@ -3287,7 +3758,7 @@ const styles = StyleSheet.create({
   fitNoteLabel: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
   fitNoteText: { fontSize: FontSize.sm, color: Colors.inkLight, fontStyle: 'italic' },
 
-  refPhoto: { width: 160, height: 160, borderRadius: Radius.md, backgroundColor: Colors.boneDeep },
+  refPhoto: { width: 152, height: 152, borderRadius: Radius.md, backgroundColor: Colors.boneDeep },
 
   measureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   measureItem: { width: '47%', backgroundColor: Colors.white, borderRadius: Radius.sm, padding: Spacing.md, gap: 2 },
@@ -3365,7 +3836,7 @@ const styles = StyleSheet.create({
   codeError: { fontSize: FontSize.sm, color: Colors.error, textAlign: 'center' },
   amountNote: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center' },
 
-  // Quote modal — currency picker
+  // Quote and consultation modal chips
   fieldLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: Spacing.sm },
   required: { color: Colors.error },
   reasonList: { gap: Spacing.sm },

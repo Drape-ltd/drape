@@ -71,12 +71,18 @@ export default function TailorReviewsScreen() {
 
   useFocusEffect(useCallback(() => {
     async function load() {
+      if (!user?.id) {
+        setReviews([])
+        setFetchError(false)
+        setLoading(false)
+        return
+      }
       setLoading(true)
       setFetchError(false)
       const { data, error } = await supabase
         .from('reviews')
         .select('id, rating, tags, body, reviewer_name, created_at, tailor_response, published_at, flagged, orders!order_id(customer_profiles!customer_id(display_name, avatar_url))')
-        .eq('tailor_id', user?.id)
+        .eq('tailor_id', user.id)
         .order('created_at', { ascending: false })
 
       if (error) {
@@ -168,8 +174,10 @@ export default function TailorReviewsScreen() {
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
             <View style={styles.guidanceCard}>
+              <Text style={styles.guidanceEyebrow}>Review visibility</Text>
+              <Text style={styles.guidanceTitle}>Public reviews clear normal trust checks before they go live on your profile.</Text>
               <Text style={styles.guidanceText}>
-                Public reviews appear on your profile once they clear normal trust checks. Honest negative feedback can still stay public, but reviews may be held while Drape checks policy or dispute context.
+                Use this screen to respond thoughtfully, not defensively. Held reviews can still be visible to ops while moderation is in progress.
               </Text>
             </View>
             {reviews.length > 0 ? reviews.map((review) => (
@@ -289,8 +297,9 @@ export default function TailorReviewsScreen() {
                 ) : null}
               </View>
             )) : (
-              <View style={styles.stateWrap}>
-                <Text style={styles.stateTitle}>No reviews yet.</Text>
+              <View style={styles.emptyCard}>
+                <Text style={styles.emptyTitle}>No customer reviews yet.</Text>
+                <Text style={styles.emptyText}>Completed orders with reviews will appear here with their visibility state and your response history.</Text>
               </View>
             )}
           </ScrollView>
@@ -306,25 +315,37 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: Spacing.xl,
+    paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
     backgroundColor: Colors.white,
     borderBottomWidth: 1,
     borderBottomColor: Colors.lightGrey,
   },
-  backBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
-  content: { padding: Spacing.xl, gap: Spacing.md },
+  backBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  content: { padding: Spacing.lg, gap: Spacing.md },
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
-  stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   guidanceCard: {
     backgroundColor: Colors.boneDeep,
     borderRadius: Radius.md,
     padding: Spacing.md,
     borderLeftWidth: 3,
     borderLeftColor: Colors.needleGreen,
+    gap: 4,
   },
+  guidanceEyebrow: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.6 },
+  guidanceTitle: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.semibold, lineHeight: 22, fontFamily: 'Georgia' },
   guidanceText: { fontSize: FontSize.xs, lineHeight: 18, color: Colors.inkLight },
+  emptyCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    padding: 16,
+    gap: 6,
+    ...Shadow.sm,
+  },
+  emptyTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  emptyText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
   reviewCard: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
     padding: Spacing.lg, gap: Spacing.sm, ...Shadow.sm,
@@ -336,7 +357,7 @@ const styles = StyleSheet.create({
   },
   reviewAvatarImage: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.lightGrey },
   reviewInitial: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.needleGreen },
-  reviewerName: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  reviewerName: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   reviewDate: { fontSize: FontSize.xs, color: Colors.midGrey },
   reviewStars: { fontSize: FontSize.sm, color: Colors.warning },
   visibilityPill: {

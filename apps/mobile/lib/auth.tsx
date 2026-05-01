@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react'
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { Platform } from 'react-native'
 import { type Session, type User } from '@supabase/supabase-js'
 import * as ExpoLinking from 'expo-linking'
@@ -7,6 +7,7 @@ import { validateDisplayName } from '@drape/shared/contact-filter'
 import { validatePasswordStrength } from '@drape/shared/auth-security'
 import { supabase, setCurrentAccessToken } from './supabase'
 import { clearRecentReauth } from './recent-reauth'
+import { queryClient } from './queryClient'
 
 // Required for expo-web-browser OAuth redirect handling on Android
 WebBrowser.maybeCompleteAuthSession()
@@ -89,6 +90,7 @@ async function signInWithPasswordResilient(email: string, password: string) {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
+  const lastSessionUserIdRef = useRef<string | null | undefined>(undefined)
 
   useEffect(() => {
     let mounted = true
@@ -174,6 +176,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       subscription.remove()
     }
   }, [])
+
+  useEffect(() => {
+    if (loading) return
+
+    const nextUserId = session?.user?.id ?? null
+    if (
+      lastSessionUserIdRef.current !== undefined &&
+      lastSessionUserIdRef.current !== nextUserId
+    ) {
+      queryClient.clear()
+    }
+
+    lastSessionUserIdRef.current = nextUserId
+  }, [loading, session?.user?.id])
 
   async function signUp(
     email: string,
@@ -300,6 +316,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function signOut() {
     const { error } = await supabase.auth.signOut()
+    queryClient.clear()
     await clearRecentReauth(session?.user?.id)
     if (error) {
       throw error

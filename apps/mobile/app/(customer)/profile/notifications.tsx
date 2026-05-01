@@ -41,6 +41,7 @@ type NotifItem = {
 // Stage → icon mapping
 function stageIcon(stage: OrderStage): React.ComponentProps<typeof Feather>['name'] {
   if (stage === 'QUOTE_SENT') return 'tag'
+  if (stage === 'PAYMENT_FAILED') return 'alert-circle'
   if (stage === 'CONFIRMED') return 'check-circle'
   if (stage === 'DESIGNING') return 'edit-3'
   if (stage === 'SOURCING') return 'shopping-bag'
@@ -59,6 +60,7 @@ function stageColor(stage: OrderStage): string {
   if (stage === 'IN_DISPUTE') return Colors.kanteRust
   if (stage === 'DECLINED' || stage === 'CANCELLED') return Colors.midGrey
   if (stage === 'COMPLETE' || stage === 'DELIVERED' || stage === 'COLLECTED') return Colors.success
+  if (stage === 'PAYMENT_FAILED') return Colors.kanteRust
   if (stage === 'QUOTE_SENT' || stage === 'CONSULTATION') return Colors.warning
   return Colors.needleGreen
 }
@@ -293,7 +295,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg, paddingVertical: 6,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.lightGrey,
     backgroundColor: Colors.bone,
   },
@@ -302,12 +304,12 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
+  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
   guideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: 4,
+    padding: 10,
+    gap: 3,
     marginBottom: Spacing.sm,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -328,35 +330,36 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
   guideTitle: {
-    fontSize: FontSize.sm,
+    fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
-    lineHeight: 20,
+    lineHeight: 17,
+    fontFamily: 'Georgia',
   },
 
   card: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: 14, flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm,
+    padding: 9, flexDirection: 'row', alignItems: 'flex-start', gap: 9,
     ...Shadow.sm, position: 'relative', overflow: 'hidden',
   },
   cardNew: {
     borderLeftWidth: 3, borderLeftColor: Colors.needleGreen,
   },
   unreadDot: {
-    position: 'absolute', top: 12, right: 12,
+    position: 'absolute', top: 11, right: 11,
     width: 8, height: 8, borderRadius: 4,
     backgroundColor: Colors.needleGreen,
   },
 
   iconWrap: {
-    width: 36, height: 36, borderRadius: Radius.sm,
+    width: 32, height: 32, borderRadius: Radius.sm,
     alignItems: 'center', justifyContent: 'center',
     flexShrink: 0,
   },
 
-  title: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: 2 },
+  title: { fontSize: 12, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: 1, fontFamily: 'Georgia', lineHeight: 16 },
   ref: { fontWeight: FontWeight.regular, color: Colors.midGrey },
-  stageLine: { fontSize: FontSize.xs, color: Colors.inkLight, marginBottom: 2 },
-  note: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 16, marginTop: 2 },
-  time: { fontSize: 11, color: Colors.midGrey, flexShrink: 0, marginTop: 2 },
+  stageLine: { fontSize: 10, color: Colors.inkLight, marginBottom: 1, lineHeight: 14 },
+  note: { fontSize: 10, color: Colors.midGrey, lineHeight: 14, marginTop: 1 },
+  time: { fontSize: 10, color: Colors.midGrey, flexShrink: 0, marginTop: 1 },
 })

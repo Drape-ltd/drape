@@ -135,17 +135,23 @@ export default function TailorProfileScreen() {
     async function load() {
       setFetchErrorMessage('')
       setLoading(true)
+      if (!user?.id) {
+        setProfile(null)
+        setPendingQuoteCount(0)
+        setLoading(false)
+        return
+      }
       try {
       const [profileRes, pendingRes] = await Promise.allSettled([
         supabase
           .from('tailor_profiles')
           .select('id, display_name, location, bio, seller_type, tier, avg_rating, total_reviews, total_orders, availability, specialty_tags, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, ships_internationally, id_verification_status, is_live, avatar_url, profile_completed, stripe_account_id, paystack_account_id')
-          .eq('user_id', user?.id)
+          .eq('user_id', user.id)
           .maybeSingle(),
         supabase
           .from('orders')
           .select('id', { count: 'exact', head: true })
-          .eq('tailor_id', user?.id)
+          .eq('tailor_id', user.id)
           .eq('stage', 'PENDING_QUOTE'),
       ])
 
@@ -317,8 +323,8 @@ export default function TailorProfileScreen() {
   const liveBadge = LIVE_BADGE[liveBadgeKey]
 
   function handleReadinessAction() {
-    if (readiness.actionLabel === 'Review payout status') {
-      router.push('/(tailor)/earnings')
+    if (!readiness.payoutReady && readiness.identityVerified) {
+      router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/profile' } } as never)
       return
     }
     if (readiness.actionLabel === 'Review live profile') {

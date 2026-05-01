@@ -69,7 +69,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: Radius.md,
+    borderRadius: Radius.lg,
+    minHeight: 44,
   },
   fullWidth: {
     width: '100%',
@@ -95,9 +96,9 @@ const styles = StyleSheet.create({
   },
 
   // Sizes
-  size_sm: { paddingVertical: Spacing.sm, paddingHorizontal: Spacing.md },
-  size_md: { paddingVertical: Spacing.md, paddingHorizontal: Spacing.lg },
-  size_lg: { paddingVertical: Spacing.lg, paddingHorizontal: Spacing.xl },
+  size_sm: { paddingVertical: 8, paddingHorizontal: Spacing.md },
+  size_md: { paddingVertical: 10, paddingHorizontal: Spacing.lg },
+  size_lg: { paddingVertical: 12, paddingHorizontal: Spacing.xl },
 
   // Labels
   label: {
@@ -110,6 +111,6 @@ const styles = StyleSheet.create({
   label_danger: { color: Colors.white },
 
   labelSize_sm: { fontSize: FontSize.sm },
-  labelSize_md: { fontSize: FontSize.md },
-  labelSize_lg: { fontSize: FontSize.md },
+  labelSize_md: { fontSize: FontSize.md, lineHeight: 20 },
+  labelSize_lg: { fontSize: FontSize.md, lineHeight: 20 },
 })

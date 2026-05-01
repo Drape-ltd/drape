@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Image } from 'react-native'
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator } from 'react-native'
+import { Image as ExpoImage } from 'expo-image'
 import { Feather } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { invokeFunction, supabase } from '@/lib/supabase'
@@ -774,7 +775,7 @@ export default function NewShopItemScreen() {
           <View style={styles.photoGrid}>
             {photoUrls.map((url, index) => (
               <View key={url} style={styles.photoThumbWrap}>
-                <Image source={{ uri: url }} style={styles.photoThumb} resizeMode="cover" />
+                <ExpoImage source={{ uri: url }} style={styles.photoThumb} contentFit="cover" transition={180} />
                 <TouchableOpacity
                   style={styles.photoRemove}
                   onPress={() => setPhotoUrls((prev) => prev.filter((_, i) => i !== index))}
@@ -1109,16 +1110,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   headerSpacer: { width: 44, height: 44 },
-  headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  headerTitle: { flex: 1, textAlign: 'center', fontSize: 19, fontWeight: FontWeight.bold, color: CHARCOAL, fontFamily: 'Georgia' },
   scroll: { flex: 1 },
-  content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, gap: Spacing.md, paddingBottom: 92 },
+  content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.xs, gap: Spacing.sm, paddingBottom: 92 },
   bestUseCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 6, ...Shadow.sm },
   bestUseEyebrow: { fontSize: FontSize.xs, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.6 },
   bestUseText: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
   readinessCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 6, ...Shadow.sm },
   readinessCardWarning: { borderWidth: 1, borderColor: Colors.warning + '35' },
   readinessCardSuccess: { borderWidth: 1, borderColor: Colors.success + '30' },
-  readinessTitle: { fontSize: 14, color: CHARCOAL, fontWeight: FontWeight.semibold, lineHeight: 18 },
+  readinessTitle: { fontSize: 14, color: CHARCOAL, fontWeight: FontWeight.semibold, lineHeight: 18, fontFamily: 'Georgia' },
   readinessBody: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
   readinessMeta: { fontSize: 11, color: MUTED_GREY, lineHeight: 16 },
   checkList: { gap: 6, marginTop: 2 },
@@ -1126,7 +1127,7 @@ const styles = StyleSheet.create({
   checkText: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
   checkTextReady: { color: CHARCOAL },
   field: { gap: 6 },
-  label: { fontSize: 14, color: CHARCOAL, fontWeight: FontWeight.semibold },
+  label: { fontSize: 14, color: CHARCOAL, fontWeight: FontWeight.semibold, fontFamily: 'Georgia' },
   fieldHint: { fontSize: 11, color: MUTED_GREY, lineHeight: 16 },
   input: {
     backgroundColor: Colors.white,
@@ -1194,7 +1195,7 @@ const styles = StyleSheet.create({
   chipText: { color: Colors.inkLight, fontSize: 13, fontWeight: FontWeight.medium },
   chipTextActive: { color: PRIMARY_GREEN },
   choiceGroup: { gap: 8 },
-  choiceCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 4, borderWidth: 1.5, borderColor: Colors.lightGrey, ...Shadow.sm },
+  choiceCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: 4, borderWidth: 1.5, borderColor: Colors.lightGrey, ...Shadow.sm },
   choiceCardActive: { borderColor: PRIMARY_GREEN, backgroundColor: Colors.needleGreenLight },
   choiceCardDisabled: { opacity: 0.6 },
   choiceTitle: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL },
@@ -1258,7 +1259,7 @@ const styles = StyleSheet.create({
     gap: 8,
     ...Shadow.sm,
   },
-  fitGuideTitle: { fontSize: 14, color: CHARCOAL, fontWeight: FontWeight.semibold },
+  fitGuideTitle: { fontSize: 14, color: CHARCOAL, fontWeight: FontWeight.semibold, fontFamily: 'Georgia' },
   fitGuideBody: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
   fitGuideAction: {
     alignSelf: 'flex-start',

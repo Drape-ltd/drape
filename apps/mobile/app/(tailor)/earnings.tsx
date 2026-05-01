@@ -1,228 +1,286 @@
-/**
- * Tailor payout dashboard + basic analytics
- * Design doc §9.5 + §9.7
- * - Total earnings this month / week / all time
- * - Pending (in escrow) + available
- * - Payout history
- * - 6-month earnings bar chart
- * - 3 headline analytics numbers
- */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  View, Text, StyleSheet, ScrollView, ActivityIndicator,
-  Dimensions, TouchableOpacity, RefreshControl,
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  ActivityIndicator,
+  RefreshControl,
+  TextInput,
+  Share,
 } from 'react-native'
-import { useNavigation, useRouter } from 'expo-router'
+import * as FileSystem from 'expo-file-system/legacy'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import AsyncStorage from '@react-native-async-storage/async-storage'
-import { supabase } from '@/lib/supabase'
-import { useAuth } from '@/lib/auth'
+import { useNavigation, useRouter } from 'expo-router'
+import { Feather } from '@expo/vector-icons'
+import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { goBackOrFallback } from '@/lib/navigation'
-import { deriveTailorReadiness, payoutSetupCopy, type TailorReadinessInput } from '@/lib/tailor-readiness'
-import { formatAmount, fetchRates } from '@/lib/currency'
-import type { CurrencyCode, Rates } from '@/lib/currency'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { useAuth } from '@/lib/auth'
+import {
+  buildTailorTransactionsCsv,
+  fetchTailorEarningsDashboard,
+  type TailorEarningsDashboardData,
+  type TailorPayoutHistoryRecord,
+  type TailorTransactionRecord,
+  type TailorTransactionStatus,
+} from '@/lib/money-history'
+import { formatAmount, type CurrencyCode } from '@/lib/currency'
+import { useRefreshOnFocus } from '@/lib/queries'
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window')
-const CHART_WIDTH = SCREEN_WIDTH - Spacing.xl * 2
-const CHART_HEIGHT = 140
-const EARNINGS_GUIDE_KEY = 'drape_tailor_earnings_best_use_dismissed'
+type StatusFilter = 'ALL' | TailorTransactionStatus
+type RangeFilter = 'ALL' | '30D' | '90D' | '365D'
 
-type MonthBucket = { label: string; amount: number }
-type PayoutRow = { id: string; reference: string; amount: number; garmentType: string; completedAt: string }
+const STATUS_FILTERS: Array<{ key: StatusFilter; label: string }> = [
+  { key: 'ALL', label: 'All' },
+  { key: 'PENDING', label: 'Pending' },
+  { key: 'AVAILABLE', label: 'Available' },
+  { key: 'RELEASED', label: 'Released' },
+  { key: 'PAID_OUT', label: 'Paid out' },
+  { key: 'BLOCKED', label: 'Blocked' },
+  { key: 'FAILED', label: 'Failed' },
+]
 
-type EarningsData = {
-  allTime: number
-  thisMonth: number
-  thisWeek: number
-  pendingEscrow: number
-  ordersThisMonth: number
-  avgRating: number
-  monthBuckets: MonthBucket[]
-  history: PayoutRow[]
+const RANGE_FILTERS: Array<{ key: RangeFilter; label: string }> = [
+  { key: '30D', label: '30 days' },
+  { key: '90D', label: '90 days' },
+  { key: '365D', label: '1 year' },
+  { key: 'ALL', label: 'All time' },
+]
+
+function money(amount: number, currency: string) {
+  return formatAmount(amount, currency as CurrencyCode, currency as CurrencyCode, {})
 }
 
-function getMonthBuckets(): MonthBucket[] {
-  const buckets: MonthBucket[] = []
-  const now = new Date()
-  for (let i = 5; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    buckets.push({
-      label: d.toLocaleDateString('en-GB', { month: 'short' }),
-      amount: 0,
-    })
+function withinRange(date: string, range: RangeFilter) {
+  if (range === 'ALL') return true
+  const ms =
+    range === '30D'
+      ? 30 * 24 * 60 * 60 * 1000
+      : range === '90D'
+        ? 90 * 24 * 60 * 60 * 1000
+        : 365 * 24 * 60 * 60 * 1000
+  return Date.parse(date) >= Date.now() - ms
+}
+
+function statusLabel(status: TailorTransactionStatus) {
+  switch (status) {
+    case 'PENDING':
+      return 'Pending'
+    case 'AVAILABLE':
+      return 'Available'
+    case 'RELEASED':
+      return 'Released'
+    case 'PAID_OUT':
+      return 'Paid out'
+    case 'BLOCKED':
+      return 'Blocked'
+    case 'FAILED':
+      return 'Failed'
   }
-  return buckets
 }
 
-export default function EarningsScreen() {
+function statusTone(status: TailorTransactionStatus) {
+  switch (status) {
+    case 'PAID_OUT':
+      return { bg: Colors.needleGreenLight, fg: Colors.needleGreenDark }
+    case 'AVAILABLE':
+    case 'RELEASED':
+      return { bg: Colors.boneDeep, fg: Colors.needleGreen }
+    case 'PENDING':
+      return { bg: '#FEF3C7', fg: '#B45309' }
+    case 'BLOCKED':
+      return { bg: Colors.kanteRustLight, fg: Colors.kanteRust }
+    case 'FAILED':
+      return { bg: Colors.errorLight, fg: Colors.error }
+  }
+}
+
+function payoutStatusLabel(status: TailorPayoutHistoryRecord['status']) {
+  switch (status) {
+    case 'PAID':
+      return 'Completed'
+    case 'PROCESSING':
+      return 'Processing'
+    case 'FAILED':
+      return 'Failed'
+    case 'REVERSED':
+      return 'Reversed'
+    case 'CANCELED':
+      return 'Canceled'
+    case 'BLOCKED':
+      return 'Blocked'
+    case 'PENDING':
+      return 'Pending'
+  }
+}
+
+function payoutStatusTone(status: TailorPayoutHistoryRecord['status']) {
+  switch (status) {
+    case 'PAID':
+      return { bg: Colors.needleGreenLight, fg: Colors.needleGreenDark }
+    case 'PROCESSING':
+    case 'PENDING':
+      return { bg: Colors.boneDeep, fg: Colors.needleGreen }
+    case 'BLOCKED':
+      return { bg: Colors.kanteRustLight, fg: Colors.kanteRust }
+    case 'FAILED':
+    case 'REVERSED':
+    case 'CANCELED':
+      return { bg: Colors.errorLight, fg: Colors.error }
+  }
+}
+
+function payoutMethodLabel(data: TailorEarningsDashboardData) {
+  if (data.payoutProvider === 'PAYSTACK' && data.payoutBankName && data.payoutAccountMasked) {
+    return `${data.payoutBankName} · ${data.payoutAccountMasked}`
+  }
+  if (data.payoutProvider === 'PAYSTACK' && data.payoutBankName) return data.payoutBankName
+  if (!data.payoutProvider) return 'Payout account setup pending'
+  return data.payoutProvider === 'PAYSTACK' ? 'Verified Paystack account' : 'Verified Stripe Connect account'
+}
+
+function shareOf(total: number, value: number) {
+  if (total <= 0 || value <= 0) return 0
+  return Math.max(8, Math.round((value / total) * 100))
+}
+
+function StatCard({ label, value, hint }: { label: string; value: string; hint: string }) {
+  return (
+    <View style={styles.statCard}>
+      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statHint}>{hint}</Text>
+    </View>
+  )
+}
+
+function FilterChip({
+  label,
+  active,
+  onPress,
+}: {
+  label: string
+  active: boolean
+  onPress: () => void
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.filterChip, active ? styles.filterChipActive : null]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      <Text style={[styles.filterChipText, active ? styles.filterChipTextActive : null]}>{label}</Text>
+    </TouchableOpacity>
+  )
+}
+
+export default function TailorEarningsScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
-  const [data, setData] = useState<EarningsData | null>(null)
+  const [data, setData] = useState<TailorEarningsDashboardData | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [fetchError, setFetchError] = useState(false)
-  const [currency, setCurrency] = useState<CurrencyCode>('GBP')
-  const [rates, setRates] = useState<Rates>({})
-  const [showGuide, setShowGuide] = useState(true)
-  const [readinessInput, setReadinessInput] = useState<TailorReadinessInput | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL')
+  const [rangeFilter, setRangeFilter] = useState<RangeFilter>('ALL')
+  const [exporting, setExporting] = useState(false)
 
-  async function fetchEarnings() {
+  async function load() {
     if (!user?.id) {
       setData(null)
-      setFetchError(false)
-      setReadinessInput(null)
       setLoading(false)
       return
     }
-    setFetchError(false)
-    const now = new Date()
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
-    const weekStart = new Date(now)
-    weekStart.setDate(now.getDate() - 7)
-    const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1)
 
-    const [completedRes, pendingRes, profileRes, liveRatesRes] = await Promise.allSettled([
-      // All completed orders (COMPLETE, DELIVERED, COLLECTED)
-      supabase
-        .from('orders')
-        .select('id, reference, garment_type, quoted_amount, quoted_currency, updated_at')
-        .eq('tailor_id', user?.id)
-        .in('stage', ['COMPLETE', 'DELIVERED', 'COLLECTED'])
-        .order('updated_at', { ascending: false }),
-
-      // Orders in escrow (confirmed through ready-to-collect / shipped)
-      supabase
-        .from('orders')
-        .select('quoted_amount, quoted_currency')
-        .eq('tailor_id', user?.id)
-        .in('stage', ['CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'SHIPPED', 'READY_FOR_COLLECTION']),
-
-      supabase
-        .from('tailor_profiles')
-        .select('avg_rating, currency, profile_completed, id_verification_status, is_live, stripe_account_id, paystack_account_id')
-        .eq('user_id', user?.id)
-        .maybeSingle(),
-
-      fetchRates(),
-    ])
-
-    const completed =
-      completedRes.status === 'fulfilled' && !completedRes.value.error
-        ? ((completedRes.value.data ?? []) as any[])
-        : []
-    const pending =
-      pendingRes.status === 'fulfilled' && !pendingRes.value.error
-        ? ((pendingRes.value.data ?? []) as any[])
-        : []
-    const profile =
-      profileRes.status === 'fulfilled' && !profileRes.value.error
-        ? (profileRes.value.data as any)
-        : null
-    const liveRates = liveRatesRes.status === 'fulfilled' ? liveRatesRes.value : {}
-
-    if (
-      (completedRes.status === 'rejected' || (completedRes.status === 'fulfilled' && completedRes.value.error)) &&
-      (pendingRes.status === 'rejected' || (pendingRes.status === 'fulfilled' && pendingRes.value.error)) &&
-      (profileRes.status === 'rejected' || (profileRes.status === 'fulfilled' && profileRes.value.error))
-    ) {
-      setFetchError(true)
+    try {
+      const result = await fetchTailorEarningsDashboard(user.id)
+      setData(result)
+      setError(null)
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : 'Could not load earnings.')
     }
-
-    // Use the tailor's stored currency, fall back to GBP
-    const tailorCurrency = (profile?.currency ?? 'GBP') as CurrencyCode
-    setCurrency(tailorCurrency)
-    setRates(liveRates)
-    setReadinessInput({
-      profileCompleted: profile?.profile_completed ?? false,
-      idVerificationStatus: profile?.id_verification_status ?? 'NOT_SUBMITTED',
-      isLive: profile?.is_live ?? false,
-      stripeAccountId: profile?.stripe_account_id ?? null,
-      paystackAccountId: profile?.paystack_account_id ?? null,
-    })
-
-    // Normalise each order's amount to minor units of tailorCurrency
-    function toDisplay(amountMinor: number, fromCurrency: CurrencyCode = tailorCurrency): number {
-      if (fromCurrency === tailorCurrency) return amountMinor
-      const fromRate = liveRates[fromCurrency] ?? 1
-      const toRate = liveRates[tailorCurrency] ?? 1
-      return Math.round((amountMinor / fromRate) * toRate)
-    }
-
-    const allTime = completed.reduce((s, o) => s + toDisplay(o.quoted_amount ?? 0, (o.quoted_currency ?? tailorCurrency) as CurrencyCode), 0)
-    const thisMonth = completed
-      .filter((o) => new Date(o.updated_at) >= monthStart)
-      .reduce((s, o) => s + toDisplay(o.quoted_amount ?? 0, (o.quoted_currency ?? tailorCurrency) as CurrencyCode), 0)
-    const thisWeek = completed
-      .filter((o) => new Date(o.updated_at) >= weekStart)
-      .reduce((s, o) => s + toDisplay(o.quoted_amount ?? 0, (o.quoted_currency ?? tailorCurrency) as CurrencyCode), 0)
-    const pendingEscrow = pending.reduce((s: number, o: any) => s + toDisplay(o.quoted_amount ?? 0, (o.quoted_currency ?? tailorCurrency) as CurrencyCode), 0)
-    const ordersThisMonth = completed.filter((o) => new Date(o.updated_at) >= monthStart).length
-
-    // Build 6-month chart buckets
-    const buckets = getMonthBuckets()
-    for (const order of completed) {
-      const d = new Date(order.updated_at)
-      if (d < sixMonthsAgo) continue
-      const key = d.toLocaleDateString('en-GB', { month: 'short' })
-      const bucket = buckets.find((b) => b.label === key)
-      if (bucket) bucket.amount += toDisplay(order.quoted_amount ?? 0, (order.quoted_currency ?? tailorCurrency) as CurrencyCode)
-    }
-
-    const history: PayoutRow[] = completed.slice(0, 20).map((o) => ({
-      id: o.id,
-      reference: o.reference,
-      amount: toDisplay(o.quoted_amount ?? 0, (o.quoted_currency ?? tailorCurrency) as CurrencyCode),
-      garmentType: o.garment_type,
-      completedAt: o.updated_at,
-    }))
-
-    setData({
-      allTime, thisMonth, thisWeek, pendingEscrow,
-      ordersThisMonth, avgRating: profile?.avg_rating ?? 0,
-      monthBuckets: buckets, history,
-    })
   }
 
   useEffect(() => {
     setLoading(true)
-    void fetchEarnings().finally(() => setLoading(false))
+    void load().finally(() => setLoading(false))
   }, [user?.id])
 
-  useEffect(() => {
-    AsyncStorage.getItem(`${EARNINGS_GUIDE_KEY}:${user?.id ?? 'guest'}`)
-      .then((value) => setShowGuide(value !== '1'))
-      .catch(() => {})
-  }, [user?.id])
-
-  async function dismissGuide() {
-    setShowGuide(false)
-    try {
-      await AsyncStorage.setItem(`${EARNINGS_GUIDE_KEY}:${user?.id ?? 'guest'}`, '1')
-    } catch {}
-  }
+  useRefreshOnFocus(() => {
+    void load()
+  }, 20_000)
 
   async function onRefresh() {
     setRefreshing(true)
-    await fetchEarnings()
+    await load()
     setRefreshing(false)
   }
 
-  const fmt = (minor: number) => formatAmount(minor, currency, currency, rates)
-  const readiness = deriveTailorReadiness(readinessInput)
-  const payoutNextStep = payoutSetupCopy(currency)
+  function goBack() {
+    goBackOrFallback(router, navigation, '/(tailor)')
+  }
+
+  const filteredTransactions = useMemo(() => {
+    const needle = search.trim().toLowerCase()
+    return (data?.transactions ?? []).filter((row) => {
+      if (statusFilter !== 'ALL' && row.status !== statusFilter) return false
+      if (!withinRange(row.date, rangeFilter)) return false
+      if (!needle) return true
+      return [
+        row.reference,
+        row.orderId,
+        row.customerFirstName,
+        row.title,
+      ].some((value) => value.toLowerCase().includes(needle))
+    })
+  }, [data?.transactions, rangeFilter, search, statusFilter])
+
+  const hasActiveFilters = statusFilter !== 'ALL' || rangeFilter !== 'ALL' || search.trim().length > 0
+
+  function clearFilters() {
+    setSearch('')
+    setStatusFilter('ALL')
+    setRangeFilter('ALL')
+  }
+
+  async function exportCsv() {
+    if (!filteredTransactions.length || exporting) return
+
+    setExporting(true)
+    try {
+      const csv = buildTailorTransactionsCsv(filteredTransactions)
+      const baseDir = FileSystem.cacheDirectory ?? FileSystem.documentDirectory
+      if (!baseDir) {
+        throw new Error('No writable directory available for CSV export.')
+      }
+      const fileUri = `${baseDir}drape-earnings-${Date.now()}.csv`
+      await FileSystem.writeAsStringAsync(fileUri, csv, {
+        encoding: FileSystem.EncodingType.UTF8,
+      })
+      await Share.share({
+        url: fileUri,
+        message: `Drape earnings export\n${fileUri}`,
+      })
+    } catch (shareError) {
+      setError(shareError instanceof Error ? shareError.message : 'Could not export CSV.')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   if (loading) {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Earnings</Text>
+            <Text style={styles.stateEyebrow}>Payments & payouts</Text>
             <ActivityIndicator color={Colors.needleGreen} size="large" />
-            <Text style={styles.stateTitle}>Loading your earnings…</Text>
+            <Text style={styles.stateTitle}>Loading earnings history…</Text>
             <Text style={styles.stateHint}>
-              We’re pulling together completed orders, pending funds, and recent payout activity so you can see the business clearly.
+              We’re pulling your settled order earnings, pending escrow, and payout ledger together.
             </Text>
           </View>
         </View>
@@ -230,41 +288,23 @@ export default function EarningsScreen() {
     )
   }
 
-  if (fetchError && !data) {
+  if (!data) {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Earnings</Text>
-            <Text style={styles.stateTitle}>Couldn't load your earnings yet.</Text>
+            <Text style={styles.stateEyebrow}>Payments & payouts</Text>
+            <Text style={styles.stateTitle}>No payout profile yet.</Text>
             <Text style={styles.stateHint}>
-              This screen should give you a calm view of what has cleared, what is still pending, and how recent work is stacking up.
+              Set up a payout account before you take paid work so Drape can release earnings safely.
             </Text>
-            <TouchableOpacity
-              style={styles.retryBtn}
-              onPress={() => {
-                setLoading(true)
-                fetchEarnings().finally(() => setLoading(false))
-              }}
-            >
-              <Text style={styles.retryBtnText}>Try again</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.secondaryBtn}
-              onPress={() => router.replace('/(tailor)/profile')}
-            >
-              <Text style={styles.secondaryBtnText}>Open profile</Text>
+            <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/earnings' } } as never)}>
+              <Text style={styles.primaryBtnText}>Open payout setup</Text>
             </TouchableOpacity>
           </View>
         </View>
       </SafeAreaView>
     )
-  }
-
-  const maxBucket = Math.max(...(data?.monthBuckets.map((b) => b.amount) ?? [1]), 1)
-
-  function goBack() {
-    goBackOrFallback(router, navigation, '/(tailor)')
   }
 
   return (
@@ -275,202 +315,254 @@ export default function EarningsScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />}
       >
-        {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={goBack}>
             <Text style={styles.back}>← Back</Text>
           </TouchableOpacity>
-          <Text style={styles.title}>Earnings</Text>
-          <View style={{ width: 60 }} />
+          <Text style={styles.title}>Payments & payouts</Text>
+          <TouchableOpacity style={styles.exportBtn} onPress={() => void exportCsv()} disabled={exporting || filteredTransactions.length === 0}>
+            <Feather name="download" size={16} color={Colors.needleGreen} />
+          </TouchableOpacity>
         </View>
 
-        {showGuide && (
-          <View style={styles.guideCard}>
-            <View style={styles.guideHeader}>
-              <Text style={styles.guideEyebrow}>Best use</Text>
-              <TouchableOpacity onPress={() => void dismissGuide()} style={styles.guideClose}>
-                <Text style={styles.guideCloseText}>×</Text>
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.guideText}>Use this screen to separate cleared earnings from money still waiting on delivery or collection.</Text>
-          </View>
-        )}
-
-        {readinessInput ? (
-          <View
-            style={[
-              styles.readinessCard,
-              readiness.tone === 'success'
-                ? styles.readinessCardSuccess
-                : readiness.tone === 'warning'
-                  ? styles.readinessCardWarning
-                  : null,
-            ]}
-          >
-            <Text style={styles.readinessTitle}>{readiness.title}</Text>
-            <Text style={styles.readinessBody}>{readiness.body}</Text>
-            {readiness.payoutProviderLabel ? (
-              <Text style={styles.readinessMeta}>Payout path detected: {readiness.payoutProviderLabel}</Text>
-            ) : null}
-            <TouchableOpacity style={styles.readinessLink} onPress={() => router.push('/(tailor)/profile/trust-access' as never)}>
-              <Text style={styles.readinessLinkText}>See trust & access</Text>
+        {!data.payoutReady ? (
+          <View style={styles.warningCard}>
+            <Text style={styles.warningTitle}>
+              {data.payoutReverificationRequired ? 'Reconnect your payout account' : 'Payout account still required'}
+            </Text>
+            <Text style={styles.warningBody}>
+              Drape will not release earnings until your payout account is verified. Orders can still settle into escrow, but withdrawals stay blocked until setup is complete.
+            </Text>
+            <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/earnings' } } as never)}>
+              <Text style={styles.primaryBtnText}>{data.payoutReverificationRequired ? 'Reconnect payout account' : 'Finish payout setup'}</Text>
             </TouchableOpacity>
           </View>
         ) : null}
 
-        {!readiness.payoutReady ? (
-          <View style={styles.nextStepCard}>
-            <Text style={styles.nextStepTitle}>{payoutNextStep.title}</Text>
-            <Text style={styles.nextStepBody}>{payoutNextStep.body}</Text>
-            <Text style={styles.nextStepHint}>
-              Use the in-app payout setup so Drape has a structured request tied to this seller profile. That keeps the blocker visible and trackable instead of leaving it in email only.
-            </Text>
-            <View style={styles.nextStepActions}>
-              <TouchableOpacity
-                style={styles.primaryActionBtn}
-                onPress={() => router.push('/(tailor)/profile/payout-setup' as never)}
-              >
-                <Text style={styles.primaryActionBtnText}>Start payout setup</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.secondaryActionBtn}
-                onPress={() => router.push('/(tailor)/profile/trust-access' as never)}
-              >
-                <Text style={styles.secondaryActionBtnText}>Open trust & access</Text>
-              </TouchableOpacity>
+        <View style={styles.summaryCard}>
+          <Text style={styles.summaryEyebrow}>Summary</Text>
+          <Text style={styles.summaryValue}>{money(data.totalEarnings, data.payoutCurrency)}</Text>
+          <Text style={styles.summaryHint}>
+            Total earnings is the sum of your pending, available, and paid out net earnings in {data.payoutCurrency}.
+          </Text>
+          <View style={styles.summaryMetaCard}>
+            <Text style={styles.summaryMetaLabel}>Payout method</Text>
+            <Text style={styles.summaryMetaValue}>{payoutMethodLabel(data)}</Text>
+            <Text style={styles.summaryMetaHint}>Current payout route: {data.payoutProvider === 'PAYSTACK' ? 'Paystack' : data.payoutProvider === 'STRIPE' ? 'Stripe Connect' : 'Not configured yet'}</Text>
+          </View>
+        </View>
+
+        <View style={styles.statsGrid}>
+          <StatCard label="Available for payout" value={money(data.availableForPayout, data.payoutCurrency)} hint={`Of total: ${money(data.availableForPayout, data.payoutCurrency)} is eligible now or already processing`} />
+          <StatCard label="Pending in escrow" value={money(data.pendingEarnings, data.payoutCurrency)} hint={`Of total: ${money(data.pendingEarnings, data.payoutCurrency)} is still waiting on delivery, review, or payout release`} />
+          <StatCard label="Already paid out" value={money(data.alreadyPaidOut, data.payoutCurrency)} hint={`Of total: ${money(data.alreadyPaidOut, data.payoutCurrency)} has completed provider transfer`} />
+        </View>
+
+        <View style={styles.breakdownCard}>
+          <Text style={styles.sectionTitle}>Earnings split</Text>
+          <View style={styles.breakdownRail}>
+            <View style={[styles.breakdownSegmentPending, { flex: shareOf(data.totalEarnings, data.pendingEarnings) || 1 }]} />
+            <View style={[styles.breakdownSegmentAvailable, { flex: shareOf(data.totalEarnings, data.availableForPayout) || 1 }]} />
+            <View style={[styles.breakdownSegmentPaid, { flex: shareOf(data.totalEarnings, data.alreadyPaidOut) || 1 }]} />
+          </View>
+          <View style={styles.breakdownLegend}>
+            <View style={styles.breakdownLegendRow}>
+              <View style={[styles.breakdownDot, styles.breakdownDotPending]} />
+              <Text style={styles.breakdownLegendText}>Pending</Text>
             </View>
+            <View style={styles.breakdownLegendRow}>
+              <View style={[styles.breakdownDot, styles.breakdownDotAvailable]} />
+              <Text style={styles.breakdownLegendText}>Available</Text>
+            </View>
+            <View style={styles.breakdownLegendRow}>
+              <View style={[styles.breakdownDot, styles.breakdownDotPaid]} />
+              <Text style={styles.breakdownLegendText}>Paid out</Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.controlsCard}>
+          <Text style={styles.sectionTitle}>Transaction history</Text>
+          <TextInput
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Search by order ID, reference, customer, or garment"
+            placeholderTextColor={Colors.midGrey}
+            style={styles.searchInput}
+          />
+          {hasActiveFilters ? (
+            <TouchableOpacity style={styles.clearFiltersBtn} onPress={clearFilters} activeOpacity={0.75}>
+              <Text style={styles.clearFiltersText}>Clear filters</Text>
+            </TouchableOpacity>
+          ) : null}
+          <View style={styles.filterWrap}>
+            {STATUS_FILTERS.map((filter) => (
+              <FilterChip
+                key={filter.key}
+                label={filter.label}
+                active={statusFilter === filter.key}
+                onPress={() => setStatusFilter(filter.key)}
+              />
+            ))}
+          </View>
+          <View style={styles.filterWrap}>
+            {RANGE_FILTERS.map((filter) => (
+              <FilterChip
+                key={filter.key}
+                label={filter.label}
+                active={rangeFilter === filter.key}
+                onPress={() => setRangeFilter(filter.key)}
+              />
+            ))}
+          </View>
+          <Text style={styles.controlsHint}>
+            Rows use your payout currency where the locked order FX makes that safe. Export keeps both the displayed figures and the original customer-paid amount for reconciliation.
+          </Text>
+        </View>
+
+        {error ? (
+          <View style={styles.inlineErrorCard}>
+            <Text style={styles.inlineErrorTitle}>Something needs attention</Text>
+            <Text style={styles.inlineErrorText}>{error}</Text>
           </View>
         ) : null}
 
-        {/* Hero stat */}
-        <View style={styles.heroCard}>
-          <Text style={styles.heroLabel}>Total earnings</Text>
-          <Text style={styles.heroValue}>{fmt(data?.allTime ?? 0)}</Text>
-          <View style={styles.heroRow}>
-            <HeroSub label="This month" value={fmt(data?.thisMonth ?? 0)} />
-            <View style={styles.heroDivider} />
-            <HeroSub label="This week" value={fmt(data?.thisWeek ?? 0)} />
-          </View>
-        </View>
-
-        {/* Pending funds */}
-        {(data?.pendingEscrow ?? 0) > 0 && (
-          <View style={styles.escrowCard}>
-            <View style={styles.escrowDot} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.escrowLabel}>Pending delivery or finish</Text>
-              <Text style={styles.escrowValue}>{fmt(data!.pendingEscrow)}</Text>
-            </View>
-          </View>
-        )}
-
-        {/* Analytics — 3 headline numbers */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>This month</Text>
-          <View style={styles.analyticsRow}>
-            <AnalyticCard label="Orders completed" value={String(data?.ordersThisMonth ?? 0)} />
-            <AnalyticCard label="Avg rating" value={data?.avgRating ? `${data.avgRating.toFixed(1)} ★` : 'No rating'} />
-            <AnalyticCard label="Earned" value={fmt(data?.thisMonth ?? 0)} highlight />
-          </View>
-        </View>
-
-        {/* 6-month earnings chart */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Last 6 months</Text>
-          <View style={styles.chartCard}>
-            <View style={styles.chartArea}>
-              {(data?.monthBuckets ?? []).map((bucket, i) => {
-                const barHeight = maxBucket > 0
-                  ? Math.max(4, (bucket.amount / maxBucket) * CHART_HEIGHT)
-                  : 4
-                return (
-                  <View key={i} style={styles.chartBarWrap}>
-                    <Text style={styles.chartBarValue}>
-                      {bucket.amount > 0 ? fmt(bucket.amount) : ''}
-                    </Text>
-                    <View style={[styles.chartBar, { height: barHeight }]} />
-                    <Text style={styles.chartBarLabel}>{bucket.label}</Text>
-                  </View>
-                )
-              })}
-            </View>
-          </View>
-        </View>
-
-        {/* Payout history */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Completed orders</Text>
-          {(data?.history ?? []).length === 0 ? (
-            <View style={styles.stateCard}>
-              <Text style={styles.stateEyebrow}>Completed orders</Text>
-              <Text style={styles.stateTitle}>No completed orders yet.</Text>
-              <Text style={styles.stateHint}>
-                Your finished customer jobs will appear here once they move through collection or delivery and are fully closed out.
+          {filteredTransactions.length === 0 ? (
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyTitle}>{(data.transactions ?? []).length === 0 ? 'No transactions yet.' : 'No transactions match this filter.'}</Text>
+              <Text style={styles.emptyText}>
+                {(data.transactions ?? []).length === 0
+                  ? 'Completed orders will appear here with payout status, fees, tax, and net earnings once they settle.'
+                  : 'Try adjusting your date range, status, or search terms to find the order you need.'}
               </Text>
-              <TouchableOpacity style={styles.retryBtn} onPress={() => router.navigate('/(tailor)/orders')}>
-                <Text style={styles.retryBtnText}>View active orders</Text>
-              </TouchableOpacity>
             </View>
           ) : (
-            <View style={styles.historyList}>
-              {(data?.history ?? []).map((row) => (
+            filteredTransactions.map((row) => {
+              const tone = statusTone(row.status)
+              return (
                 <TouchableOpacity
-                  key={row.id}
-                  style={styles.historyRow}
-                  onPress={() => router.navigate(`/(tailor)/orders/${row.id}`)}
+                  key={row.orderId}
+                  style={styles.transactionCard}
+                  onPress={() => router.navigate(`/(tailor)/orders/${row.orderId}`)}
+                  activeOpacity={0.78}
                 >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.historyGarment}>{row.garmentType}</Text>
-                    <Text style={styles.historyRef}>
-                      #{row.reference}  ·  {new Date(row.completedAt).toLocaleDateString('en-GB', {
-                        day: 'numeric', month: 'short', year: 'numeric',
-                      })}
-                    </Text>
+                  <View style={styles.rowTop}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.rowTitle}>{row.title}</Text>
+                      <Text style={styles.rowMeta}>
+                        #{row.reference} · {row.customerFirstName} · {new Date(row.date).toLocaleDateString('en-GB', {
+                          day: 'numeric',
+                          month: 'short',
+                          year: 'numeric',
+                        })}
+                      </Text>
+                    </View>
+                    <View style={[styles.statusPill, { backgroundColor: tone.bg }]}>
+                      <Text style={[styles.statusPillText, { color: tone.fg }]}>{statusLabel(row.status)}</Text>
+                    </View>
                   </View>
-                  <Text style={styles.historyAmount}>{fmt(row.amount)}</Text>
+
+                  <View style={styles.moneyBreakdown}>
+                    <MoneyLine label="Customer paid" value={money(row.orderAmount, row.orderCurrency)} />
+                    <MoneyLine label="Platform fee" value={money(row.platformFeeAmount, row.taxCurrency)} />
+                    <MoneyLine label="Tax collected" value={money(row.taxAmount, row.taxCurrency)} />
+                    <MoneyLine label="Net earnings" value={money(row.netAmount, row.netCurrency)} strong />
+                  </View>
+                  {row.convertedFromOriginal ? (
+                    <Text style={styles.currencyContextText}>
+                      Customer originally paid {money(row.originalOrderAmount, row.originalOrderCurrency)}. These figures are shown in {row.orderCurrency} using the locked order FX rate.
+                    </Text>
+                  ) : null}
+                  {row.netCurrency !== data.payoutCurrency ? (
+                    <Text style={styles.currencyContextText}>
+                      Locked in {row.netCurrency}. Ops must approve payout in the original currency or convert it into {data.payoutCurrency}.
+                    </Text>
+                  ) : null}
+
+                  {row.statusReason ? <Text style={styles.reasonText}>{row.statusReason}</Text> : null}
                 </TouchableOpacity>
-              ))}
-            </View>
+              )
+            })
           )}
         </View>
 
-        {/* Payout info */}
-        <View style={styles.payoutInfoCard}>
-          <Text style={styles.payoutInfoTitle}>Payout schedule</Text>
-          <Text style={styles.payoutInfoText}>
-            Funds move only after Drape clears the order for payout follow-up. If payout setup is still missing, paid work should stay blocked until Drape can confirm a payout path for your account.
-          </Text>
-          <Text style={styles.payoutInfoNote}>
-            {readiness.payoutReady
-              ? 'Drape currently reads your seller as payout-ready for standard paid work.'
-              : 'This screen is also your payout-readiness checkpoint while dedicated payout setup stays lightweight.'}
-          </Text>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Payout history</Text>
+          {data.payouts.length === 0 ? (
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyTitle}>No payouts have been triggered yet.</Text>
+              <Text style={styles.emptyText}>
+                Once Drape releases a completed order, the provider reference and settlement status will appear here.
+              </Text>
+            </View>
+          ) : (
+            data.payouts.map((row) => {
+              const tone = payoutStatusTone(row.status)
+              return (
+                <View key={row.id} style={styles.payoutCard}>
+                  <View style={styles.rowTop}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.rowTitle}>{money(row.amount, row.currency)}</Text>
+                      <Text style={styles.rowMeta}>
+                        {row.provider} · {row.providerReference ?? 'Awaiting provider reference'}
+                      </Text>
+                    </View>
+                    <View style={[styles.statusPill, { backgroundColor: tone.bg }]}>
+                      <Text style={[styles.statusPillText, { color: tone.fg }]}>{payoutStatusLabel(row.status)}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.rowMeta}>{payoutMethodLabel(data)}</Text>
+                  <Text style={styles.rowMeta}>
+                    {row.orderReference ? `Order #${row.orderReference} · ` : ''}
+                    Initiated {new Date(row.initiatedAt).toLocaleDateString('en-GB', {
+                      day: 'numeric',
+                      month: 'short',
+                      year: 'numeric',
+                    })}
+                  </Text>
+                  {row.completedAt ? (
+                    <Text style={styles.rowMeta}>
+                      Completed {new Date(row.completedAt).toLocaleDateString('en-GB', {
+                        day: 'numeric',
+                        month: 'short',
+                        year: 'numeric',
+                      })}
+                    </Text>
+                  ) : null}
+                  {row.failedAt ? (
+                    <Text style={styles.rowMeta}>
+                      Failed {new Date(row.failedAt).toLocaleDateString('en-GB', {
+                        day: 'numeric',
+                        month: 'short',
+                        year: 'numeric',
+                      })}
+                    </Text>
+                  ) : null}
+                  {row.blockedReason ? <Text style={styles.reasonText}>{row.blockedReason}</Text> : null}
+                </View>
+              )
+            })
+          )}
         </View>
       </ScrollView>
     </SafeAreaView>
   )
 }
 
-function HeroSub({ label, value }: { label: string; value: string }) {
+function MoneyLine({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
   return (
-    <View style={styles.heroSub}>
-      <Text style={styles.heroSubLabel}>{label}</Text>
-      <Text style={styles.heroSubValue}>{value}</Text>
-    </View>
-  )
-}
-
-function AnalyticCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
-  return (
-    <View style={[styles.analyticCard, highlight && styles.analyticCardHighlight]}>
-      <Text style={[styles.analyticValue, highlight && styles.analyticValueHighlight]}>{value}</Text>
-      <Text style={styles.analyticLabel}>{label}</Text>
+    <View style={styles.moneyLine}>
+      <Text style={styles.moneyLabel}>{label}</Text>
+      <Text style={strong ? styles.moneyValueStrong : styles.moneyValue}>{value}</Text>
     </View>
   )
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
+  scroll: { flex: 1 },
+  content: { paddingBottom: Spacing.xxxl },
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
   stateCard: {
     width: '100%',
@@ -484,170 +576,269 @@ const styles = StyleSheet.create({
   },
   stateEyebrow: {
     fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
     color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    letterSpacing: 0.7,
   },
-  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  stateTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    textAlign: 'center',
+  },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
-  scroll: { flex: 1 },
-  content: { paddingBottom: 36 },
   header: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
   },
-  back: { color: Colors.needleGreen, fontSize: FontSize.sm, fontWeight: FontWeight.medium, width: 60 },
-  title: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
-
-  heroCard: {
-    marginHorizontal: Spacing.lg, marginTop: Spacing.sm, backgroundColor: Colors.needleGreen,
-    borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.sm,
-  },
-  heroLabel: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.7)' },
-  heroValue: { fontSize: 36, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: -1 },
-  heroRow: { flexDirection: 'row', gap: Spacing.md, marginTop: 4 },
-  heroSub: { gap: 2 },
-  heroSubLabel: { fontSize: FontSize.xs, color: 'rgba(255,255,255,0.6)' },
-  heroSubValue: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.white },
-  heroDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.2)' },
-  guideCard: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 14,
-    gap: Spacing.xs,
+  back: { width: 60, color: Colors.needleGreen, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
+  title: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  exportBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: Radius.full,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
-    ...Shadow.sm,
+    backgroundColor: Colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  guideClose: { padding: 2 },
-  guideCloseText: { fontSize: 18, lineHeight: 18, color: Colors.midGrey },
-  guideEyebrow: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
-  readinessCard: {
+  warningCard: {
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.md,
     backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 14,
-    gap: Spacing.xs,
-    ...Shadow.sm,
-  },
-  readinessCardWarning: { borderWidth: 1, borderColor: Colors.warning + '35' },
-  readinessCardSuccess: { borderWidth: 1, borderColor: Colors.success + '30' },
-  readinessTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-  readinessBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
-  readinessMeta: { fontSize: FontSize.xs, color: Colors.midGrey },
-  readinessLink: { alignSelf: 'flex-start' },
-  readinessLinkText: { fontSize: FontSize.xs, color: Colors.midGrey, fontWeight: FontWeight.medium },
-  nextStepCard: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 14,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
     gap: Spacing.sm,
     borderWidth: 1,
-    borderColor: Colors.lightGrey,
+    borderColor: Colors.warning + '55',
     ...Shadow.sm,
   },
-  nextStepTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-  nextStepBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
-  nextStepHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
-  nextStepActions: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginTop: Spacing.xs },
-  primaryActionBtn: {
+  warningTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  warningBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 21 },
+  primaryBtn: {
+    alignSelf: 'flex-start',
     backgroundColor: Colors.needleGreen,
     borderRadius: Radius.full,
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.sm,
   },
-  primaryActionBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
-  secondaryActionBtn: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.full,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-  },
-  secondaryActionBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink },
-
-  escrowCard: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    marginHorizontal: Spacing.lg, backgroundColor: Colors.warning + '15',
-    borderRadius: Radius.md, padding: 14,
-    borderWidth: 1, borderColor: Colors.warning + '40',
-  },
-  escrowDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.warning },
-  escrowLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
-  escrowValue: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
-
-  section: { paddingHorizontal: Spacing.lg, gap: Spacing.sm, marginTop: Spacing.lg },
-  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-
-  analyticsRow: { flexDirection: 'row', gap: Spacing.sm },
-  analyticCard: {
-    flex: 1, backgroundColor: Colors.white, borderRadius: Radius.sm,
-    padding: 12, alignItems: 'center', gap: 4, ...Shadow.sm,
-  },
-  analyticCardHighlight: { backgroundColor: Colors.needleGreen },
-  analyticValue: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink },
-  analyticValueHighlight: { color: Colors.white },
-  analyticLabel: { fontSize: 10, color: Colors.midGrey, textAlign: 'center' },
-
-  chartCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, ...Shadow.sm },
-  chartArea: {
-    flexDirection: 'row', alignItems: 'flex-end',
-    height: CHART_HEIGHT + 40, gap: 0,
-  },
-  chartBarWrap: { flex: 1, alignItems: 'center', justifyContent: 'flex-end', gap: Spacing.xs },
-  chartBarValue: { fontSize: 9, color: Colors.midGrey, textAlign: 'center' },
-  chartBar: { width: '60%', backgroundColor: Colors.needleGreen, borderRadius: 3, minHeight: 4 },
-  chartBarLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
-
-  historyList: { backgroundColor: Colors.white, borderRadius: Radius.md, overflow: 'hidden', ...Shadow.sm },
-  historyRow: {
-    flexDirection: 'row', alignItems: 'center', padding: Spacing.lg,
-    borderBottomWidth: 1, borderBottomColor: Colors.lightGrey,
-  },
-  historyGarment: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  historyRef: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
-  historyAmount: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.needleGreen },
-
-  payoutInfoCard: {
-    margin: Spacing.lg, backgroundColor: Colors.boneDeep,
-    borderRadius: Radius.md, padding: 14, gap: Spacing.sm,
-  },
-  payoutInfoTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  payoutInfoText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
-  payoutInfoNote: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium },
-
-  empty: { paddingVertical: Spacing.xl, alignItems: 'center', justifyContent: 'center', flex: 1, gap: Spacing.md, paddingHorizontal: Spacing.xl },
-  emptyText: { fontSize: FontSize.md, color: Colors.inkLight },
-  emptySubtext: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
-  retryBtn: {
+  primaryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  summaryCard: {
+    marginHorizontal: Spacing.lg,
     backgroundColor: Colors.needleGreen,
-    borderRadius: Radius.full,
-    paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.sm,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.xs,
   },
-  retryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
-  secondaryBtn: {
+  summaryEyebrow: {
+    fontSize: FontSize.xs,
+    color: 'rgba(255,255,255,0.72)',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+    fontWeight: FontWeight.semibold,
+  },
+  summaryValue: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: -0.6, fontFamily: 'Georgia' },
+  summaryHint: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.84)', lineHeight: 18 },
+  summaryMetaCard: {
+    marginTop: Spacing.xs,
+    borderRadius: Radius.md,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    padding: Spacing.sm,
+    gap: 2,
+  },
+  summaryMetaLabel: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.76)',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    fontWeight: FontWeight.semibold,
+  },
+  summaryMetaValue: {
+    fontSize: FontSize.sm,
+    color: Colors.white,
+    fontWeight: FontWeight.semibold,
+  },
+  summaryMetaHint: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.76)',
+    lineHeight: 16,
+  },
+  statsGrid: {
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.sm,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  breakdownCard: {
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.md,
     backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
+  breakdownRail: {
+    flexDirection: 'row',
+    gap: 4,
+    height: 12,
+    borderRadius: Radius.full,
+    overflow: 'hidden',
+    backgroundColor: Colors.boneDeep,
+  },
+  breakdownSegmentPending: {
+    backgroundColor: Colors.kanteRust,
+  },
+  breakdownSegmentAvailable: {
+    backgroundColor: Colors.needleGreenDark,
+  },
+  breakdownSegmentPaid: {
+    backgroundColor: Colors.needleGreen,
+  },
+  breakdownLegend: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.md,
+  },
+  breakdownLegendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  breakdownDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  breakdownDotPending: {
+    backgroundColor: Colors.kanteRust,
+  },
+  breakdownDotAvailable: {
+    backgroundColor: Colors.needleGreenDark,
+  },
+  breakdownDotPaid: {
+    backgroundColor: Colors.needleGreen,
+  },
+  breakdownLegendText: {
+    fontSize: 11,
+    color: Colors.midGrey,
+  },
+  statCard: {
+    width: '47%',
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: 4,
+    ...Shadow.sm,
+  },
+  statLabel: { fontSize: FontSize.xs, color: Colors.midGrey, textTransform: 'uppercase', letterSpacing: 0.6 },
+  statValue: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  statHint: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 16 },
+  controlsCard: {
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
+  section: { marginHorizontal: Spacing.lg, marginTop: Spacing.md, gap: Spacing.sm },
+  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  searchInput: {
+    borderWidth: 1,
     borderColor: Colors.lightGrey,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.bone,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 10,
+    fontSize: FontSize.sm,
+    color: Colors.ink,
+    minHeight: 44,
+  },
+  clearFiltersBtn: {
+    alignSelf: 'flex-start',
     borderRadius: Radius.full,
     borderWidth: 1,
-    paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.sm,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 7,
   },
-  secondaryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  clearFiltersText: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    fontWeight: FontWeight.medium,
+  },
+  filterWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  filterChip: {
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 7,
+    backgroundColor: Colors.bone,
+  },
+  filterChipActive: {
+    backgroundColor: Colors.needleGreenLight,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '35',
+  },
+  filterChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
+  filterChipTextActive: { color: Colors.needleGreenDark },
+  controlsHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
+  inlineErrorCard: {
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.md,
+    backgroundColor: Colors.errorLight,
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    gap: 4,
+  },
+  inlineErrorTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.error },
+  inlineErrorText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  emptyCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
+  emptyTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  emptyText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 19 },
+  transactionCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
+  payoutCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: 6,
+    ...Shadow.sm,
+  },
+  rowTop: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md },
+  rowTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  rowMeta: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18, marginTop: 2 },
+  statusPill: { borderRadius: Radius.full, paddingHorizontal: Spacing.sm, paddingVertical: 5 },
+  statusPillText: { fontSize: 11, fontWeight: FontWeight.semibold },
+  moneyBreakdown: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.lightGrey,
+    paddingTop: Spacing.sm,
+    gap: 8,
+  },
+  moneyLine: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: Spacing.md },
+  currencyContextText: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 16 },
+  moneyLabel: { fontSize: FontSize.sm, color: Colors.inkLight, flex: 1 },
+  moneyValue: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.medium },
+  moneyValueStrong: { fontSize: FontSize.md, color: Colors.needleGreenDark, fontWeight: FontWeight.bold },
+  reasonText: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
 })

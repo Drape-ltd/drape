@@ -8,6 +8,8 @@ import { log, audit } from '../_shared/logger.ts'
 import { serializeOrderSupportMeta } from '../_shared/order-support.ts'
 import { normalizeStoredPhone, validateRecipientPhone } from '../_shared/phone.ts'
 import { parseBody, z } from '../_shared/validate.ts'
+import { normalizeAccountCurrency, resolvePaymentProviderForCurrency } from '../../../packages/shared/src/currency-config.ts'
+import { normalizeTaxCountryCode } from '../../../packages/shared/src/tax.ts'
 
 const FN = 'custom-order-action'
 
@@ -25,6 +27,10 @@ const BodySchema = z.object({
   supportMeta: z.unknown().optional().nullable(),
   deliveryMethod: z.enum(['SHIPPING', 'LOCAL_DELIVERY', 'LOCAL_COLLECTION']),
   deliveryAddress: z.string().trim().max(500).optional().nullable(),
+  deliveryCity: z.string().trim().max(120).optional().nullable(),
+  deliveryRegion: z.string().trim().max(120).optional().nullable(),
+  deliveryPostalCode: z.string().trim().max(40).optional().nullable(),
+  deliveryCountryCode: z.string().trim().max(32).optional().nullable(),
   recipientName: z.string().trim().max(120).optional().nullable(),
   recipientPhone: z.string().trim().max(40).optional().nullable(),
 })
@@ -69,6 +75,10 @@ Deno.serve(async (req) => {
     const body = parsed.data
     const needsRecipientDeliveryDetails = body.deliveryMethod !== 'LOCAL_COLLECTION'
     const normalizedDeliveryAddress = needsRecipientDeliveryDetails ? body.deliveryAddress?.trim() ?? '' : ''
+    const normalizedDeliveryCity = needsRecipientDeliveryDetails ? body.deliveryCity?.trim() ?? '' : ''
+    const normalizedDeliveryRegion = needsRecipientDeliveryDetails ? body.deliveryRegion?.trim() ?? '' : ''
+    const normalizedDeliveryPostalCode = needsRecipientDeliveryDetails ? body.deliveryPostalCode?.trim() ?? '' : ''
+    const normalizedDeliveryCountryCode = needsRecipientDeliveryDetails ? normalizeTaxCountryCode(body.deliveryCountryCode) ?? '' : ''
     const normalizedRecipientName = needsRecipientDeliveryDetails ? body.recipientName?.trim() ?? '' : ''
     const normalizedRecipientPhone = needsRecipientDeliveryDetails ? normalizeStoredPhone(body.recipientPhone) : ''
 
@@ -152,9 +162,22 @@ Deno.serve(async (req) => {
     })
     if (blockedOccasion) return blockedOccasion
 
+    const { data: accountRow, error: accountError } = await supabase
+      .from('users')
+      .select('default_currency')
+      .eq('id', caller.id)
+      .maybeSingle()
+
+    if (accountError) {
+      log('error', FN, 'db.error', { actor_id: caller.id, error: accountError.message, surface: 'users.default_currency' })
+      return jsonError(cors, 500, 'DATABASE_ERROR', 'Could not resolve your account currency right now.')
+    }
+
+    const orderCurrency = normalizeAccountCurrency((accountRow as any)?.default_currency) ?? 'USD'
+
     const { data: tailorProfile, error: tailorError } = await supabase
       .from('tailor_profiles')
-      .select('id, user_id, is_live, supports_custom_orders, location')
+      .select('id, user_id, is_live, supports_custom_orders, location, currency, payout_currency, paystack_recipient_code, stripe_connect_account_id')
       .eq('id', body.tailorProfileId)
       .maybeSingle()
 
@@ -193,6 +216,12 @@ Deno.serve(async (req) => {
       }
     }
 
+    const lockedTailorPayoutCurrency =
+      normalizeAccountCurrency((tailorProfile as any)?.payout_currency)
+      ?? normalizeAccountCurrency((tailorProfile as any)?.currency)
+      ?? orderCurrency
+    const lockedTailorPayoutProvider = resolvePaymentProviderForCurrency(lockedTailorPayoutCurrency)
+
     const { data: created, error: createError } = await supabase
       .from('orders')
       .insert({
@@ -212,8 +241,23 @@ Deno.serve(async (req) => {
         special_note: serializeOrderSupportMeta(supportMeta),
         delivery_method: body.deliveryMethod,
         delivery_address: needsRecipientDeliveryDetails ? normalizedDeliveryAddress || null : null,
+        delivery_city: needsRecipientDeliveryDetails ? normalizedDeliveryCity || null : null,
+        delivery_region: needsRecipientDeliveryDetails ? normalizedDeliveryRegion || null : null,
+        delivery_postal_code: needsRecipientDeliveryDetails ? normalizedDeliveryPostalCode || null : null,
+        delivery_country_code: needsRecipientDeliveryDetails ? normalizedDeliveryCountryCode || null : null,
         recipient_name: needsRecipientDeliveryDetails ? normalizedRecipientName || null : null,
         recipient_phone: needsRecipientDeliveryDetails ? normalizedRecipientPhone || null : null,
+        currency: orderCurrency,
+        tailor_payout_currency_locked: lockedTailorPayoutCurrency,
+        tailor_payout_provider_locked: lockedTailorPayoutProvider,
+        tailor_paystack_recipient_code_locked:
+          lockedTailorPayoutProvider === 'PAYSTACK'
+            ? ((tailorProfile as any)?.paystack_recipient_code ?? null)
+            : null,
+        tailor_stripe_connect_account_id_locked:
+          lockedTailorPayoutProvider === 'STRIPE'
+            ? ((tailorProfile as any)?.stripe_connect_account_id ?? null)
+            : null,
         fulfillment_fee: 0,
         stage: 'PENDING_QUOTE',
         stage_updated_at: new Date().toISOString(),

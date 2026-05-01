@@ -29,6 +29,11 @@ export type OpsActionKind =
   | 'conversation-access'
   | 'dispatch-stage'
   | 'order-review-resolution'
+  | 'order-partial-refund'
+  | 'payout-release'
+  | 'payout-block-resolution'
+  | 'ops-issue-status'
+  | 'manual-issue-create'
 
 export type OpsSectionDefinition = {
   key: OpsView
@@ -155,11 +160,11 @@ export const OPS_LIVE_SECTIONS: OpsSectionDefinition[] = [
     eyebrow: 'Payout visibility',
     title: 'See payout truth fast enough to answer trust questions without digging.',
     description:
-      'This stays read-only for now, but it gives ops and finance enough context to answer payout questions, connect them to orders, and spot anomalies early.',
+      'Finance and ops can see pending or blocked payouts here, retry releases where appropriate, and connect payout problems back to the original order quickly.',
     team: 'FINANCE',
     status: 'live',
     anchor: 'payouts',
-    summaryCount: () => 0,
+    summaryCount: (summary) => summary.pendingPayoutCount,
   },
   {
     key: 'workflow-issues',
@@ -168,11 +173,11 @@ export const OPS_LIVE_SECTIONS: OpsSectionDefinition[] = [
     eyebrow: 'Workflow issues',
     title: 'Surface stuck or risky product flows before customers feel abandoned.',
     description:
-      'This is the launch-critical stream from audit logs: safety reports, privacy access requests, blocked payments, blocked handoffs, and delivery webhooks that were skipped or failed.',
+      'This is the launch-critical issue queue for safety reports, payment and payout blockers, access holds, aftercare requests, and system alerts that still need human action.',
     team: 'ENGINEERING',
     status: 'live',
     anchor: 'workflow-issues',
-    summaryCount: (summary) => summary.recentSafetyReports,
+    summaryCount: (summary) => summary.openWorkflowIssues,
   },
   {
     key: 'bypass',
@@ -231,12 +236,16 @@ const ROLE_ACTION_ACCESS: Record<OpsRole, OpsActionKind[]> = {
     'conversation-access',
     'dispatch-stage',
     'order-review-resolution',
+    'order-partial-refund',
+    'payout-release',
+    'ops-issue-status',
+    'manual-issue-create',
   ],
-  ops: ['application-status', 'dispatch-stage'],
-  customer_success: ['dispute-status', 'dispute-resolution', 'order-review-resolution'],
-  trust: ['bypass-review', 'verification-decision', 'deletion-status', 'review-visibility', 'conversation-access'],
-  finance: [],
-  engineering: [],
+  ops: ['application-status', 'dispatch-stage', 'order-partial-refund', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create'],
+  customer_success: ['dispute-status', 'dispute-resolution', 'order-review-resolution', 'order-partial-refund', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create'],
+  trust: ['bypass-review', 'verification-decision', 'deletion-status', 'review-visibility', 'conversation-access', 'ops-issue-status', 'manual-issue-create'],
+  finance: ['order-partial-refund', 'payout-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create'],
+  engineering: ['ops-issue-status', 'manual-issue-create'],
 }
 
 export function parseOpsView(value: string | null | undefined): OpsView {

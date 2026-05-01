@@ -5,6 +5,11 @@ function getFunctionErrorContext(error: unknown): Response | null {
   return context instanceof Response ? context : null
 }
 
+export function readFunctionErrorStatus(error: unknown): number | null {
+  const response = getFunctionErrorContext(error)
+  return response ? response.status : null
+}
+
 function readErrorMessage(error: unknown): string | null {
   if (error instanceof Error && error.message.trim()) return error.message.trim()
   if (!error || typeof error !== 'object') return null
