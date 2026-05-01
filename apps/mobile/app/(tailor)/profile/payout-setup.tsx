@@ -57,7 +57,6 @@ type CurrencyOption = {
   countryLabel: string
 }
 
-const PAYSTACK_CURRENCIES: PayoutSetupCurrency[] = ['NGN', 'GHS', 'KES']
 const CURRENCY_OPTIONS: CurrencyOption[] = [
   { code: 'NGN', name: 'Nigerian Naira', provider: 'PAYSTACK', flag: 'NG', providerBadge: 'Paystack', countryCode: 'NG', countryLabel: 'Nigeria' },
   { code: 'GHS', name: 'Ghanaian Cedi', provider: 'PAYSTACK', flag: 'GH', providerBadge: 'Paystack', countryCode: 'GH', countryLabel: 'Ghana' },
