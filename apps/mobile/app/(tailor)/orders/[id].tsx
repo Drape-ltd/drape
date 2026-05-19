@@ -1,18 +1,20 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, TextInput, ActivityIndicator, Modal, KeyboardAvoidingView, Platform,
+  Alert, TextInput, ActivityIndicator, Modal, KeyboardAvoidingView, Platform, Linking,
 } from 'react-native'
-import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
+import { useFocusEffect, useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { Image as ExpoImage } from 'expo-image'
 import * as ImagePicker from 'expo-image-picker'
+import { ResizeMode, Video } from 'expo-av'
 import DateTimePicker from '@react-native-community/datetimepicker'
+import { Feather } from '@expo/vector-icons'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import { Sentry } from '@/lib/sentry'
+import { uploadPublicStorageImage } from '@/lib/storage-upload'
 import {
   getFulfillmentStagePreflightError,
   normalizeContactPhoneInput,
@@ -29,6 +31,7 @@ import {
   CONSULTATION_NO_SHOW_POLICY_LABELS,
   CONSULTATION_PAYMENT_TIMING_LABELS,
   CONSULTATION_RESCHEDULE_POLICY_LABELS,
+  CONSULTATION_STATUS_LABELS,
   COVERAGE_PREFERENCE_LABELS,
   DELIVERY_REVIEW_REASON_LABELS,
   DISPATCH_SERVICE_LEVEL_LABELS,
@@ -37,11 +40,15 @@ import {
   FABRIC_STRETCH_LABELS,
   FIT_CONFIDENCE_LABELS,
   FIT_INTENT_LABELS,
+  getAdditionalMeasurementRows,
+  getMeasurementConfirmationFields,
+  labelMeasurementField,
   MATERIAL_ISSUE_REASON_LABELS,
   MATERIAL_ISSUE_RESPONSE_LABELS,
   MEASUREMENT_SOURCE_LABELS,
   MEASUREMENT_SCAN_STATUS_LABELS,
   WEAR_DAY_SUPPORT_LABELS,
+  labelFitContextFlag,
   fitProfileNeedsTailorReview,
   hasOpenCancellationReview,
   hasOpenDeliveryReview,
@@ -66,7 +73,8 @@ import {
   resolveHandoffIssue,
   type HandoffIssue,
 } from '@/lib/handoff-support'
-import { Button, HandoffSupportModal, Input } from '@/components/ui'
+import { Button, HandoffSupportModal, Input, RemoteImage } from '@/components/ui'
+import { DRAPE_VISION_ROUTE, type DrapeVisionMode } from '@/constants/drapeVision'
 import { currencySymbol } from '@drape/shared'
 import { filterContactInfo, rejectPlaceholder } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -78,16 +86,36 @@ import {
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { stageColor } from '@/lib/stageColors'
 import { isTerminalOrderStage, purgeTerminalOrderClientState } from '@/lib/order-client-state'
+import { hapticSuccess } from '@/lib/haptics'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Measurement = {
+  [key: string]: unknown
   chest: number | null; waist: number | null; hips: number | null
   shoulderWidth: number | null; inseam: number | null; sleeveLength: number | null
   neckCircumference: number | null; height: number | null; unit: string
+  backLength?: number | null; outseam?: number | null; thighCircumference?: number | null
+  kneeCircumference?: number | null; torsoLength?: number | null
   fitStyle: string | null; garmentContext: string | null; bodyShape: string | string[] | null
   fitFlags: string[]; bodyNote: string | null
 } & MeasurementSnapshotMeta
+
+type StageUpdate = {
+  id: string
+  stage: string
+  note: string | null
+  photoUrl: string | null
+  createdAt: string
+}
+
+type StageMediaType = 'image' | 'video'
+
+type StageMedia = {
+  uri: string
+  type: StageMediaType
+  fingerprint: string
+}
 
 type OrderDetail = {
   id: string; reference: string; garmentType: string
@@ -112,16 +140,131 @@ type OrderDetail = {
   referencePhotos: string[]; fitNote: string | null
   measurements: Measurement | null
   supportMeta: OrderSupportMeta
+  customDetail: {
+    garmentTypeOther: string | null
+    genderPresentation: string | null
+    socialReferenceLinks: string[]
+    styleNotes: string | null
+    bodyNote: string | null
+    fabricDescription: string | null
+    fabricBudgetAmount: number | null
+    fabricBudgetCurrency: string | null
+    fabricSourcingDeadlineDays: number | null
+    fabricSourcingDeadlineAt: string | null
+    fabricApprovalStatus: string | null
+    shippingPreference: string | null
+    deliveryInstructions: string | null
+    targetDeliveryDate: string | null
+  } | null
   collectionCode: string | null
   videoCallUrl: string | null
   occasion: string | null; deadline: string | null
   createdAt: string
+  stageUpdates: StageUpdate[]
 }
 
 function asStringList(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
   if (typeof value === 'string' && value.length > 0) return [value]
   return []
+}
+
+function isVideoUri(uri: string | null | undefined) {
+  return typeof uri === 'string' && /\.(mp4|mov|m4v|webm)(?:[?#].*)?$/iu.test(uri)
+}
+
+function stageMediaFromAsset(asset: ImagePicker.ImagePickerAsset): StageMedia {
+  const type: StageMediaType = asset.type === 'video' ? 'video' : 'image'
+  const fingerprintParts = [
+    asset.assetId,
+    asset.fileName,
+    asset.fileSize,
+    asset.width,
+    asset.height,
+    asset.duration,
+    type,
+  ].filter((value) => value !== null && value !== undefined && String(value).trim().length > 0)
+
+  return {
+    uri: asset.uri,
+    type,
+    fingerprint: fingerprintParts.length > 0 ? fingerprintParts.join('|') : `${type}|${asset.uri}`,
+  }
+}
+
+function stageMediaExtension(media: StageMedia) {
+  if (media.type === 'image') return 'jpg'
+  const match = media.uri.match(/\.([a-z0-9]+)(?:[?#].*)?$/iu)
+  const extension = match?.[1]?.toLowerCase()
+  if (extension === 'mov' || extension === 'm4v' || extension === 'webm') return extension
+  return 'mp4'
+}
+
+function stageMediaContentType(media: StageMedia) {
+  if (media.type === 'image') return 'image/jpeg'
+  const extension = stageMediaExtension(media)
+  if (extension === 'mov') return 'video/quicktime'
+  if (extension === 'webm') return 'video/webm'
+  return 'video/mp4'
+}
+
+function StageMediaPreview({
+  uri,
+  mediaType,
+  style,
+  surface,
+}: {
+  uri: string
+  mediaType?: StageMediaType
+  style: any
+  surface: string
+}) {
+  const isVideo = mediaType === 'video' || isVideoUri(uri)
+  if (isVideo) {
+    return (
+      <Video
+        source={{ uri }}
+        style={style}
+        useNativeControls
+        resizeMode={ResizeMode.CONTAIN}
+        isLooping={false}
+      />
+    )
+  }
+
+  return (
+    <RemoteImage
+      uri={uri}
+      style={style}
+      contentFit="contain"
+      transition={120}
+      surface={surface}
+    />
+  )
+}
+
+function labelShippingPreference(value: string | null | undefined) {
+  if (value === 'EXPRESS') return 'Express'
+  if (value === 'STANDARD') return 'Standard'
+  return null
+}
+
+function labelFabricApprovalStatus(value: string | null | undefined) {
+  if (value === 'PENDING_TAILOR_UPLOAD') return 'Waiting for sourced fabric upload'
+  if (value === 'PENDING_CUSTOMER_APPROVAL') return 'Waiting for customer approval'
+  if (value === 'APPROVED') return 'Approved by customer'
+  if (value === 'CHANGES_REQUESTED') return 'Customer requested changes'
+  if (value === 'UNSUITABLE') return 'Marked unsuitable'
+  if (value === 'OPS_REVIEW') return 'Ops review needed'
+  return null
+}
+
+function linkHostLabel(value: string) {
+  try {
+    return new URL(value).hostname.replace(/^www\./u, '')
+  } catch {
+    return value
+  }
 }
 
 function orderStatusGuidance(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): string | null {
@@ -138,8 +281,8 @@ function orderStatusGuidance(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MAD
   }
   if (stage === 'PAYMENT_FAILED') {
     return orderKind === 'READY_MADE'
-      ? 'Checkout failed. The customer is next to retry within 30 minutes before this order is cancelled automatically.'
-      : 'Payment failed. The customer is next to retry within 30 minutes before this order is cancelled automatically.'
+      ? 'Checkout failed. The customer is next to retry within 2 hours before this order is cancelled automatically.'
+      : 'Payment failed. The customer is next to retry within 2 hours before this order is cancelled automatically.'
   }
   if (stage === 'CONFIRMED') {
     return orderKind === 'READY_MADE'
@@ -179,10 +322,10 @@ function orderStatusGuidance(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MAD
     return 'The order is ready to hand over. The customer is next at pickup, and you should confirm the collection code when they arrive.'
   }
   if (stage === 'DELIVERED') {
-    return 'Delivery is confirmed. The customer is next to finish the order or raise a concern. You can leave an internal review now.'
+    return 'Delivery is confirmed. The 72-hour customer review window is open, and payout stays protected until it closes.'
   }
   if (stage === 'COLLECTED') {
-    return 'Collection is confirmed. The customer is next to finish the order or raise a concern. You can leave an internal review now.'
+    return 'Collection is confirmed. The 72-hour customer review window is open, and payout stays protected until it closes.'
   }
   if (stage === 'COMPLETE') {
     return 'This order is complete. You can still revisit the full brief, measurements, and timeline here any time.'
@@ -201,6 +344,7 @@ function quotedAmountLabel(
   if (orderKind === 'READY_MADE') {
     if (stage === 'PAYMENT_PENDING') return 'awaiting payment'
     if (stage === 'PAYMENT_FAILED') return 'payment failed'
+    if (stage === 'DELIVERED' || stage === 'COLLECTED') return 'review window'
     if (fulfillmentPaymentPending) return 'item paid'
     if (stage === 'COMPLETE') return 'closed out'
     return 'paid'
@@ -288,34 +432,94 @@ function stageUpdatePhotoHint(order: Pick<OrderDetail, 'orderKind'>, targetStage
   if (targetStage === 'SHIPPED') {
     return 'Show the packed handoff or dispatch proof so the customer can trust the shipment update.'
   }
-  return 'A photo at this stage builds trust with your customer.'
+  return 'Use fresh photo or video proof for this exact stage. Reused media is blocked to keep the order timeline trustworthy.'
 }
 
 function stageUpdatePhotoLabel(order: Pick<OrderDetail, 'orderKind'>, targetStage: OrderStage) {
   if (order.orderKind === 'READY_MADE') {
-    if (targetStage === 'FINISHING') return 'Packing photo'
-    if (targetStage === 'READY_FOR_COLLECTION') return 'Pickup-ready photo'
-    if (targetStage === 'READY_FOR_DRAPE_DISPATCH') return 'Packed-order photo'
+    if (targetStage === 'FINISHING') return 'Packing proof'
+    if (targetStage === 'READY_FOR_COLLECTION') return 'Pickup-ready proof'
+    if (targetStage === 'READY_FOR_DRAPE_DISPATCH') return 'Packed-order proof'
   }
-  if (targetStage === 'OUT_FOR_DELIVERY') return 'Delivery handoff photo'
-  if (targetStage === 'SHIPPED') return 'Dispatch photo'
-  return 'Progress photo'
+  if (targetStage === 'OUT_FOR_DELIVERY') return 'Delivery handoff proof'
+  if (targetStage === 'SHIPPED') return 'Dispatch proof'
+  return 'Progress proof'
 }
 
 function stageUpdatePhotoRequiredMessage(order: Pick<OrderDetail, 'orderKind'>, targetStage: OrderStage) {
   if (order.orderKind === 'READY_MADE' && targetStage === 'READY_FOR_COLLECTION') {
-    return 'Add a pickup-ready photo so the customer can see the packed order before collection.'
+    return 'Add fresh pickup-ready proof so the customer can see the packed order before collection.'
   }
   if (targetStage === 'READY_FOR_DRAPE_DISPATCH') {
-    return 'Add a packed-order photo so Drape can take over dispatch cleanly.'
+    return 'Add fresh packed-order proof so Drape can take over dispatch cleanly.'
   }
   if (targetStage === 'OUT_FOR_DELIVERY') {
-    return 'Add a delivery handoff photo so the customer can trust that the order is really on the way.'
+    return 'Add fresh delivery handoff proof so the customer can trust that the order is really on the way.'
   }
   if (targetStage === 'SHIPPED') {
-    return 'Add a dispatch photo so the customer can trust this shipment update.'
+    return 'Add fresh dispatch proof so the customer can trust this shipment update.'
   }
-  return 'A photo at this stage builds trust. Please add at least one image before updating.'
+  return 'Fresh proof at this stage builds trust. Add a photo or video before updating.'
+}
+
+function defaultConsultationStart() {
+  const value = new Date()
+  value.setDate(value.getDate() + 1)
+  value.setMinutes(0, 0, 0)
+  return value
+}
+
+function formatConsultationStart(value: string | Date | null | undefined) {
+  if (!value) return 'Choose a time'
+  const date = value instanceof Date ? value : new Date(value)
+  if (!Number.isFinite(date.getTime())) return 'Choose a time'
+  return date.toLocaleString('en-GB', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function formatTimelineDate(value: string | null | undefined) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return ''
+  const day = new Intl.DateTimeFormat(undefined, {
+    day: 'numeric',
+    month: 'short',
+  }).format(date)
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date)
+  return `${day} at ${time}`
+}
+
+function timelineStageLabel(update: Pick<StageUpdate, 'stage' | 'note'>, orderKind: 'CUSTOM' | 'READY_MADE') {
+  const note = update.note?.toLowerCase() ?? ''
+  if (update.stage === 'CONFIRMED' && note.includes('payment confirmed')) {
+    return 'Payment confirmed'
+  }
+  if (update.stage === 'CONFIRMED' && (note.includes('guided fit profile') || note.includes('fit intake'))) {
+    return 'Measurements reviewed'
+  }
+  return tailorOrderStageLabel(update.stage as OrderStage, orderKind)
+}
+
+function timelineDotColor(update: Pick<StageUpdate, 'stage' | 'note'>) {
+  const note = update.note?.toLowerCase() ?? ''
+  if (update.stage === 'PAYMENT_FAILED' || note.includes('failed') || note.includes('cancel')) {
+    return Colors.error
+  }
+  if (update.stage === 'PAYMENT_PENDING' || note.includes('checkout started') || note.includes('payment started')) {
+    return Colors.statusPending
+  }
+  if (update.stage === 'IN_DISPUTE' || note.includes('concern') || note.includes('review')) {
+    return Colors.kanteRust
+  }
+  return Colors.needleGreen
 }
 
 function baseAmount(order: Pick<OrderDetail, 'orderKind' | 'itemSubtotal' | 'quotedAmount' | 'fulfillmentFee'>) {
@@ -334,7 +538,7 @@ const PRODUCTION_NEXT: Partial<Record<OrderStage, OrderStage>> = {
 
 // Flexible next stages — tailor chooses which pre-production phase to start
 const FLEXIBLE_NEXT_STAGES: Partial<Record<OrderStage, OrderStage[]>> = {
-  CONFIRMED: ['DESIGNING', 'SOURCING', 'CUTTING'],
+  CONFIRMED: ['DESIGNING'],
   DESIGNING: ['SOURCING', 'CUTTING'],
   SOURCING: ['CUTTING'],
 }
@@ -396,6 +600,7 @@ export default function TailorOrderDetailScreen() {
   const [showStageModal, setShowStageModal] = useState(false)
   const [stageModalTarget, setStageModalTarget] = useState<OrderStage | null>(null)
   const [showConsultationModal, setShowConsultationModal] = useState(false)
+  const [consultationModalAction, setConsultationModalAction] = useState<'request-consultation' | 'approve-consultation'>('request-consultation')
   const [showCodeModal, setShowCodeModal] = useState(false)
   const [showMeasurementRequestModal, setShowMeasurementRequestModal] = useState(false)
   const [showFitReadinessModal, setShowFitReadinessModal] = useState(false)
@@ -412,36 +617,44 @@ export default function TailorOrderDetailScreen() {
   const [resolvingHandoffIssue, setResolvingHandoffIssue] = useState(false)
   const purgedTerminalOrderRef = useRef<string | null>(null)
 
-  async function fetchOrder() {
+  const fetchOrder = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent === true
     if (!id || !user?.id) {
-      setLoading(false)
-      setFetchErrorMessage('')
+      if (!silent) {
+        setLoading(false)
+        setFetchErrorMessage('')
+        setOrder(null)
+        setHasCustomerReview(false)
+        setFailedReferencePhotos([])
+        setHandoffIssue(null)
+      }
+      return
+    }
+    if (!silent) {
+      setLoading(true)
       setOrder(null)
       setHasCustomerReview(false)
       setFailedReferencePhotos([])
-      setHandoffIssue(null)
-      return
     }
-    setLoading(true)
     setFetchErrorMessage('')
-    setOrder(null)
-    setHasCustomerReview(false)
-    setFailedReferencePhotos([])
     try {
       const { data, error } = await supabase
       .from('orders')
       .select(`
         id, reference, order_kind, fulfillment_option, garment_type, garment_description, item_title, item_size, item_quantity, item_subtotal, stage,
-        customer_id, quoted_amount, quoted_currency, fulfillment_fee, quoted_completion_date,
+        customer_id, quoted_amount, currency, quoted_currency, fulfillment_fee, quoted_completion_date,
         fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_payment_provider, fulfillment_payment_intent_id, fulfillment_payment_checkout_url,
         fabric_source, delivery_method, delivery_address, recipient_name, recipient_phone, tracking_number, carrier,
         fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone, reference_photos, fit_note,
         customer_measurements_snapshot, special_note, collection_code, video_call_url,
         occasion, deadline, created_at,
-        customer_profiles!customer_id(display_name)
+        customer_profiles!customer_id(display_name),
+        custom_order_details(garment_type_other, gender_presentation, social_reference_links, style_notes, body_note, fabric_description, fabric_budget_amount, fabric_budget_currency, fabric_sourcing_deadline_days, fabric_sourcing_deadline_at, fabric_approval_status, shipping_preference, delivery_instructions, target_delivery_date),
+        order_stage_updates(id, stage, note, photo_url, created_at)
       `)
       .eq('id', id)
       .eq('tailor_id', user.id)
+      .order('created_at', { ascending: true, referencedTable: 'order_stage_updates' })
       .maybeSingle()
 
       if (error) throw error
@@ -449,6 +662,9 @@ export default function TailorOrderDetailScreen() {
       if (data) {
         const d = data as any
         const openHandoffIssue = await fetchOpenHandoffIssue(d.id)
+        const customDetail = Array.isArray(d.custom_order_details)
+          ? d.custom_order_details[0] ?? null
+          : d.custom_order_details ?? null
         setOrder({
           id: d.id, reference: d.reference, garmentType: d.garment_type,
           orderKind: d.order_kind ?? 'CUSTOM', fulfillmentOption: d.fulfillment_option ?? null,
@@ -472,8 +688,39 @@ export default function TailorOrderDetailScreen() {
           referencePhotos: asStringList(d.reference_photos),
           fitNote: d.fit_note, measurements: enrichMeasurementSnapshot(d.customer_measurements_snapshot ?? null) as Measurement | null,
           supportMeta: parseOrderSupportMeta(d.special_note),
+          customDetail: customDetail
+            ? {
+                garmentTypeOther: customDetail.garment_type_other ?? null,
+                genderPresentation: customDetail.gender_presentation ?? null,
+                socialReferenceLinks: asStringList(customDetail.social_reference_links),
+                styleNotes: customDetail.style_notes ?? null,
+                bodyNote: customDetail.body_note ?? null,
+                fabricDescription: customDetail.fabric_description ?? null,
+                fabricBudgetAmount: customDetail.fabric_budget_amount ?? null,
+                fabricBudgetCurrency: customDetail.fabric_budget_currency ?? null,
+                fabricSourcingDeadlineDays: customDetail.fabric_sourcing_deadline_days ?? null,
+                fabricSourcingDeadlineAt: customDetail.fabric_sourcing_deadline_at ?? null,
+                fabricApprovalStatus: customDetail.fabric_approval_status ?? null,
+                shippingPreference: customDetail.shipping_preference ?? null,
+                deliveryInstructions: customDetail.delivery_instructions ?? null,
+                targetDeliveryDate: customDetail.target_delivery_date ?? null,
+              }
+            : null,
           collectionCode: d.collection_code, videoCallUrl: d.video_call_url ?? null,
           occasion: d.occasion, deadline: d.deadline, createdAt: d.created_at,
+          stageUpdates: (Array.isArray(d.order_stage_updates) ? d.order_stage_updates : []).map((update: {
+            id: string
+            stage: string
+            note?: string | null
+            photo_url?: string | null
+            created_at: string
+          }) => ({
+            id: update.id,
+            stage: update.stage,
+            note: update.note ?? null,
+            photoUrl: update.photo_url ?? null,
+            createdAt: update.created_at,
+          })),
         })
         setHandoffIssue(openHandoffIssue)
 
@@ -484,11 +731,17 @@ export default function TailorOrderDetailScreen() {
 
         setHasCustomerReview((customerReviewCount ?? 0) > 0)
       } else {
-        setHandoffIssue(null)
-        setOrder(null)
-        setHasCustomerReview(false)
+        if (!silent) {
+          setHandoffIssue(null)
+          setOrder(null)
+          setHasCustomerReview(false)
+        }
       }
     } catch (error) {
+      if (silent) {
+        Sentry.captureException(error, { extra: { context: 'tailor_order_realtime_refresh', orderId: id } })
+        return
+      }
       setFetchErrorMessage(
         isLikelyConnectivityIssue(error)
           ? 'Connection is weak. We could not load this order yet. Retry when the signal improves, or reopen it from Orders later.'
@@ -498,10 +751,42 @@ export default function TailorOrderDetailScreen() {
       setOrder(null)
       setHasCustomerReview(false)
     }
-    setLoading(false)
-  }
+    if (!silent) setLoading(false)
+  }, [id, user?.id])
 
-  useEffect(() => { void fetchOrder() }, [id, user?.id])
+  useEffect(() => { void fetchOrder() }, [fetchOrder])
+
+  useFocusEffect(
+    useCallback(() => {
+      void fetchOrder()
+    }, [fetchOrder]),
+  )
+
+  useEffect(() => {
+    if (!id || !user?.id) return
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null
+
+    const scheduleSilentRefresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      refreshTimer = setTimeout(() => {
+        void fetchOrder({ silent: true })
+      }, 250)
+    }
+
+    const pollTimer = setInterval(scheduleSilentRefresh, 15000)
+    const channel = supabase
+      .channel(`tailor-order-detail:${id}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders', filter: `id=eq.${id}` }, scheduleSilentRefresh)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'order_stage_updates', filter: `order_id=eq.${id}` }, scheduleSilentRefresh)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'order_stage_updates', filter: `order_id=eq.${id}` }, scheduleSilentRefresh)
+      .subscribe()
+
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      clearInterval(pollTimer)
+      void supabase.removeChannel(channel)
+    }
+  }, [fetchOrder, id, user?.id])
 
   useEffect(() => {
     if (!order || !isTerminalOrderStage(order.stage)) return
@@ -596,10 +881,42 @@ export default function TailorOrderDetailScreen() {
       : FLEXIBLE_NEXT_STAGES[order.stage]
   const isFlexibleStage = !!flexibleNextStages
   const visibleReferencePhotos = order.referencePhotos.filter((url) => !failedReferencePhotos.includes(url))
+  const styleReferenceLinks =
+    order.customDetail?.socialReferenceLinks.length
+      ? order.customDetail.socialReferenceLinks
+      : asStringList(order.supportMeta.styleReferenceLinks)
+  const styleAttributes = asStringList(order.supportMeta.styleAttributes)
+  const styleNotes = order.customDetail?.styleNotes?.trim() || order.supportMeta.styleNotes?.trim() || null
+  const bodyNote = order.customDetail?.bodyNote?.trim() || order.supportMeta.bodyNote?.trim() || order.fitNote?.trim() || null
+  const garmentOther = order.customDetail?.garmentTypeOther?.trim() || order.supportMeta.customOrder?.garmentTypeOther?.trim() || null
+  const genderPresentation = order.customDetail?.genderPresentation?.trim() || order.supportMeta.customOrder?.genderPresentation?.trim() || null
+  const targetDeliveryDate = order.customDetail?.targetDeliveryDate ?? order.supportMeta.customOrder?.targetDeliveryDate ?? order.deadline
+  const fabricDescription =
+    order.customDetail?.fabricDescription?.trim()
+    || order.supportMeta.fabricSourcing?.description?.trim()
+    || null
+  const fabricBudgetAmount =
+    typeof order.customDetail?.fabricBudgetAmount === 'number'
+      ? order.customDetail.fabricBudgetAmount
+      : typeof order.supportMeta.fabricSourcing?.budgetAmount === 'number'
+        ? order.supportMeta.fabricSourcing.budgetAmount
+        : null
+  const fabricBudgetCurrency =
+    order.customDetail?.fabricBudgetCurrency
+    || order.supportMeta.fabricSourcing?.budgetCurrency
+    || order.quotedCurrency
+  const fabricSourcingDeadlineDays =
+    order.customDetail?.fabricSourcingDeadlineDays
+    ?? order.supportMeta.fabricSourcing?.deadlineBusinessDays
+    ?? null
+  const fabricApprovalStatus = labelFabricApprovalStatus(order.customDetail?.fabricApprovalStatus)
+  const shippingPreference = labelShippingPreference(order.customDetail?.shippingPreference ?? order.supportMeta.customOrder?.shippingPreference)
+  const deliveryInstructions = order.customDetail?.deliveryInstructions?.trim() || order.supportMeta.deliveryInstructions?.trim() || null
   const statusGuidance = orderStatusGuidance(order.stage, order.orderKind)
   const measurementSource = order.measurements?.measurementSource
   const fitConfidence = order.measurements?.fitConfidence
   const measurementConfirmationNeeded = order.measurements?.needsConfirmation === true
+  const measurementConfirmationFields = getMeasurementConfirmationFields(order.measurements)
   const fitProfile = order.supportMeta.fitProfile ?? null
   const consultationMeta = order.supportMeta.consultation ?? null
   const quoteBreakdown = order.supportMeta.quoteBreakdown ?? null
@@ -614,6 +931,10 @@ export default function TailorOrderDetailScreen() {
     order.stage === 'CONSULTATION' &&
     !!consultationMeta?.feeAmount &&
     !!consultationMeta.paidAt
+  const customerRequestedConsultation =
+    order.stage === 'CONSULTATION' &&
+    consultationMeta?.requestedBy === 'CUSTOMER' &&
+    consultationMeta.status === 'REQUESTED'
   const fitProfileReviewNeeded = fitProfileNeedsTailorReview(order.supportMeta)
   const fabricHandoffMode = order.supportMeta.fabricHandoffMode ?? null
   const fabricHandoffLabel =
@@ -696,8 +1017,35 @@ export default function TailorOrderDetailScreen() {
           onPress: async () => {
             if (confirmingFabricReceived) return
             setConfirmingFabricReceived(true)
+            let photoUrl: string | null = null
+            try {
+              const picked = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                quality: 0.8,
+              })
+              if (picked.canceled || !picked.assets[0]) {
+                setConfirmingFabricReceived(false)
+                return
+              }
+              const cleanUri = await stripExif(picked.assets[0].uri)
+              const filename = `fabric-receipts/${user?.id}/${Date.now()}_${Math.random().toString(36).slice(2)}.jpg`
+              photoUrl = await uploadPublicStorageImage({
+                bucket: 'order-photos',
+                path: filename,
+                uri: cleanUri,
+                contentType: 'image/jpeg',
+                maxBytes: 10 * 1024 * 1024,
+              })
+            } catch (uploadError) {
+              setConfirmingFabricReceived(false)
+              const message = isLikelyConnectivityIssue(uploadError)
+                ? 'Connection looks weak. The fabric receipt photo could not upload yet.'
+                : 'The fabric receipt photo could not upload. Please try again.'
+              Alert.alert('Photo needed', message)
+              return
+            }
             const { error } = await invokeFunction('tailor-order-action', {
-              body: { orderId: currentOrderId, action: 'confirm-fabric-received' },
+              body: { orderId: currentOrderId, action: 'confirm-fabric-received', photoUrl },
             })
             setConfirmingFabricReceived(false)
             if (error) {
@@ -717,6 +1065,32 @@ export default function TailorOrderDetailScreen() {
   function openStageModal(target: OrderStage) {
     setStageModalTarget(target)
     setShowStageModal(true)
+  }
+
+  async function openDrapeVision(mode: Extract<DrapeVisionMode, 'tailor_client_scan' | 'garment_qc'>) {
+    if (!order) return
+    let diaryId: string | undefined
+    if (mode === 'tailor_client_scan' && user?.id && order.customerId) {
+      const { data } = await supabase
+        .from('diary_entries')
+        .select('id')
+        .eq('tailor_id', user.id)
+        .eq('claimed_by_user_id', order.customerId)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      diaryId = typeof data?.id === 'string' ? data.id : undefined
+    }
+
+    router.push({
+      pathname: DRAPE_VISION_ROUTE,
+      params: {
+        mode,
+        orderId: order.id,
+        ...(diaryId ? { diaryId } : {}),
+        returnTo: `/(tailor)/orders/${order.id}`,
+      },
+    } as never)
   }
 
   async function startCall(callType: 'audio' | 'video') {
@@ -871,7 +1245,14 @@ export default function TailorOrderDetailScreen() {
                     Review the order details below and send your quote. You can also request a consultation first.
                   </Text>
                   <Button label="Send quote" onPress={() => setShowQuoteModal(true)} testID="tailor-send-quote-btn" />
-                  <Button label="Request consultation" variant="secondary" onPress={() => setShowConsultationModal(true)} />
+                  <Button
+                    label="Request consultation"
+                    variant="secondary"
+                    onPress={() => {
+                      setConsultationModalAction('request-consultation')
+                      setShowConsultationModal(true)
+                    }}
+                  />
                   <Button
                     label="Decline this order"
                     variant="ghost"
@@ -888,7 +1269,7 @@ export default function TailorOrderDetailScreen() {
                               const message = isLikelyConnectivityIssue(error)
                                 ? 'Connection looks weak. We could not decline this order yet. Retry when the signal improves.'
                                 : await readFunctionErrorMessage(error, 'Could not decline this order right now. Please try again in a moment.')
-                              Alert.alert('Error', message)
+                              Alert.alert('Could not decline order', message)
                               return
                             }
                             await purgeTerminalOrderClientState({
@@ -911,37 +1292,84 @@ export default function TailorOrderDetailScreen() {
             <View style={[styles.alertCard, styles.consultationCard]}>
               <Text style={styles.alertTitle}>Consultation requested</Text>
               <Text style={styles.alertSub}>
-                {consultationPaymentRequired && !consultationPaymentPaid
+                {customerRequestedConsultation
+                  ? 'The customer asked to schedule a consultation before you quote. Drape checks your calendar before approval, so choose another time if this one has already gone.'
+                  : consultationPaymentRequired && !consultationPaymentPaid
                   ? "You've requested a paid consultation. Wait for the customer to pay before you start the call."
                   : "You've requested a consultation with this customer. Once done, send your quote or decline."}
               </Text>
+              {consultationMeta?.proposedStartAt && customerRequestedConsultation ? (
+                <Text style={styles.supportHint}>Requested time: {formatConsultationStart(consultationMeta.proposedStartAt)}</Text>
+              ) : consultationMeta?.scheduledStartAt ? (
+                <Text style={styles.supportHint}>Scheduled: {formatConsultationStart(consultationMeta.scheduledStartAt)}</Text>
+              ) : null}
               {consultationPaymentRequired ? (
                 <Text style={styles.supportHint}>
                   {consultationPaymentPaid
-                    ? 'Consultation fee paid. You can start the consultation call when ready.'
+                    ? 'Consultation fee paid. You can start the consultation call at the scheduled time.'
                     : 'The customer still needs to pay the consultation fee before the consultation can begin.'}
                 </Text>
               ) : null}
-              <View style={{ flexDirection: 'row', gap: Spacing.md }}>
-                <View style={{ flex: 1 }}>
+              {customerRequestedConsultation ? (
+                <>
                   <Button
-                    label={order.videoCallUrl ? 'Rejoin call' : '📹 Video call'}
-                    onPress={() => startCall('video')}
-                    loading={startingCall === 'video'}
-                    disabled={!!startingCall || (consultationPaymentRequired && !consultationPaymentPaid)}
+                    label="Approve and schedule"
+                    onPress={() => {
+                      setConsultationModalAction('approve-consultation')
+                      setShowConsultationModal(true)
+                    }}
                   />
-                </View>
-                <View style={{ flex: 1 }}>
                   <Button
-                    label="🎙 Audio call"
+                    label="Decline consultation"
                     variant="secondary"
-                    onPress={() => startCall('audio')}
-                    loading={startingCall === 'audio'}
-                    disabled={!!startingCall || (consultationPaymentRequired && !consultationPaymentPaid)}
+                    onPress={() => {
+                      Alert.alert('Decline consultation?', 'The order returns to quote review so you can still send a quote or decline the full order.', [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Decline consultation',
+                          style: 'destructive',
+                          onPress: async () => {
+                            const { error } = await invokeFunction('tailor-order-action', {
+                              body: { orderId: order.id, action: 'decline-consultation-request' },
+                            })
+                            if (error) {
+                              const message = isLikelyConnectivityIssue(error)
+                                ? 'Connection looks weak. We could not decline the consultation yet. Retry when the signal improves.'
+                                : await readFunctionErrorMessage(error, 'Could not decline this consultation right now.')
+                              Alert.alert('Consultation unavailable', message)
+                              return
+                            }
+                            fetchOrder()
+                          },
+                        },
+                      ])
+                    }}
                   />
-                </View>
-              </View>
-              <Button label="Send quote" variant="secondary" onPress={() => setShowQuoteModal(true)} />
+                </>
+              ) : (
+                <>
+                  <View style={{ flexDirection: 'row', gap: Spacing.md }}>
+                    <View style={{ flex: 1 }}>
+                      <Button
+                        label={order.videoCallUrl ? 'Rejoin call' : 'Video call'}
+                        onPress={() => startCall('video')}
+                        loading={startingCall === 'video'}
+                        disabled={!!startingCall || (consultationPaymentRequired && !consultationPaymentPaid)}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Button
+                        label="Audio call"
+                        variant="secondary"
+                        onPress={() => startCall('audio')}
+                        loading={startingCall === 'audio'}
+                        disabled={!!startingCall || (consultationPaymentRequired && !consultationPaymentPaid)}
+                      />
+                    </View>
+                  </View>
+                  <Button label="Send quote" variant="secondary" onPress={() => setShowQuoteModal(true)} />
+                </>
+              )}
               <Button
                 label="Decline"
                 variant="ghost"
@@ -958,7 +1386,7 @@ export default function TailorOrderDetailScreen() {
                           const message = isLikelyConnectivityIssue(error)
                             ? 'Connection looks weak. We could not decline this order yet. Retry when the signal improves.'
                             : await readFunctionErrorMessage(error, 'Could not decline this order right now. Please try again in a moment.')
-                          Alert.alert('Error', message)
+                          Alert.alert('Could not decline order', message)
                           return
                         }
                         await purgeTerminalOrderClientState({
@@ -981,7 +1409,7 @@ export default function TailorOrderDetailScreen() {
                 <View style={styles.supportCard}>
                   <Text style={styles.supportCardTitle}>Consultation policy</Text>
                   <View style={styles.supportMetaList}>
-                    <BriefRow label="Status" value={consultationMeta.status === 'COMPLETED' ? 'Consultation completed' : 'Consultation requested'} />
+                    <BriefRow label="Status" value={consultationMeta.status ? CONSULTATION_STATUS_LABELS[consultationMeta.status] : 'Consultation requested'} />
                     <BriefRow
                       label="Fee"
                       value={
@@ -997,6 +1425,11 @@ export default function TailorOrderDetailScreen() {
                     />
                     {consultationMeta.feeAmount ? (
                       <BriefRow label="Fee treatment" value={consultationMeta.feeCreditable ? 'Credits toward the final order' : 'Separate consultation fee'} />
+                    ) : null}
+                    {consultationMeta.scheduledStartAt ? (
+                      <BriefRow label="Scheduled for" value={formatConsultationStart(consultationMeta.scheduledStartAt)} />
+                    ) : consultationMeta.proposedStartAt ? (
+                      <BriefRow label="Requested time" value={formatConsultationStart(consultationMeta.proposedStartAt)} />
                     ) : null}
                     {consultationMeta.paymentTiming ? (
                       <BriefRow label="Payment timing" value={CONSULTATION_PAYMENT_TIMING_LABELS[consultationMeta.paymentTiming]} />
@@ -1147,6 +1580,22 @@ export default function TailorOrderDetailScreen() {
                   </Text>
                 </View>
               ) : null}
+              <View style={styles.supportCard}>
+                <View style={styles.visionOrderHeader}>
+                  <View style={styles.visionOrderIcon}>
+                    <Feather name="shield" size={16} color={Colors.needleGreen} />
+                  </View>
+                  <Text style={styles.supportCardTitle}>Drape Vision garment QC</Text>
+                </View>
+                <Text style={styles.supportHint}>
+                  Verify final garment measurements and handoff readiness before collection or dispatch.
+                </Text>
+                <Button
+                  label="Open garment QC"
+                  variant="secondary"
+                  onPress={() => { void openDrapeVision('garment_qc') }}
+                />
+              </View>
               {order.deliveryMethod === 'LOCAL_COLLECTION' ? (
                 <Button
                   label="Mark ready for collection"
@@ -1178,6 +1627,49 @@ export default function TailorOrderDetailScreen() {
               <Text style={styles.stageCardSub}>{statusGuidance}</Text>
             </View>
           )}
+
+          <View style={styles.supportCard}>
+            <View style={styles.visionOrderHeader}>
+              <View style={styles.visionOrderIcon}>
+                <Feather name="image" size={16} color={Colors.needleGreen} />
+              </View>
+              <Text style={styles.supportCardTitle}>Order evidence timeline</Text>
+            </View>
+            <Text style={styles.supportHint}>
+              Drape Vision QC photos and production updates stay here so you, the customer, and ops are looking at the same proof.
+            </Text>
+            <View style={styles.timeline}>
+              {order.stageUpdates.length > 0 ? order.stageUpdates.map((update) => (
+                <View key={update.id} style={styles.timelineItem}>
+                  <View style={[styles.timelineDot, { backgroundColor: timelineDotColor(update) }]} />
+                  <View style={styles.timelineContent}>
+                    <Text style={styles.timelineStage}>
+                      {timelineStageLabel(update, order.orderKind)}
+                    </Text>
+                    {update.note ? <Text style={styles.timelineNote}>{update.note}</Text> : null}
+                    {update.photoUrl ? (
+                      <StageMediaPreview
+                        uri={update.photoUrl}
+                        style={styles.timelinePhoto}
+                        surface="tailor_order_timeline_photo"
+                      />
+                    ) : null}
+                    <Text style={styles.timelineDate}>{formatTimelineDate(update.createdAt)}</Text>
+                  </View>
+                </View>
+              )) : (
+                <View style={styles.timelineItem}>
+                  <View style={[styles.timelineDot, { backgroundColor: Colors.lightGrey }]} />
+                  <View style={styles.timelineContent}>
+                    <Text style={styles.timelineStage}>No evidence yet</Text>
+                    <Text style={styles.timelineNote}>
+                      Add photos when updating production stages or save a Drape Vision QC entry before handoff.
+                    </Text>
+                  </View>
+                </View>
+              )}
+            </View>
+          </View>
 
           {showCancellationPolicyCard && (
             <View style={styles.supportCard}>
@@ -1262,7 +1754,7 @@ export default function TailorOrderDetailScreen() {
             </View>
           )}
 
-          {(measurementSource || fitConfidence || order.fabricSource === 'CUSTOMER_SUPPLIES' || materialIssue) && (
+          {(measurementSource || fitConfidence || order.fabricSource === 'CUSTOMER_SUPPLIES' || fabricDescription || fabricApprovalStatus || materialIssue || (order.orderKind === 'CUSTOM' && PRE_CUTTING_STAGES.includes(order.stage))) && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Pre-cutting checks</Text>
           {cuttingBlockedLocally && order.orderKind === 'CUSTOM' && ['CONFIRMED', 'DESIGNING', 'SOURCING'].includes(order.stage) ? (
@@ -1307,6 +1799,15 @@ export default function TailorOrderDetailScreen() {
                       {order.measurements?.confirmationReason ? (
                         <Text style={styles.supportBodyText}>{order.measurements.confirmationReason}</Text>
                       ) : null}
+                      {measurementConfirmationFields.length > 0 ? (
+                        <View style={styles.measurementConfirmFieldWrap}>
+                          {measurementConfirmationFields.map((field) => (
+                            <View key={field} style={styles.measurementConfirmFieldChip}>
+                              <Text style={styles.measurementConfirmFieldText}>{labelMeasurementField(field)}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      ) : null}
                     </>
                   ) : PRE_CUTTING_STAGES.includes(order.stage) ? (
                     <>
@@ -1322,6 +1823,25 @@ export default function TailorOrderDetailScreen() {
                   ) : null}
                 </View>
               )}
+
+              {order.orderKind === 'CUSTOM' && PRE_CUTTING_STAGES.includes(order.stage) ? (
+                <View style={styles.supportCard}>
+                  <View style={styles.visionOrderHeader}>
+                    <View style={styles.visionOrderIcon}>
+                      <Feather name="aperture" size={16} color={Colors.needleGreen} />
+                    </View>
+                    <Text style={styles.supportCardTitle}>Drape Vision fit check</Text>
+                  </View>
+                  <Text style={styles.supportHint}>
+                    Use this when the customer is with you or when a measurement needs one more review before cutting.
+                  </Text>
+                  <Button
+                    label="Open Vision fit check"
+                    variant="secondary"
+                    onPress={() => { void openDrapeVision('tailor_client_scan') }}
+                  />
+                </View>
+              ) : null}
 
               {fitProfile ? (
                 <View style={styles.supportCard}>
@@ -1375,15 +1895,26 @@ export default function TailorOrderDetailScreen() {
                 </View>
               ) : null}
 
-              {(order.fabricSource === 'CUSTOMER_SUPPLIES' || fabricHandoffLabel || fabricPolicy || materialIssue) && (
+              {(order.fabricSource === 'CUSTOMER_SUPPLIES' || fabricHandoffLabel || fabricPolicy || materialIssue || fabricDescription || fabricApprovalStatus) && (
                 <View style={styles.supportCard}>
-                  <Text style={styles.supportCardTitle}>Fabric handoff</Text>
+                  <Text style={styles.supportCardTitle}>{order.fabricSource === 'TAILOR_SOURCES' ? 'Fabric sourcing' : 'Fabric handoff'}</Text>
                   <View style={styles.supportMetaList}>
                     <BriefRow
                       label="Fabric source"
                       value={order.fabricSource === 'CUSTOMER_SUPPLIES' ? 'Customer supplies' : 'Tailor sources'}
                     />
                     {fabricHandoffLabel ? <BriefRow label="Handoff plan" value={fabricHandoffLabel} /> : null}
+                    {fabricDescription ? <BriefRow label="Customer wants" value={fabricDescription} /> : null}
+                    {fabricBudgetAmount != null ? (
+                      <BriefRow
+                        label="Fabric budget"
+                        value={formatAmount(fabricBudgetAmount, fabricBudgetCurrency as CurrencyCode, fabricBudgetCurrency as CurrencyCode, STATIC_FALLBACK_RATES)}
+                      />
+                    ) : null}
+                    {fabricSourcingDeadlineDays ? (
+                      <BriefRow label="Sourcing update due" value={`${fabricSourcingDeadlineDays} business days`} />
+                    ) : null}
+                    {fabricApprovalStatus ? <BriefRow label="Approval status" value={fabricApprovalStatus} /> : null}
                     {order.supportMeta.fabricReceivedAt ? (
                       <BriefRow
                         label="Received"
@@ -1492,6 +2023,13 @@ export default function TailorOrderDetailScreen() {
               <Text style={styles.briefText}>{order.garmentDescription}</Text>
             )}
             <View style={styles.briefMeta}>
+              {order.orderKind === 'CUSTOM' ? <BriefRow label="Garment" value={garmentOther || order.garmentType} /> : null}
+              {order.orderKind === 'CUSTOM' && garmentOther && order.garmentType === 'Other' ? (
+                <BriefRow label="Selected type" value="Other" />
+              ) : null}
+              {order.orderKind === 'CUSTOM' && genderPresentation ? (
+                <BriefRow label="Fit category" value={genderPresentation} />
+              ) : null}
               {order.orderKind === 'READY_MADE' && order.itemTitle ? <BriefRow label="Item" value={order.itemTitle} /> : null}
               {order.orderKind === 'READY_MADE' && order.itemSize ? <BriefRow label="Size" value={order.itemSize} /> : null}
               {order.orderKind === 'READY_MADE' ? <BriefRow label="Quantity" value={`${order.itemQuantity}`} /> : null}
@@ -1514,10 +2052,10 @@ export default function TailorOrderDetailScreen() {
                 />
               ) : null}
               {order.occasion && <BriefRow label="Occasion" value={order.occasion} />}
-              {order.deadline && (
+              {targetDeliveryDate && (
                 <BriefRow
-                  label="Deadline"
-                  value={new Date(order.deadline).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+                  label="Target delivery"
+                  value={new Date(targetDeliveryDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
                 />
               )}
               <BriefRow label="Fabric" value={order.fabricSource === 'CUSTOMER_SUPPLIES' ? 'Customer supplies' : 'You source'} />
@@ -1539,6 +2077,12 @@ export default function TailorOrderDetailScreen() {
               ) : null}
               {order.deliveryMethod !== 'LOCAL_COLLECTION' && order.deliveryAddress ? (
                 <BriefRow label={order.deliveryMethod === 'LOCAL_DELIVERY' ? 'Deliver to' : 'Ship to'} value={order.deliveryAddress} />
+              ) : null}
+              {order.deliveryMethod === 'SHIPPING' && shippingPreference ? (
+                <BriefRow label="Shipping preference" value={shippingPreference} />
+              ) : null}
+              {deliveryInstructions ? (
+                <BriefRow label="Delivery instructions" value={deliveryInstructions} />
               ) : null}
               {order.deliveryMethod !== 'LOCAL_COLLECTION' && (order.fulfillmentProvider || order.carrier) ? (
                 <BriefRow label="Partner" value={order.fulfillmentProvider ?? order.carrier ?? ''} />
@@ -1587,10 +2131,10 @@ export default function TailorOrderDetailScreen() {
                 </Text>
               </View>
             ) : null}
-            {order.fitNote && (
+            {bodyNote && (
               <View style={styles.fitNote}>
-                <Text style={styles.fitNoteLabel}>Fit note from customer</Text>
-                <Text style={styles.fitNoteText}>"{order.fitNote}"</Text>
+                <Text style={styles.fitNoteLabel}>Body note from customer</Text>
+                <Text style={styles.fitNoteText}>"{bodyNote}"</Text>
               </View>
             )}
 
@@ -1650,20 +2194,59 @@ export default function TailorOrderDetailScreen() {
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 <View style={{ flexDirection: 'row', gap: Spacing.md }}>
                   {visibleReferencePhotos.map((url, i) => (
-                    <ExpoImage
+                    <RemoteImage
                       key={i}
-                      source={url}
+                      uri={url}
+                      bucket="order-photos"
                       style={styles.refPhoto}
-                      contentFit="cover"
-                      cachePolicy="memory-disk"
+                      contentFit="contain"
                       transition={120}
-                      onError={() => {
+                      surface="tailor_order_reference_photo"
+                      onLoadError={() => {
                         setFailedReferencePhotos((prev) => prev.includes(url) ? prev : [...prev, url])
                       }}
                     />
                   ))}
                 </View>
               </ScrollView>
+            </View>
+          )}
+
+          {(styleReferenceLinks.length > 0 || styleAttributes.length > 0 || styleNotes) && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Style references</Text>
+              <View style={styles.supportCard}>
+                {styleAttributes.length > 0 ? (
+                  <View style={styles.styleChipRow}>
+                    {styleAttributes.map((item) => (
+                      <View key={item} style={styles.styleChip}>
+                        <Text style={styles.styleChipText}>{item}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+                {styleNotes ? (
+                  <Text style={styles.supportBodyText}>{styleNotes}</Text>
+                ) : null}
+                {styleReferenceLinks.length > 0 ? (
+                  <View style={styles.referenceLinkList}>
+                    {styleReferenceLinks.map((link) => (
+                      <TouchableOpacity
+                        key={link}
+                        style={styles.referenceLinkRow}
+                        onPress={() => {
+                          void Linking.openURL(link).catch(() => {
+                            Alert.alert('Could not open link', 'Copy the reference link from the customer brief and try it in your browser.')
+                          })
+                        }}
+                      >
+                        <Text style={styles.referenceLinkHost}>{linkHostLabel(link)}</Text>
+                        <Text style={styles.referenceLinkText} numberOfLines={1}>{link}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
             </View>
           )}
 
@@ -1778,6 +2361,7 @@ export default function TailorOrderDetailScreen() {
       <ConsultationModal
         visible={showConsultationModal}
         orderId={order.id}
+        action={consultationModalAction}
         defaultCurrency={(order.quotedCurrency as CurrencyCode) ?? 'USD'}
         onClose={() => setShowConsultationModal(false)}
         onSent={() => { setShowConsultationModal(false); fetchOrder() }}
@@ -1786,6 +2370,7 @@ export default function TailorOrderDetailScreen() {
       <MeasurementConfirmationRequestModal
         visible={showMeasurementRequestModal}
         orderId={order.id}
+        measurements={order.measurements}
         onClose={() => setShowMeasurementRequestModal(false)}
         onSent={() => {
           setShowMeasurementRequestModal(false)
@@ -1887,7 +2472,7 @@ function BodyProfileCard({ measurements: m }: { measurements: Measurement }) {
         <View style={styles.fitFlagsRow}>
           {fitFlags.map((f) => (
             <View key={f} style={styles.fitFlagBadge}>
-              <Text style={styles.fitFlagText}>{f.replace(/_/g, ' ').toLowerCase()}</Text>
+              <Text style={styles.fitFlagText}>{labelFitContextFlag(f)}</Text>
             </View>
           ))}
         </View>
@@ -1913,11 +2498,15 @@ function BodyRow({ label, value }: { label: string; value: string }) {
 // ─── Measurements Section ─────────────────────────────────────────────────────
 
 function MeasurementsSection({ measurements: m }: { measurements: Measurement }) {
+  const additionalRows = getAdditionalMeasurementRows(m)
   const rows = [
     { label: 'Chest', value: m.chest }, { label: 'Waist', value: m.waist },
     { label: 'Hips', value: m.hips }, { label: 'Shoulders', value: m.shoulderWidth },
     { label: 'Inseam', value: m.inseam }, { label: 'Sleeve', value: m.sleeveLength },
     { label: 'Neck', value: m.neckCircumference }, { label: 'Height', value: m.height },
+    { label: 'Back length', value: m.backLength }, { label: 'Outseam', value: m.outseam },
+    { label: 'Thigh', value: m.thighCircumference }, { label: 'Knee', value: m.kneeCircumference },
+    { label: 'Torso', value: m.torsoLength },
   ]
   return (
     <View style={styles.section}>
@@ -1932,6 +2521,19 @@ function MeasurementsSection({ measurements: m }: { measurements: Measurement })
           </View>
         ))}
       </View>
+      {additionalRows.length > 0 ? (
+        <View style={styles.additionalMeasureBlock}>
+          <Text style={styles.additionalMeasureTitle}>Garment-specific measurements</Text>
+          <View style={styles.measureGrid}>
+            {additionalRows.map(({ label, value }) => (
+              <View key={label} style={styles.measureItem}>
+                <Text style={styles.measureLabel}>{label}</Text>
+                <Text style={styles.measureValue}>{String(value)} {m.unit}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      ) : null}
     </View>
   )
 }
@@ -1948,6 +2550,11 @@ function hasMeasurementContent(measurements: Measurement | null): measurements i
     measurements.sleeveLength,
     measurements.neckCircumference,
     measurements.height,
+    measurements.backLength,
+    measurements.outseam,
+    measurements.thighCircumference,
+    measurements.kneeCircumference,
+    measurements.torsoLength,
   ]
 
   if (numericFields.some((value) => typeof value === 'number' && Number.isFinite(value))) return true
@@ -1956,6 +2563,7 @@ function hasMeasurementContent(measurements: Measurement | null): measurements i
   if (asStringList(measurements.bodyShape).length > 0) return true
   if (asStringList(measurements.fitFlags).length > 0) return true
   if (typeof measurements.bodyNote === 'string' && measurements.bodyNote.trim().length > 0) return true
+  if (getAdditionalMeasurementRows(measurements).length > 0) return true
 
   return false
 }
@@ -1969,22 +2577,51 @@ const MATERIAL_ISSUE_REASON_OPTIONS: MaterialIssueReason[] = [
   'FABRIC_MISMATCH',
 ]
 
-function MeasurementConfirmationRequestModal({ visible, orderId, onClose, onSent }: {
+function MeasurementConfirmationRequestModal({ visible, orderId, measurements, onClose, onSent }: {
   visible: boolean
   orderId: string
+  measurements: Measurement | null
   onClose: () => void
   onSent: () => void
 }) {
   const [note, setNote] = useState('')
   const [noteError, setNoteError] = useState('')
   const [sending, setSending] = useState(false)
+  const [selectedFields, setSelectedFields] = useState<string[]>([])
+  const fieldOptions = [
+    'chest',
+    'waist',
+    'hips',
+    'shoulderWidth',
+    'inseam',
+    'sleeveLength',
+    'neckCircumference',
+    'height',
+    'backLength',
+    'outseam',
+    'thighCircumference',
+    'kneeCircumference',
+    'torsoLength',
+  ]
+    .filter((key) => measurements?.[key] != null)
+    .map((key) => ({ key, label: labelMeasurementField(key), value: measurements?.[key] }))
+    .concat(getAdditionalMeasurementRows(measurements).map((row) => ({ key: row.label, label: row.label, value: row.value })))
 
   useEffect(() => {
     if (!visible) return
     setNote('')
     setNoteError('')
     setSending(false)
+    setSelectedFields([])
   }, [visible, orderId])
+
+  function toggleField(field: string) {
+    setSelectedFields((previous) =>
+      previous.includes(field)
+        ? previous.filter((item) => item !== field)
+        : [...previous, field],
+    )
+  }
 
   function validateNote(value: string) {
     if (value.trim().length < 10) {
@@ -2010,7 +2647,12 @@ function MeasurementConfirmationRequestModal({ visible, orderId, onClose, onSent
     if (!validateNote(note)) return
     setSending(true)
     const { error } = await invokeFunction('tailor-order-action', {
-      body: { orderId, action: 'request-measurement-confirmation', note: note.trim() },
+      body: {
+        orderId,
+        action: 'request-measurement-confirmation',
+        note: note.trim(),
+        fields: selectedFields,
+      },
     })
     setSending(false)
     if (error) {
@@ -2041,9 +2683,38 @@ function MeasurementConfirmationRequestModal({ visible, orderId, onClose, onSent
             <View style={styles.supportWarningCard}>
               <Text style={styles.supportWarningTitle}>Pause cutting until this is answered</Text>
               <Text style={styles.supportWarningText}>
-                Ask one clear question so the customer can confirm the measurements without confusion.
+                Select exact fields when possible. Drape will show the customer a focused task before cutting can start.
               </Text>
             </View>
+
+            {fieldOptions.length > 0 ? (
+              <View style={styles.measurementFieldPicker}>
+                <Text style={styles.modalSectionLabel}>Fields to confirm</Text>
+                <View style={styles.measurementFieldChipWrap}>
+                  {fieldOptions.map((option) => {
+                    const active = selectedFields.includes(option.key)
+                    return (
+                      <TouchableOpacity
+                        key={option.key}
+                        accessibilityRole="button"
+                        onPress={() => toggleField(option.key)}
+                        style={[styles.measurementFieldChip, active && styles.measurementFieldChipActive]}
+                      >
+                        <Text style={[styles.measurementFieldChipText, active && styles.measurementFieldChipTextActive]}>
+                          {option.label}
+                        </Text>
+                        <Text style={[styles.measurementFieldChipValue, active && styles.measurementFieldChipTextActive]}>
+                          {String(option.value)} {measurements?.unit ?? ''}
+                        </Text>
+                      </TouchableOpacity>
+                    )
+                  })}
+                </View>
+                <Text style={styles.modalHelpText}>
+                  Leave unselected only if the question is general. Selected fields travel with the order and Vision review.
+                </Text>
+              </View>
+            ) : null}
 
             <Input
               label="What needs confirming?"
@@ -2740,7 +3411,7 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, custome
       capture('quote_sent', { amount_pence: amountPence, has_note: !!note.trim() })
       onSent()
     } catch (e) {
-      console.error('Send quote error:', e)
+      Sentry.captureException(e, { extra: { context: 'send_quote_submit', orderId } })
       Alert.alert(
         'Error',
         isLikelyConnectivityIssue(e)
@@ -2770,7 +3441,7 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, custome
             <View style={styles.supportCard}>
               <Text style={styles.supportCardTitle}>Quote currency</Text>
               <Text style={styles.supportHint}>
-                This order is locked to {currencyLabel}. To quote in a different currency, update your pricing setup in account settings before starting a new order.
+                This order is locked to {currencyLabel} so payment, escrow, and payout stay in the same currency. To use another currency, update your payout and pricing setup before accepting new orders.
               </Text>
             </View>
             <Input
@@ -2791,7 +3462,7 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, custome
               <View style={styles.supportCard}>
                 <Text style={styles.supportCardTitle}>Drape-managed dispatch</Text>
                 <Text style={styles.supportHint}>
-                  Standard {deliveryMethod === 'LOCAL_DELIVERY' ? 'delivery' : 'shipping'} is collected at checkout as a flat Drape fee. You do not need to enter a separate dispatch amount here.
+                  Standard {deliveryMethod === 'LOCAL_DELIVERY' ? 'delivery' : 'shipping'} is collected at checkout as a Drape fee. If a carrier surcharge, customs charge, or import duty appears later, Drape will handle approval with the customer before dispatch.
                 </Text>
               </View>
             ) : null}
@@ -2915,7 +3586,8 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
 }) {
   const [note, setNote] = useState('')
   const [noteError, setNoteError] = useState('')
-  const [photoUri, setPhotoUri] = useState<string | null>(null)
+  const [primaryMedia, setPrimaryMedia] = useState<StageMedia | null>(null)
+  const [secondMedia, setSecondMedia] = useState<StageMedia | null>(null)
   const [updating, setUpdating] = useState(false)
   const [trackingNumber, setTrackingNumber] = useState('')
   const [provider, setProvider] = useState('')
@@ -2924,12 +3596,14 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
   const [deliveryContactPhone, setDeliveryContactPhone] = useState('')
 
   const nextStage: OrderStage = targetStage
+  const finishingNeedsSecondPhoto = order.orderKind === 'CUSTOM' && nextStage === 'FINISHING'
 
   useEffect(() => {
     if (!visible) return
     setNote('')
     setNoteError('')
-    setPhotoUri(null)
+    setPrimaryMedia(null)
+    setSecondMedia(null)
     setUpdating(false)
     setTrackingNumber('')
     setProvider('')
@@ -2947,10 +3621,50 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
     setNoteError(''); return true
   }
 
-  async function pickPhoto() {
+  async function pickStageMediaFromCamera(slot: 'primary' | 'secondary') {
     if (updating) return
-    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 })
-    if (!res.canceled && res.assets[0]) setPhotoUri(res.assets[0].uri)
+    const permission = await ImagePicker.requestCameraPermissionsAsync()
+    if (permission.status !== 'granted') {
+      Alert.alert('Camera access needed', 'Allow camera access to take fresh production proof for this stage.')
+      return
+    }
+    const res = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      quality: 0.8,
+      videoMaxDuration: 25,
+    })
+    if (!res.canceled && res.assets[0]) {
+      const media = stageMediaFromAsset(res.assets[0])
+      if (slot === 'secondary') setSecondMedia(media)
+      else setPrimaryMedia(media)
+    }
+  }
+
+  async function pickStageMediaFromLibrary(slot: 'primary' | 'secondary') {
+    if (updating) return
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      quality: 0.8,
+      videoMaxDuration: 25,
+    })
+    if (!res.canceled && res.assets[0]) {
+      const media = stageMediaFromAsset(res.assets[0])
+      if (slot === 'secondary') setSecondMedia(media)
+      else setPrimaryMedia(media)
+    }
+  }
+
+  function pickStageMedia(slot: 'primary' | 'secondary' = 'primary') {
+    if (updating) return
+    Alert.alert(
+      'Add proof media',
+      'Use fresh stage proof. Reusing a photo or video already attached to this order will be blocked.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Take photo/video', onPress: () => { void pickStageMediaFromCamera(slot) } },
+        { text: 'Choose from library', onPress: () => { void pickStageMediaFromLibrary(slot) } },
+      ],
+    )
   }
 
   async function update() {
@@ -2961,8 +3675,12 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
       return
     }
     if (!validateNote(note)) return
-    if (!photoUri) {
-      Alert.alert('Photo required', stageUpdatePhotoRequiredMessage(order, nextStage))
+    if (!primaryMedia) {
+      Alert.alert('Proof media required', stageUpdatePhotoRequiredMessage(order, nextStage))
+      return
+    }
+    if (finishingNeedsSecondPhoto && !secondMedia) {
+      Alert.alert('Second proof required', 'Finishing needs front and back proof before it can be marked complete.')
       return
     }
     const fulfillmentPreflightError =
@@ -2987,21 +3705,21 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
     setUpdating(true)
 
     try {
-      let photoUrl: string | null = null
-      if (photoUri) {
-        const cleanUri = await stripExif(photoUri)
-        const ext = 'jpg'
-        const filename = `progress/${order.id}/${Date.now()}.${ext}`
-        try {
-          const response = await fetch(cleanUri)
-          const blob = await response.blob()
-          if (blob.size > 10 * 1024 * 1024) throw new Error('Photo exceeds 10 MB limit.')
-          await supabase.storage.from('order-photos').upload(filename, blob, { contentType: `image/${ext}` })
-          const { data } = supabase.storage.from('order-photos').getPublicUrl(filename)
-          photoUrl = data.publicUrl
-        } catch (uploadErr: any) {
-          if (uploadErr?.message?.includes('10 MB')) throw uploadErr
-        }
+      const photoUrls: string[] = []
+      const mediaFingerprints: string[] = []
+      for (const media of [primaryMedia, secondMedia].filter(Boolean) as StageMedia[]) {
+        const uploadUri = media.type === 'image' ? await stripExif(media.uri) : media.uri
+        const ext = stageMediaExtension(media)
+        const filename = `progress/${order.id}/${Date.now()}_${photoUrls.length}.${ext}`
+        const publicUrl = await uploadPublicStorageImage({
+          bucket: 'order-photos',
+          path: filename,
+          uri: uploadUri,
+          contentType: stageMediaContentType(media),
+          maxBytes: media.type === 'video' ? 50 * 1024 * 1024 : 10 * 1024 * 1024,
+        })
+        photoUrls.push(publicUrl)
+        mediaFingerprints.push(media.fingerprint)
       }
 
       const { data: efData, error: efError } = await invokeFunction('tailor-order-action', {
@@ -3010,7 +3728,9 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
           action: 'advance-stage',
           targetStage: nextStage,
           note: note.trim() || undefined,
-          photoUrl: photoUrl ?? undefined,
+          photoUrl: photoUrls[0] ?? undefined,
+          photoUrls,
+          mediaFingerprints,
           trackingNumber: nextStage === 'SHIPPED' ? normalizeTrackingNumberInput(trackingNumber) || undefined : undefined,
           fulfillmentProvider: ['SHIPPED', 'OUT_FOR_DELIVERY'].includes(nextStage) ? provider.trim() || undefined : undefined,
           fulfillmentReference: ['SHIPPED', 'OUT_FOR_DELIVERY'].includes(nextStage) ? normalizeDispatchReferenceInput(reference) || undefined : undefined,
@@ -3035,13 +3755,14 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
       capture('stage_advanced', {
         from_stage: order.stage,
         to_stage: nextStage,
-        has_photo: !!photoUrl,
+        has_photo: photoUrls.length > 0,
         has_note: !!note.trim(),
       })
 
+      hapticSuccess()
       onUpdated(nextStage)
     } catch (e) {
-      console.error('Stage update error:', e)
+      Sentry.captureException(e, { extra: { context: 'stage_update_submit', orderId: order.id, targetStage: nextStage } })
       Alert.alert(
         'Update unavailable',
         isLikelyConnectivityIssue(e)
@@ -3087,29 +3808,52 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
               required
             />
 
-            {/* Progress photo */}
+            {/* Progress proof */}
             <View>
               <Text style={styles.photoLabel}>{stageUpdatePhotoLabel(order, nextStage)} <Text style={{ color: Colors.error }}>*</Text></Text>
               <Text style={styles.photoHint}>{stageUpdatePhotoHint(order, nextStage)}</Text>
-              {photoUri ? (
+              {primaryMedia ? (
                 <View style={styles.photoPreviewWrap}>
-                  <ExpoImage
-                    source={photoUri}
+                  <StageMediaPreview
+                    uri={primaryMedia.uri}
+                    mediaType={primaryMedia.type}
                     style={styles.photoPreview}
-                    contentFit="cover"
-                    cachePolicy="memory-disk"
-                    transition={120}
+                    surface="tailor_stage_update_photo_preview"
                   />
-                  <TouchableOpacity style={styles.photoRemove} onPress={() => setPhotoUri(null)} disabled={updating}>
+                  <TouchableOpacity style={styles.photoRemove} onPress={() => setPrimaryMedia(null)} disabled={updating}>
                     <Text style={styles.photoRemoveText}>Remove</Text>
                   </TouchableOpacity>
                 </View>
               ) : (
-                <TouchableOpacity style={styles.photoPickBtn} onPress={pickPhoto} disabled={updating}>
-                  <Text style={styles.photoPickText}>+ Add photo</Text>
+                <TouchableOpacity style={styles.photoPickBtn} onPress={() => pickStageMedia('primary')} disabled={updating}>
+                  <Text style={styles.photoPickText}>+ Add photo or video</Text>
                 </TouchableOpacity>
               )}
             </View>
+
+            {finishingNeedsSecondPhoto ? (
+              <View>
+                <Text style={styles.photoLabel}>Second finishing proof <Text style={{ color: Colors.error }}>*</Text></Text>
+                <Text style={styles.photoHint}>Add a second fresh angle so the customer and ops can verify finishing quality.</Text>
+                {secondMedia ? (
+                  <View style={styles.photoPreviewWrap}>
+                    <StageMediaPreview
+                      uri={secondMedia.uri}
+                      mediaType={secondMedia.type}
+                      style={styles.photoPreview}
+                      surface="tailor_stage_update_second_photo_preview"
+                    />
+                    <TouchableOpacity style={styles.photoRemove} onPress={() => setSecondMedia(null)} disabled={updating}>
+                      <Text style={styles.photoRemoveText}>Remove</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <TouchableOpacity style={styles.photoPickBtn} onPress={() => pickStageMedia('secondary')} disabled={updating}>
+                    <Text style={styles.photoPickText}>+ Add second photo or video</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            ) : null}
 
             {['SHIPPED', 'OUT_FOR_DELIVERY'].includes(nextStage) && (
               <View style={styles.shippingFields}>
@@ -3187,7 +3931,8 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
                 updating ||
                 note.trim().length < 10 ||
                 !!noteError ||
-                !photoUri ||
+                !primaryMedia ||
+                (finishingNeedsSecondPhoto && !secondMedia) ||
                 (
                   nextStage === 'SHIPPED' &&
                   (!provider.trim() || (!trackingNumber.trim() && !reference.trim()) || !deliveryContactName.trim() || !deliveryContactPhone.trim())
@@ -3207,11 +3952,13 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
 
 // ─── Consultation Modal ───────────────────────────────────────────────────────
 
-function ConsultationModal({ visible, orderId, defaultCurrency, onClose, onSent }: {
-  visible: boolean; orderId: string; defaultCurrency: CurrencyCode; onClose: () => void; onSent: () => void
+function ConsultationModal({ visible, orderId, action, defaultCurrency, onClose, onSent }: {
+  visible: boolean; orderId: string; action: 'request-consultation' | 'approve-consultation'; defaultCurrency: CurrencyCode; onClose: () => void; onSent: () => void
 }) {
   const currencyLabel = `${currencySymbol(defaultCurrency)} ${defaultCurrency}`
   const [fee, setFee] = useState('')
+  const [scheduledAt, setScheduledAt] = useState<Date>(defaultConsultationStart())
+  const [showPicker, setShowPicker] = useState(false)
   const [creditFeeTowardOrder, setCreditFeeTowardOrder] = useState(true)
   const [paymentTiming, setPaymentTiming] = useState<'BEFORE_CALL_STARTS' | 'WAIVED_OR_FREE'>('BEFORE_CALL_STARTS')
   const [reschedulePolicy, setReschedulePolicy] = useState<'ONE_FREE_RESCHEDULE' | 'FLEXIBLE_WITH_NOTICE' | 'CASE_BY_CASE'>('ONE_FREE_RESCHEDULE')
@@ -3229,6 +3976,8 @@ function ConsultationModal({ visible, orderId, defaultCurrency, onClose, onSent 
   useEffect(() => {
     if (!visible) return
     setFee('')
+    setScheduledAt(defaultConsultationStart())
+    setShowPicker(false)
     setCreditFeeTowardOrder(true)
     setPaymentTiming('BEFORE_CALL_STARTS')
     setReschedulePolicy('ONE_FREE_RESCHEDULE')
@@ -3238,7 +3987,7 @@ function ConsultationModal({ visible, orderId, defaultCurrency, onClose, onSent 
     setNote('')
     setNoteError('')
     setSending(false)
-  }, [visible, orderId])
+  }, [visible, orderId, action])
 
   function validateNote(t: string) {
     const res = filterContactInfo(t)
@@ -3249,14 +3998,19 @@ function ConsultationModal({ visible, orderId, defaultCurrency, onClose, onSent 
   async function send() {
     if (sending) return
     if (!validateNote(note)) return
+    if (scheduledAt.getTime() < Date.now() + 60 * 60 * 1000) {
+      Alert.alert('Choose another time', 'Pick a consultation time at least 1 hour from now.')
+      return
+    }
     setSending(true)
 
     const feePence = fee ? Math.round(parseFloat(fee) * 100) : null
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
 
     const { data: efData, error: efError } = await invokeFunction('tailor-order-action', {
       body: {
         orderId,
-        action: 'request-consultation',
+        action,
         consultationFee: feePence,
         currency: defaultCurrency,
         creditFeeTowardOrder: feePence ? creditFeeTowardOrder : false,
@@ -3265,6 +4019,8 @@ function ConsultationModal({ visible, orderId, defaultCurrency, onClose, onSent 
         noShowPolicy: feePence ? noShowPolicy : 'CASE_BY_CASE',
         expiryPolicy,
         reminderEnabled,
+        scheduledStartAt: scheduledAt.toISOString(),
+        timezone,
         note: note.trim() || undefined,
       },
     })
@@ -3289,7 +4045,7 @@ function ConsultationModal({ visible, orderId, defaultCurrency, onClose, onSent 
       return
     }
 
-    capture('consultation_requested', { has_fee: !!feePence })
+    capture(action === 'approve-consultation' ? 'consultation_approved' : 'consultation_requested', { has_fee: !!feePence })
     setSending(false)
     onSent()
   }
@@ -3302,16 +4058,40 @@ function ConsultationModal({ visible, orderId, defaultCurrency, onClose, onSent 
             <TouchableOpacity onPress={onClose} disabled={sending}>
               <Text style={styles.modalClose}>Cancel</Text>
             </TouchableOpacity>
-            <Text style={styles.modalTitle}>Request consultation</Text>
+            <Text style={styles.modalTitle}>{action === 'approve-consultation' ? 'Approve consultation' : 'Request consultation'}</Text>
             <View style={{ width: 60 }} />
           </View>
 
           <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
             <View style={styles.consultationInfo}>
               <Text style={styles.consultationInfoText}>
-                A consultation lets you assess the order details before committing to a quote. The customer will be notified and can discuss further via messages.
+                {action === 'approve-consultation'
+                  ? 'Approving this request reserves this time on your Drape calendar, sets the terms, and asks the customer to pay first if you charge a fee.'
+                  : 'A consultation reserves time on your Drape calendar so you can assess the order details before committing to a quote.'}
+              </Text>
+              <Text style={styles.consultationInfoText}>
+                If another order takes the same time first, Drape will block the booking and ask you to choose a new slot.
               </Text>
             </View>
+            <Input
+              label="Consultation time"
+              value={formatConsultationStart(scheduledAt)}
+              onPressIn={() => setShowPicker(true)}
+              showSoftInputOnFocus={false}
+              hint="Pick a time at least 1 hour from now. Reminders go out before the scheduled slot."
+              required
+            />
+            {showPicker ? (
+              <DateTimePicker
+                value={scheduledAt}
+                mode="datetime"
+                minimumDate={new Date(Date.now() + 60 * 60 * 1000)}
+                onChange={(_, value) => {
+                  setShowPicker(Platform.OS === 'ios')
+                  if (value) setScheduledAt(value)
+                }}
+              />
+            ) : null}
             <Input
               label={`Consultation fee (${currencyLabel}, optional)`}
               placeholder="e.g. 20"
@@ -3434,7 +4214,7 @@ function ConsultationModal({ visible, orderId, defaultCurrency, onClose, onSent 
               filterContact
             />
             <Button
-              label="Request consultation"
+              label={action === 'approve-consultation' ? 'Approve consultation' : 'Request consultation'}
               onPress={send}
               loading={sending}
               disabled={sending || !!noteError}
@@ -3679,9 +4459,9 @@ const styles = StyleSheet.create({
 
   briefText: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 24 },
   briefMeta: { gap: Spacing.sm },
-  briefRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  briefRow: { flexDirection: 'row', justifyContent: 'space-between', gap: Spacing.md },
   briefRowLabel: { fontSize: FontSize.sm, color: Colors.midGrey },
-  briefRowValue: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink },
+  briefRowValue: { flex: 1, textAlign: 'right', fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink },
   supportCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
@@ -3692,6 +4472,19 @@ const styles = StyleSheet.create({
   supportCardWarning: {
     borderWidth: 1,
     borderColor: Colors.kanteRust + '40',
+  },
+  visionOrderHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  visionOrderIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
   },
   supportCardTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   supportMetaList: { gap: 6 },
@@ -3708,6 +4501,55 @@ const styles = StyleSheet.create({
   supportBadgeTextSuccess: { color: Colors.needleGreen },
   supportBodyText: { fontSize: 11, color: Colors.inkLight, lineHeight: 17 },
   supportHint: { fontSize: 10, color: Colors.midGrey, lineHeight: 16 },
+  timeline: { gap: 0, paddingTop: Spacing.xs },
+  timelineItem: { flexDirection: 'row', gap: 9, paddingBottom: 10 },
+  timelineDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    marginTop: 5,
+    backgroundColor: Colors.needleGreen,
+  },
+  timelineContent: { flex: 1, gap: 3 },
+  timelineStage: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  timelineNote: { fontSize: 11, color: Colors.inkLight, fontStyle: 'italic', lineHeight: 16 },
+  timelinePhoto: {
+    width: '100%',
+    height: 150,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.boneDeep,
+    marginTop: Spacing.xs,
+  },
+  timelineDate: { fontSize: 10, color: Colors.midGrey },
+  measurementConfirmFieldWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
+  measurementConfirmFieldChip: {
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 5,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.kanteRust + '40',
+  },
+  measurementConfirmFieldText: { fontSize: FontSize.xs, color: Colors.kanteRust, fontWeight: FontWeight.semibold },
+  styleChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  styleChip: {
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 5,
+  },
+  styleChipText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
+  referenceLinkList: { gap: 6 },
+  referenceLinkRow: {
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.bone,
+    padding: Spacing.sm,
+    gap: 2,
+  },
+  referenceLinkHost: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.ink },
+  referenceLinkText: { fontSize: FontSize.xs, color: Colors.needleGreen },
   handoffIssueCard: {
     gap: Spacing.sm,
     padding: Spacing.md,
@@ -3735,7 +4577,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreenLight,
   },
   handoffStatusPillEscalated: {
-    backgroundColor: '#FFF2DC',
+    backgroundColor: Colors.accentLight,
   },
   handoffStatusText: {
     fontSize: FontSize.xs,
@@ -3764,6 +4606,8 @@ const styles = StyleSheet.create({
   measureItem: { width: '47%', backgroundColor: Colors.white, borderRadius: Radius.sm, padding: Spacing.md, gap: 2 },
   measureLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
   measureValue: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  additionalMeasureBlock: { gap: Spacing.sm, marginTop: Spacing.md },
+  additionalMeasureTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
 
   messageCta: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
@@ -3773,7 +4617,7 @@ const styles = StyleSheet.create({
 
   backLink: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
   retryBtn: { backgroundColor: Colors.needleGreen, borderRadius: Radius.full, paddingVertical: Spacing.md, paddingHorizontal: Spacing.xxxl },
-  retryBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
+  retryBtnText: { color: Colors.textInverse, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
   secondaryBtn: {
     backgroundColor: Colors.white,
     borderColor: Colors.lightGrey,
@@ -3795,6 +4639,26 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
   modalScroll: { flex: 1 },
   modalContent: { padding: Spacing.xl, gap: Spacing.xl },
+  modalSectionLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  modalHelpText: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
+  measurementFieldPicker: { gap: Spacing.sm },
+  measurementFieldChipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  measurementFieldChip: {
+    minHeight: 44,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+  },
+  measurementFieldChipActive: {
+    borderColor: Colors.needleGreen,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  measurementFieldChipText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  measurementFieldChipTextActive: { color: Colors.needleGreen },
+  measurementFieldChipValue: { marginTop: 2, fontSize: FontSize.xs, color: Colors.midGrey },
   shippingFields: { gap: Spacing.sm },
   shippingWarning: {
     fontSize: FontSize.sm,
@@ -3818,7 +4682,7 @@ const styles = StyleSheet.create({
   },
   photoPickText: { fontSize: FontSize.md, color: Colors.midGrey },
   photoPreviewWrap: { gap: Spacing.sm },
-  photoPreview: { width: '100%', height: 200, borderRadius: Radius.md },
+  photoPreview: { width: '100%', height: 200, borderRadius: Radius.md, backgroundColor: Colors.boneDeep },
   photoRemove: { alignSelf: 'flex-start' },
   photoRemoveText: { color: Colors.error, fontSize: FontSize.sm },
 

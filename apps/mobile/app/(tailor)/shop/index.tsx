@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native'
-import { Image as ExpoImage } from 'expo-image'
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, RefreshControl } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { buildTailorStockAlert, formatSizeInventorySummary, normalizeSizeInventory, type SizeInventory } from '@/lib/ready-made-stock'
-import { Button } from '@/components/ui'
+import { Button, RemoteImage } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 
 type SellerItem = {
@@ -93,6 +92,7 @@ export default function TailorShopScreen() {
   const [profile, setProfile] = useState<SellerProfile | null>(null)
   const [items, setItems] = useState<SellerItem[]>([])
   const [updatingItemId, setUpdatingItemId] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
 
   useEffect(() => {
     const requestedFilter = typeof params.filter === 'string' ? params.filter.toUpperCase() : ''
@@ -101,96 +101,98 @@ export default function TailorShopScreen() {
     }
   }, [params.filter])
 
+  const loadShop = useCallback(async (showSpinner = true) => {
+    if (!user?.id) {
+      setProfile(null)
+      setItems([])
+      setLoading(false)
+      return
+    }
+    if (showSpinner) setLoading(true)
+
+    const { data: profileData } = await supabase
+      .from('tailor_profiles')
+      .select('id, supports_ready_made')
+      .eq('user_id', user.id)
+      .maybeSingle()
+
+    if (!profileData?.id) {
+      setProfile(null)
+      setItems([])
+      setLoading(false)
+      return
+    }
+
+    setProfile({
+      id: profileData.id,
+      supportsReadyMade: profileData.supports_ready_made ?? false,
+    })
+
+    const primary = await supabase
+      .from('seller_items')
+      .select('id, title, category, sizes, price_amount, currency, stock_status, inventory_quantity, size_inventory, is_live, photo_urls')
+      .eq('tailor_profile_id', profileData.id)
+      .order('updated_at', { ascending: false })
+
+    let itemsData: any[] | null = primary.data as any[] | null
+    let itemsError: any = primary.error
+
+    if (itemsError && isMissingInventoryColumnError(itemsError)) {
+      const fallback = await supabase
+        .from('seller_items')
+        .select('id, title, category, sizes, price_amount, currency, stock_status, inventory_quantity, is_live, photo_urls')
+        .eq('tailor_profile_id', profileData.id)
+        .order('updated_at', { ascending: false })
+
+      itemsData = fallback.data
+      itemsError = fallback.error
+    }
+
+    if (itemsError) {
+      Alert.alert('Shop unavailable', 'We could not load your shop items right now.')
+      setItems([])
+      setLoading(false)
+      return
+    }
+
+    setItems(
+      (itemsData ?? []).map((row: any) => ({
+        id: row.id,
+        title: row.title,
+        category: row.category ?? null,
+        sizes: Array.isArray(row.sizes) ? row.sizes.filter((value: unknown): value is string => typeof value === 'string' && value.length > 0) : [],
+        sizeInventory: normalizeSizeInventory(
+          Array.isArray(row.sizes) ? row.sizes.filter((value: unknown): value is string => typeof value === 'string' && value.length > 0) : [],
+          row.size_inventory,
+          typeof row.inventory_quantity === 'number'
+            ? row.inventory_quantity
+            : fallbackInventoryQuantity(row),
+        ),
+        priceAmount: row.price_amount,
+        currency: row.currency,
+        stockStatus: row.stock_status,
+        inventoryQuantity:
+          typeof row.inventory_quantity === 'number'
+            ? row.inventory_quantity
+            : fallbackInventoryQuantity(row),
+        isLive: row.is_live,
+        photoUrls: Array.isArray(row.photo_urls) ? row.photo_urls.filter((value: unknown): value is string => typeof value === 'string' && value.length > 0) : [],
+      }))
+    )
+    setLoading(false)
+  }, [user?.id])
+
   useFocusEffect(
     useCallback(() => {
-      let active = true
-
-      async function load() {
-        if (!user?.id) return
-        setLoading(true)
-
-        const { data: profileData } = await supabase
-          .from('tailor_profiles')
-          .select('id, supports_ready_made')
-          .eq('user_id', user.id)
-          .maybeSingle()
-
-        if (!active) return
-
-        if (!profileData?.id) {
-          setProfile(null)
-          setItems([])
-          setLoading(false)
-          return
-        }
-
-        setProfile({
-          id: profileData.id,
-          supportsReadyMade: profileData.supports_ready_made ?? false,
-        })
-
-        const primary = await supabase
-          .from('seller_items')
-          .select('id, title, category, sizes, price_amount, currency, stock_status, inventory_quantity, size_inventory, is_live, photo_urls')
-          .eq('tailor_profile_id', profileData.id)
-          .order('updated_at', { ascending: false })
-
-        let itemsData: any[] | null = primary.data as any[] | null
-        let itemsError: any = primary.error
-
-        if (itemsError && isMissingInventoryColumnError(itemsError)) {
-          const fallback = await supabase
-            .from('seller_items')
-            .select('id, title, category, sizes, price_amount, currency, stock_status, inventory_quantity, is_live, photo_urls')
-            .eq('tailor_profile_id', profileData.id)
-            .order('updated_at', { ascending: false })
-
-          itemsData = fallback.data
-          itemsError = fallback.error
-        }
-
-        if (!active) return
-
-        if (itemsError) {
-          Alert.alert('Shop unavailable', 'We could not load your shop items right now.')
-          setItems([])
-          setLoading(false)
-          return
-        }
-
-        setItems(
-          (itemsData ?? []).map((row: any) => ({
-            id: row.id,
-            title: row.title,
-            category: row.category ?? null,
-            sizes: Array.isArray(row.sizes) ? row.sizes.filter((value: unknown): value is string => typeof value === 'string' && value.length > 0) : [],
-            sizeInventory: normalizeSizeInventory(
-              Array.isArray(row.sizes) ? row.sizes.filter((value: unknown): value is string => typeof value === 'string' && value.length > 0) : [],
-              row.size_inventory,
-              typeof row.inventory_quantity === 'number'
-                ? row.inventory_quantity
-                : fallbackInventoryQuantity(row),
-            ),
-            priceAmount: row.price_amount,
-            currency: row.currency,
-            stockStatus: row.stock_status,
-            inventoryQuantity:
-              typeof row.inventory_quantity === 'number'
-                ? row.inventory_quantity
-                : fallbackInventoryQuantity(row),
-            isLive: row.is_live,
-            photoUrls: Array.isArray(row.photo_urls) ? row.photo_urls.filter((value: unknown): value is string => typeof value === 'string' && value.length > 0) : [],
-          }))
-        )
-        setLoading(false)
-      }
-
-      void load()
-      return () => {
-        active = false
-      }
-    }, [user?.id])
+      void loadShop()
+    }, [loadShop])
   )
+
+  async function onRefresh() {
+    setRefreshing(true)
+    await loadShop(false)
+    setRefreshing(false)
+  }
 
   const filteredItems = items.filter((item) => {
     const status = effectiveStockStatus(item)
@@ -320,11 +322,16 @@ export default function TailorShopScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+      <ScrollView
+        style={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} colors={[Colors.needleGreen]} />}
+      >
         <View style={styles.header}>
           <Text style={styles.title}>Shop</Text>
           <TouchableOpacity style={styles.addBtn} onPress={() => router.push('/(tailor)/shop/new')}>
-            <Feather name="plus" size={16} color={Colors.white} />
+            <Feather name="plus" size={16} color={Colors.textInverse} />
             <Text style={styles.addBtnText}>Add item</Text>
           </TouchableOpacity>
         </View>
@@ -359,6 +366,9 @@ export default function TailorShopScreen() {
 
         {!profile?.supportsReadyMade ? (
           <View style={styles.emptyCard}>
+            <View style={styles.emptyIcon}>
+              <Feather name="toggle-left" size={24} color={Colors.needleGreen} />
+            </View>
             <Text style={styles.emptyTitle}>Shop now is off</Text>
             <Text style={styles.emptyHint}>Turn on ready-made selling in your profile before you list items.</Text>
             <Button label="Open profile" variant="secondary" onPress={() => router.push('/(tailor)/profile/edit')} />
@@ -384,6 +394,9 @@ export default function TailorShopScreen() {
 
             {filteredItems.length === 0 ? (
               <View style={styles.emptyCard}>
+                <View style={styles.emptyIcon}>
+                  <Feather name="package" size={24} color={Colors.needleGreen} />
+                </View>
                 <Text style={styles.emptyTitle}>No items here yet</Text>
                 <Text style={styles.emptyHint}>
                   {filter === 'LIVE'
@@ -404,7 +417,19 @@ export default function TailorShopScreen() {
                   return (
                     <View key={item.id} style={styles.itemCard}>
                     {item.photoUrls[0] ? (
-                      <ExpoImage source={{ uri: item.photoUrls[0] }} style={styles.itemThumb} contentFit="cover" transition={180} />
+                      <RemoteImage
+                        uri={item.photoUrls[0]}
+                        bucket="seller-item-media"
+                        style={styles.itemThumb}
+                        contentFit="cover"
+                        transition={180}
+                        surface="tailor_shop_item_thumb"
+                        fallback={(
+                          <View style={[styles.itemThumb, styles.itemThumbPlaceholder]}>
+                            <Feather name="image" size={18} color={Colors.midGrey} />
+                          </View>
+                        )}
+                      />
                     ) : (
                       <View style={[styles.itemThumb, styles.itemThumbPlaceholder]}>
                         <Feather name="image" size={18} color={Colors.midGrey} />
@@ -537,7 +562,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     minHeight: 44,
   },
-  addBtnText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  addBtnText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   bestUseCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 4, ...Shadow.sm },
   bestUseEyebrow: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.6 },
   bestUseText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
@@ -573,10 +598,18 @@ const styles = StyleSheet.create({
   },
   filterPillActive: { backgroundColor: Colors.needleGreen, borderColor: Colors.needleGreen },
   filterText: { color: Colors.inkLight, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
-  filterTextActive: { color: Colors.white },
-  emptyCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 16, gap: Spacing.sm, ...Shadow.sm },
+  filterTextActive: { color: Colors.textInverse },
+  emptyCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 16, gap: Spacing.sm, alignItems: 'center', ...Shadow.sm },
+  emptyIcon: {
+    width: 54,
+    height: 54,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   emptyTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-  emptyHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
+  emptyHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18, textAlign: 'center' },
   itemList: { gap: Spacing.sm },
   itemCard: {
     flexDirection: 'row',
@@ -630,7 +663,7 @@ const styles = StyleSheet.create({
   itemActionText: {
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
-    color: Colors.white,
+    color: Colors.textInverse,
   },
   itemActionGhostText: {
     fontSize: FontSize.xs,

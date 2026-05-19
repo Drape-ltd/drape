@@ -5,10 +5,11 @@ import {
   buildConversationBlockedMessage,
   readConversationAccessState,
 } from '../_shared/conversation-access.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { getClientIp, rateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
+import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
 import { parseBody, z, uuid } from '../_shared/validate.ts'
 
 const FN = 'message-action'
@@ -108,22 +109,74 @@ Deno.serve(async (req) => {
     }
 
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
-    const allowed = await checkRateLimit(supabase, `${FN}:${caller.id}`, 3600, 180)
-    if (!allowed) {
-      return jsonError(cors, 429, 'RATE_LIMITED', 'You are sending messages too quickly. Please wait a moment before trying again.')
-    }
+    const clientIp = getClientIp(req)
+    const limit = await rateLimit(
+      supabase,
+      caller.id,
+      FN,
+      10,
+      60_000,
+      { ip: clientIp, userAgent: req.headers.get('user-agent'), userId: caller.id },
+    )
+    if (!limit.allowed) return rateLimitExceededResponse(cors, limit.retryAfter)
 
     const { data: order, error: orderError } = await supabase
       .from('orders')
-      .select('id, customer_id, tailor_id')
+      .select('id, customer_id, tailor_id, stage')
       .eq('id', body.orderId)
       .maybeSingle()
 
     if (orderError) return jsonError(cors, 500, 'DATABASE_ERROR', 'Could not check this conversation right now.')
-    if (!order) return jsonError(cors, 404, 'ORDER_NOT_FOUND', 'This order conversation could not be found anymore.')
 
-    const isCustomer = order.customer_id === caller.id
-    const isTailor = order.tailor_id === caller.id
+    const orderRow = order as { id?: string; customer_id?: string | null; tailor_id?: string | null; stage?: string | null } | null
+    const isCustomer = orderRow?.customer_id === caller.id
+    const isTailor = orderRow?.tailor_id === caller.id
+    const messagePreflight = runPreflight([
+      {
+        name: 'conversation_order_exists',
+        condition: !!orderRow?.id,
+        errorCode: 'ORDER_NOT_FOUND',
+        message: 'This order conversation could not be found anymore.',
+        field: 'orderId',
+        severity: 'BLOCKING',
+        actual: { orderId: body.orderId },
+      },
+      {
+        name: 'sender_is_participant',
+        condition: isCustomer || isTailor,
+        errorCode: 'CONVERSATION_FORBIDDEN',
+        message: 'This conversation is not available from your account.',
+        field: 'orderId',
+        severity: 'BLOCKING',
+        actual: { callerId: caller.id, customerId: orderRow?.customer_id ?? null, tailorId: orderRow?.tailor_id ?? null },
+      },
+      {
+        name: 'conversation_open',
+        condition: !['CANCELLED', 'COMPLETE'].includes(orderRow?.stage ?? ''),
+        errorCode: 'CONVERSATION_CLOSED',
+        message: 'This order thread is closed. Contact Drape support if you still need help.',
+        field: 'stage',
+        severity: 'BLOCKING',
+        actual: { stage: orderRow?.stage ?? null },
+      },
+    ])
+
+    if (!messagePreflight.passed) {
+      await logPreflightFailure(supabase, messagePreflight, {
+        operation: 'send_message',
+        entityType: 'order',
+        entityId: body.orderId,
+        orderId: body.orderId,
+        actorId: caller.id,
+        actorRole: isTailor ? 'TAILOR' : 'CUSTOMER',
+        userId: caller.id,
+        source: FN,
+        metadata: { messageType: body.type },
+      })
+      return preflightFailureResponse(messagePreflight, cors, messagePreflight.failures[0]?.errorCode === 'ORDER_NOT_FOUND' ? 404 : 409)
+    }
+
+    if (!orderRow?.id) return jsonError(cors, 404, 'ORDER_NOT_FOUND', 'This order conversation could not be found anymore.')
     if (!isCustomer && !isTailor) {
       return jsonError(cors, 403, 'FORBIDDEN', 'This conversation is not available from your account.')
     }

@@ -1,7 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
 import { rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
@@ -59,20 +59,31 @@ const BodySchema = z.discriminatedUnion('action', [
   }),
 ])
 
+function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
+  if (typeof body.error === 'string' && typeof body.message !== 'string') {
+    body.message = body.error
+  }
+
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...headers, 'Content-Type': 'application/json' },
+  })
+}
+
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
 
   try {
     const caller = await getAuthUser(req)
-    if (!caller) return new Response('Unauthorized', { status: 401, headers: cors })
+    if (!caller) return jsonResponse({ error: 'Please sign in again before managing client diary entries.' }, 401, cors)
 
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
-    if (!parsed.ok) return new Response(parsed.error, { status: 400, headers: cors })
+    if (!parsed.ok) return jsonResponse({ error: parsed.error }, 400, cors)
 
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
     const allowed = await checkRateLimit(supabase, `${FN}:${caller.id}`, 3600, 60)
-    if (!allowed) return new Response('Too many requests', { status: 429, headers: cors })
+    if (!allowed) return rateLimitExceededResponse(cors)
 
     const body = parsed.data
 
@@ -115,7 +126,7 @@ Deno.serve(async (req) => {
 
         if (error || !data) {
           log('error', FN, 'db.error', { actor_id: caller.id, error: error?.message ?? 'create failed' })
-          return new Response(error?.message ?? 'Could not save diary entry.', { status: 500, headers: cors })
+          return jsonResponse({ error: 'We could not save this diary entry right now. Please try again.' }, 500, cors)
         }
 
         await audit(supabase, {
@@ -125,9 +136,7 @@ Deno.serve(async (req) => {
           payload: { entry_id: data.id },
         })
 
-        return new Response(JSON.stringify({ ok: true, entryId: data.id, passportId: data.passport_id }), {
-          headers: { ...cors, 'Content-Type': 'application/json' },
-        })
+        return jsonResponse({ ok: true, entryId: data.id, passportId: data.passport_id }, 200, cors)
       }
 
       const { data: existing } = await supabase
@@ -137,7 +146,7 @@ Deno.serve(async (req) => {
         .eq('tailor_id', caller.id)
         .maybeSingle()
 
-      if (!existing?.id) return new Response('Diary entry not found', { status: 404, headers: cors })
+      if (!existing?.id) return jsonResponse({ error: 'That diary entry was not found. Refresh and try again.' }, 404, cors)
 
       const { error } = await supabase
         .from('diary_entries')
@@ -147,7 +156,7 @@ Deno.serve(async (req) => {
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, error: error.message })
-        return new Response(error.message ?? 'Could not update diary entry.', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not update this diary entry right now. Please try again.' }, 500, cors)
       }
 
       await audit(supabase, {
@@ -157,9 +166,7 @@ Deno.serve(async (req) => {
         payload: { entry_id: body.entryId },
       })
 
-      return new Response(JSON.stringify({ ok: true, entryId: body.entryId }), {
-        headers: { ...cors, 'Content-Type': 'application/json' },
-      })
+      return jsonResponse({ ok: true, entryId: body.entryId }, 200, cors)
     }
 
     const { entryId } = body
@@ -170,7 +177,7 @@ Deno.serve(async (req) => {
       .eq('tailor_id', caller.id)
       .maybeSingle()
 
-    if (!existing?.id) return new Response('Diary entry not found', { status: 404, headers: cors })
+    if (!existing?.id) return jsonResponse({ error: 'That diary entry was not found. Refresh and try again.' }, 404, cors)
 
     if (body.action === 'mark-invite-sent') {
       const { error } = await supabase
@@ -181,12 +188,10 @@ Deno.serve(async (req) => {
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, error: error.message })
-        return new Response(error.message ?? 'Could not mark invite sent.', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not mark this invite as sent right now. Please try again.' }, 500, cors)
       }
 
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { ...cors, 'Content-Type': 'application/json' },
-      })
+      return jsonResponse({ ok: true }, 200, cors)
     }
 
     const { error } = await supabase
@@ -197,7 +202,7 @@ Deno.serve(async (req) => {
 
     if (error) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: error.message })
-      return new Response(error.message ?? 'Could not delete diary entry.', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not delete this diary entry right now. Please try again.' }, 500, cors)
     }
 
     await audit(supabase, {
@@ -207,11 +212,9 @@ Deno.serve(async (req) => {
       payload: { entry_id: entryId },
     })
 
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    })
+    return jsonResponse({ ok: true }, 200, cors)
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return new Response('Internal server error', { status: 500, headers: cors })
+    return jsonResponse({ error: 'We could not update the client diary right now. Please try again.' }, 500, cors)
   }
 })

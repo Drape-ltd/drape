@@ -43,6 +43,11 @@ export default function TailorOrdersScreen() {
     profileCompleted: boolean
     stripeAccountId: string | null
     paystackAccountId: string | null
+    payoutCurrency: string | null
+    payoutProvider: string | null
+    payoutReverificationRequired: boolean | null
+    payoutAccountVerified: boolean | null
+    payoutAccountType: 'PAYSTACK' | 'STRIPE_CONNECT' | null
   } | null>(null)
   const [showGuide, setShowGuide] = useState(true)
 
@@ -62,7 +67,7 @@ export default function TailorOrdersScreen() {
 
     const { data, error } = await supabase
       .from('tailor_profiles')
-      .select('id, display_name, is_live, id_verification_status, profile_completed, stripe_account_id, paystack_account_id')
+      .select('id, display_name, is_live, id_verification_status, profile_completed, payout_currency, payout_provider, payout_reverification_required, payout_account_verified, payout_account_type')
       .eq('user_id', user.id)
       .maybeSingle()
 
@@ -77,8 +82,13 @@ export default function TailorOrdersScreen() {
       isLive: (data as any).is_live,
       idVerificationStatus: (data as any).id_verification_status ?? 'NOT_SUBMITTED',
       profileCompleted: (data as any).profile_completed ?? false,
-      stripeAccountId: (data as any).stripe_account_id ?? null,
-      paystackAccountId: (data as any).paystack_account_id ?? null,
+      stripeAccountId: null,
+      paystackAccountId: null,
+      payoutCurrency: (data as any).payout_currency ?? null,
+      payoutProvider: (data as any).payout_provider ?? null,
+      payoutReverificationRequired: (data as any).payout_reverification_required ?? null,
+      payoutAccountVerified: (data as any).payout_account_verified ?? null,
+      payoutAccountType: (data as any).payout_account_type ?? null,
     })
   }
 
@@ -100,7 +110,7 @@ export default function TailorOrdersScreen() {
   }
 
   // Refetch whenever this screen comes back into focus (e.g. returning from order detail)
-  useRefreshOnFocus(refetch)
+  useRefreshOnFocus(refetch, 0)
 
   // Group: pending quotes first when on active tab; search on completed tab
   const sortedOrders = (() => {
@@ -295,8 +305,8 @@ export default function TailorOrdersScreen() {
                         if (item.videoCallUrl) {
                           Alert.alert('Join call', 'Rejoin your consultation call.', [
                             { text: 'Cancel', style: 'cancel' },
-                            { text: '📹 Video', onPress: () => { void handleConsultationCall(item) } },
-                            { text: '🎙 Audio', onPress: () => { void handleConsultationCall(item) } },
+                            { text: 'Video', onPress: () => { void handleConsultationCall(item) } },
+                            { text: 'Audio', onPress: () => { void handleConsultationCall(item) } },
                           ])
                         } else {
                           void handleConsultationCall(item)
@@ -306,7 +316,7 @@ export default function TailorOrdersScreen() {
                       <Text style={styles.callChipText}>
                         {openingCallOrderId === item.id
                           ? 'Opening…'
-                          : item.videoCallUrl ? '📞 Rejoin call' : '📞 Start call'}
+                          : item.videoCallUrl ? 'Rejoin call' : 'Start call'}
                       </Text>
                     </TouchableOpacity>
                     <Text style={styles.consultationHint}>Consultation in progress</Text>
@@ -418,7 +428,7 @@ const emptyStyles = StyleSheet.create({
     minHeight: 44,
     justifyContent: 'center',
   },
-  ctaText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.white },
+  ctaText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
 })
 
 const styles = StyleSheet.create({
@@ -485,7 +495,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
     paddingHorizontal: 14, paddingVertical: 8, minHeight: 44, justifyContent: 'center',
   },
-  callChipText: { fontSize: FontSize.xs, color: Colors.white, fontWeight: FontWeight.semibold },
+  callChipText: { fontSize: FontSize.xs, color: Colors.textInverse, fontWeight: FontWeight.semibold },
   consultationHint: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium },
 
   empty: { flex: 1, paddingTop: 80, alignItems: 'center', gap: Spacing.md, paddingHorizontal: Spacing.xl },

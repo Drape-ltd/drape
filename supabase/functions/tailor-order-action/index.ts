@@ -25,10 +25,12 @@ import {
   shouldResetCollectionCodeAttempts,
 } from '../_shared/collection-code.ts'
 import { rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
+import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
+import { sendOrderEventEmail } from '../_shared/order-email.ts'
 import {
   customerFulfillmentPaymentRequestedNotification,
   fulfillmentPaymentRequestedStageNote,
@@ -58,29 +60,65 @@ import {
 } from '../_shared/order-support.ts'
 import { finalizeOrderTerminal } from '../_shared/order-terminal.ts'
 import { refundSettledOrderPayments } from '../_shared/payment-refunds.ts'
+
+function normalizeMeasurementSource(value: unknown) {
+  return value === 'HELPER_GUIDED' ||
+    value === 'TAILOR_CAPTURED' ||
+    value === 'EXTERNAL_PRO_CAPTURED' ||
+    value === 'DRAPE_VISION' ||
+    value === 'TAILOR_ASSISTED_DRAPE_VISION'
+    ? value
+    : 'SELF_GUIDED'
+}
+
+function normalizeMeasurementConfirmationFields(value: unknown) {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const fields: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const field = item.trim().slice(0, 80)
+    if (!field || seen.has(field.toLowerCase())) continue
+    seen.add(field.toLowerCase())
+    fields.push(field)
+    if (fields.length >= 20) break
+  }
+  return fields
+}
 import { deriveTailorReadiness } from '../_shared/tailor-readiness.ts'
 import { z, parseBody, uuid, isoDate } from '../_shared/validate.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
+import {
+  releaseConsultationSlot,
+  reserveConsultationSlot,
+} from '../_shared/consultation-bookings.ts'
 import { resolveDrapeManagedFulfillmentFee } from '../../../packages/shared/src/fulfillment-fees.ts'
 import { deriveCancellationPolicy } from '../../../packages/shared/src/cancellation-policy.ts'
 import { buildCustomerStageSms } from '../../../packages/shared/src/sms-copy.ts'
 import { normalizeAccountCurrency } from '../../../packages/shared/src/currency-config.ts'
+import {
+  CUSTOM_PRODUCTION_STAGE_REQUIREMENTS,
+  CUSTOM_PRODUCTION_STAGE_LABELS,
+  type CustomProductionStageKey,
+} from '../../../packages/shared/src/custom-order-flow.ts'
 import { normalizeTaxCountryCode } from '../../../packages/shared/src/tax.ts'
 import { calculateLockedOrderAmountsWithTaxBase, resolveOrderTax } from '../_shared/tax.ts'
+
+const MAX_MONEY_MINOR_UNITS = 999_999_999
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
     orderId:        uuid,
     action:         z.literal('send-quote'),
-    amount:         z.number().int().positive().max(100_000_00),
-    fulfillmentFee: z.number().int().nonnegative().max(100_000_00).optional(),
+    amount:         z.number().int().positive().max(MAX_MONEY_MINOR_UNITS),
+    fulfillmentFee: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).optional(),
     currency:       z.string().trim().min(2).max(5),
     completionDate: isoDate,
     breakdown: z.object({
-      laborAmount: z.number().int().nonnegative().max(100_000_00).optional(),
-      sourcingAmount: z.number().int().nonnegative().max(100_000_00).optional(),
-      rushAmount: z.number().int().nonnegative().max(100_000_00).optional(),
+      laborAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).optional(),
+      sourcingAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).optional(),
+      rushAmount: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).optional(),
       included: z.array(z.string().trim().min(1).max(120)).max(6).optional(),
       excluded: z.array(z.string().trim().min(1).max(120)).max(6).optional(),
       summary: z.string().trim().max(300).optional(),
@@ -95,7 +133,7 @@ const BodySchema = z.discriminatedUnion('action', [
   z.object({
     orderId:         uuid,
     action:          z.literal('request-consultation'),
-    consultationFee: z.number().int().nonnegative().max(100_000_00).nullable().optional(),
+    consultationFee: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).nullable().optional(),
     currency: z.string().trim().min(2).max(5).optional(),
     creditFeeTowardOrder: z.boolean().optional(),
     paymentTiming: z.enum(['BEFORE_CALL_STARTS', 'WAIVED_OR_FREE']).optional(),
@@ -103,12 +141,34 @@ const BodySchema = z.discriminatedUnion('action', [
     noShowPolicy: z.enum(['FEE_FORFEITED', 'ONE_REBOOK_ALLOWED', 'CASE_BY_CASE']).optional(),
     expiryPolicy: z.enum(['EXPIRES_IN_7_DAYS', 'EXPIRES_IN_14_DAYS', 'NO_EXPIRY']).optional(),
     reminderEnabled: z.boolean().optional(),
+    scheduledStartAt: isoDate.optional(),
+    timezone: z.string().trim().max(80).optional(),
+    note:            z.string().trim().max(300).optional(),
+  }),
+  z.object({
+    orderId:         uuid,
+    action:          z.literal('approve-consultation'),
+    consultationFee: z.number().int().nonnegative().max(MAX_MONEY_MINOR_UNITS).nullable().optional(),
+    currency: z.string().trim().min(2).max(5).optional(),
+    creditFeeTowardOrder: z.boolean().optional(),
+    paymentTiming: z.enum(['BEFORE_CALL_STARTS', 'WAIVED_OR_FREE']).optional(),
+    reschedulePolicy: z.enum(['ONE_FREE_RESCHEDULE', 'FLEXIBLE_WITH_NOTICE', 'CASE_BY_CASE']).optional(),
+    noShowPolicy: z.enum(['FEE_FORFEITED', 'ONE_REBOOK_ALLOWED', 'CASE_BY_CASE']).optional(),
+    expiryPolicy: z.enum(['EXPIRES_IN_7_DAYS', 'EXPIRES_IN_14_DAYS', 'NO_EXPIRY']).optional(),
+    reminderEnabled: z.boolean().optional(),
+    scheduledStartAt: isoDate,
+    timezone: z.string().trim().max(80).optional(),
+    note:            z.string().trim().max(300).optional(),
+  }),
+  z.object({
+    orderId: uuid,
+    action: z.literal('decline-consultation-request'),
     note:            z.string().trim().max(300).optional(),
   }),
   z.object({
     orderId: uuid,
     action: z.literal('request-fulfillment-payment'),
-    amount: z.number().int().positive().max(100_000_00),
+    amount: z.number().int().positive().max(MAX_MONEY_MINOR_UNITS),
     note: z.string().trim().max(300).optional(),
   }),
   z.object({
@@ -117,6 +177,8 @@ const BodySchema = z.discriminatedUnion('action', [
     targetStage:    z.enum(['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_COLLECTION', 'READY_FOR_DRAPE_DISPATCH']),
     note:           z.string().trim().min(10).max(300),
     photoUrl:       z.string().url().optional(),
+    photoUrls:      z.array(z.string().url()).max(6).optional(),
+    mediaFingerprints: z.array(z.string().trim().min(4).max(240)).max(6).optional(),
     trackingNumber: z.string().trim().max(50).optional(),
     carrier:        z.string().trim().max(50).optional(),
     fulfillmentProvider: z.string().trim().max(80).optional(),
@@ -134,6 +196,7 @@ const BodySchema = z.discriminatedUnion('action', [
     orderId: uuid,
     action:  z.literal('request-measurement-confirmation'),
     note:    z.string().trim().min(10).max(300),
+    fields:  z.array(z.string().trim().min(1).max(80)).max(20).optional(),
   }),
   z.object({
     orderId: uuid,
@@ -144,6 +207,23 @@ const BodySchema = z.discriminatedUnion('action', [
     orderId: uuid,
     action:  z.literal('confirm-fabric-received'),
     note:    z.string().trim().max(300).optional(),
+    photoUrl: z.string().url().optional(),
+  }),
+  z.object({
+    orderId: uuid,
+    action: z.literal('save-garment-qc'),
+    note: z.string().trim().min(10).max(500),
+    photoUrl: z.string().url().optional(),
+    unit: z.enum(['in', 'cm']).default('in'),
+    measurements: z.record(z.string(), z.number().positive().max(1000)).default({}),
+    checks: z.object({
+      seamsSecure: z.boolean().default(false),
+      measurementsChecked: z.boolean().default(false),
+      photoAttached: z.boolean().default(false),
+      readyForHandoff: z.boolean().default(false),
+    }).default({}),
+    confidence: z.enum(['PASS', 'NEEDS_REVIEW']).default('PASS'),
+    captureVersion: z.string().trim().max(40).optional(),
   }),
   z.object({
     orderId: uuid,
@@ -191,17 +271,63 @@ function nextQuoteExpiryIso() {
   return new Date(Date.now() + QUOTE_VALIDITY_HOURS * 60 * 60 * 1000).toISOString()
 }
 
+function validateScheduledStartAt(value: string | undefined, minLeadMinutes: number) {
+  if (!value) return 'Choose a consultation time before sending the request.'
+  const timestamp = new Date(value).getTime()
+  if (!Number.isFinite(timestamp)) return 'Choose a valid consultation time.'
+  const min = Date.now() + minLeadMinutes * 60 * 1000
+  if (timestamp < min) return `Choose a time at least ${minLeadMinutes} minutes from now.`
+  const max = Date.now() + 30 * 24 * 60 * 60 * 1000
+  if (timestamp > max) return 'Choose a consultation time within the next 30 days.'
+  return null
+}
+
+function jsonErrorResponse(cors: HeadersInit, status: number, code: string, error: string) {
+  return jsonResponse({ code, error }, status, cors)
+}
+
+function jsonResponse(body: Record<string, unknown>, status: number, cors: HeadersInit) {
+  if (typeof body.error === 'string' && typeof body.message !== 'string') {
+    body.message = body.error
+  }
+
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...cors, 'Content-Type': 'application/json' },
+  })
+}
+
+async function orderAlreadyScheduledForConsultation(
+  supabase: any,
+  orderId: string,
+  scheduledStartAt: string,
+) {
+  const { data } = await supabase
+    .from('orders')
+    .select('stage, special_note')
+    .eq('id', orderId)
+    .maybeSingle()
+
+  const consultation = parseOrderSupportMeta(data?.special_note ?? null).consultation
+  return data?.stage === 'CONSULTATION' &&
+    consultation?.status === 'SCHEDULED' &&
+    consultation.scheduledStartAt === scheduledStartAt
+}
+
 
 type Action =
   | 'send-quote'
   | 'decline-order'
   | 'request-consultation'
+  | 'approve-consultation'
+  | 'decline-consultation-request'
   | 'request-fulfillment-payment'
   | 'advance-stage'
   | 'confirm-collection'
   | 'request-measurement-confirmation'
   | 'confirm-fit-readiness'
   | 'confirm-fabric-received'
+  | 'save-garment-qc'
   | 'open-material-issue'
   | 'request-cancellation-review'
   | 'request-delivery-review'
@@ -256,8 +382,8 @@ declare const EdgeRuntime: {
 // Valid source stages for each advance-stage target
 const ADVANCE_VALID_FROM: Record<string, string[]> = {
   DESIGNING:            ['CONFIRMED'],
-  SOURCING:             ['CONFIRMED', 'DESIGNING'],
-  CUTTING:              ['CONFIRMED', 'DESIGNING', 'SOURCING'],
+  SOURCING:             ['DESIGNING'],
+  CUTTING:              ['DESIGNING', 'SOURCING'],
   SEWING:               ['CUTTING'],
   FINISHING:            ['SEWING'],
   READY_FOR_COLLECTION: ['FINISHING'],
@@ -270,7 +396,9 @@ const PRE_CUTTING_STAGES = ['PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYM
 const CUSTOMER_NOTIFICATION: Record<string, { title: string; body: string }> = {
   'send-quote':            { title: 'Quote received 💰',       body: 'Your tailor sent you a quote. Review it now.' },
   'decline-order':         { title: 'Order declined',           body: 'Your tailor was unable to accept this order.' },
-  'request-consultation':  { title: 'Consultation requested',   body: 'Your tailor wants to schedule a quick consultation first.' },
+  'request-consultation':  { title: 'Consultation scheduled',   body: 'Your tailor reserved a consultation slot. Review the time and pay first if a fee is required.' },
+  'approve-consultation':  { title: 'Consultation approved',    body: 'Your tailor approved and reserved the consultation slot. Pay the fee if required before the call.' },
+  'decline-consultation-request': { title: 'Consultation declined', body: 'Your tailor declined the consultation request but can still send a quote or message you.' },
   DESIGNING:               { title: 'Order update ✏️',          body: 'Your tailor is working through design details for your order.' },
   SOURCING:                { title: 'Order update 🧵',          body: 'Your tailor is sourcing materials for your order.' },
   CUTTING:                 { title: 'Order update ✂️',          body: 'Your tailor has started cutting the fabric.' },
@@ -281,6 +409,7 @@ const CUSTOMER_NOTIFICATION: Record<string, { title: string; body: string }> = {
   'request-measurement-confirmation': { title: 'Measurement check needed', body: 'Your tailor wants you to confirm your measurements before cutting starts.' },
   'confirm-fit-readiness': { title: 'Fit intake reviewed', body: 'Your tailor reviewed the guided fit intake attached to this order.' },
   'confirm-fabric-received': { title: 'Fabric received', body: 'Your tailor confirmed they received your fabric.' },
+  'save-garment-qc': { title: 'Quality check saved', body: 'Your tailor added a Drape Vision quality check to your order timeline.' },
   'open-material-issue': { title: 'Fabric issue needs your decision', body: 'Your tailor reviewed the fabric and needs your choice before production can continue.' },
   'request-cancellation-review': { title: 'Cancellation review requested', body: 'Your tailor asked Drape to review cancelling this order before handoff.' },
   'request-delivery-review': { title: 'Delivery review requested', body: 'Your tailor asked Drape to review a dispatch or delivery issue.' },
@@ -310,6 +439,26 @@ function customerNotificationForStage(targetStage: string, order: Pick<OrderRow,
   }
 
   return CUSTOMER_NOTIFICATION[targetStage]
+}
+
+function queueCustomerOrderEmail(
+  supabase: any,
+  order: OrderRow,
+  subject: string,
+  body: string,
+  evidenceImageUrl?: string | null,
+) {
+  if (!order.customer_id) return
+  EdgeRuntime.waitUntil(
+    sendOrderEventEmail(supabase, {
+      order,
+      recipientUserId: order.customer_id.toString(),
+      audience: 'CUSTOMER',
+      subject,
+      body,
+      evidenceImageUrl,
+    }),
+  )
 }
 
 /** Cryptographically random 4-digit collection code (1000–9999). */
@@ -347,6 +496,123 @@ async function auditFulfillmentHandoffBlocked(
   })
 }
 
+function isCustomOrder(order: Pick<OrderRow, 'order_kind'>) {
+  return order.order_kind === 'CUSTOM'
+}
+
+function uniquePhotoUrls(photoUrl?: string | null, photoUrls?: string[] | null) {
+  return [...new Set([...(photoUrls ?? []), photoUrl ?? ''].map((value) => value.trim()).filter(Boolean))]
+}
+
+function uniqueMediaFingerprints(values?: string[] | null) {
+  return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))]
+}
+
+async function findReusedProductionMedia(
+  supabase: any,
+  orderId: string,
+  mediaUrls: string[],
+  mediaFingerprints: string[],
+) {
+  const reused = new Set<string>()
+
+  if (mediaUrls.length > 0) {
+    const { data: updates, error: updatesError } = await supabase
+      .from('order_stage_updates')
+      .select('photo_url')
+      .eq('order_id', orderId)
+      .in('photo_url', mediaUrls)
+
+    if (updatesError) throw new Error(updatesError.message)
+    for (const row of updates ?? []) {
+      if (typeof row.photo_url === 'string' && row.photo_url.trim()) reused.add(row.photo_url.trim())
+    }
+  }
+
+  const { data: evidenceRows, error: evidenceError } = await supabase
+    .from('order_production_evidence')
+    .select('photo_urls, metadata')
+    .eq('order_id', orderId)
+    .limit(200)
+
+  if (evidenceError) throw new Error(evidenceError.message)
+
+  const mediaUrlSet = new Set(mediaUrls)
+  const fingerprintSet = new Set(mediaFingerprints)
+
+  for (const row of evidenceRows ?? []) {
+    const photoUrls = Array.isArray(row.photo_urls) ? row.photo_urls : []
+    for (const url of photoUrls) {
+      if (typeof url === 'string' && mediaUrlSet.has(url.trim())) reused.add(url.trim())
+    }
+
+    const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+      ? row.metadata as Record<string, unknown>
+      : {}
+    const storedFingerprints = Array.isArray(metadata.media_fingerprints)
+      ? metadata.media_fingerprints
+      : []
+    for (const fingerprint of storedFingerprints) {
+      if (typeof fingerprint === 'string' && fingerprintSet.has(fingerprint.trim())) {
+        reused.add(fingerprint.trim())
+      }
+    }
+  }
+
+  return [...reused]
+}
+
+async function readCustomFabricApprovalForCutting(supabase: any, orderId: string) {
+  const { data, error } = await supabase
+    .from('custom_order_details')
+    .select('fabric_approval_required, fabric_approval_status')
+    .eq('order_id', orderId)
+    .maybeSingle()
+
+  if (error) throw new Error(error.message)
+  return {
+    required: data?.fabric_approval_required === true,
+    status: typeof data?.fabric_approval_status === 'string' ? data.fabric_approval_status : null,
+  }
+}
+
+function customProductionStageForTarget(targetStage: string, deliveryMethod?: string | null): CustomProductionStageKey {
+  if (targetStage === 'SOURCING') return 'FABRIC'
+  if (targetStage === 'DESIGNING') return 'PRE_CUTTING'
+  if (targetStage === 'CUTTING') return 'CUTTING'
+  if (targetStage === 'SEWING') return 'SEWING'
+  if (targetStage === 'FINISHING') return 'FINISHING'
+  if (targetStage === 'READY_FOR_COLLECTION') return 'QUALITY_CHECK'
+  if (targetStage === 'READY_FOR_DRAPE_DISPATCH') return deliveryMethod === 'LOCAL_COLLECTION' ? 'QUALITY_CHECK' : 'DISPATCHED'
+  return 'PRE_CUTTING'
+}
+
+async function insertCustomProductionEvidence(
+  supabase: any,
+  input: {
+    orderId: string
+    stageKey: CustomProductionStageKey
+    note: string | null
+    photoUrls: string[]
+    actorId: string
+    metadata?: Record<string, unknown>
+  },
+) {
+  const { error } = await supabase
+    .from('order_production_evidence')
+    .insert({
+      order_id: input.orderId,
+      stage_key: input.stageKey,
+      note: input.note,
+      photo_urls: input.photoUrls,
+      actor_id: input.actorId,
+      actor_role: 'TAILOR',
+      metadata: input.metadata ?? {},
+    })
+
+  return error
+}
+
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
@@ -355,13 +621,13 @@ Deno.serve(async (req) => {
     const caller = await getAuthUser(req)
     if (!caller) {
       log('warn', FN, 'auth.unauthenticated')
-      return new Response('Unauthorized', { status: 401, headers: cors })
+      return jsonResponse({ error: 'Please sign in again before updating this order.' }, 401, cors)
     }
 
     const parsed = parseBody(BodySchema, await req.json())
     if (!parsed.ok) {
       log('warn', FN, 'validation.failed', { actor_id: caller.id, error: parsed.error })
-      return new Response(parsed.error, { status: 400, headers: cors })
+      return jsonResponse({ error: parsed.error }, 400, cors)
     }
 
     const body = parsed.data
@@ -384,7 +650,7 @@ Deno.serve(async (req) => {
         severity: 'warn',
         payload: { function: FN },
       })
-      return new Response('Too many requests', { status: 429, headers: cors })
+      return rateLimitExceededResponse(cors)
     }
 
     if (action === 'send-quote') {
@@ -396,7 +662,7 @@ Deno.serve(async (req) => {
 
       if (profileError) {
         log('error', FN, 'db.error', { actor_id: caller.id, action, error: profileError.message })
-        return new Response('Database error', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
       }
 
       const readiness = deriveTailorReadiness(profile)
@@ -431,11 +697,11 @@ Deno.serve(async (req) => {
 
     if (orderError) {
       log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: orderError.message })
-      return new Response('Database error', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
     }
 
     const order = orderData as unknown as OrderRow | null
-    if (!order) return new Response('Order not found', { status: 404, headers: cors })
+    if (!order) return jsonErrorResponse(cors, 404, 'ORDER_NOT_FOUND', 'This order could not be found anymore.')
 
     // Verify caller is the tailor on this order
     if (order.tailor_id?.toString() !== caller.id) {
@@ -448,7 +714,7 @@ Deno.serve(async (req) => {
         severity: 'warn',
         payload: { function: FN, action },
       })
-      return new Response('Forbidden', { status: 403, headers: cors })
+      return jsonErrorResponse(cors, 403, 'FORBIDDEN', 'This order is not available from your tailor account.')
     }
 
     const blockedNote = await rejectIfBlockedContact({
@@ -481,20 +747,19 @@ Deno.serve(async (req) => {
         )
       }
 
-      const source = snapshot.measurementSource === 'HELPER_GUIDED' ||
-        snapshot.measurementSource === 'TAILOR_CAPTURED' ||
-        snapshot.measurementSource === 'EXTERNAL_PRO_CAPTURED'
-        ? snapshot.measurementSource
-        : 'SELF_GUIDED'
+      const source = normalizeMeasurementSource(snapshot.measurementSource)
       const sourceLabel = MEASUREMENT_SOURCE_LABELS[source]
       const now = new Date().toISOString()
+      const confirmationFields = normalizeMeasurementConfirmationFields('fields' in body ? body.fields : [])
       const nextSnapshot = {
         ...snapshot,
         needsConfirmation: true,
         confirmationReason: body.note.trim(),
+        confirmationFields,
         confirmationRequestedAt: now,
         confirmedAt: null,
         confirmedBy: null,
+        confirmedFields: null,
       }
 
       const { error } = await supabase
@@ -504,13 +769,18 @@ Deno.serve(async (req) => {
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
-        return new Response('Database error', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
       }
 
       await supabase.from('order_stage_updates').insert({
         order_id: orderId,
         stage: order.stage,
-        note: buildMeasurementConfirmationRequestNote(body.note.trim(), sourceLabel),
+        note: buildMeasurementConfirmationRequestNote(
+          confirmationFields.length
+            ? `${body.note.trim()} Fields: ${confirmationFields.join(', ')}.`
+            : body.note.trim(),
+          sourceLabel,
+        ),
       })
 
       await audit(supabase, {
@@ -518,13 +788,14 @@ Deno.serve(async (req) => {
         actor_id: caller.id,
         actor_role: 'TAILOR',
         order_id: orderId,
-        payload: { stage: order.stage, measurement_source: source },
+        payload: { stage: order.stage, measurement_source: source, fields: confirmationFields },
       })
 
       if (order.customer_id) {
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.customer_id.toString(), {
             ...CUSTOMER_NOTIFICATION['request-measurement-confirmation'],
+            preferenceKey: 'orderUpdates',
             data: { orderId },
           })
         )
@@ -540,6 +811,13 @@ Deno.serve(async (req) => {
         return new Response(
           JSON.stringify({ error: `Cannot confirm fabric receipt from stage ${order.stage}` }),
           { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (isCustomOrder(order) && !body.photoUrl?.trim()) {
+        return new Response(
+          JSON.stringify({ error: 'Add a fabric receipt photo before confirming fabric was received.' }),
+          { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
 
@@ -572,14 +850,33 @@ Deno.serve(async (req) => {
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
-        return new Response('Database error', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
       }
 
       await supabase.from('order_stage_updates').insert({
         order_id: orderId,
         stage: order.stage,
         note: buildFabricReceivedNote(handoffLabel, body.note ?? null),
+        photo_url: body.photoUrl ?? null,
       })
+
+      if (isCustomOrder(order)) {
+        const evidenceError = await insertCustomProductionEvidence(supabase, {
+          orderId,
+          stageKey: 'FABRIC',
+          note: body.note?.trim() || 'Customer fabric received.',
+          photoUrls: uniquePhotoUrls(body.photoUrl),
+          actorId: caller.id,
+          metadata: {
+            fabric_source: order.fabric_source,
+            handoff_mode: handoffMode,
+          },
+        })
+        if (evidenceError) {
+          log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: evidenceError.message, surface: 'order_production_evidence' })
+          return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
+        }
+      }
 
       await audit(supabase, {
         event: 'fabric.received',
@@ -593,6 +890,7 @@ Deno.serve(async (req) => {
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.customer_id.toString(), {
             ...CUSTOMER_NOTIFICATION['confirm-fabric-received'],
+            preferenceKey: 'orderUpdates',
             data: { orderId },
           })
         )
@@ -638,7 +936,7 @@ Deno.serve(async (req) => {
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
-        return new Response('Database error', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
       }
 
       await supabase.from('order_stage_updates').insert({
@@ -659,6 +957,7 @@ Deno.serve(async (req) => {
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.customer_id.toString(), {
             ...CUSTOMER_NOTIFICATION['confirm-fit-readiness'],
+            preferenceKey: 'orderUpdates',
             data: { orderId },
           })
         )
@@ -667,6 +966,120 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ ok: true }), {
         headers: { ...cors, 'Content-Type': 'application/json' },
       })
+    }
+
+    if (action === 'save-garment-qc') {
+      const measurementEntries = Object.entries(body.measurements ?? {})
+        .filter(([, value]) => typeof value === 'number' && Number.isFinite(value) && value > 0)
+      const hasQcCheck = Object.values(body.checks ?? {}).some((value) => value === true)
+      const hasPhoto = Boolean(body.photoUrl?.trim())
+      const blockedStages = new Set(['CANCELLED', 'DECLINED', 'COMPLETED', 'DELIVERED', 'DISPUTED'])
+
+      const qcPreflight = runPreflight([
+        {
+          name: 'order_active_for_quality_check',
+          condition: !blockedStages.has(order.stage),
+          errorCode: 'ORDER_NOT_ACTIVE_FOR_QC',
+          message: 'This order is no longer active, so a quality check cannot be added.',
+          field: 'stage',
+          severity: 'BLOCKING',
+          actual: { stage: order.stage },
+        },
+        {
+          name: 'qc_has_evidence',
+          condition: measurementEntries.length > 0 || hasQcCheck || hasPhoto,
+          errorCode: 'QC_EVIDENCE_REQUIRED',
+          message: 'Add at least one measurement, checklist item, or proof photo before saving quality control.',
+          field: 'measurements',
+          severity: 'BLOCKING',
+          actual: {
+            measurementCount: measurementEntries.length,
+            hasPhoto,
+            hasQcCheck,
+          },
+        },
+      ])
+
+      if (!qcPreflight.passed) {
+        await logPreflightFailure(supabase, qcPreflight, {
+          operation: 'save_garment_qc',
+          entityType: 'order',
+          entityId: orderId,
+          actorId: caller.id,
+          actorRole: 'TAILOR',
+          orderId,
+          source: FN,
+          metadata: { stage: order.stage, action },
+        })
+        return preflightFailureResponse(qcPreflight, cors, 409)
+      }
+
+      const now = new Date().toISOString()
+      const normalizedMeasurements = Object.fromEntries(measurementEntries)
+      const note = `Drape Vision QC: ${body.note.trim()}`
+      const photoUrls = uniquePhotoUrls(body.photoUrl)
+
+      const stageUpdate = await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: order.stage,
+        note,
+        photo_url: photoUrls[0] ?? null,
+      })
+
+      if (stageUpdate.error) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: stageUpdate.error.message, surface: 'order_stage_updates' })
+        return jsonResponse({ error: 'We could not save this quality check right now. Please try again.' }, 500, cors)
+      }
+
+      const evidenceError = await insertCustomProductionEvidence(supabase, {
+        orderId,
+        stageKey: 'QUALITY_CHECK',
+        note: body.note.trim(),
+        photoUrls,
+        actorId: caller.id,
+        metadata: {
+          source: 'DRAPE_VISION_GARMENT_QC',
+          order_stage: order.stage,
+          capture_version: body.captureVersion ?? null,
+          recorded_at: now,
+          measurement_unit: body.unit,
+          measurements: normalizedMeasurements,
+          checks: body.checks,
+          confidence: body.confidence,
+        },
+      })
+
+      if (evidenceError) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: evidenceError.message, surface: 'order_production_evidence' })
+        return jsonResponse({ error: 'We could not save this quality check right now. Please try again.' }, 500, cors)
+      }
+
+      await audit(supabase, {
+        event: 'order.quality_check_saved',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        order_id: orderId,
+        payload: {
+          function: FN,
+          stage: order.stage,
+          source: 'DRAPE_VISION_GARMENT_QC',
+          measurement_count: measurementEntries.length,
+          has_photo: hasPhoto,
+          confidence: body.confidence,
+        },
+      })
+
+      if (order.customer_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.customer_id.toString(), {
+            ...CUSTOMER_NOTIFICATION['save-garment-qc'],
+            preferenceKey: 'orderUpdates',
+            data: { orderId },
+          })
+        )
+      }
+
+      return jsonResponse({ ok: true, measurementCount: measurementEntries.length, hasPhoto }, 200, cors)
     }
 
     if (action === 'open-material-issue') {
@@ -710,7 +1123,42 @@ Deno.serve(async (req) => {
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
-        return new Response('Database error', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
+      }
+
+      if (isCustomOrder(order)) {
+        const { error: detailError } = await supabase
+          .from('custom_order_details')
+          .update({
+            fabric_approval_status: 'UNSUITABLE',
+            fabric_marked_unsuitable_at: now,
+          })
+          .eq('order_id', orderId)
+
+        if (detailError) {
+          log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: detailError.message, surface: 'custom_order_details' })
+          return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
+        }
+
+        await createOrRefreshOpsIssue(supabase, {
+          issueType: 'FABRIC_APPROVAL',
+          severity: 'HIGH',
+          source: FN,
+          actorId: caller.id,
+          actorRole: 'TAILOR',
+          orderId,
+          userId: caller.id,
+          stage: order.stage,
+          title: 'Fabric marked unsuitable',
+          description: `Tailor flagged customer-provided fabric as unsuitable: ${reasonLabel}.`,
+          recommendedAction: 'Review the tailor note, customer response, and fabric evidence before allowing production to continue.',
+          dedupeKey: `fabric-unsuitable:${orderId}`,
+          metadata: {
+            reason: body.reason,
+            reason_label: reasonLabel,
+            from_stage: order.stage,
+          },
+        })
       }
 
       await supabase.from('order_stage_updates').insert({
@@ -732,6 +1180,7 @@ Deno.serve(async (req) => {
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.customer_id.toString(), {
             ...CUSTOMER_NOTIFICATION['open-material-issue'],
+            preferenceKey: 'orderUpdates',
             data: { orderId },
           })
         )
@@ -797,7 +1246,7 @@ Deno.serve(async (req) => {
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
-        return new Response('Database error', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
       }
 
       await supabase.from('order_stage_updates').insert({
@@ -840,6 +1289,7 @@ Deno.serve(async (req) => {
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.customer_id.toString(), {
             ...CUSTOMER_NOTIFICATION['request-cancellation-review'],
+            preferenceKey: 'orderUpdates',
             data: { orderId },
           })
         )
@@ -891,7 +1341,7 @@ Deno.serve(async (req) => {
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
-        return new Response('Database error', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
       }
 
       await supabase.from('order_stage_updates').insert({
@@ -934,6 +1384,7 @@ Deno.serve(async (req) => {
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.customer_id.toString(), {
             ...CUSTOMER_NOTIFICATION['request-delivery-review'],
+            preferenceKey: 'orderUpdates',
             data: { orderId },
           })
         )
@@ -968,6 +1419,37 @@ Deno.serve(async (req) => {
           { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
+      const lockedOrderCurrency = normalizeAccountCurrency(order.currency ?? order.quoted_currency)
+      if (!lockedOrderCurrency) {
+        log('error', FN, 'quote.currency_missing', {
+          actor_id: caller.id,
+          order_id: orderId,
+          action,
+          orderCurrency: order.currency ?? null,
+          quotedCurrency: order.quoted_currency ?? null,
+        })
+        return new Response(
+          JSON.stringify({ error: 'This order currency needs review before quoting. Please contact Drape support.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+      if (quoteCurrency !== lockedOrderCurrency) {
+        log('warn', FN, 'quote.currency_mismatch', {
+          actor_id: caller.id,
+          order_id: orderId,
+          action,
+          requestedCurrency: quoteCurrency,
+          orderCurrency: order.currency ?? null,
+          quotedCurrency: order.quoted_currency ?? null,
+          lockedOrderCurrency,
+        })
+        return new Response(
+          JSON.stringify({
+            error: `This order is locked to ${lockedOrderCurrency}. Refresh the order and send the quote in ${lockedOrderCurrency}.`,
+          }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
       const parsedDate = new Date(completionDate)
       const customerDeadline = order.deadline ? new Date(order.deadline) : null
       const supportMeta = parseOrderSupportMeta(order.special_note)
@@ -985,10 +1467,7 @@ Deno.serve(async (req) => {
           error: customerUserError.message,
           surface: 'users.region_code',
         })
-        return new Response('Could not resolve the customer tax region.', {
-          status: 500,
-          headers: { ...cors, 'Content-Type': 'application/json' },
-        })
+        return jsonErrorResponse(cors, 500, 'TAX_REGION_UNAVAILABLE', 'Could not resolve the customer tax region.')
       }
 
       const customerRegionCode =
@@ -1113,8 +1592,10 @@ Deno.serve(async (req) => {
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
-        return new Response('Database error', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
       }
+
+      await releaseConsultationSlot(supabase, orderId, 'COMPLETED')
 
       await supabase.from('order_stage_updates').insert({
         order_id: orderId,
@@ -1136,8 +1617,15 @@ Deno.serve(async (req) => {
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.customer_id.toString(), {
             ...CUSTOMER_NOTIFICATION['send-quote'],
+            preferenceKey: 'quotes',
             data: { orderId },
           })
+        )
+        queueCustomerOrderEmail(
+          supabase,
+          order,
+          'Quote received',
+          'Your tailor sent a quote. Review the amount, delivery timing, and terms inside Drape before you pay.',
         )
       }
 
@@ -1212,15 +1700,24 @@ Deno.serve(async (req) => {
           action,
           error: error instanceof Error ? error.message : String(error),
         })
-        return new Response('Database error', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
       }
+
+      await releaseConsultationSlot(supabase, orderId)
 
       if (order.customer_id) {
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.customer_id.toString(), {
             ...CUSTOMER_NOTIFICATION['decline-order'],
+            preferenceKey: 'orderUpdates',
             data: { orderId },
           })
+        )
+        queueCustomerOrderEmail(
+          supabase,
+          order,
+          'Order declined',
+          'Your tailor could not take this order. If any payment had already settled, Drape will handle the refund path before closing it out.',
         )
       }
 
@@ -1253,15 +1750,37 @@ Deno.serve(async (req) => {
         noShowPolicy,
         expiryPolicy,
         reminderEnabled,
+        scheduledStartAt,
+        timezone,
       } = body as Extract<typeof body, { action: 'request-consultation' }>
+      const scheduledError = validateScheduledStartAt(scheduledStartAt, 60)
+      if (scheduledError) {
+        return new Response(
+          JSON.stringify({ error: scheduledError }),
+          { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const booking = await reserveConsultationSlot(supabase, {
+        orderId,
+        tailorId: caller.id,
+        customerId: String(order.customer_id),
+        scheduledStartAt: scheduledStartAt!,
+      })
+      if (!booking.ok) {
+        return jsonErrorResponse(cors, booking.status, booking.code, booking.error)
+      }
+
       const supportMeta = parseOrderSupportMeta(order.special_note)
       const feeAmount = typeof consultationFee === 'number' && consultationFee > 0 ? consultationFee : null
       const feeCurrency = feeAmount
         ? normalizeAccountCurrency(currency ?? order.currency ?? order.quoted_currency) ?? 'USD'
         : normalizeAccountCurrency(order.currency ?? order.quoted_currency)
+      const now = new Date().toISOString()
       const consultationMeta = {
         ...(supportMeta.consultation ?? {}),
-        status: 'REQUESTED' as const,
+        status: 'SCHEDULED' as const,
+        requestedBy: 'TAILOR' as const,
         feeMode: feeAmount ? 'PAID' as const : 'FREE' as const,
         feeAmount,
         feeCurrency,
@@ -1277,10 +1796,21 @@ Deno.serve(async (req) => {
         expiryPolicy: expiryPolicy ?? 'EXPIRES_IN_14_DAYS',
         reminderEnabled: reminderEnabled ?? true,
         requestNote: body.note?.trim() || null,
-        requestedAt: new Date().toISOString(),
+        requestedAt: now,
+        proposedStartAt: scheduledStartAt!,
+        scheduledStartAt: scheduledStartAt!,
+        scheduledEndAt: booking.scheduledEndAt,
+        timezone: timezone?.trim() || null,
+        approvedAt: now,
+        approvedBy: caller.id,
+        declinedAt: null,
+        declinedBy: null,
+        declineReason: null,
+        reminder30SentAt: null,
+        reminder5SentAt: null,
       }
 
-      const { error } = await supabase
+      const { data: updatedOrder, error } = await supabase
         .from('orders')
         .update({
           stage: 'CONSULTATION',
@@ -1291,19 +1821,39 @@ Deno.serve(async (req) => {
             ...supportMeta,
             consultation: consultationMeta,
           }),
-          stage_updated_at: new Date().toISOString(),
+          stage_updated_at: now,
         })
         .eq('id', orderId)
+        .eq('stage', 'PENDING_QUOTE')
+        .select('id')
+        .maybeSingle()
 
       if (error) {
+        if (booking.reservationState === 'created') await releaseConsultationSlot(supabase, orderId)
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
-        return new Response('Database error', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
+      }
+
+      if (!updatedOrder?.id) {
+        if (await orderAlreadyScheduledForConsultation(supabase, orderId, scheduledStartAt!)) {
+          return new Response(JSON.stringify({ ok: true, idempotent: true }), {
+            headers: { ...cors, 'Content-Type': 'application/json' },
+          })
+        }
+        if (booking.reservationState === 'created') await releaseConsultationSlot(supabase, orderId)
+        return jsonErrorResponse(
+          cors,
+          409,
+          'ORDER_STATE_CHANGED',
+          'This order changed while you were scheduling the consultation. Refresh the order and try again if consultation is still needed.',
+        )
       }
 
       await supabase.from('order_stage_updates').insert({
         order_id: orderId,
         stage: 'CONSULTATION',
-        note: body.note?.trim() || null,
+        note: body.note?.trim()
+          || `Tailor scheduled a consultation for ${scheduledStartAt}. Customer must pay first if a fee is required.`,
       })
 
       await audit(supabase, {
@@ -1320,8 +1870,257 @@ Deno.serve(async (req) => {
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.customer_id.toString(), {
             ...CUSTOMER_NOTIFICATION['request-consultation'],
+            preferenceKey: 'orderUpdates',
             data: { orderId },
           })
+        )
+        queueCustomerOrderEmail(
+          supabase,
+          order,
+          'Consultation scheduled',
+          'Your tailor reserved a consultation slot. Review the time in Drape and pay the consultation fee first if one is required.',
+        )
+      }
+
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // ── approve-consultation ─────────────────────────────────────────────────
+    if (action === 'approve-consultation') {
+      if (order.stage !== 'CONSULTATION') {
+        return new Response(
+          JSON.stringify({ error: `Cannot approve consultation from stage ${order.stage}` }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const supportMeta = parseOrderSupportMeta(order.special_note)
+      const existingConsultation = supportMeta.consultation
+      if (existingConsultation?.requestedBy !== 'CUSTOMER' || existingConsultation.status !== 'REQUESTED') {
+        return new Response(
+          JSON.stringify({ error: 'This order is not waiting on a customer consultation request approval.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const {
+        consultationFee = null,
+        currency,
+        creditFeeTowardOrder,
+        paymentTiming,
+        reschedulePolicy,
+        noShowPolicy,
+        expiryPolicy,
+        reminderEnabled,
+        scheduledStartAt,
+        timezone,
+      } = body as Extract<typeof body, { action: 'approve-consultation' }>
+      const scheduledError = validateScheduledStartAt(scheduledStartAt, 60)
+      if (scheduledError) {
+        return new Response(
+          JSON.stringify({ error: scheduledError }),
+          { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const booking = await reserveConsultationSlot(supabase, {
+        orderId,
+        tailorId: caller.id,
+        customerId: String(order.customer_id),
+        scheduledStartAt,
+      })
+      if (!booking.ok) {
+        return jsonErrorResponse(cors, booking.status, booking.code, booking.error)
+      }
+
+      const feeAmount = typeof consultationFee === 'number' && consultationFee > 0 ? consultationFee : null
+      const feeCurrency = feeAmount
+        ? normalizeAccountCurrency(currency ?? order.currency ?? order.quoted_currency) ?? 'USD'
+        : normalizeAccountCurrency(order.currency ?? order.quoted_currency)
+      const now = new Date().toISOString()
+      const nextConsultationMeta = {
+        ...existingConsultation,
+        status: 'SCHEDULED' as const,
+        feeMode: feeAmount ? 'PAID' as const : 'FREE' as const,
+        feeAmount,
+        feeCurrency,
+        feeCreditable: feeAmount ? creditFeeTowardOrder === true : false,
+        feeCreditedTowardQuote: false,
+        paymentProvider: null,
+        paymentIntentId: null,
+        paymentCheckoutUrl: null,
+        paymentTiming: feeAmount ? (paymentTiming ?? 'BEFORE_CALL_STARTS') : 'WAIVED_OR_FREE' as const,
+        paidAt: null,
+        reschedulePolicy: reschedulePolicy ?? 'ONE_FREE_RESCHEDULE',
+        noShowPolicy: noShowPolicy ?? (feeAmount ? 'FEE_FORFEITED' : 'CASE_BY_CASE'),
+        expiryPolicy: expiryPolicy ?? 'EXPIRES_IN_14_DAYS',
+        reminderEnabled: reminderEnabled ?? true,
+        requestNote: body.note?.trim() || existingConsultation.requestNote || null,
+        scheduledStartAt,
+        scheduledEndAt: booking.scheduledEndAt,
+        timezone: timezone?.trim() || existingConsultation.timezone || null,
+        approvedAt: now,
+        approvedBy: caller.id,
+        declinedAt: null,
+        declinedBy: null,
+        declineReason: null,
+        reminder30SentAt: null,
+        reminder5SentAt: null,
+      }
+
+      const { data: updatedOrder, error } = await supabase
+        .from('orders')
+        .update({
+          consultation_fee: feeAmount,
+          currency: feeAmount ? feeCurrency : normalizeAccountCurrency(order.currency) ?? normalizeAccountCurrency(order.quoted_currency) ?? 'USD',
+          quoted_currency: feeAmount ? feeCurrency : normalizeAccountCurrency(order.quoted_currency) ?? null,
+          special_note: serializeOrderSupportMeta({
+            ...supportMeta,
+            consultation: nextConsultationMeta,
+          }),
+          stage_updated_at: now,
+        })
+        .eq('id', orderId)
+        .eq('stage', 'CONSULTATION')
+        .eq('special_note', order.special_note ?? '')
+        .select('id')
+        .maybeSingle()
+
+      if (error) {
+        if (booking.reservationState === 'created') await releaseConsultationSlot(supabase, orderId)
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
+        return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
+      }
+
+      if (!updatedOrder?.id) {
+        if (await orderAlreadyScheduledForConsultation(supabase, orderId, scheduledStartAt)) {
+          return new Response(JSON.stringify({ ok: true, idempotent: true }), {
+            headers: { ...cors, 'Content-Type': 'application/json' },
+          })
+        }
+        if (booking.reservationState === 'created') await releaseConsultationSlot(supabase, orderId)
+        return jsonErrorResponse(
+          cors,
+          409,
+          'ORDER_STATE_CHANGED',
+          'This consultation request changed while you were approving it. Refresh the order before choosing a time.',
+        )
+      }
+
+      await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: 'CONSULTATION',
+        note: body.note?.trim()
+          || `Tailor approved and scheduled the consultation for ${scheduledStartAt}. Customer must pay first if a fee is required.`,
+      })
+
+      await audit(supabase, {
+        event: 'consultation.approved',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        order_id: orderId,
+        payload: {
+          requested_by: 'CUSTOMER',
+          scheduled_start_at: scheduledStartAt,
+          has_fee: feeAmount != null,
+        },
+      })
+
+      if (order.customer_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.customer_id.toString(), {
+            ...CUSTOMER_NOTIFICATION['approve-consultation'],
+            preferenceKey: 'orderUpdates',
+            data: { orderId },
+          }),
+        )
+        queueCustomerOrderEmail(
+          supabase,
+          order,
+          'Consultation approved',
+          'Your tailor approved and reserved your consultation slot. Pay the fee if required before the call opens.',
+        )
+      }
+
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // ── decline-consultation-request ─────────────────────────────────────────
+    if (action === 'decline-consultation-request') {
+      if (order.stage !== 'CONSULTATION') {
+        return new Response(
+          JSON.stringify({ error: `Cannot decline consultation request from stage ${order.stage}` }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const supportMeta = parseOrderSupportMeta(order.special_note)
+      const existingConsultation = supportMeta.consultation
+      if (existingConsultation?.requestedBy !== 'CUSTOMER' || existingConsultation.status !== 'REQUESTED') {
+        return new Response(
+          JSON.stringify({ error: 'This order is not waiting on a customer consultation request.' }),
+          { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const now = new Date().toISOString()
+      const { error } = await supabase
+        .from('orders')
+        .update({
+          stage: 'PENDING_QUOTE',
+          consultation_fee: null,
+          special_note: serializeOrderSupportMeta({
+            ...supportMeta,
+            consultation: {
+              ...existingConsultation,
+              status: 'DECLINED' as const,
+              declinedAt: now,
+              declinedBy: caller.id,
+              declineReason: body.note?.trim() || null,
+            },
+          }),
+          stage_updated_at: now,
+        })
+        .eq('id', orderId)
+
+      if (error) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
+        return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
+      }
+
+      await releaseConsultationSlot(supabase, orderId)
+
+      await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: 'PENDING_QUOTE',
+        note: body.note?.trim() || 'Tailor declined the consultation request and returned to quote review.',
+      })
+
+      await audit(supabase, {
+        event: 'consultation.declined',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        order_id: orderId,
+        payload: { requested_by: 'CUSTOMER' },
+      })
+
+      if (order.customer_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.customer_id.toString(), {
+            ...CUSTOMER_NOTIFICATION['decline-consultation-request'],
+            preferenceKey: 'orderUpdates',
+            data: { orderId },
+          }),
+        )
+        queueCustomerOrderEmail(
+          supabase,
+          order,
+          'Consultation declined',
+          'Your tailor declined the consultation request. They can still send a quote or continue by message if the order is a fit.',
         )
       }
 
@@ -1336,21 +2135,93 @@ Deno.serve(async (req) => {
       const {
         targetStage,
         photoUrl,
+        photoUrls,
         trackingNumber,
         carrier,
         fulfillmentProvider,
         fulfillmentReference,
         fulfillmentContactName,
         fulfillmentContactPhone,
+        mediaFingerprints,
       } = body as Extract<typeof body, { action: 'advance-stage' }>
       const normalizedTrackingNumber = trackingNumber?.trim().toUpperCase() ?? ''
       const normalizedProvider = fulfillmentProvider?.trim() || carrier?.trim() || ''
       const normalizedReference = fulfillmentReference?.trim() ?? ''
       const normalizedContactName = fulfillmentContactName?.trim() ?? ''
       const normalizedContactPhone = normalizeStoredPhone(fulfillmentContactPhone)
+      const productionPhotoUrls = uniquePhotoUrls(photoUrl, photoUrls)
+      const productionMediaFingerprints = uniqueMediaFingerprints(mediaFingerprints)
+      const customStageKey = isCustomOrder(order)
+        ? customProductionStageForTarget(targetStage, order.delivery_method)
+        : null
+      const customStageRequirements = customStageKey ? CUSTOM_PRODUCTION_STAGE_REQUIREMENTS[customStageKey] : null
 
       // Idempotent: if already in the target stage, the previous request succeeded
       if (order.stage === targetStage) {
+        if (customStageKey === 'FABRIC' && order.fabric_source === 'TAILOR_SOURCES' && productionPhotoUrls.length > 0) {
+          const { error: detailError } = await supabase
+            .from('custom_order_details')
+            .update({
+              fabric_approval_status: 'PENDING_CUSTOMER_APPROVAL',
+              fabric_approval_requested_at: new Date().toISOString(),
+            })
+            .eq('order_id', orderId)
+
+          if (detailError) {
+            log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: detailError.message, surface: 'custom_order_details' })
+            return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
+          }
+
+          await supabase.from('order_stage_updates').insert({
+            order_id: orderId,
+            stage: targetStage,
+            note: body.note.trim(),
+            photo_url: productionPhotoUrls[0] ?? null,
+          })
+
+          const evidenceError = await insertCustomProductionEvidence(supabase, {
+            orderId,
+            stageKey: 'FABRIC',
+            note: body.note.trim(),
+            photoUrls: productionPhotoUrls,
+            actorId: caller.id,
+            metadata: {
+              order_stage: targetStage,
+              fabric_source: order.fabric_source,
+              resubmission: true,
+              media_fingerprints: productionMediaFingerprints,
+              media_count: productionPhotoUrls.length,
+            },
+          })
+
+          if (evidenceError) {
+            log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: evidenceError.message, surface: 'order_production_evidence' })
+            return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
+          }
+
+          await audit(supabase, {
+            event: 'fabric.sourced_submitted',
+            actor_id: caller.id,
+            actor_role: 'TAILOR',
+            order_id: orderId,
+            payload: { stage: order.stage, resubmission: true },
+          })
+
+          if (order.customer_id) {
+            EdgeRuntime.waitUntil(
+              sendPushToUser(supabase, order.customer_id.toString(), {
+                ...CUSTOMER_NOTIFICATION.SOURCING,
+                preferenceKey: 'orderUpdates',
+                data: { orderId },
+              })
+            )
+          }
+
+          return new Response(JSON.stringify({ ok: true, fabricApprovalStatus: 'PENDING_CUSTOMER_APPROVAL' }), {
+            headers: { ...cors, 'Content-Type': 'application/json' },
+          })
+        }
+
         const responseBody: Record<string, unknown> = { ok: true, idempotent: true }
         // Re-fetch collection_code if needed so UI still gets it on retry
         if (targetStage === 'READY_FOR_COLLECTION') {
@@ -1363,6 +2234,218 @@ Deno.serve(async (req) => {
         })
       }
 
+      const validFrom = validAdvanceStages(order, targetStage)
+      const cuttingSnapshot = targetStage === 'CUTTING'
+        ? parseMeasurementSnapshot(order.customer_measurements_snapshot)
+        : null
+      const cuttingSupportMeta = targetStage === 'CUTTING'
+        ? parseOrderSupportMeta(order.special_note)
+        : null
+      const cuttingMaterialIssue = cuttingSupportMeta?.materialIssue
+      const waitingOnTailorSourcing =
+        cuttingMaterialIssue?.status === 'CUSTOMER_RESPONDED' &&
+        cuttingMaterialIssue.response === 'ASK_TAILOR_TO_SOURCE'
+      let reusedProductionMedia: string[] = []
+      let customFabricApproval: { required: boolean; status: string | null } | null = null
+      try {
+        if (order.stage !== targetStage && (productionPhotoUrls.length > 0 || productionMediaFingerprints.length > 0)) {
+          reusedProductionMedia = await findReusedProductionMedia(
+            supabase,
+            orderId,
+            productionPhotoUrls,
+            productionMediaFingerprints,
+          )
+        }
+        if (targetStage === 'CUTTING' && order.fabric_source === 'TAILOR_SOURCES' && isCustomOrder(order)) {
+          customFabricApproval = await readCustomFabricApprovalForCutting(supabase, orderId)
+        }
+      } catch (error) {
+        log('error', FN, 'db.error', {
+          actor_id: caller.id,
+          order_id: orderId,
+          action,
+          target_stage: targetStage,
+          error: error instanceof Error ? error.message : String(error),
+          surface: 'production_preflight_lookup',
+        })
+        return jsonResponse({ error: 'We could not verify this stage update right now. Please try again.' }, 500, cors)
+      }
+      const dispatchRecipientPhoneError =
+        targetStage === 'READY_FOR_DRAPE_DISPATCH'
+          ? validateRecipientPhone(order.recipient_phone)
+          : null
+      const advancePreflight = runPreflight([
+        {
+          name: 'ready_made_stage_supported',
+          condition: !(isReadyMadeOrder(order) && ['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING'].includes(targetStage)),
+          errorCode: 'READY_MADE_STAGE_UNSUPPORTED',
+          message: 'Ready-made orders skip tailoring production stages. Move this order into preparation instead.',
+          field: 'targetStage',
+          severity: 'BLOCKING',
+          actual: { orderKind: order.order_kind, targetStage },
+        },
+        {
+          name: 'next_stage_valid',
+          condition: validFrom.includes(order.stage),
+          errorCode: 'STAGE_OUT_OF_ORDER',
+          message: `You need to complete ${validFrom.join(' or ') || 'the previous stage'} before moving to this step.`,
+          field: 'targetStage',
+          severity: 'BLOCKING',
+          actual: { currentStage: order.stage, targetStage, validFrom },
+        },
+        {
+          name: 'production_photo_present',
+          condition: !customStageKey || !customStageRequirements?.photoRequired || productionPhotoUrls.length >= customStageRequirements.minPhotoCount,
+          errorCode: 'PHOTO_REQUIRED',
+          message: customStageKey && customStageRequirements
+            ? `${CUSTOM_PRODUCTION_STAGE_LABELS[customStageKey]} requires ${customStageRequirements.minPhotoCount} fresh proof media item${customStageRequirements.minPhotoCount === 1 ? '' : 's'} before it can be marked complete.`
+            : 'Please upload a fresh photo or video of this stage before continuing.',
+          field: 'photoUrl',
+          severity: 'BLOCKING',
+          actual: { photoCount: productionPhotoUrls.length, requiredPhotoCount: customStageRequirements?.minPhotoCount ?? 0 },
+        },
+        {
+          name: 'production_media_not_reused',
+          condition: reusedProductionMedia.length === 0,
+          errorCode: 'PRODUCTION_MEDIA_REUSED',
+          message: 'Use a fresh photo or video for this stage. This media is already attached to the order timeline.',
+          field: 'photoUrl',
+          severity: 'BLOCKING',
+          actual: { reusedCount: reusedProductionMedia.length },
+        },
+        {
+          name: 'collection_stage_matches_method',
+          condition: targetStage !== 'READY_FOR_COLLECTION' || order.delivery_method === 'LOCAL_COLLECTION',
+          errorCode: 'COLLECTION_METHOD_MISMATCH',
+          message: 'This order is not set for pickup. Use the matching delivery handoff instead.',
+          field: 'delivery_method',
+          severity: 'BLOCKING',
+          actual: { deliveryMethod: order.delivery_method, targetStage },
+        },
+        {
+          name: 'dispatch_stage_matches_method',
+          condition: targetStage !== 'READY_FOR_DRAPE_DISPATCH' || order.delivery_method !== 'LOCAL_COLLECTION',
+          errorCode: 'DISPATCH_METHOD_MISMATCH',
+          message: 'This order is set for local collection. Mark it ready for collection instead.',
+          field: 'delivery_method',
+          severity: 'BLOCKING',
+          actual: { deliveryMethod: order.delivery_method, targetStage },
+        },
+        {
+          name: 'dispatch_address_present',
+          condition: targetStage !== 'READY_FOR_DRAPE_DISPATCH' || !!order.delivery_address?.trim(),
+          errorCode: 'DELIVERY_ADDRESS_MISSING',
+          message: 'Delivery address is missing on this order. Ask the customer to update it before Drape dispatch.',
+          field: 'delivery_address',
+          severity: 'BLOCKING',
+          actual: { hasDeliveryAddress: !!order.delivery_address?.trim() },
+        },
+        {
+          name: 'dispatch_recipient_name_present',
+          condition: targetStage !== 'READY_FOR_DRAPE_DISPATCH' || !!order.recipient_name?.trim(),
+          errorCode: 'RECIPIENT_NAME_MISSING',
+          message: 'Recipient name is missing on this order. Ask the customer to update it before Drape dispatch.',
+          field: 'recipient_name',
+          severity: 'BLOCKING',
+          actual: { hasRecipientName: !!order.recipient_name?.trim() },
+        },
+        {
+          name: 'dispatch_recipient_phone_valid',
+          condition: targetStage !== 'READY_FOR_DRAPE_DISPATCH' || !dispatchRecipientPhoneError,
+          errorCode: 'RECIPIENT_PHONE_INVALID',
+          message: dispatchRecipientPhoneError ?? 'Recipient phone is missing on this order. Ask the customer to update it before Drape dispatch.',
+          field: 'recipient_phone',
+          severity: 'BLOCKING',
+          actual: { recipientPhone: order.recipient_phone ?? null },
+        },
+        {
+          name: 'dispatch_photo_present',
+          condition: targetStage !== 'READY_FOR_DRAPE_DISPATCH' || productionPhotoUrls.length >= 1,
+          errorCode: 'DISPATCH_PROOF_MISSING',
+          message: 'Add fresh packed-order proof before marking this order ready for Drape dispatch.',
+          field: 'photoUrl',
+          severity: 'BLOCKING',
+          actual: { photoCount: productionPhotoUrls.length },
+        },
+        {
+          name: 'measurements_confirmed_before_cutting',
+          condition: targetStage !== 'CUTTING' || cuttingSnapshot?.needsConfirmation !== true,
+          errorCode: 'MEASUREMENTS_CONFIRMATION_REQUIRED',
+          message: 'Measurements still need customer confirmation before cutting can start.',
+          field: 'customer_measurements_snapshot',
+          severity: 'BLOCKING',
+          actual: { needsConfirmation: cuttingSnapshot?.needsConfirmation ?? null },
+        },
+        {
+          name: 'fabric_received_before_cutting',
+          condition: targetStage !== 'CUTTING' || order.fabric_source !== 'CUSTOMER_SUPPLIES' || !!cuttingSupportMeta?.fabricReceivedAt || waitingOnTailorSourcing,
+          errorCode: 'FABRIC_NOT_RECEIVED',
+          message: 'Confirm that the customer fabric has been received before cutting starts.',
+          field: 'fabric_source',
+          severity: 'BLOCKING',
+          actual: {
+            fabricSource: order.fabric_source ?? null,
+            fabricReceivedAt: cuttingSupportMeta?.fabricReceivedAt ?? null,
+            waitingOnTailorSourcing,
+          },
+        },
+        {
+          name: 'tailor_sourced_fabric_approved_before_cutting',
+          condition:
+            targetStage !== 'CUTTING' ||
+            order.fabric_source !== 'TAILOR_SOURCES' ||
+            !isCustomOrder(order) ||
+            (customFabricApproval?.required === true && customFabricApproval?.status === 'APPROVED'),
+          errorCode: 'FABRIC_APPROVAL_REQUIRED',
+          message: 'Wait for the customer to approve the sourced fabric before cutting starts.',
+          field: 'fabric_approval_status',
+          severity: 'BLOCKING',
+          actual: {
+            fabricSource: order.fabric_source ?? null,
+            fabricApprovalRequired: customFabricApproval?.required ?? null,
+            fabricApprovalStatus: customFabricApproval?.status ?? null,
+          },
+        },
+        {
+          name: 'material_issue_resolved_before_cutting',
+          condition: targetStage !== 'CUTTING' || !materialIssueBlocksCutting(cuttingSupportMeta),
+          errorCode: 'MATERIAL_ISSUE_OPEN',
+          message: 'This order has an open material issue. Resolve it before cutting starts.',
+          field: 'special_note',
+          severity: 'BLOCKING',
+          actual: { materialIssueStatus: cuttingMaterialIssue?.status ?? null },
+        },
+        {
+          name: 'fit_profile_reviewed_before_cutting',
+          condition: targetStage !== 'CUTTING' || !fitProfileNeedsTailorReview(cuttingSupportMeta),
+          errorCode: 'FIT_PROFILE_REVIEW_REQUIRED',
+          message: 'Review the guided fit intake or request measurement confirmation before cutting starts.',
+          field: 'special_note',
+          severity: 'BLOCKING',
+          actual: { requiresTailorReview: cuttingSupportMeta?.fitProfile?.requiresTailorReview ?? null },
+        },
+      ])
+
+      if (!advancePreflight.passed) {
+        await logPreflightFailure(supabase, advancePreflight, {
+          operation: 'production_stage_update',
+          entityType: 'order',
+          entityId: orderId,
+          orderId,
+          actorId: caller.id,
+          actorRole: 'TAILOR',
+          userId: caller.id,
+          source: FN,
+          metadata: {
+            currentStage: order.stage,
+            targetStage,
+            deliveryMethod: order.delivery_method ?? null,
+            orderKind: order.order_kind ?? null,
+          },
+        })
+        return preflightFailureResponse(advancePreflight, cors, 409)
+      }
+
       if (isReadyMadeOrder(order) && ['DESIGNING', 'SOURCING', 'CUTTING', 'SEWING'].includes(targetStage)) {
         return new Response(
           JSON.stringify({ error: 'Ready-made orders skip tailoring production stages. Move this order into preparation instead.' }),
@@ -1370,11 +2453,19 @@ Deno.serve(async (req) => {
         )
       }
 
-      const validFrom = validAdvanceStages(order, targetStage)
       if (!validFrom.includes(order.stage)) {
         return new Response(
           JSON.stringify({ error: `Cannot advance to ${targetStage} from stage ${order.stage}` }),
           { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (customStageKey && customStageRequirements?.photoRequired && productionPhotoUrls.length < customStageRequirements.minPhotoCount) {
+        return new Response(
+          JSON.stringify({
+            error: `${CUSTOM_PRODUCTION_STAGE_LABELS[customStageKey]} requires ${customStageRequirements.minPhotoCount} production photo${customStageRequirements.minPhotoCount === 1 ? '' : 's'} before it can be marked complete.`,
+          }),
+          { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
 
@@ -1395,7 +2486,7 @@ Deno.serve(async (req) => {
 
         if (pickupDetailsError) {
           log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: pickupDetailsError.message })
-          return new Response('Database error', { status: 500, headers: cors })
+          return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
         }
 
         if (!pickupDetails?.pickup_address?.trim()) {
@@ -1452,7 +2543,7 @@ Deno.serve(async (req) => {
         }
       }
 
-      if (targetStage === 'READY_FOR_DRAPE_DISPATCH' && !photoUrl?.trim()) {
+      if (targetStage === 'READY_FOR_DRAPE_DISPATCH' && productionPhotoUrls.length < 1) {
         await auditFulfillmentHandoffBlocked(supabase, caller.id, order, 'dispatch_proof_missing')
         return new Response(
           JSON.stringify({ error: 'Add a packed-order photo before marking this order ready for Drape dispatch.' }),
@@ -1495,6 +2586,21 @@ Deno.serve(async (req) => {
         }
       }
 
+      if (customStageKey === 'FABRIC' && order.fabric_source === 'TAILOR_SOURCES') {
+        const { error: detailError } = await supabase
+          .from('custom_order_details')
+          .update({
+            fabric_approval_status: 'PENDING_CUSTOMER_APPROVAL',
+            fabric_approval_requested_at: new Date().toISOString(),
+          })
+          .eq('order_id', orderId)
+
+        if (detailError) {
+          log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: detailError.message, surface: 'custom_order_details' })
+          return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
+        }
+      }
+
       const updates: Record<string, unknown> = {
         stage: targetStage,
         stage_updated_at: new Date().toISOString(),
@@ -1514,15 +2620,40 @@ Deno.serve(async (req) => {
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, target_stage: targetStage, error: error.message })
-        return new Response('Database error', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
       }
 
       await supabase.from('order_stage_updates').insert({
         order_id: orderId,
         stage: targetStage,
         note: body.note?.trim() || null,
-        photo_url: photoUrl ?? null,
+        photo_url: productionPhotoUrls[0] ?? null,
       })
+
+      if (customStageKey) {
+        const evidenceError = await insertCustomProductionEvidence(supabase, {
+          orderId,
+          stageKey: customStageKey,
+          note: body.note.trim(),
+          photoUrls: productionPhotoUrls,
+          actorId: caller.id,
+          metadata: {
+            order_stage: targetStage,
+            from_stage: order.stage,
+            fabric_source: order.fabric_source ?? null,
+            delivery_method: order.delivery_method ?? null,
+            tracking_number: normalizedTrackingNumber || null,
+            carrier: normalizedProvider || null,
+            media_fingerprints: productionMediaFingerprints,
+            media_count: productionPhotoUrls.length,
+          },
+        })
+
+        if (evidenceError) {
+          log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: evidenceError.message, surface: 'order_production_evidence' })
+          return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
+        }
+      }
 
       await audit(supabase, {
         event: 'order.stage_changed',
@@ -1542,8 +2673,9 @@ Deno.serve(async (req) => {
       const stageNotif = customerNotificationForStage(targetStage, order)
       if (stageNotif && order.customer_id) {
         EdgeRuntime.waitUntil(
-          sendPushToUser(supabase, order.customer_id.toString(), { ...stageNotif, data: { orderId } })
+          sendPushToUser(supabase, order.customer_id.toString(), { ...stageNotif, preferenceKey: 'orderUpdates', data: { orderId } })
         )
+        queueCustomerOrderEmail(supabase, order, stageNotif.title, stageNotif.body, productionPhotoUrls[0] ?? null)
 
         const stageSms = buildCustomerStageSms({
           id: order.id,
@@ -1617,7 +2749,7 @@ Deno.serve(async (req) => {
 
         if (resetError) {
           log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: resetError.message })
-          return new Response('Database error', { status: 500, headers: cors })
+          return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
         }
 
         attempts = 0
@@ -1672,7 +2804,7 @@ Deno.serve(async (req) => {
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
-        return new Response('Database error', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
       }
 
       await supabase.from('order_stage_updates').insert({
@@ -1695,6 +2827,7 @@ Deno.serve(async (req) => {
           sendPushToUser(supabase, order.customer_id.toString(), {
             title: 'Order collected 🎉',
             body: 'Your order has been collected. Hope you love it!',
+            preferenceKey: 'orderUpdates',
             data: { orderId },
           })
         )
@@ -1705,10 +2838,10 @@ Deno.serve(async (req) => {
       })
     }
 
-    return new Response('Unknown action', { status: 400, headers: cors })
+    return jsonErrorResponse(cors, 400, 'UNKNOWN_ACTION', 'This order action is not supported.')
 
   } catch (err) {
     log('error', FN, 'unhandled_exception', { error: String(err) })
-    return new Response('Internal error', { status: 500, headers: cors })
+    return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
   }
 })

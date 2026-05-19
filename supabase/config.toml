@@ -37,6 +37,16 @@ enable_signup = true
 double_confirm_changes = true
 enable_confirmations = true
 
+[auth.email.notification.email_changed]
+enabled = true
+subject = "Your Drape email address was changed"
+content_path = "./templates/email_changed_notification.html"
+
+[auth.email.notification.password_changed]
+enabled = true
+subject = "Your Drape password was changed"
+content_path = "./templates/password_changed_notification.html"
+
 [auth.external.google]
 enabled = true
 client_id = "env(GOOGLE_CLIENT_ID)"
@@ -62,6 +72,12 @@ verify_jwt = false
 [functions.create-consultation-room]
 verify_jwt = false
 
+[functions.create-order-call-room]
+verify_jwt = false
+
+[functions.currency-context]
+verify_jwt = false
+
 [functions.delivery-webhook]
 verify_jwt = false
 
@@ -75,6 +91,15 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.custom-order-action]
+verify_jwt = false
+
+[functions.account-profile-action]
+verify_jwt = false
+
+[functions.account-security-action]
+verify_jwt = false
+
+[functions.account-security-notification]
 verify_jwt = false
 
 [functions.ready-made-order-action]
@@ -98,10 +123,16 @@ verify_jwt = false
 [functions.message-action]
 verify_jwt = false
 
+[functions.handoff-support-action]
+verify_jwt = false
+
 [functions.saved-tailor-action]
 verify_jwt = false
 
 [functions.request-account-deletion]
+verify_jwt = false
+
+[functions.reauth-proof-action]
 verify_jwt = false
 
 [functions.request-data-access]
@@ -110,16 +141,40 @@ verify_jwt = false
 [functions.payment-action]
 verify_jwt = false
 
+[functions.payout-account-action]
+verify_jwt = false
+
+[functions.payout-setup-request]
+verify_jwt = false
+
+[functions.refund-order-payments]
+verify_jwt = false
+
+[functions.release-order-payouts]
+verify_jwt = false
+
 [functions.stripe-webhook]
 verify_jwt = false
 
 [functions.paystack-webhook]
 verify_jwt = false
 
+[functions.service-health]
+verify_jwt = false
+
 [functions.expire-pending-payments]
 verify_jwt = false
 
 [functions.expire-quotes]
+verify_jwt = false
+
+[functions.escalate-handoff-issues]
+verify_jwt = false
+
+[functions.escalate-production-stalls]
+verify_jwt = false
+
+[functions.send-consultation-reminders]
 verify_jwt = false
 
 [functions.auto-release]

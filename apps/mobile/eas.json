@@ -11,7 +11,9 @@
       "env": {
         "EXPO_PUBLIC_APP_VARIANT": "development",
         "EXPO_PUBLIC_SUPABASE_ENV": "development",
-        "EXPO_PUBLIC_SUPABASE_PROJECT_REF": "pqptfuqogvrajozfsqzi"
+        "EXPO_PUBLIC_SUPABASE_PROJECT_REF": "pqptfuqogvrajozfsqzi",
+        "EXPO_PUBLIC_PROJECT_ID": "4729d6f8-273a-43a9-abdf-6e4ca31ce83d",
+        "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       }
     },
     "preview": {
@@ -20,7 +22,9 @@
       "env": {
         "EXPO_PUBLIC_APP_VARIANT": "preview",
         "EXPO_PUBLIC_SUPABASE_ENV": "preview",
-        "EXPO_PUBLIC_SUPABASE_PROJECT_REF": "pqptfuqogvrajozfsqzi"
+        "EXPO_PUBLIC_SUPABASE_PROJECT_REF": "pqptfuqogvrajozfsqzi",
+        "EXPO_PUBLIC_PROJECT_ID": "4729d6f8-273a-43a9-abdf-6e4ca31ce83d",
+        "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       },
       "ios": { "simulator": false },
       "android": { "buildType": "apk" }
@@ -29,20 +33,15 @@
       "channel": "production",
       "env": {
         "EXPO_PUBLIC_APP_VARIANT": "production",
-        "EXPO_PUBLIC_SUPABASE_ENV": "production"
+        "EXPO_PUBLIC_SUPABASE_ENV": "production",
+        "EXPO_PUBLIC_PROJECT_ID": "4729d6f8-273a-43a9-abdf-6e4ca31ce83d"
       },
-      "ios": { "buildType": "release" },
       "android": { "buildType": "app-bundle" },
       "autoIncrement": true
     }
   },
   "submit": {
     "production": {
-      "ios": {
-        "appleId": "",
-        "ascAppId": "",
-        "appleTeamId": ""
-      },
       "android": {
         "serviceAccountKeyPath": "./google-service-account.json",
         "track": "internal"

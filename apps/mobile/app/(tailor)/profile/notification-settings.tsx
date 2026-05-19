@@ -21,15 +21,19 @@ import { goBackOrFallback } from '@/lib/navigation'
 type NotifPrefs = {
   newOrders: boolean
   messages: boolean
+  paymentReleased: boolean
+  lowStockAlerts: boolean
   reviews: boolean
-  promotions: boolean
+  platformUpdates: boolean
 }
 
 const DEFAULT_PREFS: NotifPrefs = {
   newOrders: true,
   messages: true,
+  paymentReleased: true,
+  lowStockAlerts: true,
   reviews: true,
-  promotions: false,
+  platformUpdates: false,
 }
 
 function PrefRow({
@@ -54,7 +58,7 @@ function PrefRow({
         onValueChange={onChange}
         disabled={disabled}
         trackColor={{ false: Colors.lightGrey, true: Colors.needleGreen }}
-        thumbColor={Colors.white}
+        thumbColor={Colors.textInverse}
       />
     </View>
   )
@@ -69,7 +73,16 @@ export default function TailorNotificationSettingsScreen() {
 
   useEffect(() => {
     const stored = user?.user_metadata?.notif_prefs
-    if (stored) setPrefs({ ...DEFAULT_PREFS, ...stored })
+    if (stored) {
+      const legacy = stored as Partial<NotifPrefs> & { promotions?: boolean }
+      setPrefs({
+        ...DEFAULT_PREFS,
+        ...legacy,
+        platformUpdates: typeof legacy.platformUpdates === 'boolean'
+          ? legacy.platformUpdates
+          : legacy.promotions ?? DEFAULT_PREFS.platformUpdates,
+      })
+    }
   }, [user?.user_metadata?.notif_prefs])
 
   async function toggle(key: keyof NotifPrefs, value: boolean) {
@@ -125,6 +138,24 @@ export default function TailorNotificationSettingsScreen() {
               onChange={(v) => toggle('newOrders', v)}
               disabled={saving}
             />
+            <View style={styles.divider} />
+            <PrefRow
+              icon="dollar-sign"
+              title="Payment released"
+              description="Alert when Drape releases earnings or a payout needs your attention."
+              value={prefs.paymentReleased}
+              onChange={(v) => toggle('paymentReleased', v)}
+              disabled={saving}
+            />
+            <View style={styles.divider} />
+            <PrefRow
+              icon="alert-circle"
+              title="Low stock alerts"
+              description="Alerts when ready-made inventory is almost sold out."
+              value={prefs.lowStockAlerts}
+              onChange={(v) => toggle('lowStockAlerts', v)}
+              disabled={saving}
+            />
           </View>
         </View>
 
@@ -156,15 +187,15 @@ export default function TailorNotificationSettingsScreen() {
           <View style={styles.card}>
             <PrefRow
               icon="zap"
-              title="Tips & promotions"
-              description="Platform updates, tailoring tips, and Drape announcements."
-              value={prefs.promotions}
-              onChange={(v) => toggle('promotions', v)}
+              title="Platform updates"
+              description="Drape announcements, policy changes, and tailoring tips."
+              value={prefs.platformUpdates}
+              onChange={(v) => toggle('platformUpdates', v)}
               disabled={saving}
             />
           </View>
           <Text style={styles.hint}>
-            Transactional notifications about your orders are always sent.
+            Critical account, safety, support, and dispute alerts may still be sent even when routine alerts are off.
           </Text>
         </View>
 

@@ -3,7 +3,7 @@ import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { deriveTailorReadiness } from '../_shared/tailor-readiness.ts'
 import { parseBody, z } from '../_shared/validate.ts'
 
@@ -21,7 +21,11 @@ const BodySchema = z.object({
 })
 
 function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
-  return new Response(JSON.stringify(body), {
+  const payload =
+    typeof body.error === 'string' && typeof body.message !== 'string'
+      ? { ...body, message: body.error }
+      : body
+  return new Response(JSON.stringify(payload), {
     status,
     headers: { ...headers, 'Content-Type': 'application/json' },
   })
@@ -35,13 +39,13 @@ Deno.serve(async (req) => {
     const caller = await getAuthUser(req)
     if (!caller) {
       log('warn', FN, 'auth.unauthenticated')
-      return new Response('Unauthorized', { status: 401, headers: cors })
+      return jsonResponse({ error: 'Please sign in again before submitting payout setup details.' }, 401, cors)
     }
 
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
     if (!parsed.ok) {
       log('warn', FN, 'validation.failed', { actor_id: caller.id, error: parsed.error })
-      return new Response(parsed.error, { status: 400, headers: cors })
+      return jsonResponse({ error: parsed.error }, 400, cors)
     }
 
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
@@ -54,7 +58,7 @@ Deno.serve(async (req) => {
         severity: 'warn',
         payload: { function: FN },
       })
-      return new Response('Too many requests', { status: 429, headers: cors })
+      return rateLimitExceededResponse(cors)
     }
 
     const { data: profile, error: profileError } = await supabase
@@ -65,11 +69,11 @@ Deno.serve(async (req) => {
 
     if (profileError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: profileError.message })
-      return new Response('Database error', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not load your tailor profile right now. Please try again.' }, 500, cors)
     }
 
     if (!profile?.id) {
-      return new Response('Tailor profile not found.', { status: 404, headers: cors })
+      return jsonResponse({ error: 'Finish tailor setup before submitting payout details.' }, 404, cors)
     }
 
     const readiness = deriveTailorReadiness(profile)
@@ -104,7 +108,7 @@ Deno.serve(async (req) => {
 
     if (existingRequestError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: existingRequestError.message })
-      return new Response('Database error', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not check your current payout setup request right now. Please try again.' }, 500, cors)
     }
 
     if (existingRequest?.id) {
@@ -132,7 +136,7 @@ Deno.serve(async (req) => {
 
     if (createRequestError || !createdRequest?.id) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: createRequestError?.message ?? 'create failed' })
-      return new Response('Could not save payout setup details.', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not save payout setup details right now. Please try again.' }, 500, cors)
     }
 
     await audit(supabase, {
@@ -157,6 +161,6 @@ Deno.serve(async (req) => {
     )
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return new Response('Internal server error', { status: 500, headers: cors })
+    return jsonResponse({ error: 'Something went wrong submitting payout setup details. Please try again.' }, 500, cors)
   }
 })

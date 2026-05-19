@@ -18,9 +18,9 @@
  *      Table: disputes  |  Event: INSERT + UPDATE
  *      → Dispute opened confirmation, resolution notice
  *
- *   4. id-verification-email
- *      Table: tailor_profiles  |  Event: UPDATE  (verification decision changes)
- *      → Approval / rejection notice to tailor
+ *   Verification decision emails are sent by handle-verification-decision.
+ *   Do not send them from database webhooks, or ops decisions will duplicate
+ *   customer-facing mail.
  *
  * Deploy:
  *   supabase functions deploy send-email --project-ref <ref>
@@ -127,22 +127,6 @@ function disputeResolvedEmail(displayName: string, ref: string, resolution: stri
   <p style="color:#555;line-height:1.6"><strong>Outcome:</strong> ${outcome}</p>
   ${resolution ? `<p style="color:#555;line-height:1.6"><strong>Resolution note:</strong> ${resolution}</p>` : ''}
   <p style="margin-top:32px;font-size:12px;color:#aaa">© Drape Ltd. If you have questions, reply to this email.</p>
-</div>`
-}
-
-function idVerifiedEmail(displayName: string, approved: boolean): string {
-  const headline = approved ? 'ID verification approved' : 'ID verification — action required'
-  const body = approved
-    ? 'Your ID has been verified. Your profile is now eligible to go live on Drape.'
-    : 'We were unable to verify your ID document. Please re-submit a clear photo of a valid government-issued ID in your profile settings.'
-  return `
-<div style="font-family:sans-serif;max-width:520px;margin:0 auto;color:#1a1a2e">
-  <img src="${APP_URL}/logo.png" alt="Drape" width="80" style="margin:32px 0 16px"/>
-  <h1 style="font-size:22px;font-weight:700;margin:0 0 8px">${headline}</h1>
-  <p style="color:#555;line-height:1.6">Hi ${displayName},</p>
-  <p style="color:#555;line-height:1.6">${body}</p>
-  <a href="${APP_URL}" style="display:inline-block;margin-top:16px;padding:12px 24px;background:#2d6a4f;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Open Drape</a>
-  <p style="margin-top:32px;font-size:12px;color:#aaa">© Drape Ltd.</p>
 </div>`
 }
 
@@ -281,10 +265,12 @@ Deno.serve(async (req) => {
     }
 
     // ── Tailor profile UPDATE — ID verification decision ──────────────────────
+    // The canonical verification workflow sends approval / rejection emails
+    // directly from handle-verification-decision so the rejection reason can be
+    // included and the audit trail stays attached to the ops action.
     if (table === 'tailor_profiles' && type === 'UPDATE') {
-      const profile = record
       const prevStatus = old_record?.id_verification_status
-      const nextStatus = profile.id_verification_status
+      const nextStatus = record?.id_verification_status
 
       if (prevStatus === nextStatus) return new Response('ok')
 
@@ -292,16 +278,6 @@ Deno.serve(async (req) => {
       const rejected = nextStatus === 'REJECTED'
 
       if (!approved && !rejected) return new Response('ok')
-
-      const { data: user } = await supabase
-        .from('users').select('email, display_name').eq('id', profile.user_id).single()
-      if (user?.email) {
-        await sendEmail(
-          user.email,
-          approved ? 'Your ID has been verified — Drape' : 'ID verification — action needed',
-          idVerifiedEmail(user.display_name ?? 'there', approved),
-        )
-      }
       return new Response('ok')
     }
 

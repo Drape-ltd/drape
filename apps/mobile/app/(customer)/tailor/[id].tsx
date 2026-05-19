@@ -1,21 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  FlatList, ActivityIndicator, Alert, Dimensions, NativeSyntheticEvent, NativeScrollEvent, Modal,
+  FlatList, Alert, Dimensions, NativeSyntheticEvent, NativeScrollEvent, Modal,
+  TextInput, KeyboardAvoidingView, Platform, ActivityIndicator,
 } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { Image as ExpoImage } from 'expo-image'
 import { Feather } from '@expo/vector-icons'
-import { useRefreshOnFocus, useTailorPublic } from '@/lib/queries'
+import { ResizeMode, Video } from 'expo-av'
+import { useRefreshOnFocus, useTailorPublic, useWishlistCollections } from '@/lib/queries'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth, useUserRole } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { useCurrency, formatAmount, type CurrencyCode } from '@/lib/currency'
-import { TierBadgeChip, StarRating, Tag, Button } from '@/components/ui'
+import { RemoteImage, TierBadgeChip, StarRating, Tag, Button, SkeletonBlock } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { goBackOrFallback } from '@/lib/navigation'
+import { hapticLight } from '@/lib/haptics'
+import { getTailorPriceMinMajor } from '@drape/shared/tailor-setup'
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
 const HERO_HEIGHT = 264
@@ -39,7 +42,9 @@ type TailorProfile = {
   currency: string
   priceRangeMin: number | null
   priceRangeMax: number | null
+  avatarUrl: string | null
   portfolioPhotos: string[]
+  portfolioVideos: string[]
   supportsCustomOrders: boolean
   supportsReadyMade: boolean
   pickupAvailable: boolean
@@ -89,9 +94,12 @@ export default function TailorProfileScreen() {
   const [failedHeroImages, setFailedHeroImages] = useState<string[]>([])
   const [portfolioPreviewIndex, setPortfolioPreviewIndex] = useState<number | null>(null)
   const [portfolioViewerIndex, setPortfolioViewerIndex] = useState(0)
+  const [previewVideoUrl, setPreviewVideoUrl] = useState<string | null>(null)
   const [showPortfolioModal, setShowPortfolioModal] = useState(false)
   const [showReviewsModal, setShowReviewsModal] = useState(false)
   const [showStylesModal, setShowStylesModal] = useState(false)
+  const [wishlistPickerOpen, setWishlistPickerOpen] = useState(false)
+  const [newWishlistName, setNewWishlistName] = useState('')
   const { currency, rates } = useCurrency()
   const {
     data,
@@ -100,6 +108,7 @@ export default function TailorProfileScreen() {
     isFetching,
     refetch,
   } = useTailorPublic(role === 'CUSTOMER' ? id : undefined, role === 'CUSTOMER' ? user?.id : undefined)
+  const { data: wishlistCollections = [], refetch: refetchWishlists } = useWishlistCollections(role === 'CUSTOMER' ? user?.id : undefined)
   const profile = (data?.profile ?? null) as TailorProfile | null
   const reviews = (data?.reviews ?? []) as Review[]
   const isSaved = savedOverride ?? data?.isSaved ?? false
@@ -114,31 +123,63 @@ export default function TailorProfileScreen() {
     setSavedOverride(null)
   }, [id, data?.isSaved])
 
-  async function toggleSave() {
+  async function saveToWishlist(input: { collectionId?: string; collectionName?: string }) {
     if (!user?.id || savingHeart) return
     setSavingHeart(true)
     try {
-      if (isSaved) {
+      const { error } = await invokeFunction('saved-tailor-action', {
+        body: {
+          action: 'save-tailor',
+          tailorProfileId: id,
+          collectionId: input.collectionId,
+          collectionName: input.collectionName,
+        },
+      })
+      if (error) throw error
+      setSavedOverride(true)
+      setWishlistPickerOpen(false)
+      setNewWishlistName('')
+      hapticLight()
+      void refetchWishlists()
+    } catch (error) {
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. We could not update your wishlists yet. Retry when the signal improves.'
+        : await readFunctionErrorMessage(error, 'Could not update your wishlists right now. Please try again in a moment.')
+      Alert.alert('Wishlist not updated', message)
+    } finally {
+      setSavingHeart(false)
+    }
+  }
+
+  async function toggleSave() {
+    if (!user?.id || savingHeart) return
+    if (isSaved) {
+      setSavingHeart(true)
+      try {
         const { error } = await invokeFunction('saved-tailor-action', {
           body: { action: 'unsave-by-profile', tailorProfileId: id },
         })
         if (error) throw error
         setSavedOverride(false)
-      } else {
-        const { error } = await invokeFunction('saved-tailor-action', {
-          body: { action: 'save', tailorProfileId: id },
-        })
-        if (error) throw error
-        setSavedOverride(true)
+        hapticLight()
+        void refetchWishlists()
+      } catch (error) {
+        const message = isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. We could not update your saved tailors yet. Retry when the signal improves.'
+          : await readFunctionErrorMessage(error, 'Could not update your saved tailors right now. Please try again in a moment.')
+        Alert.alert('Could not update wishlist', message)
+      } finally {
+        setSavingHeart(false)
       }
-    } catch (error) {
-      const message = isLikelyConnectivityIssue(error)
-        ? 'Connection looks weak. We could not update your saved tailors yet. Retry when the signal improves.'
-        : await readFunctionErrorMessage(error, 'Could not update your saved tailors right now. Please try again in a moment.')
-      Alert.alert('Error', message)
-    } finally {
-      setSavingHeart(false)
+      return
     }
+
+    if (wishlistCollections.length === 1) {
+      await saveToWishlist({ collectionId: wishlistCollections[0].id })
+      return
+    }
+
+    setWishlistPickerOpen(true)
   }
 
   function onCarouselScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
@@ -160,17 +201,29 @@ export default function TailorProfileScreen() {
     setTimeout(() => setPortfolioPreviewIndex(index), 150)
   }
 
+  function openVideoPreview(url: string) {
+    setShowPortfolioModal(false)
+    setTimeout(() => setPreviewVideoUrl(url), 150)
+  }
+
   if (isLoading && !data) {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Seller profile</Text>
-            <ActivityIndicator color={Colors.needleGreen} size="large" />
-            <Text style={styles.stateTitle}>Loading this profile…</Text>
-            <Text style={styles.stateHint}>
-              We’re pulling together the profile, portfolio, and trust signals so you can decide clearly.
-            </Text>
+            <View style={styles.profileSkeleton}>
+              <SkeletonBlock style={styles.profileSkeletonHero} />
+              <View style={styles.profileSkeletonBody}>
+                <SkeletonBlock style={styles.profileSkeletonTitle} />
+                <SkeletonBlock style={styles.profileSkeletonLine} />
+                <View style={styles.profileSkeletonStats}>
+                  <SkeletonBlock style={styles.profileSkeletonStat} />
+                  <SkeletonBlock style={styles.profileSkeletonStat} />
+                  <SkeletonBlock style={styles.profileSkeletonStat} />
+                </View>
+              </View>
+            </View>
           </View>
         </View>
       </SafeAreaView>
@@ -227,21 +280,38 @@ export default function TailorProfileScreen() {
   }
 
   const portfolioImages = Array.from(new Set(profile.portfolioPhotos.filter((url) => typeof url === 'string' && url.length > 0)))
-  const heroImages = portfolioImages.filter((url) => !failedHeroImages.includes(url))
+  const portfolioVideos = Array.from(new Set(profile.portfolioVideos.filter((url) => typeof url === 'string' && url.length > 0)))
+  const heroSourceImages = portfolioImages.length > 0
+    ? portfolioImages
+    : (profile.avatarUrl ? [profile.avatarUrl] : [])
+  const heroImages = heroSourceImages.filter((url) => !failedHeroImages.includes(url))
   const pricingCurrency = (profile.currency ?? 'USD') as CurrencyCode
-  const priceLabel = (profile.priceRangeMin && profile.priceRangeMax)
-    ? `${formatAmount(profile.priceRangeMin, pricingCurrency, currency, rates)} to ${formatAmount(profile.priceRangeMax, pricingCurrency, currency, rates)}`
-    : null
+  const minimumUsefulPriceMinor = getTailorPriceMinMajor(pricingCurrency) * 100
+  const priceRangeMin = profile.priceRangeMin
+  const priceRangeMax = profile.priceRangeMax
+  const hasUsefulPriceRange =
+    priceRangeMin != null &&
+    priceRangeMax != null &&
+    priceRangeMin >= minimumUsefulPriceMinor &&
+    priceRangeMax >= priceRangeMin
+  const priceLabel = hasUsefulPriceRange
+    ? `${formatAmount(priceRangeMin, pricingCurrency, currency, rates)} to ${formatAmount(priceRangeMax, pricingCurrency, currency, rates)}`
+    : 'Custom quote after brief'
   const originalPriceLabel =
-    priceLabel && pricingCurrency !== currency
-      ? `${formatAmount(profile.priceRangeMin ?? 0, pricingCurrency, pricingCurrency, rates)} to ${formatAmount(profile.priceRangeMax ?? 0, pricingCurrency, pricingCurrency, rates)}`
+    hasUsefulPriceRange && pricingCurrency !== currency
+      ? `${formatAmount(priceRangeMin, pricingCurrency, pricingCurrency, rates)} to ${formatAmount(priceRangeMax, pricingCurrency, pricingCurrency, rates)}`
       : null
   const isFullyBooked = profile.availability === 'FULLY_BOOKED'
-  const portfolioCount = profile.portfolioPhotos.length
+  const portfolioCount = portfolioImages.length + portfolioVideos.length
   const reviewSummary: ReviewSummary = {
     average: reviews.length > 0 ? reviews.reduce((sum, row) => sum + row.rating, 0) / reviews.length : profile.avgRating,
     count: reviews.length > 0 ? reviews.length : profile.totalReviews,
   }
+  const reviewBreakdown = [5, 4, 3, 2, 1].map((rating) => {
+    const count = reviews.filter((review) => review.rating === rating).length
+    const percent = reviews.length > 0 ? count / reviews.length : 0
+    return { rating, count, percent }
+  })
 
   return (
       <SafeAreaView style={styles.safe} edges={[]}>
@@ -261,14 +331,21 @@ export default function TailorProfileScreen() {
                 onScroll={onCarouselScroll}
                 scrollEventThrottle={16}
                 renderItem={({ item }) => (
-                  <ExpoImage
-                    source={item}
+                  <RemoteImage
+                    uri={item}
+                    bucket="portfolio-photos"
                     style={styles.heroImage}
                     contentFit="cover"
                     transition={150}
-                    onError={() => {
+                    surface="customer_tailor_profile_hero"
+                    onLoadError={() => {
                       setFailedHeroImages((prev) => (prev.includes(item) ? prev : [...prev, item]))
                     }}
+                    fallback={(
+                      <View style={[styles.heroImage, styles.heroPlaceholder]}>
+                        <Feather name="image" size={42} color={Colors.needleGreen} />
+                      </View>
+                    )}
                   />
                 )}
               />
@@ -283,7 +360,7 @@ export default function TailorProfileScreen() {
             </>
           ) : (
             <View style={[styles.heroImage, styles.heroPlaceholder]}>
-              <Text style={styles.heroEmoji}>🧵</Text>
+              <Feather name="image" size={42} color={Colors.needleGreen} />
             </View>
           )}
 
@@ -293,14 +370,16 @@ export default function TailorProfileScreen() {
               <Text style={styles.backBtnText}>←</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.heartBtn}
+              style={[styles.heartBtn, isSaved && styles.heartBtnSaved]}
               onPress={(event) => {
                 event.stopPropagation()
                 void toggleSave()
               }}
               disabled={savingHeart}
+              accessibilityRole="button"
+              accessibilityLabel={isSaved ? 'Remove tailor from saved' : 'Save tailor'}
             >
-              <Text style={styles.heartBtnText}>{isSaved ? '❤️' : '🤍'}</Text>
+              <Feather name="heart" size={19} color={isSaved ? Colors.textInverse : Colors.midGrey} />
             </TouchableOpacity>
           </View>
 
@@ -499,6 +578,26 @@ export default function TailorProfileScreen() {
         ) : null}
       </View>
 
+      <WishlistPickerModal
+        visible={wishlistPickerOpen}
+        collections={wishlistCollections}
+        newWishlistName={newWishlistName}
+        saving={savingHeart}
+        onChangeNewWishlistName={setNewWishlistName}
+        onClose={() => {
+          setWishlistPickerOpen(false)
+          setNewWishlistName('')
+        }}
+        onSelect={(collectionId) => {
+          void saveToWishlist({ collectionId })
+        }}
+        onCreate={() => {
+          const name = newWishlistName.trim()
+          if (!name) return
+          void saveToWishlist({ collectionName: name })
+        }}
+      />
+
       <Modal
         visible={portfolioPreviewIndex !== null}
         transparent
@@ -526,7 +625,14 @@ export default function TailorProfileScreen() {
                 }}
                 renderItem={({ item }) => (
                   <View style={styles.previewSlide}>
-                    <ExpoImage source={item} style={styles.previewImage} contentFit="contain" transition={150} />
+                    <RemoteImage
+                      uri={item}
+                      bucket="portfolio-photos"
+                      style={styles.previewImage}
+                      contentFit="contain"
+                      transition={150}
+                      surface="customer_tailor_portfolio_preview"
+                    />
                   </View>
                 )}
               />
@@ -542,6 +648,28 @@ export default function TailorProfileScreen() {
         </View>
       </Modal>
 
+      <Modal
+        visible={!!previewVideoUrl}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPreviewVideoUrl(null)}
+      >
+        <View style={styles.previewBackdrop}>
+          <TouchableOpacity style={styles.previewClose} onPress={() => setPreviewVideoUrl(null)}>
+            <Text style={styles.previewCloseText}>Close</Text>
+          </TouchableOpacity>
+          {previewVideoUrl ? (
+            <Video
+              source={{ uri: previewVideoUrl }}
+              style={styles.previewVideo}
+              resizeMode={ResizeMode.CONTAIN}
+              useNativeControls
+              shouldPlay
+            />
+          ) : null}
+        </View>
+      </Modal>
+
       <Modal visible={showPortfolioModal} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowPortfolioModal(false)}>
         <SafeAreaView style={styles.modalSafe}>
           <View style={styles.modalHeader}>
@@ -552,7 +680,7 @@ export default function TailorProfileScreen() {
             <View style={{ width: 48 }} />
           </View>
           <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
-            {portfolioImages.length > 0 ? (
+            {portfolioCount > 0 ? (
               <View style={styles.portfolioGrid}>
                 {portfolioImages.map((url) => (
                   <TouchableOpacity
@@ -561,7 +689,34 @@ export default function TailorProfileScreen() {
                     activeOpacity={0.9}
                     onPress={() => openPortfolioPreview(portfolioImages.indexOf(url))}
                   >
-                    <ExpoImage source={url} style={styles.portfolioTileImage} contentFit="cover" transition={120} />
+                    <RemoteImage
+                      uri={url}
+                      bucket="portfolio-photos"
+                      style={styles.portfolioTileImage}
+                      contentFit="cover"
+                      transition={120}
+                      surface="customer_tailor_portfolio_grid"
+                      fallback={(
+                        <View style={[styles.portfolioTileImage, styles.heroPlaceholder]}>
+                          <Feather name="image" size={22} color={Colors.midGrey} />
+                        </View>
+                      )}
+                    />
+                  </TouchableOpacity>
+                ))}
+                {portfolioVideos.map((url) => (
+                  <TouchableOpacity
+                    key={`${url}`}
+                    style={[styles.portfolioTile, styles.portfolioVideoTile]}
+                    activeOpacity={0.9}
+                    onPress={() => openVideoPreview(url)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Play portfolio video"
+                  >
+                    <View style={styles.portfolioVideoIcon}>
+                      <Feather name="play" size={20} color={Colors.textInverse} />
+                    </View>
+                    <Text style={styles.portfolioVideoText}>Video</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -606,7 +761,26 @@ export default function TailorProfileScreen() {
           </View>
           <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
             {reviews.length > 0 ? (
-              reviews.map((r) => <ReviewCard key={r.id} review={r} />)
+              <>
+                <View style={styles.ratingBreakdownCard}>
+                  <View>
+                    <Text style={styles.ratingBreakdownValue}>{reviewSummary.average.toFixed(1)}</Text>
+                    <StarRating rating={reviewSummary.average} count={reviewSummary.count} />
+                  </View>
+                  <View style={styles.ratingBreakdownRows}>
+                    {reviewBreakdown.map((row) => (
+                      <View key={row.rating} style={styles.ratingBreakdownRow}>
+                        <Text style={styles.ratingBreakdownLabel}>{row.rating}</Text>
+                        <View style={styles.ratingBreakdownTrack}>
+                          <View style={[styles.ratingBreakdownFill, { width: `${Math.round(row.percent * 100)}%` }]} />
+                        </View>
+                        <Text style={styles.ratingBreakdownPercent}>{Math.round(row.percent * 100)}%</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+                {reviews.map((r) => <ReviewCard key={r.id} review={r} />)}
+              </>
             ) : (
               <View style={styles.emptyReviewCard}>
                 <Text style={styles.emptyReviewTitle}>No reviews yet</Text>
@@ -696,6 +870,80 @@ function ReviewCard({ review }: { review: Review }) {
   )
 }
 
+function WishlistPickerModal({
+  visible,
+  collections,
+  newWishlistName,
+  saving,
+  onChangeNewWishlistName,
+  onClose,
+  onSelect,
+  onCreate,
+}: {
+  visible: boolean
+  collections: Array<{ id: string; name: string; itemCount: number }>
+  newWishlistName: string
+  saving: boolean
+  onChangeNewWishlistName: (value: string) => void
+  onClose: () => void
+  onSelect: (collectionId: string) => void
+  onCreate: () => void
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.wishlistSheetOverlay}>
+        <TouchableOpacity style={styles.wishlistSheetScrim} activeOpacity={1} onPress={onClose} />
+        <View style={styles.wishlistSheet}>
+          <View style={styles.wishlistSheetHandle} />
+          <Text style={styles.wishlistSheetTitle}>
+            {collections.length === 0 ? 'Create a wishlist to save this' : 'Save to wishlist'}
+          </Text>
+          {collections.length > 0 ? (
+            <View style={styles.wishlistOptions}>
+              {collections.map((collection) => (
+                <TouchableOpacity
+                  key={collection.id}
+                  style={styles.wishlistOption}
+                  onPress={() => onSelect(collection.id)}
+                  disabled={saving}
+                >
+                  <View style={styles.wishlistOptionIcon}>
+                    <Feather name="heart" size={17} color={Colors.needleGreen} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.wishlistOptionTitle}>{collection.name}</Text>
+                    <Text style={styles.wishlistOptionMeta}>{collection.itemCount} item{collection.itemCount === 1 ? '' : 's'}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : null}
+          <View style={styles.wishlistCreateBox}>
+            <TextInput
+              value={newWishlistName}
+              onChangeText={onChangeNewWishlistName}
+              placeholder="e.g. December Wedding"
+              placeholderTextColor={Colors.midGrey}
+              style={styles.wishlistInput}
+              autoFocus={collections.length === 0}
+              maxLength={80}
+              returnKeyType="done"
+              onSubmitEditing={onCreate}
+            />
+            <TouchableOpacity
+              style={[styles.wishlistCreateButton, (!newWishlistName.trim() || saving) && styles.wishlistCreateButtonDisabled]}
+              onPress={onCreate}
+              disabled={!newWishlistName.trim() || saving}
+            >
+              {saving ? <ActivityIndicator color={Colors.textInverse} /> : <Text style={styles.wishlistCreateButtonText}>Create and save</Text>}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  )
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
@@ -718,6 +966,38 @@ const styles = StyleSheet.create({
   },
   stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
+  profileSkeleton: {
+    alignSelf: 'stretch',
+    overflow: 'hidden',
+    borderRadius: Radius.md,
+    backgroundColor: Colors.bone,
+  },
+  profileSkeletonHero: {
+    width: '100%',
+    height: 176,
+    borderRadius: 0,
+  },
+  profileSkeletonBody: {
+    padding: Spacing.md,
+    gap: Spacing.sm,
+  },
+  profileSkeletonTitle: {
+    width: '68%',
+    height: 22,
+  },
+  profileSkeletonLine: {
+    width: '88%',
+    height: 14,
+  },
+  profileSkeletonStats: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginTop: Spacing.xs,
+  },
+  profileSkeletonStat: {
+    flex: 1,
+    height: 42,
+  },
   stateGuideCard: {
     alignSelf: 'stretch',
     backgroundColor: Colors.bone,
@@ -764,6 +1044,27 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.lightGrey,
   },
   portfolioTileImage: { width: '100%', height: '100%' },
+  portfolioVideoTile: {
+    backgroundColor: Colors.ink,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.xs,
+  },
+  portfolioVideoIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreen,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  portfolioVideoText: {
+    fontSize: FontSize.xs,
+    color: Colors.textInverse,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
   decisionGuideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
@@ -790,7 +1091,6 @@ const styles = StyleSheet.create({
   heroContainer: { width: SCREEN_WIDTH, height: HERO_HEIGHT, position: 'relative' },
   heroImage: { width: SCREEN_WIDTH, height: HERO_HEIGHT },
   heroPlaceholder: { backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center' },
-  heroEmoji: { fontSize: 64 },
   heroOverlay: {
     position: 'absolute', top: 0, left: 0, right: 0,
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start',
@@ -807,7 +1107,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.9)',
     alignItems: 'center', justifyContent: 'center',
   },
-  heartBtnText: { fontSize: 18 },
+  heartBtnSaved: {
+    backgroundColor: Colors.needleGreen,
+  },
   dotRow: {
     position: 'absolute', bottom: 12, left: 0, right: 0,
     flexDirection: 'row', justifyContent: 'center', gap: 6,
@@ -819,7 +1121,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: Radius.full,
     paddingHorizontal: 10, paddingVertical: 4,
   },
-  photoCountText: { fontSize: FontSize.xs, color: Colors.white, fontWeight: FontWeight.semibold },
+  photoCountText: { fontSize: FontSize.xs, color: Colors.textInverse, fontWeight: FontWeight.semibold },
 
   body: { padding: Spacing.lg, gap: Spacing.md, marginTop: -Spacing.md },
   identityRow: {
@@ -963,6 +1265,20 @@ const styles = StyleSheet.create({
   reviewDate: { fontSize: FontSize.xs, color: Colors.midGrey },
   reviewBody: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
   reviewTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  ratingBreakdownCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  ratingBreakdownValue: { fontSize: 34, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  ratingBreakdownRows: { gap: 6 },
+  ratingBreakdownRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  ratingBreakdownLabel: { width: 14, fontSize: FontSize.xs, color: Colors.ink, fontWeight: FontWeight.semibold },
+  ratingBreakdownTrack: { flex: 1, height: 8, borderRadius: 4, backgroundColor: Colors.boneDeep, overflow: 'hidden' },
+  ratingBreakdownFill: { height: '100%', borderRadius: 4, backgroundColor: Colors.needleGreen },
+  ratingBreakdownPercent: { width: 36, textAlign: 'right', fontSize: FontSize.xs, color: Colors.midGrey },
   responseWrap: {
     backgroundColor: Colors.needleGreenLight,
     borderRadius: Radius.md,
@@ -1005,6 +1321,58 @@ const styles = StyleSheet.create({
     borderTopWidth: 1, borderTopColor: Colors.lightGrey,
     paddingBottom: 8,
   },
+  wishlistSheetOverlay: { flex: 1, justifyContent: 'flex-end' },
+  wishlistSheetScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.35)' },
+  wishlistSheet: {
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+  },
+  wishlistSheetHandle: { alignSelf: 'center', width: 42, height: 4, borderRadius: 2, backgroundColor: Colors.lightGrey },
+  wishlistSheetTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  wishlistOptions: { gap: Spacing.sm },
+  wishlistOption: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    padding: Spacing.sm,
+  },
+  wishlistOptionIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  wishlistOptionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  wishlistOptionMeta: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
+  wishlistCreateBox: { gap: Spacing.sm },
+  wishlistInput: {
+    minHeight: 52,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    paddingHorizontal: Spacing.md,
+    fontSize: FontSize.md,
+    color: Colors.ink,
+    backgroundColor: Colors.bone,
+  },
+  wishlistCreateButton: {
+    minHeight: 52,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreen,
+  },
+  wishlistCreateButtonDisabled: { opacity: 0.5 },
+  wishlistCreateButtonText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   previewBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.92)',
@@ -1018,6 +1386,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
   },
   previewImage: { width: SCREEN_WIDTH - Spacing.lg * 2, height: '82%' },
+  previewVideo: { width: SCREEN_WIDTH - Spacing.lg * 2, height: '72%' },
   refreshingText: { fontSize: FontSize.xs, color: Colors.midGrey, paddingHorizontal: Spacing.xl, marginBottom: Spacing.sm },
   previewClose: {
     position: 'absolute',
@@ -1029,7 +1398,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
   },
-  previewCloseText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  previewCloseText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   previewCount: {
     position: 'absolute',
     bottom: 48,
@@ -1039,5 +1408,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
-  previewCountText: { color: Colors.white, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
+  previewCountText: { color: Colors.textInverse, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
 })

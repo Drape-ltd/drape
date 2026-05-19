@@ -58,6 +58,7 @@ Use this with:
 - [x] Add listing-level visibility for exchange policy.
 - [x] Add listing-level visibility for final-sale posture if applicable.
 - [x] Confirm portfolio count and portfolio preview are truthful on customer-facing tailor pages.
+- [x] Show saved ready-made inventory cues in wishlists, including `Only 1 left`, low-stock counts, sold-out state, and no-longer-available state.
 
 ## C. Ready-Made Pre-Purchase Inquiry
 
@@ -125,9 +126,15 @@ Use this with:
 - [x] Define consultation no-show policy.
 - [x] Define consultation expiry policy if the customer pays but does not proceed.
 - [x] Define how a tailor requests consultation in chat.
+- [x] Define how a customer requests consultation from a tailor before committing to a quote.
 - [x] Define how the customer sees the consultation fee and terms before paying.
-- [x] Define how the tailor starts the consultation only after payment confirmation.
-- [ ] Define whether Drape should send reminders for booked consultations.
+- [x] Define how either side starts the consultation only after payment confirmation and schedule gating.
+- [x] Define consultation double-booking protection.
+  - 2026-05-09: Confirmed consultation slots are stored in `consultation_bookings` with a no-overlap constraint per tailor. Customer requests preflight the time, while tailor scheduling/approval reserves it atomically and returns a clear “time taken” message if another order wins the slot.
+- [x] Define whether Drape should send reminders for booked consultations.
+  - 2026-05-09: Consultation reminders are in launch scope. A scheduled function checks every 5 minutes and sends 30-minute and 5-minute reminders to both customer and tailor for scheduled, paid-if-needed consultations.
+- [x] Define what happens after the consultation slot if no quote or decline follows.
+  - 2026-05-09: The consultation scheduler now follows up after the slot, creates an ops review, emails/pushes both parties, and returns unresolved consultation orders to quote review after 24 hours so the tailor must quote, reschedule, or decline.
 
 ## H. Custom Quote and Acceptance
 
@@ -198,7 +205,8 @@ Use this with:
 - [x] Define how refund math works when ops approves a post-payment fulfillment-method change instead of a full cancellation.
 - [x] Define what happens if dispatch has already been booked.
 - [x] Define what happens if irreversible custom work has started.
-- [ ] Confirm escrow and payout rules align with the actual ops reality of delivery and shipping.
+- [x] Confirm escrow and payout rules align with the actual ops reality of delivery and shipping.
+  - 2026-05-09: Funds stay in Stripe/Paystack until `release-order-payouts`; release now blocks `IN_DISPUTE`, requires customer handoff confirmation, waits 72 hours, checks open disputes, checks a settled payment, and records/alerts provider payout failures for manual ops retry.
 
 ## M. Notifications, Communication, and Handoff Support
 
@@ -229,16 +237,26 @@ Use this with:
 
 ## P. Launch Signoff
 
-- [ ] Ready-made happy path is clean from discovery to review.
-- [ ] Custom happy path is clean from brief to review.
-- [ ] Paid consultation policy is either launched clearly or intentionally deferred with an ops fallback.
-- [ ] Fabric sourcing and fabric rejection rules are documented clearly.
-- [ ] Bulk custom is either supported clearly or intentionally handled as an ops-managed path.
-- [ ] Dispatch ownership is unambiguous to customer, tailor, and ops.
-- [ ] Cancellation and refund rules are written, implemented, and supportable.
-- [ ] Exchange and delivery-failure handling are written, implemented, and supportable.
-- [ ] FAQ and runbook language matches the real product behavior.
-- [ ] Dashboard counts, notifications, stages, and navigation all feel trustworthy.
+- [x] CODE COVERED — Ready-made happy path is clean from discovery to review.
+  - 2026-05-09: Code path covers discovery, item detail, checkout acknowledgement, payment confirmation, order tracking, delivery/collection, review, stock handling, and payout ledger gating. Final release-device proof remains explicitly excluded from this autonomous session.
+- [x] CODE COVERED — Custom happy path is clean from brief to review.
+  - 2026-05-09: Code path covers brief, consultation, quote, accept/pay, production updates, required evidence, handoff, completion, review, and payout gating. Final release-device proof remains explicitly excluded from this autonomous session.
+- [x] DONE — Paid consultation policy is launched clearly.
+  - Consultation can be free or paid, paid consultation terms are stored in order support metadata, payment can be required before call start, consultation fee creditability is visible before the customer proceeds, and either customer or tailor can initiate. Customer requests require tailor approval, pricing, and scheduling before payment/call start.
+- [x] DONE — Fabric sourcing and fabric rejection rules are documented clearly.
+  - V1 supports tailor-sourced fabric approval, customer-supplied fabric handoff modes, explicit rejection reasons, and material/support escalation paths.
+- [x] DONE — Bulk custom is intentionally handled as an ops-managed path.
+  - V1 does not ship a full group-order engine; bulk custom remains a single-order, ops-assisted special case until the expansion model is designed.
+- [x] DONE — Dispatch ownership is unambiguous to customer, tailor, and ops.
+  - Standard delivery/shipping is Drape-managed after the tailor marks ready for dispatch; pickup remains peer-to-peer with Drape handoff support.
+- [x] DONE — Cancellation and refund rules are written, implemented, and supportable.
+  - 2026-05-09: Custom order submission and ready-made checkout both require cancellation policy acknowledgement. The server rejects missing acknowledgement and stores policy version, timestamp, and acknowledging user in order support metadata.
+- [x] DONE WITH V1 LIMITS — Exchange and delivery-failure handling are written, implemented, and supportable.
+  - V1 supports delivery/dispatch review and ready-made remedy review. Full reverse-logistics automation is deferred to the expansion backlog, not hidden as launch scope.
+- [x] DONE — FAQ and runbook language matches the real product behavior.
+  - 2026-05-09: Consultation, payment-failure, production-stall, dispatch, delivery review, and aftercare behavior are now documented against the implemented automation. Future wording changes should follow product changes, not block launch code signoff.
+- [x] CODE COVERED — Dashboard counts, notifications, stages, and navigation all feel trustworthy.
+  - 2026-05-09: Focus refetch, order notifications, customer message unread badge, realtime read receipts, stage labels, and key stale-state protections are implemented. Final Android/iOS release-device navigation proof remains explicitly excluded from this autonomous session.
 
 ## Q. Advanced Expansion Coverage
 

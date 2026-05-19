@@ -157,8 +157,20 @@ export type TailorPayoutHistoryRecord = {
   failedAt: string | null
 }
 
+export type TailorEarningsCurrencySummary = {
+  currency: string
+  totalEarnings: number
+  availableForPayout: number
+  pendingEarnings: number
+  alreadyPaidOut: number
+}
+
 export type TailorEarningsDashboardData = {
   payoutCurrency: string
+  summaryCurrency: string
+  hasMixedCurrencies: boolean
+  hasPayoutCurrencyMismatch: boolean
+  currencySummaries: TailorEarningsCurrencySummary[]
   payoutProvider: PaymentProvider | null
   payoutAccountType: 'PAYSTACK' | 'STRIPE_CONNECT' | null
   payoutBankName: string | null
@@ -367,6 +379,29 @@ function derivePayoutProvider(currency: string | null | undefined): PaymentProvi
   return normalized ? resolvePaymentProviderForCurrency(normalized) : null
 }
 
+function emptyCurrencySummary(currency: string): TailorEarningsCurrencySummary {
+  return {
+    currency,
+    totalEarnings: 0,
+    availableForPayout: 0,
+    pendingEarnings: 0,
+    alreadyPaidOut: 0,
+  }
+}
+
+function ensureCurrencySummary(
+  summaries: Map<string, TailorEarningsCurrencySummary>,
+  currency: string,
+) {
+  const normalizedCurrency = safeText(normalizeAccountCurrency(currency), 'USD')
+  const existing = summaries.get(normalizedCurrency)
+  if (existing) return existing
+
+  const next = emptyCurrencySummary(normalizedCurrency)
+  summaries.set(normalizedCurrency, next)
+  return next
+}
+
 function positiveRate(value: number | null | undefined) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
 }
@@ -432,9 +467,19 @@ function resolveTransactionPayoutMoney(order: OrderMoneyRow) {
     return { amount, currency, provider: resolvePaymentProviderForCurrency(currency) } as const
   }
 
-  const currency = normalizeAccountCurrency(order.tailor_payout_currency_locked ?? order.source_currency ?? order.currency)
+  const currency = normalizeAccountCurrency(order.source_currency ?? order.currency)
   const amount = lockedPayoutAmount(order)
-  const provider = order.tailor_payout_provider_locked ?? (currency ? resolvePaymentProviderForCurrency(currency) : null)
+  const provider = currency ? resolvePaymentProviderForCurrency(currency) : null
+  const lockedCurrency = normalizeAccountCurrency(order.tailor_payout_currency_locked)
+  const lockedProvider = order.tailor_payout_provider_locked ?? null
+
+  if (lockedCurrency && currency && lockedCurrency !== currency) {
+    return { blockedReason: PAYOUT_BLOCKED_REASONS.PAYOUT_CURRENCY_MISMATCH } as const
+  }
+
+  if (lockedProvider && provider && lockedProvider !== provider) {
+    return { blockedReason: PAYOUT_BLOCKED_REASONS.PAYOUT_CURRENCY_MISMATCH } as const
+  }
 
   if (!currency || !provider) {
     return { blockedReason: PAYOUT_BLOCKED_REASONS.PAYOUT_CURRENCY_INVALID } as const
@@ -706,10 +751,7 @@ export async function fetchTailorEarningsDashboard(userId: string): Promise<Tail
   const disputes = ((disputeData as DisputeRow[] | null) ?? [])
   const paymentsByOrder = groupByOrder(payments)
 
-  let totalEarnings = 0
-  let availableForPayout = 0
-  let pendingEarnings = 0
-  let alreadyPaidOut = 0
+  const summaryByCurrency = new Map<string, TailorEarningsCurrencySummary>()
 
   const transactions = orders
     .map((order) => {
@@ -750,10 +792,11 @@ export async function fetchTailorEarningsDashboard(userId: string): Promise<Tail
       })
 
       if (hasSettledEarnings) {
-        totalEarnings += netAmount
-        if (payoutStatus.status === 'PAID_OUT') alreadyPaidOut += netAmount
-        else if (payoutStatus.status === 'AVAILABLE' || payoutStatus.status === 'RELEASED') availableForPayout += netAmount
-        else if (payoutStatus.status === 'PENDING' || payoutStatus.status === 'BLOCKED' || payoutStatus.status === 'FAILED') pendingEarnings += netAmount
+        const currencySummary = ensureCurrencySummary(summaryByCurrency, netCurrency)
+        currencySummary.totalEarnings += netAmount
+        if (payoutStatus.status === 'PAID_OUT') currencySummary.alreadyPaidOut += netAmount
+        else if (payoutStatus.status === 'AVAILABLE' || payoutStatus.status === 'RELEASED') currencySummary.availableForPayout += netAmount
+        else if (payoutStatus.status === 'PENDING' || payoutStatus.status === 'BLOCKED' || payoutStatus.status === 'FAILED') currencySummary.pendingEarnings += netAmount
       }
 
       return {
@@ -792,18 +835,33 @@ export async function fetchTailorEarningsDashboard(userId: string): Promise<Tail
     failedAt: row.failed_at,
   }))
 
+  const payoutCurrency = safeText(profile.payout_currency ?? profile.currency, 'USD')
+  const currencySummaries = Array.from(summaryByCurrency.values()).sort((left, right) => {
+    if (left.currency === payoutCurrency) return -1
+    if (right.currency === payoutCurrency) return 1
+    return right.totalEarnings - left.totalEarnings
+  })
+  const primarySummary =
+    currencySummaries.find((summaryRow) => summaryRow.currency === payoutCurrency)
+    ?? currencySummaries[0]
+    ?? emptyCurrencySummary(payoutCurrency)
+
   return {
-    payoutCurrency: safeText(profile.payout_currency ?? profile.currency, 'USD'),
+    payoutCurrency,
+    summaryCurrency: primarySummary.currency,
+    hasMixedCurrencies: currencySummaries.length > 1,
+    hasPayoutCurrencyMismatch: currencySummaries.some((summaryRow) => summaryRow.totalEarnings > 0 && summaryRow.currency !== payoutCurrency),
+    currencySummaries,
     payoutProvider: derivePayoutProvider(profile.payout_currency ?? profile.currency),
     payoutAccountType: profile.payout_account_type,
     payoutBankName: profile.payout_bank_name ?? null,
     payoutAccountMasked: profile.payout_account_masked ?? null,
     payoutReady: profile.payout_account_verified === true && profile.payout_reverification_required !== true,
     payoutReverificationRequired: profile.payout_reverification_required === true,
-    totalEarnings,
-    availableForPayout,
-    pendingEarnings,
-    alreadyPaidOut,
+    totalEarnings: primarySummary.totalEarnings,
+    availableForPayout: primarySummary.availableForPayout,
+    pendingEarnings: primarySummary.pendingEarnings,
+    alreadyPaidOut: primarySummary.alreadyPaidOut,
     transactions,
     payouts: payoutsHistory,
   }

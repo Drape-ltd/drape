@@ -17,6 +17,7 @@ const routes = [
   '/verify',
   '/payouts',
   '/privacy',
+  '/account-deletion',
   '/security',
   '/legal',
   '/partnerships',

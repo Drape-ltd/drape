@@ -4,20 +4,26 @@
  *
  * Use before any photo upload to Supabase Storage.
  *
- * Returns the cleaned local URI. Falls back to the original URI if
- * manipulation fails (better to upload with EXIF than to block the user).
+ * Returns the cleaned local URI. If manipulation fails, the upload should
+ * stop instead of storing bytes that do not match the file extension/MIME.
  */
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator'
 
-export async function stripExif(uri: string): Promise<string> {
+type StripExifOptions = {
+  maxWidth?: number
+  compress?: number
+}
+
+export async function stripExif(uri: string, options: StripExifOptions = {}): Promise<string> {
   try {
+    const actions = options.maxWidth ? [{ resize: { width: options.maxWidth } }] : []
     const result = await manipulateAsync(
       uri,
-      [], // no transforms — just re-encode to drop metadata
-      { compress: 0.85, format: SaveFormat.JPEG },
+      actions,
+      { compress: options.compress ?? 0.85, format: SaveFormat.JPEG },
     )
     return result.uri
   } catch {
-    return uri
+    throw new Error('Could not prepare the selected image. Please choose a different photo.')
   }
 }

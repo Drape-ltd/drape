@@ -296,9 +296,24 @@ model TailorProfile {
   payoutAccountName    String?            @map("payout_account_name")
   payoutAccountMasked  String?            @map("payout_account_masked")
   payoutCountryCode    String?            @map("payout_country_code")
+  manualBankEntry      Boolean            @default(false) @map("manual_bank_entry")
+  manualBankName       String?            @map("manual_bank_name")
+  manualBankCountryCode String?           @map("manual_bank_country_code")
+  manualBankCountryName String?           @map("manual_bank_country_name")
+  manualBankSwiftBic   String?            @map("manual_bank_swift_bic")
+  manualBankAccountNumber String?         @map("manual_bank_account_number")
+  manualBankAccountName String?           @map("manual_bank_account_name")
+  manualBankVerificationStatus String     @default("NOT_SUBMITTED") @map("manual_bank_verification_status")
+  manualBankSubmittedAt DateTime?         @map("manual_bank_submitted_at")
+  manualBankVerifiedAt DateTime?          @map("manual_bank_verified_at")
+  manualBankVerifiedBy String?            @map("manual_bank_verified_by")
   paystackRecipientCode String?           @map("paystack_recipient_code")
   stripeConnectAccountId String?          @map("stripe_connect_account_id")
   payoutAccountVerifiedAt DateTime?       @map("payout_account_verified_at")
+  payoutAccountChangeCount Int            @default(0) @map("payout_account_change_count")
+  payoutAccountLastChangedAt DateTime?    @map("payout_account_last_changed_at")
+  payoutAccountChangeLockedUntil DateTime? @map("payout_account_change_locked_until")
+  payoutDestinationHoldUntil DateTime?    @map("payout_destination_hold_until")
   tier                 TailorTier         @default(VERIFIED)
   availability         AvailabilityStatus @default(OPEN)
   isVerified           Boolean            @default(false) @map("is_verified")
@@ -611,13 +626,32 @@ model Order {
 
   stageHistory OrderStageUpdate[]
   orderPhotos  OrderPhoto[]
+  customDetail CustomOrderDetail?
+  productionEvidence OrderProductionEvidence[]
   messages     Message[]
   review       Review?
   dispute      Dispute?
   payments     OrderPayment[]
   webhookEvents PaymentWebhookEvent[]
+  consultationBookings ConsultationBooking[]
 
   @@map("orders")
+}
+
+model ConsultationBooking {
+  id               String   @id @default(uuid())
+  orderId          String   @map("order_id")
+  order            Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  tailorId         String   @map("tailor_id")
+  customerId       String   @map("customer_id")
+  scheduledStartAt DateTime @map("scheduled_start_at")
+  scheduledEndAt   DateTime @map("scheduled_end_at")
+  status           String   @default("CONFIRMED")
+  source           String   @default("ORDER_CONSULTATION")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@map("consultation_bookings")
 }
 
 // ─────────────────────────────────────────────
@@ -649,6 +683,59 @@ model OrderPhoto {
   createdAt   DateTime @default(now()) @map("created_at")
 
   @@map("order_photos")
+}
+
+// ─────────────────────────────────────────────
+// CUSTOM ORDER DETAILS
+// ─────────────────────────────────────────────
+
+model CustomOrderDetail {
+  id                              String    @id @default(uuid())
+  orderId                         String    @unique @map("order_id")
+  order                           Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  garmentTypeOther                String?   @map("garment_type_other")
+  genderPresentation              String?   @map("gender_presentation")
+  socialReferenceLinks            String[]  @default([]) @map("social_reference_links")
+  styleNotes                      String?   @map("style_notes")
+  bodyNote                        String?   @map("body_note")
+  fabricDescription               String?   @map("fabric_description")
+  fabricBudgetAmount              Int?      @map("fabric_budget_amount")
+  fabricBudgetCurrency            Currency? @map("fabric_budget_currency")
+  fabricSourcingDeadlineDays      Int?      @map("fabric_sourcing_deadline_days")
+  fabricSourcingDeadlineAt        DateTime? @map("fabric_sourcing_deadline_at")
+  fabricApprovalRequired          Boolean   @default(false) @map("fabric_approval_required")
+  fabricApprovalStatus            String    @default("NOT_REQUIRED") @map("fabric_approval_status")
+  fabricApprovalRequestedAt       DateTime? @map("fabric_approval_requested_at")
+  fabricApprovedAt                DateTime? @map("fabric_approved_at")
+  fabricChangesRequestedAt        DateTime? @map("fabric_changes_requested_at")
+  fabricMarkedUnsuitableAt        DateTime? @map("fabric_marked_unsuitable_at")
+  shippingPreference              String?   @map("shipping_preference")
+  deliveryInstructions            String?   @map("delivery_instructions")
+  targetDeliveryDate              DateTime? @map("target_delivery_date")
+  createdAt                       DateTime  @default(now()) @map("created_at")
+  updatedAt                       DateTime  @updatedAt @map("updated_at")
+
+  @@map("custom_order_details")
+}
+
+// ─────────────────────────────────────────────
+// ORDER PRODUCTION EVIDENCE
+// ─────────────────────────────────────────────
+
+model OrderProductionEvidence {
+  id        String   @id @default(uuid())
+  orderId   String   @map("order_id")
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  stageKey  String   @map("stage_key")
+  note      String?
+  photoUrls String[] @default([]) @map("photo_urls")
+  actorId   String?  @map("actor_id")
+  actorRole String?  @map("actor_role")
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([orderId, stageKey, createdAt])
+  @@map("order_production_evidence")
 }
 
 // ─────────────────────────────────────────────

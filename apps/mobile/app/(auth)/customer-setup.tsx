@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, KeyboardAvoidingView, Platform,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, KeyboardAvoidingView, Platform, ActivityIndicator,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import * as ImageManipulator from 'expo-image-manipulator'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
+import { pickAvatarImageUri, type AvatarImageSource } from '@/lib/avatar-picker'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { syncUserRow } from '@/lib/syncUserRow'
+import { uploadPublicStorageImage } from '@/lib/storage-upload'
+import { Sentry } from '@/lib/sentry'
 import {
   SUPPORTED_CURRENCIES,
   detectDeviceCurrencyPreference,
@@ -16,12 +20,29 @@ import {
   type CurrencyCode,
 } from '@/lib/currency'
 import { Button, Input } from '@/components/ui'
+import { AvatarImage } from '@/components/ui/AvatarImage'
 import { validateDisplayName } from '@drape/shared/contact-filter'
 import { normalizePhoneForStorage, PHONE_STORAGE_HINT, validatePhoneForProfile } from '@drape/shared/phone'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 type Unit = 'in' | 'cm'
 type GarmentContext = 'MENSWEAR' | 'WOMENSWEAR' | 'BOTH' | 'PREFER_NOT_TO_SAY'
+type CustomerSetupProfileRow = {
+  avatar_url?: string | null
+  display_name?: string | null
+  phone?: string | null
+  unit_preference?: string | null
+  garment_context?: unknown
+  measurements?: {
+    unit?: unknown
+    garmentContext?: unknown
+  } | null
+}
+type UserCurrencyRow = {
+  default_currency?: string | null
+  currency_source?: string | null
+  region_code?: string | null
+}
 
 const GARMENT_OPTIONS: Array<{ value: GarmentContext; label: string; hint: string }> = [
   { value: 'MENSWEAR', label: 'Menswear', hint: 'Suits, Agbada, kaftans, shirts, trousers' },
@@ -36,6 +57,12 @@ function normalizeGarmentContext(value: unknown): GarmentContext | null {
     return value
   }
   return null
+}
+
+function customerSetupSaveMessage(error: unknown) {
+  return isLikelyConnectivityIssue(error)
+    ? 'Connection looks weak. We could not save your setup yet. Retry when the signal improves.'
+    : 'We could not save your setup right now. Please try again in a moment.'
 }
 
 export default function CustomerSetupScreen() {
@@ -57,6 +84,8 @@ export default function CustomerSetupScreen() {
   const [regionCode, setRegionCode] = useState(detectedCurrency.regionCode)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
+  const [uploadingAvatar, setUploadingAvatar] = useState(false)
 
   useEffect(() => {
     if (!user?.id) return
@@ -71,18 +100,19 @@ export default function CustomerSetupScreen() {
 
     supabase
       .from('customer_profiles')
-      .select('display_name, phone, unit_preference, garment_context, measurements')
+      .select('display_name, phone, unit_preference, garment_context, measurements, avatar_url')
       .eq('user_id', user.id)
       .maybeSingle()
       .then(({ data, error }) => {
         if (cancelled) return
         if (error || !data) return
 
-        const measurements = (data as any).measurements ?? {}
-        const nextDisplayName = (data as any).display_name ?? oauthName
-        const nextPhone = (data as any).phone ?? user.user_metadata?.phone ?? ''
-        const nextUnit = ((data as any).unit_preference ?? measurements.unit) as Unit | undefined
-        const nextGarmentContext = normalizeGarmentContext((data as any).garment_context ?? measurements.garmentContext)
+        const row = data as CustomerSetupProfileRow
+        const measurements = row.measurements ?? {}
+        const nextDisplayName = row.display_name ?? oauthName
+        const nextPhone = row.phone ?? user.user_metadata?.phone ?? ''
+        const nextUnit = (row.unit_preference ?? measurements.unit) as Unit | undefined
+        const nextGarmentContext = normalizeGarmentContext(row.garment_context ?? measurements.garmentContext)
 
         if (typeof nextDisplayName === 'string' && nextDisplayName.trim().length > 0) {
           setDisplayName(nextDisplayName)
@@ -96,6 +126,9 @@ export default function CustomerSetupScreen() {
         if (nextGarmentContext) {
           setGarmentContext(nextGarmentContext)
         }
+        if (typeof row.avatar_url === 'string' && row.avatar_url.trim().length > 0) {
+          setAvatarUrl(row.avatar_url.trim())
+        }
       })
 
     supabase
@@ -107,18 +140,19 @@ export default function CustomerSetupScreen() {
         if (cancelled) return
         if (error || !data) return
 
-        const nextCurrency = typeof (data as any).default_currency === 'string'
-          ? SUPPORTED_CURRENCIES.find((item) => item.code === (data as any).default_currency)
+        const row = data as UserCurrencyRow
+        const nextCurrency = typeof row.default_currency === 'string'
+          ? SUPPORTED_CURRENCIES.find((item) => item.code === row.default_currency)
           : null
 
         if (nextCurrency) {
           setDefaultCurrency(nextCurrency.code)
         }
-        if (typeof (data as any).currency_source === 'string' && (data as any).currency_source.trim().length > 0) {
-          setCurrencySource((data as any).currency_source.trim().toUpperCase() as typeof currencySource)
+        if (typeof row.currency_source === 'string' && row.currency_source.trim().length > 0) {
+          setCurrencySource(row.currency_source.trim().toUpperCase() as typeof currencySource)
         }
-        if (typeof (data as any).region_code === 'string' && (data as any).region_code.trim().length > 0) {
-          setRegionCode((data as any).region_code.trim().toUpperCase())
+        if (typeof row.region_code === 'string' && row.region_code.trim().length > 0) {
+          setRegionCode(row.region_code.trim().toUpperCase())
         }
       })
 
@@ -126,6 +160,47 @@ export default function CustomerSetupScreen() {
       cancelled = true
     }
   }, [user?.id, oauthName])
+
+  function handleAvatarPress() {
+    Alert.alert('Profile photo', 'Take a photo now or choose one from your library.', [
+      { text: 'Take photo', onPress: () => void updateAvatarFromSource('camera') },
+      { text: 'Choose from library', onPress: () => void updateAvatarFromSource('library') },
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }
+
+  async function updateAvatarFromSource(source: AvatarImageSource) {
+    if (!user?.id || uploadingAvatar) return
+    const imageUri = await pickAvatarImageUri(source)
+    if (!imageUri) return
+
+    setUploadingAvatar(true)
+    try {
+      const compressed = await ImageManipulator.manipulateAsync(
+        imageUri,
+        [{ resize: { width: 800, height: 800 } }],
+        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG },
+      )
+
+      const publicUrl = await uploadPublicStorageImage({
+        bucket: 'avatars',
+        path: `${user.id}/avatar.jpg`,
+        uri: compressed.uri,
+        contentType: 'image/jpeg',
+        maxBytes: 5 * 1024 * 1024,
+        upsert: true,
+      })
+
+      setAvatarUrl(`${publicUrl}?t=${Date.now()}`)
+    } catch (error) {
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. We could not add your photo yet. Retry when the signal improves.'
+        : 'Could not add your photo right now. Please try again in a moment.'
+      Alert.alert('Photo not saved', message)
+    } finally {
+      setUploadingAvatar(false)
+    }
+  }
 
   function validateName(name: string) {
     const err = validateDisplayName(name)
@@ -172,6 +247,7 @@ export default function CustomerSetupScreen() {
           phone: normalizedPhone,
           unit_preference: unit,
           garment_context: garmentContext,
+          avatar_url: avatarUrl,
           // Seed garment context + unit into measurements so it's available from the start
           measurements: {
             unit,
@@ -197,7 +273,7 @@ export default function CustomerSetupScreen() {
           ? 'We saved part of your setup, but could not finish updating your account yet because the connection looks weak. Retry when the signal improves.'
           : 'We saved part of your setup, but could not finish updating your account right now. Please try again in a moment.'
         setSaveError(message)
-        Alert.alert('Error', message)
+        Alert.alert('Could not finish account setup', message)
         return
       }
 
@@ -213,13 +289,13 @@ export default function CustomerSetupScreen() {
           currencyConfirmedAt: now,
           strict: true,
         })
-      } catch (syncError: any) {
+      } catch (syncError: unknown) {
         setSaving(false)
         const message = isLikelyConnectivityIssue(syncError)
           ? 'We saved your setup, but could not finish locking your account currency because the connection looks weak. Please retry once the signal improves.'
           : 'We saved your setup, but could not finish locking your account currency right now. Please try again in a moment.'
         setSaveError(message)
-        Alert.alert('Error', message)
+        Alert.alert('Could not finish account setup', message)
         return
       }
     }
@@ -227,15 +303,19 @@ export default function CustomerSetupScreen() {
     setSaving(false)
 
     if (error) {
-      const details = error.message ?? 'Unknown error'
-      console.error('customer setup save failed', {
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
-        code: error.code,
+      Sentry.captureMessage('Customer setup save failed', {
+        level: 'error',
+        extra: {
+          userId: user?.id ?? null,
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+        },
       })
-      setSaveError(`We could not save your setup. ${details}`)
-      Alert.alert('Error', `Could not save your profile. ${details}`)
+      const message = customerSetupSaveMessage(error)
+      setSaveError(message)
+      Alert.alert('Could not save your profile', message)
       return
     }
 
@@ -268,6 +348,35 @@ export default function CustomerSetupScreen() {
               <View style={styles.guideCard}>
                 <Text style={styles.guideTitle}>Best use</Text>
                 <Text style={styles.guideText}>Keep this simple and accurate. You can refine the rest later.</Text>
+              </View>
+
+              <View style={styles.photoCard}>
+                <TouchableOpacity
+                  style={styles.avatarTap}
+                  onPress={handleAvatarPress}
+                  disabled={uploadingAvatar}
+                  accessibilityRole="button"
+                  accessibilityLabel="Add profile photo"
+                >
+                  <AvatarImage uri={avatarUrl} initials={displayName || user?.email} size={76} shadow />
+                  {uploadingAvatar ? (
+                    <View style={styles.avatarUploading}>
+                      <ActivityIndicator color={Colors.textInverse} size="small" />
+                    </View>
+                  ) : null}
+                </TouchableOpacity>
+                <View style={styles.photoCopy}>
+                  <Text style={styles.photoTitle}>Add a profile photo</Text>
+                  <Text style={styles.photoText}>Optional, but it helps tailors recognise you in orders and messages.</Text>
+                  <TouchableOpacity
+                    onPress={handleAvatarPress}
+                    disabled={uploadingAvatar}
+                    accessibilityRole="button"
+                    accessibilityLabel={avatarUrl ? 'Change profile photo' : 'Add profile photo'}
+                  >
+                    <Text style={styles.photoAction}>{avatarUrl ? 'Change photo' : 'Take or choose photo'}</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
 
               <Input
@@ -387,7 +496,7 @@ export default function CustomerSetupScreen() {
             label="Continue to Drape"
             onPress={save}
             loading={saving}
-            disabled={saving || !displayName.trim() || !phone.trim() || !!nameError || !!phoneError || !garmentContext}
+            disabled={saving || uploadingAvatar || !displayName.trim() || !phone.trim() || !!nameError || !!phoneError || !garmentContext}
           />
         </View>
       </KeyboardAvoidingView>
@@ -458,6 +567,43 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     color: Colors.inkLight,
     lineHeight: 20,
+  },
+  photoCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+  },
+  avatarTap: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+  },
+  avatarUploading: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 38,
+    backgroundColor: 'rgba(26,26,24,0.42)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoCopy: { flex: 1, gap: 4 },
+  photoTitle: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  photoText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+  },
+  photoAction: {
+    marginTop: 2,
+    fontSize: FontSize.sm,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
   },
 
   heading: { gap: Spacing.sm, paddingTop: Spacing.lg },

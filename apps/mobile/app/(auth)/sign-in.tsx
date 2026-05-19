@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Platform, View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView } from 'react-native'
+import { Platform, View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView, KeyboardAvoidingView, Linking } from 'react-native'
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -18,6 +18,7 @@ export default function SignInScreen() {
   const [loading, setLoading] = useState(false)
   const [oauthLoading, setOauthLoading] = useState<'google' | 'apple' | null>(null)
   const [emailError, setEmailError] = useState('')
+  const [passwordError, setPasswordError] = useState('')
 
   function validateEmail(value: string) {
     const trimmed = value.trim()
@@ -42,18 +43,20 @@ export default function SignInScreen() {
     if (loading || oauthLoading) return
     if (!validateEmail(email)) return
     if (!password) {
-      Alert.alert('Password required', 'Please enter your password to continue.')
+      setPasswordError('Password is required.')
       return
     }
+    setPasswordError('')
 
     setLoading(true)
     const { error } = await signIn(email.trim().toLowerCase(), password)
     setLoading(false)
     if (error) {
-      if (error.includes('did not match')) {
+      if (error === 'Incorrect password. Try again.') {
+        setPasswordError(error)
         Alert.alert(
-          'Sign in failed',
-          `${error}\n\nIf this account was created with Google or Apple, use that provider. Otherwise reset the password for this email and try again.`,
+          'Incorrect password',
+          'Incorrect password. Try again.',
           [
             { text: 'Cancel', style: 'cancel' },
             {
@@ -71,6 +74,7 @@ export default function SignInScreen() {
         Alert.alert('Sign in failed', error)
       }
     } else {
+      setPasswordError('')
       capture('sign_in')
     }
     // RouteGuard handles redirect
@@ -94,12 +98,34 @@ export default function SignInScreen() {
     else capture('sign_in', { method: 'apple' })
   }
 
+  async function contactAccountSupport() {
+    const normalizedEmail = email.trim().toLowerCase()
+    const subject = encodeURIComponent('Account access help')
+    const body = encodeURIComponent(
+      normalizedEmail
+        ? `Hi Drape support,\n\nI cannot access my account. The email I tried is ${normalizedEmail}.\n\nWhat I need help with:\n`
+        : 'Hi Drape support,\n\nI cannot access my account.\n\nWhat I need help with:\n',
+    )
+    const url = `mailto:support@drapeon.co?subject=${subject}&body=${body}`
+    try {
+      const supported = await Linking.canOpenURL(url)
+      if (!supported) {
+        Alert.alert('Contact support', 'Email support@drapeon.co for account access help.')
+        return
+      }
+      await Linking.openURL(url)
+    } catch {
+      Alert.alert('Contact support', 'Email support@drapeon.co for account access help.')
+    }
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <TouchableOpacity style={styles.back} onPress={goBack}>
         <Text style={styles.backText}>← Back</Text>
       </TouchableOpacity>
 
+      <KeyboardAvoidingView style={styles.keyboardAvoider} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={styles.heroCard}>
           <Text style={styles.heading}>Welcome back.</Text>
@@ -109,7 +135,7 @@ export default function SignInScreen() {
         <View style={styles.formCard}>
         <View style={styles.formIntro}>
           <Text style={styles.formEyebrow}>Your account</Text>
-          <Text style={styles.formTitle}>Email and password, or a provider.</Text>
+          <Text style={styles.formTitle}>Sign in with your email or a connected account.</Text>
         </View>
 
         <Input
@@ -133,7 +159,11 @@ export default function SignInScreen() {
             label="Password"
             placeholder="Your password"
             value={password}
-            onChangeText={setPassword}
+            onChangeText={(value) => {
+              setPassword(value)
+              if (passwordError) setPasswordError('')
+            }}
+            error={passwordError}
             secureTextEntry
             textContentType="password"
             autoComplete="current-password"
@@ -156,6 +186,10 @@ export default function SignInScreen() {
             <Text style={styles.forgot}>Forgot your password?</Text>
           </TouchableOpacity>
 
+          <TouchableOpacity style={styles.supportWrap} onPress={() => { void contactAccountSupport() }}>
+            <Text style={styles.supportLink}>Can’t access your account?</Text>
+          </TouchableOpacity>
+
           <Divider label="or continue with" />
 
           <View style={styles.oauthRow}>
@@ -163,6 +197,8 @@ export default function SignInScreen() {
               style={styles.oauthBtn}
               onPress={handleGoogle}
               disabled={!!oauthLoading || loading}
+              accessibilityRole="button"
+              accessibilityLabel="Sign in with Google"
             >
               <Text style={styles.oauthIcon}>G</Text>
               <Text style={styles.oauthLabel}>
@@ -175,8 +211,10 @@ export default function SignInScreen() {
                 style={[styles.oauthBtn, styles.oauthBtnApple]}
                 onPress={handleApple}
                 disabled={!!oauthLoading || loading}
+                accessibilityRole="button"
+                accessibilityLabel="Sign in with Apple"
               >
-                <Ionicons name="logo-apple" size={18} color={Colors.white} />
+                <Ionicons name="logo-apple" size={18} color={Colors.textInverse} />
                 <Text style={[styles.oauthLabel, styles.oauthLabelApple]}>
                   {oauthLoading === 'apple' ? 'Opening…' : 'Apple'}
                 </Text>
@@ -192,12 +230,14 @@ export default function SignInScreen() {
           </Text>
         </View>
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   )
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.bone },
+  keyboardAvoider: { flex: 1 },
   back: { paddingHorizontal: Spacing.xl, paddingTop: Spacing.md },
   backText: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
   content: { padding: Spacing.xl, gap: Spacing.md, paddingBottom: Spacing.xxl },
@@ -234,6 +274,8 @@ const styles = StyleSheet.create({
   },
   forgotWrap: { alignSelf: 'flex-end' },
   forgot: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  supportWrap: { alignSelf: 'flex-end', marginTop: -Spacing.sm },
+  supportLink: { fontSize: FontSize.sm, color: Colors.inkLight, fontWeight: FontWeight.medium },
   oauthRow: { flexDirection: 'row', gap: Spacing.md },
   oauthBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
@@ -243,7 +285,7 @@ const styles = StyleSheet.create({
   },
   oauthBtnApple: { backgroundColor: Colors.ink, borderColor: Colors.ink },
   oauthIcon: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink },
-  oauthIconApple: { color: Colors.white },
+  oauthIconApple: { color: Colors.textInverse },
   oauthLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink },
-  oauthLabelApple: { color: Colors.white },
+  oauthLabelApple: { color: Colors.textInverse },
 })

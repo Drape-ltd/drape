@@ -3,6 +3,8 @@ export type MeasurementSource =
   | 'HELPER_GUIDED'
   | 'TAILOR_CAPTURED'
   | 'EXTERNAL_PRO_CAPTURED'
+  | 'DRAPE_VISION'
+  | 'TAILOR_ASSISTED_DRAPE_VISION'
 
 export type MeasurementFitConfidence = 'LOW' | 'MEDIUM' | 'HIGH'
 
@@ -10,6 +12,9 @@ export type MeasurementScanCaptureMethod =
   | 'GUIDED_MANUAL_BASELINE'
   | 'GUIDED_HELPER_BASELINE'
   | 'TAILOR_REVIEWED_BASELINE'
+  | 'DRAPE_VISION_ROTATION'
+  | 'TAILOR_ASSISTED_DRAPE_VISION_ROTATION'
+  | 'GARMENT_QC_VISION_FLAT_LAY'
 
 export type MeasurementScanStatus =
   | 'CAPTURED'
@@ -24,7 +29,22 @@ export type MeasurementFieldKey =
   | 'inseam'
   | 'sleeveLength'
   | 'neckCircumference'
+  | 'underBust'
   | 'height'
+  | 'backLength'
+  | 'outseam'
+  | 'thighCircumference'
+  | 'kneeCircumference'
+  | 'bicepCircumference'
+  | 'wristCircumference'
+  | 'headCircumference'
+  | 'hatBandLine'
+  | 'headLength'
+  | 'headWidth'
+  | 'earToEarOverCrown'
+  | 'frontToBackOverCrown'
+  | 'filaHeight'
+  | 'torsoLength'
 
 export type FitIntent = 'FITTED' | 'BALANCED' | 'RELAXED'
 
@@ -57,7 +77,22 @@ export const MEASUREMENT_FIELD_KEYS: MeasurementFieldKey[] = [
   'inseam',
   'sleeveLength',
   'neckCircumference',
+  'underBust',
   'height',
+  'backLength',
+  'outseam',
+  'thighCircumference',
+  'kneeCircumference',
+  'bicepCircumference',
+  'wristCircumference',
+  'headCircumference',
+  'hatBandLine',
+  'headLength',
+  'headWidth',
+  'earToEarOverCrown',
+  'frontToBackOverCrown',
+  'filaHeight',
+  'torsoLength',
 ]
 
 export type FabricHandoffMode =
@@ -88,6 +123,16 @@ export type ConsultationExpiryPolicy =
   | 'EXPIRES_IN_14_DAYS'
   | 'NO_EXPIRY'
 
+export type ConsultationRequestedBy = 'CUSTOMER' | 'TAILOR'
+
+export type ConsultationStatus =
+  | 'REQUESTED'
+  | 'APPROVED'
+  | 'SCHEDULED'
+  | 'COMPLETED'
+  | 'DECLINED'
+  | 'EXPIRED'
+
 export type QuoteBreakdownMeta = {
   laborAmount?: number | null
   sourcingAmount?: number | null
@@ -99,7 +144,8 @@ export type QuoteBreakdownMeta = {
 }
 
 export type ConsultationMeta = {
-  status?: 'REQUESTED' | 'COMPLETED' | null
+  status?: ConsultationStatus | null
+  requestedBy?: ConsultationRequestedBy | null
   feeMode?: ConsultationFeeMode | null
   feeAmount?: number | null
   feeCurrency?: string | null
@@ -116,6 +162,19 @@ export type ConsultationMeta = {
   reminderEnabled?: boolean | null
   requestNote?: string | null
   requestedAt?: string | null
+  proposedStartAt?: string | null
+  scheduledStartAt?: string | null
+  scheduledEndAt?: string | null
+  timezone?: string | null
+  approvedAt?: string | null
+  approvedBy?: string | null
+  declinedAt?: string | null
+  declinedBy?: string | null
+  declineReason?: string | null
+  reminder30SentAt?: string | null
+  reminder5SentAt?: string | null
+  followUpSentAt?: string | null
+  expiredAt?: string | null
 }
 
 export type FabricPolicyMeta = {
@@ -202,6 +261,7 @@ export type DeliveryReviewReason =
   | 'OTHER'
 
 export type MeasurementSnapshotMeta = {
+  fitPassportVersion?: number | null
   measurementSource?: MeasurementSource | null
   measurementSourceLabel?: string | null
   fitConfidence?: MeasurementFitConfidence | null
@@ -223,9 +283,11 @@ export type MeasurementSnapshotMeta = {
   requiresTailorReview?: boolean
   needsConfirmation?: boolean
   confirmationReason?: string | null
+  confirmationFields?: string[] | null
   confirmationRequestedAt?: string | null
   confirmedAt?: string | null
   confirmedBy?: 'CUSTOMER' | 'TAILOR' | null
+  confirmedFields?: string[] | null
 }
 
 export type FitProfileMeta = {
@@ -288,11 +350,35 @@ export type DeliveryReviewMeta = {
   resolvedAt?: string | null
 }
 
+export type CustomOrderMeta = {
+  garmentType?: string | null
+  garmentTypeOther?: string | null
+  genderPresentation?: string | null
+  targetDeliveryDate?: string | null
+  referencePhotoCount?: number | null
+  styleReferenceLinkCount?: number | null
+  shippingPreference?: string | null
+}
+
+export type FabricSourcingMeta = {
+  description?: string | null
+  budgetAmount?: number | null
+  budgetCurrency?: string | null
+  deadlineBusinessDays?: number | null
+}
+
 export type OrderSupportMeta = {
   fabricHandoffMode?: FabricHandoffMode | null
   fabricHandoffLabel?: string | null
   fabricReceivedAt?: string | null
   fabricReceivedNote?: string | null
+  customOrder?: CustomOrderMeta | null
+  styleReferenceLinks?: string[] | null
+  styleAttributes?: string[] | null
+  styleNotes?: string | null
+  bodyNote?: string | null
+  fabricSourcing?: FabricSourcingMeta | null
+  deliveryInstructions?: string | null
   consultation?: ConsultationMeta | null
   quoteBreakdown?: QuoteBreakdownMeta | null
   fabricPolicy?: FabricPolicyMeta | null
@@ -309,6 +395,8 @@ export const MEASUREMENT_SOURCE_LABELS: Record<MeasurementSource, string> = {
   HELPER_GUIDED: 'Measured with a helper',
   TAILOR_CAPTURED: 'Measured by a tailor',
   EXTERNAL_PRO_CAPTURED: 'Measured by another professional',
+  DRAPE_VISION: 'Drape Vision',
+  TAILOR_ASSISTED_DRAPE_VISION: 'Drape Vision with tailor',
 }
 
 export const FIT_CONFIDENCE_LABELS: Record<MeasurementFitConfidence, string> = {
@@ -321,12 +409,41 @@ export const MEASUREMENT_SCAN_CAPTURE_METHOD_LABELS: Record<MeasurementScanCaptu
   GUIDED_MANUAL_BASELINE: 'Guided fit intake',
   GUIDED_HELPER_BASELINE: 'Guided fit intake with helper',
   TAILOR_REVIEWED_BASELINE: 'Tailor-reviewed fit intake',
+  DRAPE_VISION_ROTATION: 'Drape Vision scan',
+  TAILOR_ASSISTED_DRAPE_VISION_ROTATION: 'Tailor-assisted Drape Vision scan',
+  GARMENT_QC_VISION_FLAT_LAY: 'Drape Vision garment QC',
 }
 
 export const MEASUREMENT_SCAN_STATUS_LABELS: Record<MeasurementScanStatus, string> = {
   CAPTURED: 'Captured',
   TAILOR_REVIEW_REQUIRED: 'Tailor review required',
   TAILOR_REVIEWED: 'Tailor reviewed',
+}
+
+export const MEASUREMENT_FIELD_LABELS: Record<MeasurementFieldKey, string> = {
+  chest: 'Chest',
+  waist: 'Waist',
+  hips: 'Hips',
+  shoulderWidth: 'Shoulder width',
+  inseam: 'Inseam',
+  sleeveLength: 'Sleeve length',
+  neckCircumference: 'Neck',
+  underBust: 'Under bust',
+  height: 'Height',
+  backLength: 'Back length',
+  outseam: 'Outseam',
+  thighCircumference: 'Thigh',
+  kneeCircumference: 'Knee',
+  bicepCircumference: 'Bicep',
+  wristCircumference: 'Wrist',
+  headCircumference: 'Head circumference',
+  hatBandLine: 'Hat band line',
+  headLength: 'Head length',
+  headWidth: 'Head width',
+  earToEarOverCrown: 'Ear to ear over crown',
+  frontToBackOverCrown: 'Front to back over crown',
+  filaHeight: 'Fila height',
+  torsoLength: 'Torso length',
 }
 
 export const FIT_INTENT_LABELS: Record<FitIntent, string> = {
@@ -371,6 +488,169 @@ export const SYMMETRY_FLAG_LABELS: Record<SymmetryFlag, string> = {
   HEEL_HEIGHT_AFFECTS_DRAPE: 'Heel height affects drape',
 }
 
+export const FIT_CONTEXT_FLAG_LABELS: Record<string, string> = {
+  LARGE_THIGHS: 'Large thighs',
+  BROAD_SHOULDERS: 'Broad shoulders',
+  SHORT_TORSO: 'Short torso',
+  FULL_SEAT: 'Full seat',
+  SLOPING_SHOULDERS: 'Sloping shoulders',
+  LONG_ARMS: 'Long arms',
+  FULL_BELLY: 'Full belly / midsection',
+  LONG_RISE: 'Long rise needed',
+  NARROW_SHOULDERS: 'Narrow shoulders',
+  FULL_CHEST: 'Full chest',
+  FULL_UPPER_ARM: 'Full upper arm',
+  WIDE_CALVES: 'Wide calves',
+  ONE_SHOULDER_LOWER: 'One shoulder sits lower',
+  HIP_TILT: 'Hip tilt or uneven waist',
+  FORWARD_NECK: 'Forward neck / rounded back',
+  USES_SHAPEWEAR: 'Uses shapewear',
+  CORSETED_FIT: 'Corseted or snatched fit',
+  NURSING_OR_POSTPARTUM: 'Nursing or postpartum fit',
+  MODEST_COVERAGE: 'Modest coverage preferred',
+  HEADWEAR_FIT_NEEDED: 'Matching headwear needed',
+  BRAIDS_LOCS_OR_WIG: 'Braids, locs, wig, or volume',
+}
+
+export function labelFitContextFlag(flag: unknown) {
+  if (typeof flag !== 'string') return ''
+  return FIT_CONTEXT_FLAG_LABELS[flag] ?? flag.replace(/_/g, ' ').toLowerCase()
+}
+
+function humanizeMeasurementField(field: string) {
+  const spaced = field
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .trim()
+  if (!spaced) return field
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase()
+}
+
+export function labelMeasurementField(field: unknown) {
+  if (typeof field !== 'string') return ''
+  return MEASUREMENT_FIELD_LABELS[field as MeasurementFieldKey] ?? humanizeMeasurementField(field)
+}
+
+export const MEASUREMENT_FIELD_GUIDES: Record<string, string> = {
+  chest: 'Measure around the fullest part of the chest or bust, keeping the tape level.',
+  waist: 'Measure around the natural waist, usually the narrowest part of the torso.',
+  hips: 'Measure around the fullest part of the hips and seat.',
+  shoulderWidth: 'Measure from one shoulder tip to the other across the back.',
+  sleeveLength: 'Measure from shoulder tip to wrist with the arm slightly bent.',
+  inseam: 'Measure from crotch point down the inside leg to the ankle.',
+  outseam: 'Measure from side waist down the outside leg to the ankle.',
+  thighCircumference: 'Measure around the fullest part of the thigh.',
+  kneeCircumference: 'Measure around the knee with the leg relaxed.',
+  underBust: 'Measure directly under the bust where a bra band would sit.',
+  bicepCircumference: 'Measure around the fullest part of the upper arm.',
+  wristCircumference: 'Measure around the wrist bone.',
+  headCircumference: 'Measure around the forehead, above the ears, and the fullest back of the head.',
+  hatBandLine: 'Measure around the exact line where the hat or fila should sit.',
+  headLength: 'Measure from the forehead to the fullest back of the head.',
+  headWidth: 'Measure from temple to temple.',
+  earToEarOverCrown: 'Measure from one ear base over the crown to the other ear base.',
+  frontToBackOverCrown: 'Measure from front band line over the crown to back band line.',
+  filaHeight: 'Measure or describe how tall the fila should stand before shaping or folding.',
+  'Round bust': 'Measure around the fullest part of the bust, keeping the tape level across the back.',
+  'High bust': 'Measure above the bust, under the arms, and across the upper back.',
+  'Under bust': 'Measure directly under the bust where a bra band would sit.',
+  'Front bust': 'Measure from center front to side seam at bust level.',
+  'Back bust': 'Measure from center back to side seam at bust level.',
+  'Bust point spacing': 'Measure straight across from one bust point to the other.',
+  'Bust point to waist': 'Measure from bust point down to the natural waist.',
+  'Bust radius': 'Measure from center front to the bust point.',
+  'Across chest': 'Measure straight across the front chest between armhole points.',
+  'Across back': 'Measure straight across the back between back armhole points.',
+  'Armhole depth': 'Measure from shoulder point down to the underarm level.',
+  'Front waist length': 'Measure from shoulder/neck point over the bust to the front waist.',
+  'Back waist length': 'Measure from nape or shoulder/neck point to the back waist.',
+  'Front rise': 'Measure from front waist through the crotch seam point.',
+  'Back rise': 'Measure from back waist through the crotch seam point.',
+  'Crotch depth': 'Sit upright and measure from side waist down to the chair surface.',
+  'Seat depth': 'Measure the back seat depth needed for trousers or fitted skirts.',
+  Calf: 'Measure around the fullest part of the calf.',
+  Ankle: 'Measure around the ankle where the hem should sit.',
+  Bicep: 'Measure around the fullest part of the upper arm.',
+  Forearm: 'Measure around the fullest part of the forearm.',
+  Wrist: 'Measure around the wrist bone.',
+  'Round elbow': 'Measure around the elbow with the arm slightly bent.',
+  'Head circumference': 'Measure around the forehead, above the ears, and the fullest back of the head.',
+  'Hat band line': 'Measure around the exact line where the hat or fila should sit.',
+  'Head length': 'Measure from the forehead to the fullest back of the head.',
+  'Head width': 'Measure from temple to temple.',
+  'Ear to ear over crown': 'Measure from one ear base over the crown to the other ear base.',
+  'Front to back over crown': 'Measure from front band line over the crown to back band line.',
+  'Fila height': 'Measure or describe how tall the fila should stand before shaping or folding.',
+}
+
+export function measurementGuideForField(field: unknown) {
+  if (typeof field !== 'string') return null
+  return MEASUREMENT_FIELD_GUIDES[field] ??
+    MEASUREMENT_FIELD_GUIDES[labelMeasurementField(field)] ??
+    MEASUREMENT_FIELD_GUIDES[humanizeMeasurementField(field)] ??
+    null
+}
+
+const MEASUREMENT_METADATA_KEYS = new Set<string>([
+  ...MEASUREMENT_FIELD_KEYS,
+  'unit',
+  'fitStyle',
+  'fitPassportVersion',
+  'measurementSource',
+  'measurementSourceLabel',
+  'fitConfidence',
+  'needsConfirmation',
+  'confirmationReason',
+  'confirmationFields',
+  'confirmationRequestedAt',
+  'confirmedAt',
+  'confirmedBy',
+  'confirmedFields',
+  'garmentContext',
+  'bodyShape',
+  'fitFlags',
+  'bodyNote',
+  'captureMethod',
+  'captureVersion',
+  'capturedAt',
+  'confidenceOverall',
+  'confidenceByField',
+  'sourceDevice',
+  'latestMeasurementScanId',
+  'latestMeasurementScanStatus',
+  'latestFitProfile',
+  'bodyFlags',
+  'symmetryFlags',
+  'requiresTailorReview',
+  'displayUnit',
+  'displayMeasurements',
+  'warnings',
+])
+
+export function getAdditionalMeasurementRows(measurements: Record<string, unknown> | null | undefined) {
+  if (!measurements) return []
+
+  return Object.entries(measurements)
+    .filter(([key, value]) => {
+      if (MEASUREMENT_METADATA_KEYS.has(key)) return false
+      if (value == null) return false
+      if (typeof value === 'number') return Number.isFinite(value)
+      if (typeof value === 'string') return value.trim().length > 0
+      return false
+    })
+    .map(([label, value]) => ({ label, value }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+}
+
+export function getMeasurementConfirmationFields(measurements: Record<string, unknown> | null | undefined) {
+  if (!measurements) return []
+  return Array.isArray(measurements.confirmationFields)
+    ? measurements.confirmationFields
+        .filter((field): field is string => typeof field === 'string' && field.trim().length > 0)
+        .map((field) => field.trim())
+    : []
+}
+
 export const FABRIC_HANDOFF_LABELS: Record<FabricHandoffMode, string> = {
   CUSTOMER_SHIPS_TO_TAILOR: 'Customer ships fabric to tailor',
   CUSTOMER_DROPS_OFF_LOCALLY: 'Customer drops fabric off locally',
@@ -400,6 +680,15 @@ export const CONSULTATION_EXPIRY_POLICY_LABELS: Record<ConsultationExpiryPolicy,
   EXPIRES_IN_7_DAYS: 'Expires if not used within 7 days',
   EXPIRES_IN_14_DAYS: 'Expires if not used within 14 days',
   NO_EXPIRY: 'No expiry before the tailor re-quotes',
+}
+
+export const CONSULTATION_STATUS_LABELS: Record<ConsultationStatus, string> = {
+  REQUESTED: 'Consultation requested',
+  APPROVED: 'Consultation approved',
+  SCHEDULED: 'Consultation scheduled',
+  COMPLETED: 'Consultation completed',
+  DECLINED: 'Consultation declined',
+  EXPIRED: 'Consultation expired',
 }
 
 export const DISPATCH_SERVICE_LEVEL_LABELS: Record<NonNullable<DispatchRecordMeta['serviceLevel']>, string> = {
@@ -453,10 +742,51 @@ export function deriveMeasurementFitConfidence(source: MeasurementSource | null 
       return 'MEDIUM'
     case 'TAILOR_CAPTURED':
     case 'EXTERNAL_PRO_CAPTURED':
+    case 'DRAPE_VISION':
+    case 'TAILOR_ASSISTED_DRAPE_VISION':
       return 'HIGH'
     case 'SELF_GUIDED':
     default:
       return 'LOW'
+  }
+}
+
+export function isMeasurementSource(value: unknown): value is MeasurementSource {
+  return (
+    value === 'SELF_GUIDED' ||
+    value === 'HELPER_GUIDED' ||
+    value === 'TAILOR_CAPTURED' ||
+    value === 'EXTERNAL_PRO_CAPTURED' ||
+    value === 'DRAPE_VISION' ||
+    value === 'TAILOR_ASSISTED_DRAPE_VISION'
+  )
+}
+
+export function isMeasurementCaptureMethod(value: unknown): value is MeasurementScanCaptureMethod {
+  return (
+    value === 'GUIDED_MANUAL_BASELINE' ||
+    value === 'GUIDED_HELPER_BASELINE' ||
+    value === 'TAILOR_REVIEWED_BASELINE' ||
+    value === 'DRAPE_VISION_ROTATION' ||
+    value === 'TAILOR_ASSISTED_DRAPE_VISION_ROTATION' ||
+    value === 'GARMENT_QC_VISION_FLAT_LAY'
+  )
+}
+
+export function captureMethodForMeasurementSource(source: MeasurementSource): MeasurementScanCaptureMethod {
+  switch (source) {
+    case 'HELPER_GUIDED':
+      return 'GUIDED_HELPER_BASELINE'
+    case 'TAILOR_CAPTURED':
+    case 'EXTERNAL_PRO_CAPTURED':
+      return 'TAILOR_REVIEWED_BASELINE'
+    case 'DRAPE_VISION':
+      return 'DRAPE_VISION_ROTATION'
+    case 'TAILOR_ASSISTED_DRAPE_VISION':
+      return 'TAILOR_ASSISTED_DRAPE_VISION_ROTATION'
+    case 'SELF_GUIDED':
+    default:
+      return 'GUIDED_MANUAL_BASELINE'
   }
 }
 
@@ -485,26 +815,17 @@ export function deriveOverallMeasurementConfidence(
 
 export function enrichMeasurementSnapshot(snapshot: Record<string, unknown> | null | undefined): Record<string, unknown> | null {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return null
-  const measurementSource = (
-    snapshot.measurementSource === 'SELF_GUIDED' ||
-    snapshot.measurementSource === 'HELPER_GUIDED' ||
-    snapshot.measurementSource === 'TAILOR_CAPTURED' ||
-    snapshot.measurementSource === 'EXTERNAL_PRO_CAPTURED'
-  )
+  const measurementSource = isMeasurementSource(snapshot.measurementSource)
     ? snapshot.measurementSource
     : 'SELF_GUIDED'
 
   return {
     ...snapshot,
+    fitPassportVersion: typeof snapshot.fitPassportVersion === 'number' ? snapshot.fitPassportVersion : null,
     measurementSource,
     measurementSourceLabel: MEASUREMENT_SOURCE_LABELS[measurementSource],
     fitConfidence: deriveMeasurementFitConfidence(measurementSource),
-    captureMethod:
-      snapshot.captureMethod === 'GUIDED_MANUAL_BASELINE' ||
-      snapshot.captureMethod === 'GUIDED_HELPER_BASELINE' ||
-      snapshot.captureMethod === 'TAILOR_REVIEWED_BASELINE'
-        ? snapshot.captureMethod
-        : null,
+    captureMethod: isMeasurementCaptureMethod(snapshot.captureMethod) ? snapshot.captureMethod : null,
     captureVersion: typeof snapshot.captureVersion === 'string' ? snapshot.captureVersion : null,
     capturedAt: typeof snapshot.capturedAt === 'string' ? snapshot.capturedAt : null,
     confidenceOverall:
@@ -537,12 +858,18 @@ export function enrichMeasurementSnapshot(snapshot: Record<string, unknown> | nu
     requiresTailorReview: snapshot.requiresTailorReview === true,
     needsConfirmation: snapshot.needsConfirmation === true,
     confirmationReason: typeof snapshot.confirmationReason === 'string' ? snapshot.confirmationReason : null,
+    confirmationFields: Array.isArray(snapshot.confirmationFields)
+      ? snapshot.confirmationFields.filter((field): field is string => typeof field === 'string' && field.trim().length > 0)
+      : null,
     confirmationRequestedAt: typeof snapshot.confirmationRequestedAt === 'string' ? snapshot.confirmationRequestedAt : null,
     confirmedAt: typeof snapshot.confirmedAt === 'string' ? snapshot.confirmedAt : null,
     confirmedBy:
       snapshot.confirmedBy === 'CUSTOMER' || snapshot.confirmedBy === 'TAILOR'
         ? snapshot.confirmedBy
         : null,
+    confirmedFields: Array.isArray(snapshot.confirmedFields)
+      ? snapshot.confirmedFields.filter((field): field is string => typeof field === 'string' && field.trim().length > 0)
+      : null,
   }
 }
 
@@ -556,12 +883,7 @@ export function buildOrderFitProfile(snapshot: Record<string, unknown> | null | 
 
   if (!latestFitProfile && typeof snapshot.latestMeasurementScanId !== 'string') return null
 
-  const captureMethod =
-    snapshot.captureMethod === 'GUIDED_MANUAL_BASELINE' ||
-    snapshot.captureMethod === 'GUIDED_HELPER_BASELINE' ||
-    snapshot.captureMethod === 'TAILOR_REVIEWED_BASELINE'
-      ? snapshot.captureMethod
-      : null
+  const captureMethod = isMeasurementCaptureMethod(snapshot.captureMethod) ? snapshot.captureMethod : null
 
   const status =
     snapshot.latestMeasurementScanStatus === 'CAPTURED' ||

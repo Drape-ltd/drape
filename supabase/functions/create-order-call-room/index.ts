@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { z, parseBody, uuid } from '../_shared/validate.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getDailyApiKey, getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
@@ -91,7 +91,7 @@ Deno.serve(async (req) => {
 
     const allowed = await checkRateLimit(supabase, `${FN}:${caller.id}`, 3600, 12)
     if (!allowed) {
-      return jsonError(corsHeaders, 429, 'RATE_LIMITED', 'Too many Drape call attempts right now. Please try again later.')
+      return rateLimitExceededResponse(corsHeaders)
     }
 
     const { data: order } = await supabase
@@ -202,6 +202,7 @@ Deno.serve(async (req) => {
         sendPushToUser(supabase, counterpartId, {
           title: push.title,
           body: push.body,
+          preferenceKey: 'messages',
           data: { orderId },
         }),
       )

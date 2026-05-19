@@ -5,53 +5,68 @@
  * sub-screen or gives the clearest available in-product route.
  */
 
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native'
+import { Alert, View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native'
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { goBackOrFallback } from '@/lib/navigation'
+import { useAuth } from '@/lib/auth'
+import { useCurrency } from '@/lib/currency'
 
 function NavRow({
-  icon, label, sublabel, last, onPress, pending,
+  icon, label, sublabel, last, onPress,
 }: {
   icon: React.ComponentProps<typeof Feather>['name']
   label: string
   sublabel?: string
   last?: boolean
   onPress: () => void
-  pending?: boolean
 }) {
   return (
     <TouchableOpacity
-      style={[styles.row, last && styles.rowLast, pending && styles.rowPending]}
+      style={[styles.row, last && styles.rowLast]}
       onPress={onPress}
       activeOpacity={0.6}
+      accessibilityRole="button"
+      accessibilityLabel={sublabel ? `${label}. ${sublabel}` : label}
     >
       <Feather name={icon} size={20} color={Colors.inkLight} style={{ width: 24 }} />
       <View style={{ flex: 1 }}>
         <View style={styles.rowTitleWrap}>
           <Text style={styles.rowLabel}>{label}</Text>
-          {pending ? <Text style={styles.pendingPill}>Soon</Text> : null}
         </View>
         {sublabel ? <Text style={styles.rowSub}>{sublabel}</Text> : null}
       </View>
-      <Feather name={pending ? 'clock' : 'chevron-right'} size={16} color={Colors.midGrey} />
+      <Feather name="chevron-right" size={16} color={Colors.midGrey} />
     </TouchableOpacity>
   )
-}
-
-function notAvailableYet(feature: string) {
-  Alert.alert(feature, 'This setting is not available in the app yet.')
 }
 
 export default function AccountSettingsScreen() {
   const router = useRouter()
   const navigation = useNavigation()
+  const { user, signOut } = useAuth()
+  const { currency, loading: currencyLoading } = useCurrency()
   const version = '1.0.0'
 
   function goBack() {
     goBackOrFallback(router, navigation, '/(customer)/profile')
+  }
+
+  function confirmSignOut() {
+    Alert.alert('Sign out', 'Are you sure you want to sign out?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Sign out',
+        style: 'destructive',
+        onPress: () => {
+          void signOut().catch(() => {
+            Alert.alert('Unable to sign out', 'Please try again in a moment.')
+          })
+        },
+      },
+    ])
   }
 
   return (
@@ -78,7 +93,7 @@ export default function AccountSettingsScreen() {
           <NavRow
             icon="shield"
             label="Login & security"
-            sublabel="Password, Face ID / fingerprint"
+            sublabel={user?.email ?? 'Email, password, Face ID / fingerprint'}
             onPress={() => router.push('/(customer)/profile/login-security')}
           />
         </View>
@@ -93,38 +108,42 @@ export default function AccountSettingsScreen() {
           />
           <View style={styles.divider} />
           <NavRow
-            icon="credit-card"
-            label="Payments"
-            sublabel="Quotes, checkout, and order protection"
-            onPress={() => router.push('/(customer)/profile/help')}
+            icon="globe"
+            label="Currency"
+            sublabel={currencyLoading ? 'Loading account default...' : `Browsing and new checkout default: ${currency}`}
+            onPress={() => router.push('/(customer)/profile/currency' as never)}
           />
           <View style={styles.divider} />
           <NavRow
-            icon="file-text"
-            label="Taxes"
-            sublabel="Not available yet"
-            pending
-            onPress={() => notAvailableYet('Taxes')}
+            icon="credit-card"
+            label="Payment history"
+            sublabel="Transactions, protected orders, and refunds"
+            onPress={() => router.push('/(customer)/profile/payments' as never)}
+          />
+          <View style={styles.divider} />
+          <NavRow
+            icon="shield"
+            label="Privacy"
+            sublabel="Data, analytics, and account deletion"
+            onPress={() => router.push('/(customer)/profile/privacy' as never)}
           />
         </View>
 
-        {/* ── Accessibility ── */}
+        {/* ── Account control ── */}
         <View style={styles.group}>
           <NavRow
-            icon="globe"
-            label="Translation"
-            sublabel="Not available yet"
-            pending
-            onPress={() => notAvailableYet('Translation')}
+            icon="trash-2"
+            label="Delete account"
+            sublabel="Request permanent deletion from Drape"
+            onPress={() => router.push('/(customer)/profile/delete-account' as never)}
           />
           <View style={styles.divider} />
           <NavRow
-            icon="eye"
-            label="Accessibility"
-            sublabel="Not available yet"
-            pending
+            icon="log-out"
+            label="Sign out"
+            sublabel="Clear this device and return to login"
             last
-            onPress={() => notAvailableYet('Accessibility')}
+            onPress={confirmSignOut}
           />
         </View>
 
@@ -157,6 +176,7 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.lg,
     paddingHorizontal: Spacing.md, paddingVertical: 12,
+    minHeight: 52,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'transparent',
   },
   rowPending: { opacity: 0.88 },

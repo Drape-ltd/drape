@@ -8,6 +8,7 @@
     "build": "turbo build",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
+    "qa:android": "pnpm --dir apps/mobile qa:android",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "db:generate": "pnpm --filter @drape/db generate",
     "db:push": "pnpm --filter @drape/db db:push",
@@ -32,9 +33,11 @@
     "typescript": "^5.7.2"
   },
   "pnpm": {
-    "approvedBuilds": [
+    "onlyBuiltDependencies": [
       "@prisma/client",
       "@prisma/engines",
+      "@sentry/cli",
+      "esbuild",
       "prisma",
       "sharp",
       "unrs-resolver"

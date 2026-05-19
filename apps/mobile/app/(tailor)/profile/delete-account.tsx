@@ -8,6 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { requestAccountDeletion } from '@/lib/account-deletion'
 import { useAuth } from '@/lib/auth'
+import { issueReauthProof } from '@/lib/reauth-proof'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { CONTACTS } from '@drape/shared'
 import { goBackOrFallback } from '@/lib/navigation'
@@ -17,8 +18,13 @@ export default function TailorDeleteAccountScreen() {
   const navigation = useNavigation()
   const { user } = useAuth()
   const [reason, setReason] = useState('')
+  const [confirmationText, setConfirmationText] = useState('')
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
+  const [activeOrderCount, setActiveOrderCount] = useState<number | null>(null)
+  const canSubmit = confirmationText.trim() === 'DELETE' && password.length > 0
 
   async function openExternalUrl(url: string, fallbackMessage: string) {
     try {
@@ -38,8 +44,34 @@ export default function TailorDeleteAccountScreen() {
 
   async function handleSubmit() {
     if (submitting) return
+    if (confirmationText.trim() !== 'DELETE') {
+      Alert.alert('Confirmation required', 'Type DELETE to confirm this account deletion request.')
+      return
+    }
+    if (!password) {
+      Alert.alert('Password required', 'Enter your current password before submitting this deletion request.')
+      return
+    }
+    if (!user?.email) {
+      Alert.alert('Session expired', 'Please sign in again before submitting this deletion request.')
+      return
+    }
     setSubmitting(true)
-    const result = await requestAccountDeletion(reason)
+    const proofResult = await issueReauthProof({
+      password,
+      purpose: 'ACCOUNT_DELETION',
+    })
+    if (proofResult.error || !proofResult.proof) {
+      setSubmitting(false)
+      Alert.alert('Password check failed', proofResult.error ?? 'Confirm your password again before continuing.')
+      return
+    }
+
+    const result = await requestAccountDeletion({
+      reason,
+      confirmationText: confirmationText.trim(),
+      reauthProof: proofResult.proof,
+    })
     setSubmitting(false)
 
     if (result.error) {
@@ -50,6 +82,7 @@ export default function TailorDeleteAccountScreen() {
       return
     }
 
+    setActiveOrderCount(result.activeOrderCount ?? null)
     setSubmitted(true)
   }
 
@@ -61,7 +94,7 @@ export default function TailorDeleteAccountScreen() {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.header}>
-          <TouchableOpacity style={styles.backBtn} onPress={goBack}>
+          <TouchableOpacity style={styles.backBtn} onPress={goBack} accessibilityRole="button" accessibilityLabel="Back to privacy settings">
             <Feather name="arrow-left" size={20} color={Colors.ink} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Delete account</Text>
@@ -74,7 +107,7 @@ export default function TailorDeleteAccountScreen() {
             </View>
             <Text style={styles.heroTitle}>Your deletion request is now in Drape.</Text>
             <Text style={styles.heroCopy}>
-              We may contact you if we need confirmation. Some records may be retained where required for security, active transactions, legal obligations, or claims handling.
+              We sent a receipt to your account email. {activeOrderCount && activeOrderCount > 0 ? `We found ${activeOrderCount} active order${activeOrderCount === 1 ? '' : 's'}, so Drape will resolve open transactions before deletion or anonymization.` : 'We may contact you if we need confirmation.'} Some records may be retained where required for security, active transactions, legal obligations, or claims handling.
             </Text>
           </View>
 
@@ -83,7 +116,7 @@ export default function TailorDeleteAccountScreen() {
             <Text style={styles.noteCopy}>Email {CONTACTS.privacy} from your account email if anything about the request changes or you need to add more context.</Text>
           </View>
 
-          <TouchableOpacity style={styles.actionBtn} onPress={goBack}>
+          <TouchableOpacity style={styles.actionBtn} onPress={goBack} accessibilityRole="button" accessibilityLabel="Back to privacy settings">
             <Text style={styles.actionBtnText}>Back to privacy</Text>
           </TouchableOpacity>
         </View>
@@ -94,7 +127,7 @@ export default function TailorDeleteAccountScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={goBack}>
+        <TouchableOpacity style={styles.backBtn} onPress={goBack} accessibilityRole="button" accessibilityLabel="Back to privacy settings">
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Delete account</Text>
@@ -113,7 +146,7 @@ export default function TailorDeleteAccountScreen() {
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>What happens next</Text>
-          <Text style={styles.sectionCopy}>Your account can be restricted and queued for deletion review. We may verify identity if anything about the request is unclear or sensitive.</Text>
+          <Text style={styles.sectionCopy}>Your account can be restricted and queued for deletion review. If you have active orders, payouts, disputes, or legal retention obligations, Drape resolves those before final deletion or anonymization.</Text>
           <View style={styles.divider} />
           <Text style={styles.sectionTitle}>Account email</Text>
           <Text style={styles.accountValue}>{user?.email ?? 'No account email available in-app'}</Text>
@@ -135,17 +168,53 @@ export default function TailorDeleteAccountScreen() {
           <Text style={styles.charCount}>{reason.trim().length}/300</Text>
         </View>
 
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Confirm deletion request</Text>
+          <Text style={styles.sectionCopy}>Type DELETE, then confirm your current password. This keeps an unlocked phone from starting a deletion request by accident.</Text>
+          <TextInput
+            style={styles.textInput}
+            value={confirmationText}
+            onChangeText={setConfirmationText}
+            placeholder="Type DELETE"
+            placeholderTextColor={Colors.midGrey}
+            autoCapitalize="characters"
+            autoCorrect={false}
+          />
+          <View style={styles.passwordWrap}>
+            <TextInput
+              style={styles.passwordInput}
+              value={password}
+              onChangeText={setPassword}
+              placeholder="Current password"
+              placeholderTextColor={Colors.midGrey}
+              secureTextEntry={!showPassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TouchableOpacity
+              style={styles.eyeBtn}
+              onPress={() => setShowPassword((value) => !value)}
+              accessibilityRole="button"
+              accessibilityLabel={showPassword ? 'Hide current password' : 'Show current password'}
+            >
+              <Feather name={showPassword ? 'eye-off' : 'eye'} size={18} color={Colors.midGrey} />
+            </TouchableOpacity>
+          </View>
+        </View>
+
         <View style={styles.noteCard}>
           <Text style={styles.noteTitle}>Best use</Text>
-          <Text style={styles.noteCopy}>Use this flow when you want Drape to process account closure and deletion. If you only need fewer emails or fewer recommendations, the privacy settings above are usually the better fit.</Text>
+          <Text style={styles.noteCopy}>Use this flow when you want Drape to process account closure and deletion. It is not an instant wipe while active orders, payouts, support cases, or legal retention obligations may still be open.</Text>
         </View>
 
         <TouchableOpacity
-          style={[styles.actionBtn, submitting && { opacity: 0.7 }]}
+          style={[styles.actionBtn, (!canSubmit || submitting) && { opacity: 0.55 }]}
           onPress={handleSubmit}
-          disabled={submitting}
+          disabled={submitting || !canSubmit}
+          accessibilityRole="button"
+          accessibilityLabel="Submit account deletion request"
         >
-          {submitting ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.actionBtnText}>Submit deletion request</Text>}
+          {submitting ? <ActivityIndicator color={Colors.textInverse} /> : <Text style={styles.actionBtnText}>Submit deletion request</Text>}
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -156,6 +225,8 @@ export default function TailorDeleteAccountScreen() {
               `Please email ${CONTACTS.privacy} from your account email if you cannot complete the request in-app.`,
             )
           }}
+          accessibilityRole="button"
+          accessibilityLabel="Email Drape privacy team instead"
         >
           <Text style={styles.secondaryBtnText}>Email privacy team instead</Text>
         </TouchableOpacity>
@@ -219,6 +290,35 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md,
     color: Colors.ink,
   },
+  textInput: {
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.bone,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    padding: Spacing.md,
+    fontSize: FontSize.md,
+    color: Colors.ink,
+  },
+  passwordWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.bone,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  passwordInput: {
+    flex: 1,
+    padding: Spacing.md,
+    fontSize: FontSize.md,
+    color: Colors.ink,
+  },
+  eyeBtn: {
+    width: 48,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   charCount: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'right' },
   noteCard: {
     backgroundColor: Colors.white,
@@ -240,13 +340,17 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.error,
     borderRadius: Radius.lg,
     padding: 12,
+    minHeight: 52,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  actionBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.white },
+  actionBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   secondaryBtn: {
     borderRadius: Radius.lg,
     padding: 12,
+    minHeight: 44,
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.lightGrey,

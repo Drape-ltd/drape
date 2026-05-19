@@ -3,15 +3,23 @@ import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
+import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { createPaystackTransferRecipient, fallbackPaystackBanks, listPaystackBanks, resolvePaystackAccountNumber } from '../_shared/paystack.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { createStripeAccountLink, createStripeConnectAccount, retrieveStripeConnectAccount } from '../_shared/stripe.ts'
 import { parseBody, z } from '../_shared/validate.ts'
 import { normalizeAccountCurrency, resolvePaymentProviderForCurrency } from '../../../packages/shared/src/currency-config.ts'
+import {
+  MANUAL_BANK_ENTRY_NOTE,
+  payoutBankLogoUrl,
+  validateManualBankEntry,
+} from '../../../packages/shared/src/payout-setup.ts'
 
 const FN = 'payout-account-action'
 const PAYSTACK_PAYOUT_CURRENCIES = new Set(['NGN', 'GHS', 'KES'])
 const STRIPE_PAYOUT_CURRENCIES = new Set(['USD', 'GBP', 'EUR', 'CAD'])
+const PAYOUT_CHANGE_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000
+const PAYOUT_DESTINATION_HOLD_MS = 72 * 60 * 60 * 1000
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
@@ -39,6 +47,15 @@ const BodySchema = z.discriminatedUnion('action', [
     bankName: z.string().trim().min(2).max(120),
     accountNumber: z.string().trim().min(6).max(40),
     accountName: z.string().trim().min(2).max(120),
+  }),
+  z.object({
+    action: z.literal('submit-manual-bank-entry'),
+    payoutCurrency: z.enum(['NGN', 'GHS', 'KES', 'USD', 'GBP', 'EUR', 'CAD']),
+    bankName: z.string().trim().min(1).max(120),
+    bankCountryCode: z.string().trim().min(2).max(2),
+    swiftBic: z.string().trim().min(1).max(16),
+    accountNumber: z.string().trim().min(1).max(64),
+    accountName: z.string().trim().min(1).max(120),
   }),
   z.object({
     action: z.literal('start-stripe-connect'),
@@ -69,14 +86,30 @@ type TailorProfileRow = {
   payout_account_name?: string | null
   payout_account_masked?: string | null
   payout_country_code?: string | null
+  manual_bank_entry?: boolean | null
+  manual_bank_name?: string | null
+  manual_bank_country_code?: string | null
+  manual_bank_country_name?: string | null
+  manual_bank_swift_bic?: string | null
+  manual_bank_account_name?: string | null
+  manual_bank_verification_status?: string | null
+  manual_bank_submitted_at?: string | null
   paystack_recipient_code?: string | null
   stripe_connect_account_id?: string | null
   stripe_account_id?: string | null
   paystack_account_id?: string | null
+  payout_account_change_count?: number | null
+  payout_account_last_changed_at?: string | null
+  payout_account_change_locked_until?: string | null
+  payout_destination_hold_until?: string | null
 }
 
 function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
-  return new Response(JSON.stringify(body), {
+  const payload =
+    typeof body.error === 'string' && typeof body.message !== 'string'
+      ? { ...body, message: body.error }
+      : body
+  return new Response(JSON.stringify(payload), {
     status,
     headers: { ...headers, 'Content-Type': 'application/json' },
   })
@@ -91,10 +124,10 @@ function providerErrorResponse(error: unknown, headers: HeadersInit) {
     || message.includes('Missing Stripe')
 
   if (isProviderish) {
-    return jsonResponse({ error: message }, 503, headers)
+    return jsonResponse({ code: 'PAYOUT_PROVIDER_ERROR', error: message }, 503, headers)
   }
 
-  return new Response('Internal server error', { status: 500, headers })
+  return jsonResponse({ code: 'INTERNAL_ERROR', error: 'We could not complete payout setup right now.' }, 500, headers)
 }
 
 function normalizeCountryCode(value: string | null | undefined) {
@@ -106,15 +139,160 @@ function normalizeNameForCompare(value: string | null | undefined) {
 }
 
 function maskAccountNumber(value: string) {
-  const trimmed = value.trim()
+  const trimmed = value.trim().replace(/[\s-]+/gu, '')
   if (trimmed.length <= 4) return trimmed
   return `${'*'.repeat(Math.max(trimmed.length - 4, 4))}${trimmed.slice(-4)}`
+}
+
+function payoutSetupErrorMessage(error: unknown, fallback: string) {
+  const raw = error instanceof Error ? error.message : String(error)
+  const cleaned = raw.replace(/^Paystack error:\s*/iu, '').trim()
+  return cleaned || fallback
+}
+
+function paystackAccountVerificationError(error: unknown, headers: HeadersInit) {
+  log('warn', FN, 'paystack.account_verification_failed', {
+    error: error instanceof Error ? error.message : String(error),
+  })
+  return jsonResponse({
+    code: 'PAYSTACK_ACCOUNT_VERIFICATION_FAILED',
+    error: payoutSetupErrorMessage(
+      error,
+      'We could not verify this account number. Check the bank and account number, then try again.',
+    ),
+  }, 400, headers)
+}
+
+function paystackRecipientSetupError(error: unknown, headers: HeadersInit) {
+  log('error', FN, 'paystack.recipient_setup_failed', {
+    error: error instanceof Error ? error.message : String(error),
+  })
+  return jsonResponse({
+    code: 'PAYSTACK_RECIPIENT_SETUP_FAILED',
+    error: payoutSetupErrorMessage(
+      error,
+      'We verified the account, but Paystack could not create the payout recipient yet. Try again in a moment.',
+    ),
+  }, 503, headers)
+}
+
+function manualBankResetPatch() {
+  return {
+    manual_bank_entry: false,
+    manual_bank_name: null,
+    manual_bank_country_code: null,
+    manual_bank_country_name: null,
+    manual_bank_swift_bic: null,
+    manual_bank_account_number: null,
+    manual_bank_account_name: null,
+    manual_bank_verification_status: 'NOT_SUBMITTED',
+    manual_bank_submitted_at: null,
+    manual_bank_verified_at: null,
+    manual_bank_verified_by: null,
+  }
 }
 
 function payoutProviderForCurrency(currency: string) {
   if (PAYSTACK_PAYOUT_CURRENCIES.has(currency)) return 'PAYSTACK' as const
   if (STRIPE_PAYOUT_CURRENCIES.has(currency)) return 'STRIPE' as const
   throw new Error(`Unsupported payout currency ${currency}`)
+}
+
+function addMsIso(iso: string, ms: number) {
+  return new Date(Date.parse(iso) + ms).toISOString()
+}
+
+function isFutureIso(value: string | null | undefined, nowIso: string) {
+  if (!value) return false
+  const valueMs = Date.parse(value)
+  const nowMs = Date.parse(nowIso)
+  return Number.isFinite(valueMs) && Number.isFinite(nowMs) && valueMs > nowMs
+}
+
+function normalizedKeyPart(value: string | null | undefined) {
+  return value?.trim().replace(/\s+/gu, ' ').toUpperCase() ?? ''
+}
+
+function currentPayoutDestinationKey(profile: TailorProfileRow) {
+  if (profile.payout_account_type === 'PAYSTACK') {
+    return [
+      'PAYSTACK',
+      profile.payout_currency ?? '',
+      profile.payout_bank_code ?? '',
+      profile.payout_account_masked ?? '',
+      normalizedKeyPart(profile.payout_account_name),
+    ].join(':')
+  }
+
+  if (profile.payout_account_type === 'STRIPE_CONNECT') {
+    return [
+      'STRIPE_CONNECT',
+      profile.payout_currency ?? '',
+      profile.stripe_connect_account_id ?? profile.stripe_account_id ?? '',
+    ].join(':')
+  }
+
+  if (profile.manual_bank_entry === true) {
+    return [
+      'MANUAL',
+      profile.payout_currency ?? '',
+      profile.manual_bank_country_code ?? profile.payout_country_code ?? '',
+      normalizedKeyPart(profile.manual_bank_name ?? profile.payout_bank_name),
+      profile.payout_account_masked ?? '',
+      normalizedKeyPart(profile.manual_bank_account_name ?? profile.payout_account_name),
+    ].join(':')
+  }
+
+  return null
+}
+
+function hasVerifiedPayoutDestination(profile: TailorProfileRow) {
+  return profile.payout_account_verified === true
+    && profile.payout_reverification_required !== true
+    && currentPayoutDestinationKey(profile) !== null
+}
+
+function payoutChangeGuardResponse(profile: TailorProfileRow, nextDestinationKey: string, nowIso: string, headers: HeadersInit) {
+  const currentDestinationKey = currentPayoutDestinationKey(profile)
+  const isDestinationChange = hasVerifiedPayoutDestination(profile)
+    && currentDestinationKey !== null
+    && currentDestinationKey !== nextDestinationKey
+
+  if (!isDestinationChange || !isFutureIso(profile.payout_account_change_locked_until, nowIso)) {
+    return null
+  }
+
+  const lockedUntil = profile.payout_account_change_locked_until as string
+  const retryAfter = Math.max(60, Math.ceil((Date.parse(lockedUntil) - Date.parse(nowIso)) / 1000))
+  return jsonResponse({
+    code: 'PAYOUT_CHANGE_COOLDOWN',
+    error: 'For account safety, payout destination changes are limited for a short period after a verified account is changed.',
+    lockedUntil,
+    retryAfter,
+  }, 409, {
+    ...headers,
+    'Retry-After': String(retryAfter),
+  })
+}
+
+function payoutChangePatch(profile: TailorProfileRow, nextDestinationKey: string, nowIso: string) {
+  const currentDestinationKey = currentPayoutDestinationKey(profile)
+  const isDestinationChange = hasVerifiedPayoutDestination(profile)
+    && currentDestinationKey !== null
+    && currentDestinationKey !== nextDestinationKey
+
+  if (!isDestinationChange) {
+    return {
+      payout_account_last_changed_at: profile.payout_account_last_changed_at ?? nowIso,
+    }
+  }
+
+  return {
+    payout_account_change_count: (profile.payout_account_change_count ?? 0) + 1,
+    payout_account_last_changed_at: nowIso,
+    payout_account_change_locked_until: addMsIso(nowIso, PAYOUT_CHANGE_COOLDOWN_MS),
+    payout_destination_hold_until: addMsIso(nowIso, PAYOUT_DESTINATION_HOLD_MS),
+  }
 }
 
 async function loadTailorProfile(supabase: any, userId: string) {
@@ -137,10 +315,22 @@ async function loadTailorProfile(supabase: any, userId: string) {
       payout_account_name,
       payout_account_masked,
       payout_country_code,
+      manual_bank_entry,
+      manual_bank_name,
+      manual_bank_country_code,
+      manual_bank_country_name,
+      manual_bank_swift_bic,
+      manual_bank_account_name,
+      manual_bank_verification_status,
+      manual_bank_submitted_at,
       paystack_recipient_code,
       stripe_connect_account_id,
       stripe_account_id,
-      paystack_account_id
+      paystack_account_id,
+      payout_account_change_count,
+      payout_account_last_changed_at,
+      payout_account_change_locked_until,
+      payout_destination_hold_until
     `)
     .eq('user_id', userId)
     .maybeSingle()
@@ -157,13 +347,16 @@ Deno.serve(async (req) => {
     const caller = await getAuthUser(req)
     if (!caller) {
       log('warn', FN, 'auth.unauthenticated')
-      return new Response('Unauthorized', { status: 401, headers: cors })
+      return jsonResponse({
+        error: 'Please sign in again before managing your payout account.',
+        message: 'Please sign in again before managing your payout account.',
+      }, 401, cors)
     }
 
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
     if (!parsed.ok) {
       log('warn', FN, 'validation.failed', { actor_id: caller.id, error: parsed.error })
-      return new Response(parsed.error, { status: 400, headers: cors })
+      return jsonResponse({ error: parsed.error }, 400, cors)
     }
 
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
@@ -175,12 +368,12 @@ Deno.serve(async (req) => {
         severity: 'warn',
         payload: { function: FN },
       })
-      return new Response('Too many requests', { status: 429, headers: cors })
+      return rateLimitExceededResponse(cors)
     }
 
     const profile = await loadTailorProfile(supabase, caller.id)
     if (!profile?.id) {
-      return new Response('Tailor profile not found.', { status: 404, headers: cors })
+      return jsonResponse({ error: 'Complete your tailor profile before setting up payouts.' }, 404, cors)
     }
 
     const body = parsed.data
@@ -202,8 +395,20 @@ Deno.serve(async (req) => {
           payoutAccountName: profile.payout_account_name ?? null,
           payoutAccountMasked: profile.payout_account_masked ?? null,
           payoutCountryCode: profile.payout_country_code ?? null,
+          manualBankEntry: profile.manual_bank_entry === true,
+          manualBankName: profile.manual_bank_name ?? null,
+          manualBankCountryCode: profile.manual_bank_country_code ?? null,
+          manualBankCountryName: profile.manual_bank_country_name ?? null,
+          manualBankSwiftBic: profile.manual_bank_swift_bic ?? null,
+          manualBankAccountName: profile.manual_bank_account_name ?? null,
+          manualBankVerificationStatus: profile.manual_bank_verification_status ?? 'NOT_SUBMITTED',
+          manualBankSubmittedAt: profile.manual_bank_submitted_at ?? null,
           paystackRecipientCode: profile.paystack_recipient_code ?? null,
           stripeConnectAccountId: profile.stripe_connect_account_id ?? null,
+          payoutAccountChangeCount: profile.payout_account_change_count ?? 0,
+          payoutAccountLastChangedAt: profile.payout_account_last_changed_at ?? null,
+          payoutAccountChangeLockedUntil: profile.payout_account_change_locked_until ?? null,
+          payoutDestinationHoldUntil: profile.payout_destination_hold_until ?? null,
         },
       }, 200, cors)
     }
@@ -252,16 +457,22 @@ Deno.serve(async (req) => {
             name: bank.name,
             country: bank.country ?? null,
             currency: bank.currency ?? body.payoutCurrency,
+            logoUrl: payoutBankLogoUrl(bank.name),
           })),
       }, 200, cors)
     }
 
     if (body.action === 'verify-paystack-account') {
-      const resolved = await resolvePaystackAccountNumber({
-        accountNumber: body.accountNumber,
-        bankCode: body.bankCode,
-        currency: body.payoutCurrency,
-      })
+      let resolved
+      try {
+        resolved = await resolvePaystackAccountNumber({
+          accountNumber: body.accountNumber,
+          bankCode: body.bankCode,
+          currency: body.payoutCurrency,
+        })
+      } catch (error) {
+        return paystackAccountVerificationError(error, cors)
+      }
 
       return jsonResponse({
         ok: true,
@@ -282,11 +493,16 @@ Deno.serve(async (req) => {
     }
 
     if (body.action === 'confirm-paystack-account') {
-      const resolved = await resolvePaystackAccountNumber({
-        accountNumber: body.accountNumber,
-        bankCode: body.bankCode,
-        currency: body.payoutCurrency,
-      })
+      let resolved
+      try {
+        resolved = await resolvePaystackAccountNumber({
+          accountNumber: body.accountNumber,
+          bankCode: body.bankCode,
+          currency: body.payoutCurrency,
+        })
+      } catch (error) {
+        return paystackAccountVerificationError(error, cors)
+      }
 
       const resolvedName = normalizeNameForCompare(resolved.account_name)
       const enteredName = normalizeNameForCompare(body.accountName)
@@ -298,36 +514,68 @@ Deno.serve(async (req) => {
         }, 409, cors)
       }
 
-      const recipient = await createPaystackTransferRecipient({
-        name: resolved.account_name,
-        accountNumber: resolved.account_number,
-        bankCode: body.bankCode,
-        currency: body.payoutCurrency,
-      })
+      let recipient
+      try {
+        recipient = await createPaystackTransferRecipient({
+          name: resolved.account_name,
+          accountNumber: resolved.account_number,
+          bankCode: body.bankCode,
+          currency: body.payoutCurrency,
+        })
+      } catch (error) {
+        return paystackRecipientSetupError(error, cors)
+      }
 
       const now = new Date().toISOString()
-      const { error: updateError } = await supabase
+      const payoutCountryCode = normalizeCountryCode(body.countryCode)
+      const payoutBankName = body.bankName.trim()
+      const payoutBankCode = body.bankCode.trim()
+      const payoutAccountMasked = maskAccountNumber(resolved.account_number)
+      const nextDestinationKey = [
+        'PAYSTACK',
+        body.payoutCurrency,
+        payoutBankCode,
+        payoutAccountMasked,
+        normalizedKeyPart(resolved.account_name),
+      ].join(':')
+      const guardResponse = payoutChangeGuardResponse(profile, nextDestinationKey, now, cors)
+      if (guardResponse) return guardResponse
+
+      const { error: currencyUpdateError } = await supabase
         .from('tailor_profiles')
         .update({
           payout_currency: body.payoutCurrency,
+        })
+        .eq('id', profile.id)
+
+      if (currencyUpdateError) {
+        throw currencyUpdateError
+      }
+
+      const { error: verificationUpdateError } = await supabase
+        .from('tailor_profiles')
+        .update({
+          payout_provider: 'PAYSTACK',
           payout_account_type: 'PAYSTACK',
           payout_account_verified: true,
           payout_account_verified_at: now,
           payout_reverification_required: false,
-          payout_bank_name: body.bankName.trim(),
-          payout_bank_code: body.bankCode.trim(),
+          payout_bank_name: payoutBankName,
+          payout_bank_code: payoutBankCode,
           payout_account_name: resolved.account_name,
-          payout_account_masked: maskAccountNumber(resolved.account_number),
-          payout_country_code: normalizeCountryCode(body.countryCode),
+          payout_account_masked: payoutAccountMasked,
+          payout_country_code: payoutCountryCode,
           paystack_recipient_code: recipient.recipient_code,
           paystack_account_id: recipient.recipient_code,
           stripe_connect_account_id: null,
           stripe_account_id: null,
+          ...manualBankResetPatch(),
+          ...payoutChangePatch(profile, nextDestinationKey, now),
         })
         .eq('id', profile.id)
 
-      if (updateError) {
-        throw updateError
+      if (verificationUpdateError) {
+        throw verificationUpdateError
       }
 
       await audit(supabase, {
@@ -346,16 +594,181 @@ Deno.serve(async (req) => {
       return jsonResponse({
         ok: true,
         account: {
-          provider: 'PAYSTACK',
+          id: profile.id,
+          displayName: profile.display_name ?? 'Your tailor profile',
           payoutCurrency: body.payoutCurrency,
+          payoutProvider: 'PAYSTACK',
           payoutAccountType: 'PAYSTACK',
           payoutAccountVerified: true,
+          payoutReverificationRequired: false,
           payoutAccountVerifiedAt: now,
-          payoutBankName: body.bankName.trim(),
+          payoutBankName,
           payoutAccountName: resolved.account_name,
-          payoutAccountMasked: maskAccountNumber(resolved.account_number),
-          payoutCountryCode: normalizeCountryCode(body.countryCode),
+          payoutAccountMasked,
+          payoutCountryCode,
+          manualBankEntry: false,
+          manualBankName: null,
+          manualBankCountryCode: null,
+          manualBankCountryName: null,
+          manualBankSwiftBic: null,
+          manualBankAccountName: null,
+          manualBankVerificationStatus: 'NOT_SUBMITTED',
+          manualBankSubmittedAt: null,
           paystackRecipientCode: recipient.recipient_code,
+          stripeConnectAccountId: null,
+          payoutAccountChangeCount: hasVerifiedPayoutDestination(profile) && currentPayoutDestinationKey(profile) !== nextDestinationKey
+            ? (profile.payout_account_change_count ?? 0) + 1
+            : profile.payout_account_change_count ?? 0,
+          payoutAccountLastChangedAt: now,
+          payoutAccountChangeLockedUntil: hasVerifiedPayoutDestination(profile) && currentPayoutDestinationKey(profile) !== nextDestinationKey
+            ? addMsIso(now, PAYOUT_CHANGE_COOLDOWN_MS)
+            : profile.payout_account_change_locked_until ?? null,
+          payoutDestinationHoldUntil: hasVerifiedPayoutDestination(profile) && currentPayoutDestinationKey(profile) !== nextDestinationKey
+            ? addMsIso(now, PAYOUT_DESTINATION_HOLD_MS)
+            : profile.payout_destination_hold_until ?? null,
+        },
+      }, 200, cors)
+    }
+
+    if (body.action === 'submit-manual-bank-entry') {
+      const validation = validateManualBankEntry(body)
+      if (!validation.ok) {
+        return jsonResponse({
+          code: 'MANUAL_BANK_ENTRY_INVALID',
+          error: validation.message,
+          fieldErrors: validation.fieldErrors,
+        }, 400, cors)
+      }
+
+      const manual = validation.value
+      const now = new Date().toISOString()
+      const provider = payoutProviderForCurrency(manual.payoutCurrency)
+      const maskedAccountNumber = maskAccountNumber(manual.accountNumber)
+      const nextDestinationKey = [
+        'MANUAL',
+        manual.payoutCurrency,
+        manual.bankCountryCode,
+        normalizedKeyPart(manual.bankName),
+        maskedAccountNumber,
+        normalizedKeyPart(manual.accountName),
+      ].join(':')
+      const guardResponse = payoutChangeGuardResponse(profile, nextDestinationKey, now, cors)
+      if (guardResponse) return guardResponse
+
+      const { error: updateError } = await supabase
+        .from('tailor_profiles')
+        .update({
+          payout_currency: manual.payoutCurrency,
+          payout_provider: provider,
+          payout_account_type: null,
+          payout_account_verified: false,
+          payout_account_verified_at: null,
+          payout_reverification_required: true,
+          payout_bank_name: manual.bankName,
+          payout_bank_code: null,
+          payout_account_name: manual.accountName,
+          payout_account_masked: maskedAccountNumber,
+          payout_country_code: manual.bankCountryCode,
+          paystack_recipient_code: null,
+          paystack_account_id: null,
+          stripe_connect_account_id: null,
+          stripe_account_id: null,
+          manual_bank_entry: true,
+          manual_bank_name: manual.bankName,
+          manual_bank_country_code: manual.bankCountryCode,
+          manual_bank_country_name: manual.bankCountryName,
+          manual_bank_swift_bic: manual.swiftBic,
+          manual_bank_account_number: manual.accountNumber,
+          manual_bank_account_name: manual.accountName,
+          manual_bank_verification_status: 'PENDING',
+          manual_bank_submitted_at: now,
+          manual_bank_verified_at: null,
+          manual_bank_verified_by: null,
+          ...payoutChangePatch(profile, nextDestinationKey, now),
+        })
+        .eq('id', profile.id)
+
+      if (updateError) {
+        throw updateError
+      }
+
+      await createOrRefreshOpsIssue(supabase, {
+        issueType: 'PAYOUT_BLOCKED',
+        severity: 'HIGH',
+        source: FN,
+        actorId: caller.id,
+        actorRole: 'TAILOR',
+        userId: caller.id,
+        tailorProfileId: profile.id,
+        relatedEntityType: 'tailor_profile',
+        relatedEntityId: profile.id,
+        provider,
+        title: 'Manual payout bank needs verification',
+        description: `${profile.display_name ?? 'A tailor'} submitted manual bank details because their bank was not listed.`,
+        recommendedAction: 'Verify the manual bank details, confirm the account holder, and only mark the payout account verified once the destination is safe for first payout.',
+        dedupeKey: `manual-bank-entry:${profile.id}`,
+        metadata: {
+          payout_currency: manual.payoutCurrency,
+          bank_name: manual.bankName,
+          bank_country_code: manual.bankCountryCode,
+          bank_country_name: manual.bankCountryName,
+          swift_bic: manual.swiftBic,
+          account_name: manual.accountName,
+          account_masked: maskedAccountNumber,
+          verification_status: 'PENDING',
+          note_to_tailor: MANUAL_BANK_ENTRY_NOTE,
+        },
+      })
+
+      await audit(supabase, {
+        event: 'seller.manual_bank_entry_submitted',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        severity: 'info',
+        payload: {
+          function: FN,
+          payout_currency: manual.payoutCurrency,
+          provider,
+          bank_country_code: manual.bankCountryCode,
+          manual_bank_entry: true,
+        },
+      })
+
+      return jsonResponse({
+        ok: true,
+        account: {
+          id: profile.id,
+          displayName: profile.display_name ?? 'Your tailor profile',
+          payoutCurrency: manual.payoutCurrency,
+          payoutProvider: provider,
+          payoutAccountType: null,
+          payoutAccountVerified: false,
+          payoutReverificationRequired: true,
+          payoutAccountVerifiedAt: null,
+          payoutBankName: manual.bankName,
+          payoutAccountName: manual.accountName,
+          payoutAccountMasked: maskedAccountNumber,
+          payoutCountryCode: manual.bankCountryCode,
+          manualBankEntry: true,
+          manualBankName: manual.bankName,
+          manualBankCountryCode: manual.bankCountryCode,
+          manualBankCountryName: manual.bankCountryName,
+          manualBankSwiftBic: manual.swiftBic,
+          manualBankAccountName: manual.accountName,
+          manualBankVerificationStatus: 'PENDING',
+          manualBankSubmittedAt: now,
+          paystackRecipientCode: null,
+          stripeConnectAccountId: null,
+          payoutAccountChangeCount: hasVerifiedPayoutDestination(profile) && currentPayoutDestinationKey(profile) !== nextDestinationKey
+            ? (profile.payout_account_change_count ?? 0) + 1
+            : profile.payout_account_change_count ?? 0,
+          payoutAccountLastChangedAt: now,
+          payoutAccountChangeLockedUntil: hasVerifiedPayoutDestination(profile) && currentPayoutDestinationKey(profile) !== nextDestinationKey
+            ? addMsIso(now, PAYOUT_CHANGE_COOLDOWN_MS)
+            : profile.payout_account_change_locked_until ?? null,
+          payoutDestinationHoldUntil: hasVerifiedPayoutDestination(profile) && currentPayoutDestinationKey(profile) !== nextDestinationKey
+            ? addMsIso(now, PAYOUT_DESTINATION_HOLD_MS)
+            : profile.payout_destination_hold_until ?? null,
         },
       }, 200, cors)
     }
@@ -366,6 +779,7 @@ Deno.serve(async (req) => {
         return jsonResponse({ error: 'Enter the payout country first.' }, 400, cors)
       }
 
+      const now = new Date().toISOString()
       let accountId = profile.stripe_connect_account_id?.trim() || null
       if (!accountId) {
         const account = await createStripeConnectAccount({
@@ -378,6 +792,10 @@ Deno.serve(async (req) => {
         })
         accountId = account.id
       }
+
+      const nextDestinationKey = ['STRIPE_CONNECT', body.payoutCurrency, accountId].join(':')
+      const guardResponse = payoutChangeGuardResponse(profile, nextDestinationKey, now, cors)
+      if (guardResponse) return guardResponse
 
       const accountLink = await createStripeAccountLink({
         accountId,
@@ -402,6 +820,8 @@ Deno.serve(async (req) => {
           payout_account_name: null,
           payout_account_masked: null,
           payout_account_verified_at: null,
+          ...manualBankResetPatch(),
+          ...payoutChangePatch(profile, nextDestinationKey, now),
         })
         .eq('id', profile.id)
 
@@ -480,7 +900,11 @@ Deno.serve(async (req) => {
       }, 200, cors)
     }
 
-    return new Response('Unsupported action', { status: 400, headers: cors })
+    return jsonResponse({
+      error: 'Unsupported payout action.',
+      message: 'Unsupported payout action.',
+      code: 'UNSUPPORTED_ACTION',
+    }, 400, cors)
   } catch (error) {
     log('error', FN, 'unhandled', {
       error: error instanceof Error ? error.message : String(error),

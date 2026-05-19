@@ -174,7 +174,7 @@ describe('isTerminal', () => {
     expect(isTerminal(stage)).toBe(true)
   })
 
-  const nonTerminal: OrderStage[] = ['PENDING_QUOTE', 'QUOTE_SENT', 'PAYMENT_FAILED', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED', 'COLLECTED']
+  const nonTerminal: OrderStage[] = ['PENDING_QUOTE', 'QUOTE_SENT', 'PAYMENT_FAILED', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED', 'COLLECTED', 'PARTIALLY_REFUNDED']
   it.each(nonTerminal)('%s is NOT terminal', (stage) => {
     expect(isTerminal(stage)).toBe(false)
   })
@@ -188,6 +188,7 @@ describe('ORDER_TRANSITIONS integrity', () => {
       'DRAFT', 'PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING', 'PAYMENT_FAILED',
       'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING',
       'READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'READY_FOR_COLLECTION', 'DELIVERED', 'COLLECTED',
+      'PARTIALLY_REFUNDED',
       'COMPLETE', 'DECLINED', 'EXPIRED', 'IN_DISPUTE', 'REFUNDED', 'CANCELLED',
     ])
     for (const t of ORDER_TRANSITIONS) {
@@ -207,6 +208,7 @@ describe('ORDER_TRANSITIONS integrity', () => {
 
   it('every terminal stage has no outgoing transitions (except platform resolves)', () => {
     for (const t of ORDER_TRANSITIONS) {
+      if (t.from === 'COMPLETE' && t.to === 'PARTIALLY_REFUNDED' && t.actor === 'PLATFORM') continue
       if (TERMINAL_STAGES.includes(t.from)) {
         throw new Error(`Terminal stage ${t.from} has outgoing transition to ${t.to}`)
       }

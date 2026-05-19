@@ -39,7 +39,7 @@ export default function TailorAccessReviewScreen() {
   async function handleSubmit() {
     if (submitting) return
     if (note.trim().length < 10) {
-      Alert.alert('Add more detail', 'Please share a short explanation so support knows what looks wrong about your seller access state.')
+      Alert.alert('Add more detail', 'Please share a short explanation so support knows what looks wrong about your tailor access state.')
       return
     }
 
@@ -77,7 +77,7 @@ export default function TailorAccessReviewScreen() {
             <View style={styles.heroBadge}>
               <Text style={styles.heroBadgeText}>Request received</Text>
             </View>
-            <Text style={styles.heroTitle}>Your seller access review request is now in Drape.</Text>
+            <Text style={styles.heroTitle}>Your tailor access review request is now in Drape.</Text>
             <Text style={styles.heroCopy}>
               Support can now review the context you submitted. If more evidence is needed, they can follow up from the account email on file.
             </Text>
@@ -110,7 +110,7 @@ export default function TailorAccessReviewScreen() {
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Low-bandwidth support</Text>
           </View>
-          <Text style={styles.heroTitle}>Ask for a human review of your seller access state.</Text>
+          <Text style={styles.heroTitle}>Ask for a human review of your tailor access state.</Text>
           <Text style={styles.heroCopy}>
             Use this when you think your current access state needs human review or you need to add context that the current checks do not capture yet.
           </Text>
@@ -155,14 +155,14 @@ export default function TailorAccessReviewScreen() {
           onPress={handleSubmit}
           disabled={submitting}
         >
-          {submitting ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.actionBtnText}>Submit review request</Text>}
+          {submitting ? <ActivityIndicator color={Colors.textInverse} /> : <Text style={styles.actionBtnText}>Submit review request</Text>}
         </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.secondaryBtn}
           onPress={() => {
             void openExternalUrl(
-              `mailto:${CONTACTS.tailors}?subject=${encodeURIComponent('Drape seller access review request')}`,
+              `mailto:${CONTACTS.tailors}?subject=${encodeURIComponent('Drape tailor access review request')}`,
               `Please email ${CONTACTS.tailors} from your account email if you cannot complete the request in-app.`,
             )
           }}
@@ -252,7 +252,7 @@ const styles = StyleSheet.create({
     padding: 12,
     alignItems: 'center',
   },
-  actionBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.white },
+  actionBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   secondaryBtn: {
     borderRadius: Radius.lg,
     padding: 12,

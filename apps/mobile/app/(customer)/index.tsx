@@ -3,30 +3,34 @@ import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
   RefreshControl, TextInput, ActivityIndicator,
   Keyboard, FlatList, useWindowDimensions,
+  Modal, KeyboardAvoidingView, Platform,
+  type StyleProp, type ViewStyle,
 } from 'react-native'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { Image as ExpoImage } from 'expo-image'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Feather } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
 import { customerOrderStageLabel } from '@/lib/customer-order-copy'
 import { supabase } from '@/lib/supabase'
-import { TierBadgeChip, StarRating } from '@/components/ui'
+import { RemoteImage, TierBadgeChip, StarRating } from '@/components/ui'
+import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
+import type { StorageImageBucket } from '@/lib/image-url'
 
 const RECENTLY_VIEWED_KEY  = 'drape_recently_viewed_tailors'
 const RECENT_SEARCHES_KEY  = 'drape_recent_searches'
 const LAST_SEARCH_KEY      = 'drape_last_search'
 const DISCOVER_GUIDE_KEY   = 'drape_customer_discover_best_use_dismissed'
+const CUSTOMER_ONBOARDING_KEY = 'drape_customer_onboarding_seen'
 const MAX_RECENTLY_VIEWED  = 10
 const MAX_RECENT_SEARCHES  = 5
 const PAGE_SIZE            = 20
-const HOME_BG              = '#F9F7F3'
-const PRIMARY_GREEN        = '#1D9E75'
-const CHARCOAL             = '#2C2C2A'
-const MUTED_GREY           = '#8F8D88'
+const HOME_BG = Colors.bone
+const PRIMARY_GREEN = Colors.needleGreen
+const CHARCOAL = Colors.ink
+const MUTED_GREY = Colors.midGrey
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -42,8 +46,10 @@ const STAGE_PILL_COLOR: Partial<Record<OrderStage, { bg: string; text: string }>
 // Ordered by broadest appeal first. Globally understandable.
 // Future: replace with dynamic categories derived from search frequency or personalisation.
 const BROWSE_STYLES = ['Suits', 'Bridal', 'Casual', 'Traditional', 'Bespoke']
+const FILTER_SPECIALTIES = ['Agbada', 'Ankara', 'Suits', 'Saree', 'Kaftan', 'Trousers', 'Dresses', 'Gele', 'Other']
 
 type AvailFilter = 'ALL' | 'OPEN' | 'LIMITED'
+type MinRatingFilter = null | 4 | 4.5 | 5
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -68,7 +74,9 @@ type TailorCard = {
   tier: string
   priceRangeMin: number | null
   priceRangeMax: number | null
+  avatarUrl: string | null
   portfolioPhoto: string | null
+  exploreImageBucket: StorageImageBucket | null
   availability: string
   supportsCustomOrders: boolean
   supportsReadyMade: boolean
@@ -80,6 +88,32 @@ type LastSearch = {
   query: string
   count: number
   thumbnail: string | null
+  thumbnailBucket?: StorageImageBucket | null
+}
+
+type TailorDiscoveryRow = {
+  id: string
+  display_name?: string | null
+  location?: string | null
+  seller_type?: 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP' | null
+  specialty_tags?: unknown
+  avg_rating?: number | null
+  total_reviews?: number | null
+  tier?: string | null
+  price_range_min?: number | null
+  price_range_max?: number | null
+  avatar_url?: string | null
+  portfolio_photo_urls?: unknown
+  availability?: string | null
+  supports_custom_orders?: boolean | null
+  supports_ready_made?: boolean | null
+  avg_response_hours?: number | null
+  ranking_score?: number | null
+}
+
+type PortfolioCoverRow = {
+  tailor_profile_id?: string | null
+  image_url?: string | null
 }
 
 function orderPriority(stage: OrderStage): number {
@@ -108,10 +142,46 @@ function asStringList(value: unknown): string[] {
   return []
 }
 
+function resolveFallbackExploreImage(t: TailorDiscoveryRow): { uri: string | null; bucket: StorageImageBucket | null } {
+  const avatarUrl = typeof t.avatar_url === 'string' && t.avatar_url.trim().length > 0 ? t.avatar_url : null
+  if (avatarUrl) return { uri: avatarUrl, bucket: 'avatars' }
+
+  const portfolioPhotos = asStringList(t.portfolio_photo_urls)
+  return { uri: portfolioPhotos[0] ?? null, bucket: portfolioPhotos[0] ? 'portfolio-photos' : null }
+}
+
 function availabilityHint(tailor: TailorCard): string | null {
   if (tailor.availability === 'LIMITED') return 'Taking a limited number of orders'
   if (tailor.avgResponseHours != null) return `Usually replies in about ${Math.round(tailor.avgResponseHours)}h`
   return null
+}
+
+function initials(name: string) {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join('') || 'D'
+}
+
+function ExploreMediaPlaceholder({
+  style,
+  name,
+  size = 24,
+}: {
+  style: StyleProp<ViewStyle>
+  name: string
+  size?: number
+}) {
+  return (
+    <View style={[style, styles.exploreMediaPlaceholder]}>
+      <View style={styles.exploreMediaIcon}>
+        <Feather name="image" size={size} color={Colors.needleGreen} />
+      </View>
+      <Text style={styles.exploreMediaInitials}>{initials(name)}</Text>
+    </View>
+  )
 }
 
 // ─── Storage helpers ──────────────────────────────────────────────────────────
@@ -160,31 +230,42 @@ async function saveLastSearch(userId: string | undefined, ls: LastSearch) {
   try { await AsyncStorage.setItem(storageKey(LAST_SEARCH_KEY, userId), JSON.stringify(ls)) } catch {}
 }
 
+async function clearLastSearch(userId: string | undefined) {
+  try { await AsyncStorage.removeItem(storageKey(LAST_SEARCH_KEY, userId)) } catch {}
+}
+
 async function loadLastSearch(userId: string | undefined): Promise<LastSearch | null> {
   try {
     const raw = await AsyncStorage.getItem(storageKey(LAST_SEARCH_KEY, userId))
-    return raw ? JSON.parse(raw) : null
+    const parsed = raw ? JSON.parse(raw) as LastSearch : null
+    if (!parsed?.query?.trim() || parsed.count <= 0) {
+      await clearLastSearch(userId)
+      return null
+    }
+    return parsed
   } catch { return null }
 }
 
 // ─── Query helpers ─────────────────────────────────────────────────────────────
 
-function mapTailor(t: any): TailorCard {
-  const portfolioPhotos = asStringList(t.portfolio_photo_urls)
+function mapTailor(t: TailorDiscoveryRow): TailorCard {
+  const fallbackImage = resolveFallbackExploreImage(t)
 
   return {
     id: t.id,
-    displayName: t.display_name,
-    location: t.location,
+    displayName: t.display_name ?? 'Drape tailor',
+    location: t.location ?? 'Location not listed',
     sellerType: t.seller_type ?? 'TAILOR',
     specialtyTags: asStringList(t.specialty_tags),
-    avgRating: t.avg_rating,
-    totalReviews: t.total_reviews,
-    tier: t.tier,
+    avgRating: t.avg_rating ?? 0,
+    totalReviews: t.total_reviews ?? 0,
+    tier: t.tier ?? 'BRONZE',
     priceRangeMin: t.price_range_min ?? null,
     priceRangeMax: t.price_range_max ?? null,
-    portfolioPhoto: portfolioPhotos[0] ?? null,
-    availability: t.availability,
+    avatarUrl: t.avatar_url ?? null,
+    portfolioPhoto: fallbackImage.uri,
+    exploreImageBucket: fallbackImage.bucket,
+    availability: t.availability ?? 'OPEN',
     supportsCustomOrders: t.supports_custom_orders ?? true,
     supportsReadyMade: t.supports_ready_made ?? false,
     avgResponseHours: t.avg_response_hours ?? null,
@@ -192,10 +273,43 @@ function mapTailor(t: any): TailorCard {
   }
 }
 
+async function hydrateTailorCardsWithExploreCovers(tailors: TailorCard[]): Promise<TailorCard[]> {
+  const ids = tailors.map((tailor) => tailor.id)
+  if (ids.length === 0) return tailors
+
+  const { data, error } = await supabase
+    .from('portfolio_items')
+    .select('tailor_profile_id, image_url, sort_order')
+    .in('tailor_profile_id', ids)
+    .order('sort_order', { ascending: true })
+
+  if (error) return tailors
+
+  const coverByTailor = new Map<string, string>()
+  for (const row of (data ?? []) as PortfolioCoverRow[]) {
+    const tailorId = typeof row.tailor_profile_id === 'string' ? row.tailor_profile_id : null
+    const imageUrl = typeof row.image_url === 'string' && row.image_url.trim().length > 0 ? row.image_url : null
+    if (!tailorId || !imageUrl || coverByTailor.has(tailorId)) continue
+    coverByTailor.set(tailorId, imageUrl)
+  }
+
+  if (coverByTailor.size === 0) return tailors
+
+  return tailors.map((tailor) => {
+    const cover = coverByTailor.get(tailor.id)
+    if (!cover) return tailor
+    return {
+      ...tailor,
+      portfolioPhoto: cover,
+      exploreImageBucket: 'portfolio-photos',
+    }
+  })
+}
+
 /**
  * Natural language query parser.
  * "Suits in Lagos"    → { specialty: "Suits",  location: "Lagos" }
- * "Sellers in London" → { specialty: "",        location: "London" }
+ * "Tailors in London" → { specialty: "",        location: "London" }
  * "Bridal"            → { specialty: "Bridal",  location: "" }
  */
 function parseQuery(input: string): { specialty: string; location: string; general: string } {
@@ -252,9 +366,16 @@ export default function CustomerHomeScreen() {
   const [hasMore, setHasMore]               = useState(false)
   const [resultOffset, setResultOffset]     = useState(0)
   const [availFilter, setAvailFilter]       = useState<AvailFilter>('ALL')
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false)
+  const [specialtyFilters, setSpecialtyFilters] = useState<string[]>([])
+  const [locationFilter, setLocationFilter] = useState('')
+  const [minRatingFilter, setMinRatingFilter] = useState<MinRatingFilter>(null)
+  const [priceMaxFilter, setPriceMaxFilter] = useState('')
   const [recentSearches, setRecentSearches] = useState<string[]>([])
   const [lastSearch, setLastSearch]         = useState<LastSearch | null>(null)
   const [showGuide, setShowGuide]           = useState(true)
+  const [showOnboarding, setShowOnboarding] = useState(false)
+  const [onboardingStep, setOnboardingStep] = useState(0)
 
   // In-memory result cache: query key → first-page results
   const resultCacheRef = useRef<Map<string, TailorCard[]>>(new Map())
@@ -264,10 +385,34 @@ export default function CustomerHomeScreen() {
   const isSearchActive  = query.trim().length > 0
   const showSuggestions = searchFocused && !isSearchActive
 
-  // Filtered results by availability (client-side, no extra round trip)
-  const filteredResults = availFilter === 'ALL'
-    ? searchResults
-    : searchResults.filter((t) => t.availability === availFilter)
+  const activeFilterCount =
+    (availFilter !== 'ALL' ? 1 : 0) +
+    specialtyFilters.length +
+    (locationFilter.trim() ? 1 : 0) +
+    (minRatingFilter ? 1 : 0) +
+    (priceMaxFilter.trim() ? 1 : 0)
+
+  // Filtered results by local UI filters (client-side, no extra round trip).
+  const filteredResults = searchResults.filter((tailor) => {
+    if (availFilter !== 'ALL' && tailor.availability !== availFilter) return false
+    if (specialtyFilters.length > 0) {
+      const tags = tailor.specialtyTags.map((tag) => tag.toLowerCase())
+      const matchesSpecialty = specialtyFilters.some((specialty) => {
+        const lower = specialty.toLowerCase()
+        return tags.some((tag) => tag.includes(lower)) || tailor.displayName.toLowerCase().includes(lower)
+      })
+      if (!matchesSpecialty) return false
+    }
+    const locationText = locationFilter.trim().toLowerCase()
+    if (locationText && !tailor.location.toLowerCase().includes(locationText)) return false
+    if (minRatingFilter && tailor.avgRating < minRatingFilter) return false
+    const priceMax = Number(priceMaxFilter.trim())
+    if (Number.isFinite(priceMax) && priceMax > 0) {
+      const candidate = tailor.priceRangeMin ?? tailor.priceRangeMax
+      if (candidate != null && candidate > priceMax) return false
+    }
+    return true
+  })
 
   // ── Persistence load on focus ─────────────────────────────────────────────
 
@@ -277,11 +422,13 @@ export default function CustomerHomeScreen() {
       loadRecentSearches(user?.id),
       loadLastSearch(user?.id),
       AsyncStorage.getItem(storageKey(DISCOVER_GUIDE_KEY, user?.id)).catch(() => null),
-    ]).then(([rv, rs, ls, guideValue]) => {
+      AsyncStorage.getItem(storageKey(CUSTOMER_ONBOARDING_KEY, user?.id)).catch(() => null),
+    ]).then(([rv, rs, ls, guideValue, onboardingValue]) => {
       setRecentlyViewed(rv)
       setRecentSearches(rs)
       setLastSearch(ls)
       setShowGuide(guideValue !== '1')
+      setShowOnboarding(onboardingValue !== '1')
     })
   }, [user?.id]))
 
@@ -292,9 +439,18 @@ export default function CustomerHomeScreen() {
     } catch {}
   }
 
+  async function dismissOnboarding() {
+    setShowOnboarding(false)
+    setOnboardingStep(0)
+    try {
+      await AsyncStorage.setItem(storageKey(CUSTOMER_ONBOARDING_KEY, user?.id), '1')
+    } catch {}
+  }
+
   useFocusEffect(useCallback(() => {
-    if (!user?.id) return
-    fetchData()
+    if (!user?.id) return undefined
+    void fetchData()
+    return undefined
   }, [user?.id]))
 
   // ── Debounced live search — resets pagination on new query ─────────────────
@@ -339,7 +495,7 @@ export default function CustomerHomeScreen() {
           .eq('customer_id', user?.id),
         supabase
           .from('tailor_profiles')
-          .select('id, display_name, location, seller_type, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, portfolio_photo_urls, availability, avg_response_hours, supports_custom_orders, supports_ready_made, ranking_score')
+          .select('id, display_name, location, seller_type, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, availability, avg_response_hours, supports_custom_orders, supports_ready_made, ranking_score')
           .eq('is_live', true)
           .order('ranking_score', { ascending: false })
           .limit(30),
@@ -371,7 +527,7 @@ export default function CustomerHomeScreen() {
       const tailorRows =
         tailorsRes.status === 'fulfilled' && !tailorsRes.value.error
           ? ((tailorsRes.value.data ?? []) as any[])
-          : []
+          : null
 
       setActiveOrders(
         orderRows
@@ -388,7 +544,11 @@ export default function CustomerHomeScreen() {
       )
       setHasOrderHistory(historyCount > 0)
 
-      setAllTailors(tailorRows.map(mapTailor))
+      if (tailorRows) {
+        setAllTailors(await hydrateTailorCardsWithExploreCovers(tailorRows.map(mapTailor)))
+      } else {
+        setFetchError(true)
+      }
     } catch {
       setFetchError(true)
     }
@@ -416,7 +576,7 @@ export default function CustomerHomeScreen() {
     try {
       const baseQuery = supabase
         .from('tailor_profiles')
-        .select('id, display_name, location, seller_type, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, portfolio_photo_urls, availability, avg_response_hours, supports_custom_orders, supports_ready_made, ranking_score')
+        .select('id, display_name, location, seller_type, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, availability, avg_response_hours, supports_custom_orders, supports_ready_made, ranking_score')
         .eq('is_live', true)
 
       let sq = baseQuery
@@ -462,6 +622,8 @@ export default function CustomerHomeScreen() {
         }
       }
 
+      page = await hydrateTailorCardsWithExploreCovers(page)
+
       if (offset === 0) {
         setSearchResults(page)
         if (resultCacheRef.current.size >= 30) {
@@ -471,10 +633,20 @@ export default function CustomerHomeScreen() {
         resultCacheRef.current.set(q, page)
         setResultOffset(page.length)
 
-        const ls: LastSearch = { query: q, count: page.length, thumbnail: page[0]?.portfolioPhoto ?? null }
         saveRecentSearch(user?.id, q)
-        saveLastSearch(user?.id, ls)
-        setLastSearch(ls)
+        if (page.length > 0) {
+          const ls: LastSearch = {
+            query: q,
+            count: page.length,
+            thumbnail: page[0]?.portfolioPhoto ?? null,
+            thumbnailBucket: page[0]?.exploreImageBucket ?? null,
+          }
+          saveLastSearch(user?.id, ls)
+          setLastSearch(ls)
+        } else {
+          clearLastSearch(user?.id)
+          setLastSearch(null)
+        }
         loadRecentSearches(user?.id).then(setRecentSearches)
       } else {
         setSearchResults((prev) => [...prev, ...page])
@@ -535,14 +707,43 @@ export default function CustomerHomeScreen() {
     Keyboard.dismiss()
   }
 
+  function openDrapeVision() {
+    router.push({
+      pathname: DRAPE_VISION_ROUTE,
+      params: { mode: 'customer_scan', returnTo: '/(customer)' },
+    } as never)
+  }
+
   function handleBlur() {
     setTimeout(() => setSearchFocused(false), 150)
+  }
+
+  function toggleSpecialtyFilter(specialty: string) {
+    setSpecialtyFilters((current) =>
+      current.includes(specialty)
+        ? current.filter((item) => item !== specialty)
+        : [...current, specialty]
+    )
+  }
+
+  function clearAllFilters() {
+    setAvailFilter('ALL')
+    setSpecialtyFilters([])
+    setLocationFilter('')
+    setMinRatingFilter(null)
+    setPriceMaxFilter('')
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
+      <CustomerOnboardingModal
+        visible={showOnboarding}
+        step={onboardingStep}
+        onStepChange={setOnboardingStep}
+        onDone={() => void dismissOnboarding()}
+      />
 
       {/* ── Sticky header ── */}
       <View style={styles.stickyHeader}>
@@ -553,8 +754,9 @@ export default function CustomerHomeScreen() {
             <TextInput
               ref={inputRef}
               style={styles.searchInput}
-              placeholder="Search sellers, styles, or locations"
+              placeholder="Search tailors, styles, or locations"
               placeholderTextColor={Colors.midGrey}
+              accessibilityLabel="Search tailors, styles, or locations"
               value={query}
               onChangeText={setQuery}
               onFocus={() => setSearchFocused(true)}
@@ -576,14 +778,57 @@ export default function CustomerHomeScreen() {
               </TouchableOpacity>
             )}
           </View>
+          {isSearchActive && (
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Open search filters"
+              onPress={() => setFilterSheetOpen(true)}
+              style={styles.filterIconBtn}
+            >
+              <Feather name="sliders" size={17} color={PRIMARY_GREEN} />
+              {activeFilterCount > 0 ? (
+                <View style={styles.filterBadge}>
+                  <Text style={styles.filterBadgeText}>{activeFilterCount}</Text>
+                </View>
+              ) : null}
+            </TouchableOpacity>
+          )}
           {(searchFocused || isSearchActive) && (
             <TouchableOpacity onPress={cancelSearch} style={styles.cancelBtn}>
               <Text style={styles.cancelText}>Cancel</Text>
             </TouchableOpacity>
           )}
+          {!searchFocused && !isSearchActive && (
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Open Drape Vision"
+              onPress={openDrapeVision}
+              style={styles.visionIconBtn}
+            >
+              <Feather name="aperture" size={18} color={PRIMARY_GREEN} />
+              <View style={styles.visionStatusDot} />
+            </TouchableOpacity>
+          )}
         </View>
 
       </View>
+
+      <SearchFilterSheet
+        visible={filterSheetOpen}
+        specialtyFilters={specialtyFilters}
+        locationFilter={locationFilter}
+        minRatingFilter={minRatingFilter}
+        priceMaxFilter={priceMaxFilter}
+        availFilter={availFilter}
+        activeFilterCount={activeFilterCount}
+        onClose={() => setFilterSheetOpen(false)}
+        onToggleSpecialty={toggleSpecialtyFilter}
+        onChangeLocation={setLocationFilter}
+        onChangeMinRating={setMinRatingFilter}
+        onChangePriceMax={setPriceMaxFilter}
+        onChangeAvailability={setAvailFilter}
+        onClear={clearAllFilters}
+      />
 
       {/* ── Suggestions panel (focused, no query) ── */}
       {showSuggestions ? (
@@ -603,7 +848,7 @@ export default function CustomerHomeScreen() {
               </View>
               {recentSearches.map((s, i) => (
                 <TouchableOpacity key={i} style={styles.recentSearchRow} onPress={() => applyQuery(s)}>
-                  <Text style={styles.recentSearchIcon}>🕐</Text>
+                  <Feather name="clock" size={16} color={Colors.midGrey} />
                   <Text style={styles.recentSearchText}>{s}</Text>
                   <TouchableOpacity
                     onPress={() => {
@@ -612,8 +857,10 @@ export default function CustomerHomeScreen() {
                       AsyncStorage.setItem(storageKey(RECENT_SEARCHES_KEY, user?.id), JSON.stringify(updated))
                     }}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Remove ${s} from recent searches`}
                   >
-                    <Text style={styles.recentSearchRemove}>✕</Text>
+                    <Feather name="x" size={14} color={Colors.midGrey} />
                   </TouchableOpacity>
                 </TouchableOpacity>
               ))}
@@ -624,7 +871,7 @@ export default function CustomerHomeScreen() {
             <View style={styles.suggestChips}>
               {[
                 'Suits in Lagos',
-                'Sellers in London',
+                'Tailors in London',
                 'Bridal',
                 'Casual wear',
                 'Traditional',
@@ -655,8 +902,14 @@ export default function CustomerHomeScreen() {
               ) : (
                 <>
                   <Text style={styles.resultsCount}>
-                    {filteredResults.length} {filteredResults.length === 1 ? 'seller' : 'sellers'} found
+                    {filteredResults.length} {filteredResults.length === 1 ? 'tailor' : 'tailors'}
                   </Text>
+                  {activeFilterCount > 0 ? (
+                    <TouchableOpacity style={styles.clearFiltersRow} onPress={clearAllFilters}>
+                      <Feather name="x-circle" size={15} color={PRIMARY_GREEN} />
+                      <Text style={styles.clearFiltersText}>Clear all filters</Text>
+                    </TouchableOpacity>
+                  ) : null}
                   {/* Availability filter chips */}
                   <View style={styles.availRow}>
                     {([
@@ -685,26 +938,50 @@ export default function CustomerHomeScreen() {
                 <View style={styles.emptyStateBadge}>
                   <Text style={styles.emptyStateBadgeText}>Search</Text>
                 </View>
-                <Text style={styles.emptyStateEmoji}>{searchFetchError ? '⚠️' : '🔎'}</Text>
-                <Text style={styles.emptyStateTitle}>{searchFetchError ? "Couldn't load search results" : 'No sellers found'}</Text>
-                <Text style={styles.emptyStateHint}>
-                  {searchFetchError ? 'Try again in a moment or adjust your search.' : 'Try a different name, style, or location'}
+                <View style={[styles.emptyStateIcon, searchFetchError && styles.emptyStateIconError]}>
+                  <Feather
+                    name={searchFetchError ? 'alert-circle' : 'search'}
+                    size={26}
+                    color={searchFetchError ? Colors.kanteRust : Colors.needleGreen}
+                  />
+                </View>
+                <Text style={styles.emptyStateTitle}>
+                  {searchFetchError ? "Couldn't load search results" : 'No tailors match your search'}
                 </Text>
+                <Text style={styles.emptyStateHint}>
+                  {searchFetchError
+                    ? 'Try again in a moment or adjust your search.'
+                    : 'Try different filters or browse all tailors.'}
+                </Text>
+                <TouchableOpacity
+                  style={styles.searchRetryBtn}
+                  onPress={() => {
+                    if (searchFetchError) {
+                      runSearch(query, 0)
+                      return
+                    }
+                    setQuery('')
+                    setAvailFilter('ALL')
+                    setSearchFocused(false)
+                    Keyboard.dismiss()
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={searchFetchError ? 'Try search again' : 'Clear search filters'}
+                >
+                  <Text style={styles.searchRetryBtnText}>{searchFetchError ? 'Try again' : 'Clear filters'}</Text>
+                </TouchableOpacity>
                 {searchFetchError && (
-                  <>
-                    <TouchableOpacity style={styles.searchRetryBtn} onPress={() => runSearch(query, 0)}>
-                      <Text style={styles.searchRetryBtnText}>Try again</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.searchSecondaryBtn}
-                      onPress={() => {
-                        setSearchFocused(false)
-                        setQuery('')
-                      }}
-                    >
-                      <Text style={styles.searchSecondaryBtnText}>Back to browsing</Text>
-                    </TouchableOpacity>
-                  </>
+                  <TouchableOpacity
+                    style={styles.searchSecondaryBtn}
+                    onPress={() => {
+                      setSearchFocused(false)
+                      setQuery('')
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Back to browsing tailors"
+                  >
+                    <Text style={styles.searchSecondaryBtnText}>Back to browsing</Text>
+                  </TouchableOpacity>
                 )}
               </View>
             ) : null
@@ -729,7 +1006,7 @@ export default function CustomerHomeScreen() {
           {/* Network error banner */}
           {fetchError && (
             <View style={styles.errorBanner}>
-              <Text style={styles.errorBannerText}>Couldn't load sellers. Pull down to retry, or open Orders while discovery catches up.</Text>
+              <Text style={styles.errorBannerText}>Couldn't load tailors. Pull down to retry, or open Orders while discovery catches up.</Text>
             </View>
           )}
 
@@ -748,7 +1025,7 @@ export default function CustomerHomeScreen() {
           )}
 
           {/* Continue searching card */}
-          {lastSearch && (
+          {lastSearch && lastSearch.count > 0 && (
             <View style={styles.section}>
               <TouchableOpacity
                 style={styles.continueCard}
@@ -759,15 +1036,23 @@ export default function CustomerHomeScreen() {
                   <Text style={styles.continueLabel}>Continue searching</Text>
                   <Text style={styles.continueQuery} numberOfLines={1}>"{lastSearch.query}"</Text>
                   <Text style={styles.continueMeta}>
-                    {lastSearch.count} {lastSearch.count === 1 ? 'seller' : 'sellers'} found  ›
+                    {lastSearch.count} {lastSearch.count === 1 ? 'tailor' : 'tailors'} found  ›
                   </Text>
                 </View>
                 {lastSearch.thumbnail ? (
-                  <ExpoImage source={{ uri: lastSearch.thumbnail }} style={styles.continueThumbnail} contentFit="cover" cachePolicy="memory-disk" transition={120} />
+                  <RemoteImage
+                    uri={lastSearch.thumbnail}
+                    bucket={lastSearch.thumbnailBucket ?? 'portfolio-photos'}
+                    style={styles.continueThumbnail}
+                    contentFit="cover"
+                    transition={120}
+                    surface="customer_continue_search"
+                    fallback={(
+                      <ExploreMediaPlaceholder style={styles.continueThumbnail} name={lastSearch.query} size={18} />
+                    )}
+                  />
                 ) : (
-                  <View style={[styles.continueThumbnail, styles.continueThumbnailPlaceholder]}>
-                    <Text style={{ fontSize: 22 }}>🧵</Text>
-                  </View>
+                  <ExploreMediaPlaceholder style={styles.continueThumbnail} name={lastSearch.query} size={18} />
                 )}
               </TouchableOpacity>
             </View>
@@ -835,14 +1120,14 @@ export default function CustomerHomeScreen() {
                 activeOpacity={0.85}
               >
                 <View style={styles.firstOrderIcon}>
-                  <Text style={styles.firstOrderIconText}>✂️</Text>
+                  <Feather name="search" size={20} color={Colors.needleGreen} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.firstOrderTitle}>{hasOrderHistory ? 'No active orders right now' : 'Start your first order'}</Text>
                   <Text style={styles.firstOrderHint}>
                     {hasOrderHistory
                       ? 'Search again when you are ready to place another order.'
-                      : 'Search by style, location, or seller name to find someone you trust.'}
+                      : 'Search by style, location, or tailor name to find someone you trust.'}
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -868,7 +1153,7 @@ export default function CustomerHomeScreen() {
           {/* Top tailors grid */}
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Trusted sellers to explore</Text>
+              <Text style={styles.sectionTitle}>Trusted tailors to explore</Text>
             </View>
             {allTailors.length > 0 ? (
               <View style={styles.cardsGrid}>
@@ -881,9 +1166,9 @@ export default function CustomerHomeScreen() {
                 <View style={styles.emptyBrowseBadge}>
                   <Text style={styles.emptyBrowseBadgeText}>Discovery</Text>
                 </View>
-                <Text style={styles.emptyBrowseTitle}>No live sellers to browse yet</Text>
+                <Text style={styles.emptyBrowseTitle}>Verified tailors are being refreshed</Text>
                 <Text style={styles.emptyBrowseHint}>
-                  As soon as live sellers are available, they will appear here for customers to explore.
+                  Pull down to refresh, search by specialty, or check back shortly as vetted profiles go live.
                 </Text>
                 <TouchableOpacity
                   style={styles.emptyBrowseCta}
@@ -905,23 +1190,23 @@ export default function CustomerHomeScreen() {
 function GridCard({ tailor, onPress }: { tailor: TailorCard; onPress: () => void }) {
   const { width: screenWidth } = useWindowDimensions()
   const CARD_WIDTH = (screenWidth - Spacing.xl * 2 - Spacing.md) / 2
-  const [imageFailed, setImageFailed] = useState(false)
   return (
     <TouchableOpacity style={[styles.gridCard, { width: CARD_WIDTH }]} onPress={onPress} activeOpacity={0.88}>
       <View style={styles.gridImageWrap}>
-        {tailor.portfolioPhoto && !imageFailed ? (
-          <ExpoImage
-            source={{ uri: tailor.portfolioPhoto }}
+        {tailor.portfolioPhoto ? (
+          <RemoteImage
+            uri={tailor.portfolioPhoto}
+            bucket={tailor.exploreImageBucket ?? 'portfolio-photos'}
             style={styles.gridImage}
             contentFit="cover"
-            cachePolicy="memory-disk"
             transition={120}
-            onError={() => setImageFailed(true)}
+            surface="customer_explore_grid"
+            fallback={(
+              <ExploreMediaPlaceholder style={styles.gridImage} name={tailor.displayName} size={28} />
+            )}
           />
         ) : (
-          <View style={[styles.gridImage, styles.gridImagePlaceholder]}>
-            <Text style={{ fontSize: 36 }}>🧵</Text>
-          </View>
+          <ExploreMediaPlaceholder style={styles.gridImage} name={tailor.displayName} size={28} />
         )}
         {tailor.availability === 'OPEN' && (
           <View style={styles.availBadge}>
@@ -970,23 +1255,23 @@ function GridCard({ tailor, onPress }: { tailor: TailorCard; onPress: () => void
 // ─── Search result card ───────────────────────────────────────────────────────
 
 function SearchResultCard({ tailor, onPress }: { tailor: TailorCard; onPress: () => void }) {
-  const [imageFailed, setImageFailed] = useState(false)
   return (
     <TouchableOpacity style={styles.resultCard} onPress={onPress} activeOpacity={0.88}>
       <View style={styles.resultThumb}>
-        {tailor.portfolioPhoto && !imageFailed ? (
-          <ExpoImage
-            source={{ uri: tailor.portfolioPhoto }}
+        {tailor.portfolioPhoto ? (
+          <RemoteImage
+            uri={tailor.portfolioPhoto}
+            bucket={tailor.exploreImageBucket ?? 'portfolio-photos'}
             style={styles.resultThumbImg}
             contentFit="cover"
-            cachePolicy="memory-disk"
             transition={120}
-            onError={() => setImageFailed(true)}
+            surface="customer_search_result"
+            fallback={(
+              <ExploreMediaPlaceholder style={styles.resultThumbImg} name={tailor.displayName} size={20} />
+            )}
           />
         ) : (
-          <View style={[styles.resultThumbImg, styles.resultThumbPlaceholder]}>
-            <Text style={{ fontSize: 24 }}>🧵</Text>
-          </View>
+          <ExploreMediaPlaceholder style={styles.resultThumbImg} name={tailor.displayName} size={20} />
         )}
       </View>
       <View style={styles.resultInfo}>
@@ -1029,28 +1314,238 @@ function SearchResultCard({ tailor, onPress }: { tailor: TailorCard; onPress: ()
 // ─── Recently viewed card ─────────────────────────────────────────────────────
 
 function RecentCard({ tailor, onPress }: { tailor: TailorCard; onPress: () => void }) {
-  const [imageFailed, setImageFailed] = useState(false)
   return (
     <TouchableOpacity style={styles.recentCard} onPress={onPress} activeOpacity={0.88}>
       <View style={styles.recentImageWrap}>
-        {tailor.portfolioPhoto && !imageFailed ? (
-          <ExpoImage
-            source={{ uri: tailor.portfolioPhoto }}
+        {tailor.portfolioPhoto ? (
+          <RemoteImage
+            uri={tailor.portfolioPhoto}
+            bucket={tailor.exploreImageBucket ?? 'portfolio-photos'}
             style={styles.recentImage}
             contentFit="cover"
-            cachePolicy="memory-disk"
             transition={120}
-            onError={() => setImageFailed(true)}
+            surface="customer_recent_tailor"
+            fallback={(
+              <ExploreMediaPlaceholder style={styles.recentImage} name={tailor.displayName} size={18} />
+            )}
           />
         ) : (
-          <View style={[styles.recentImage, styles.recentImagePlaceholder]}>
-            <Text style={{ fontSize: 20 }}>🧵</Text>
-          </View>
+          <ExploreMediaPlaceholder style={styles.recentImage} name={tailor.displayName} size={18} />
         )}
       </View>
       <Text style={styles.recentName} numberOfLines={1}>{tailor.displayName}</Text>
       <Text style={styles.recentLocation} numberOfLines={1}>{tailor.location}</Text>
     </TouchableOpacity>
+  )
+}
+
+function SearchFilterSheet({
+  visible,
+  specialtyFilters,
+  locationFilter,
+  minRatingFilter,
+  priceMaxFilter,
+  availFilter,
+  activeFilterCount,
+  onClose,
+  onToggleSpecialty,
+  onChangeLocation,
+  onChangeMinRating,
+  onChangePriceMax,
+  onChangeAvailability,
+  onClear,
+}: {
+  visible: boolean
+  specialtyFilters: string[]
+  locationFilter: string
+  minRatingFilter: MinRatingFilter
+  priceMaxFilter: string
+  availFilter: AvailFilter
+  activeFilterCount: number
+  onClose: () => void
+  onToggleSpecialty: (specialty: string) => void
+  onChangeLocation: (value: string) => void
+  onChangeMinRating: (value: MinRatingFilter) => void
+  onChangePriceMax: (value: string) => void
+  onChangeAvailability: (value: AvailFilter) => void
+  onClear: () => void
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.filterSheetOverlay}>
+        <TouchableOpacity style={styles.filterSheetScrim} activeOpacity={1} onPress={onClose} />
+        <View style={styles.filterSheet}>
+          <View style={styles.filterSheetHandle} />
+          <View style={styles.filterSheetHeader}>
+            <Text style={styles.filterSheetTitle}>Filters</Text>
+            {activeFilterCount > 0 ? (
+              <TouchableOpacity onPress={onClear} accessibilityRole="button" accessibilityLabel="Clear all filters">
+                <Text style={styles.filterSheetClear}>Clear all</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+
+          <Text style={styles.filterSectionTitle}>Specialty</Text>
+          <View style={styles.filterChipWrap}>
+            {FILTER_SPECIALTIES.map((specialty) => {
+              const selected = specialtyFilters.includes(specialty)
+              return (
+                <TouchableOpacity
+                  key={specialty}
+                  style={[styles.filterSheetChip, selected && styles.filterSheetChipActive]}
+                  onPress={() => onToggleSpecialty(specialty)}
+                >
+                  <Text style={[styles.filterSheetChipText, selected && styles.filterSheetChipTextActive]}>{specialty}</Text>
+                </TouchableOpacity>
+              )
+            })}
+          </View>
+
+          <Text style={styles.filterSectionTitle}>Location</Text>
+          <TextInput
+            value={locationFilter}
+            onChangeText={onChangeLocation}
+            placeholder="City or country"
+            placeholderTextColor={Colors.midGrey}
+            style={styles.filterInput}
+            returnKeyType="done"
+          />
+
+          <Text style={styles.filterSectionTitle}>Rating</Text>
+          <View style={styles.filterChipWrap}>
+            {([null, 4, 4.5, 5] as MinRatingFilter[]).map((rating) => {
+              const selected = minRatingFilter === rating
+              return (
+                <TouchableOpacity
+                  key={rating ?? 'any'}
+                  style={[styles.filterSheetChip, selected && styles.filterSheetChipActive]}
+                  onPress={() => onChangeMinRating(rating)}
+                >
+                  <Text style={[styles.filterSheetChipText, selected && styles.filterSheetChipTextActive]}>
+                    {rating == null ? 'Any' : `${rating}+`}
+                  </Text>
+                </TouchableOpacity>
+              )
+            })}
+          </View>
+
+          <Text style={styles.filterSectionTitle}>Availability</Text>
+          <View style={styles.filterChipWrap}>
+            {([
+              { key: 'ALL', label: 'All' },
+              { key: 'OPEN', label: 'Available now' },
+              { key: 'LIMITED', label: 'Limited' },
+            ] as { key: AvailFilter; label: string }[]).map((option) => {
+              const selected = availFilter === option.key
+              return (
+                <TouchableOpacity
+                  key={option.key}
+                  style={[styles.filterSheetChip, selected && styles.filterSheetChipActive]}
+                  onPress={() => onChangeAvailability(option.key)}
+                >
+                  <Text style={[styles.filterSheetChipText, selected && styles.filterSheetChipTextActive]}>{option.label}</Text>
+                </TouchableOpacity>
+              )
+            })}
+          </View>
+
+          <Text style={styles.filterSectionTitle}>Price ceiling</Text>
+          <TextInput
+            value={priceMaxFilter}
+            onChangeText={onChangePriceMax}
+            placeholder="Max starting price"
+            placeholderTextColor={Colors.midGrey}
+            style={styles.filterInput}
+            keyboardType="decimal-pad"
+            returnKeyType="done"
+          />
+
+          <TouchableOpacity style={styles.filterApplyButton} onPress={onClose}>
+            <Text style={styles.filterApplyButtonText}>Show results</Text>
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  )
+}
+
+const CUSTOMER_ONBOARDING_SLIDES = [
+  {
+    icon: 'search' as const,
+    title: 'Find your tailor',
+    body: 'Browse trusted tailors by style, location, rating, and availability.',
+  },
+  {
+    icon: 'user-check' as const,
+    title: 'Your measurements, stored once',
+    body: 'Save your fit profile once, then reuse it whenever you place an order.',
+  },
+  {
+    icon: 'scissors' as const,
+    title: 'Track every stitch',
+    body: 'Follow quotes, production stages, messages, delivery, and reviews in one place.',
+  },
+]
+
+function CustomerOnboardingModal({
+  visible,
+  step,
+  onStepChange,
+  onDone,
+}: {
+  visible: boolean
+  step: number
+  onStepChange: (step: number) => void
+  onDone: () => void
+}) {
+  const slide = CUSTOMER_ONBOARDING_SLIDES[step] ?? CUSTOMER_ONBOARDING_SLIDES[0]
+  const isLast = step === CUSTOMER_ONBOARDING_SLIDES.length - 1
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onDone}>
+      <View style={styles.onboardingOverlay}>
+        <View style={styles.onboardingCard}>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Skip customer walkthrough"
+            onPress={onDone}
+            style={styles.onboardingSkip}
+          >
+            <Text style={styles.onboardingSkipText}>Skip</Text>
+          </TouchableOpacity>
+
+          <View style={styles.onboardingIcon}>
+            <Feather name={slide.icon} size={30} color={PRIMARY_GREEN} />
+          </View>
+          <Text style={styles.onboardingTitle}>{slide.title}</Text>
+          <Text style={styles.onboardingBody}>{slide.body}</Text>
+
+          <View style={styles.onboardingDots}>
+            {CUSTOMER_ONBOARDING_SLIDES.map((_, index) => (
+              <View
+                key={index}
+                style={[styles.onboardingDot, index === step && styles.onboardingDotActive]}
+              />
+            ))}
+          </View>
+
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={isLast ? 'Finish customer walkthrough' : 'Continue customer walkthrough'}
+            onPress={() => {
+              if (isLast) {
+                onDone()
+                return
+              }
+              onStepChange(step + 1)
+            }}
+            style={styles.onboardingButton}
+          >
+            <Text style={styles.onboardingButtonText}>{isLast ? 'Get Started' : 'Continue'}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
   )
 }
 
@@ -1076,8 +1571,53 @@ const styles = StyleSheet.create({
   },
   searchInput: { flex: 1, fontSize: 14, color: CHARCOAL, padding: 0 },
   clearBtn: { minWidth: 24, minHeight: 24, alignItems: 'center', justifyContent: 'center' },
+  filterIconBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.white,
+    position: 'relative',
+    ...Shadow.sm,
+  },
+  filterBadge: {
+    position: 'absolute',
+    right: 5,
+    top: 5,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.kanteRust,
+    borderWidth: 1.5,
+    borderColor: Colors.white,
+  },
+  filterBadgeText: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.textInverse },
   cancelBtn: { paddingVertical: 8, minHeight: 44, justifyContent: 'center' },
   cancelText: { fontSize: 14, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
+  visionIconBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.white,
+    position: 'relative',
+    ...Shadow.sm,
+  },
+  visionStatusDot: {
+    position: 'absolute',
+    right: 9,
+    top: 9,
+    width: 8,
+    height: 8,
+    borderRadius: Radius.full,
+    backgroundColor: PRIMARY_GREEN,
+    borderWidth: 1.5,
+    borderColor: Colors.white,
+  },
 
   // Scroll areas
   scroll: { flex: 1 },
@@ -1134,9 +1674,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
     paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.lightGrey,
   },
-  recentSearchIcon: { fontSize: 16 },
   recentSearchText: { flex: 1, fontSize: 14, color: CHARCOAL },
-  recentSearchRemove: { fontSize: 13, color: Colors.midGrey },
   suggestChips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   suggestChip: {
     paddingHorizontal: 12, paddingVertical: 8,
@@ -1149,6 +1687,8 @@ const styles = StyleSheet.create({
   resultsList: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: 28 },
   resultsHeader: { gap: Spacing.sm, marginBottom: 6 },
   resultsCount: { fontSize: 16, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  clearFiltersRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, minHeight: 32 },
+  clearFiltersText: { fontSize: FontSize.sm, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
   availRow: { flexDirection: 'row', gap: Spacing.sm },
   availChip: {
     minHeight: 44,
@@ -1159,7 +1699,7 @@ const styles = StyleSheet.create({
   },
   availChipActive: { backgroundColor: CHARCOAL, borderColor: CHARCOAL },
   availLabel: { fontSize: 12, color: MUTED_GREY, fontWeight: FontWeight.medium },
-  availLabelActive: { color: Colors.white },
+  availLabelActive: { color: Colors.textInverse },
   loadMoreSpinner: { marginVertical: Spacing.lg },
 
   // Result card
@@ -1171,6 +1711,28 @@ const styles = StyleSheet.create({
   resultThumb: { width: 76, height: 86, borderRadius: Radius.md, overflow: 'hidden' },
   resultThumbImg: { width: '100%', height: '100%' },
   resultThumbPlaceholder: { backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center' },
+  exploreMediaPlaceholder: {
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  exploreMediaIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: Colors.needleGreen,
+  },
+  exploreMediaInitials: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.bold,
+    letterSpacing: 0.8,
+  },
   resultInfo: { flex: 1, gap: 3, justifyContent: 'center' },
   resultNameRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   resultName: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, flex: 1, marginRight: 4, fontFamily: 'Georgia' },
@@ -1188,10 +1750,124 @@ const styles = StyleSheet.create({
   },
   capabilityText: { fontSize: 11, color: Colors.inkLight, fontWeight: FontWeight.medium },
   limitedBadge: {
-    backgroundColor: '#FEF3C7', paddingHorizontal: Spacing.sm,
+    backgroundColor: Colors.statusPendingBg, paddingHorizontal: Spacing.sm,
     paddingVertical: 2, borderRadius: Radius.full, alignSelf: 'flex-start', marginTop: 2,
   },
-  limitedText: { fontSize: 10, color: '#92400E', fontWeight: FontWeight.medium },
+  limitedText: { fontSize: 10, color: Colors.statusPending, fontWeight: FontWeight.medium },
+  filterSheetOverlay: { flex: 1, justifyContent: 'flex-end' },
+  filterSheetScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.35)' },
+  filterSheet: {
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.sm,
+  },
+  filterSheetHandle: { alignSelf: 'center', width: 42, height: 4, borderRadius: 2, backgroundColor: Colors.lightGrey },
+  filterSheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  filterSheetTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  filterSheetClear: { fontSize: FontSize.sm, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
+  filterSectionTitle: { marginTop: Spacing.sm, fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  filterChipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
+  filterSheetChip: {
+    minHeight: 40,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    paddingHorizontal: Spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.white,
+  },
+  filterSheetChipActive: { backgroundColor: Colors.needleGreen, borderColor: Colors.needleGreen },
+  filterSheetChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
+  filterSheetChipTextActive: { color: Colors.textInverse },
+  filterInput: {
+    minHeight: 48,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    paddingHorizontal: Spacing.md,
+    fontSize: FontSize.md,
+    color: Colors.ink,
+    backgroundColor: Colors.bone,
+  },
+  filterApplyButton: {
+    marginTop: Spacing.md,
+    minHeight: 52,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreen,
+  },
+  filterApplyButtonText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
+  onboardingOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(26,26,24,0.52)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing.xl,
+  },
+  onboardingCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    alignItems: 'center',
+    gap: Spacing.md,
+    ...Shadow.lg,
+  },
+  onboardingSkip: {
+    alignSelf: 'flex-end',
+    minHeight: 44,
+    paddingHorizontal: Spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  onboardingSkipText: { fontSize: FontSize.sm, color: Colors.midGrey, fontWeight: FontWeight.medium },
+  onboardingIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  onboardingTitle: {
+    fontFamily: 'Georgia',
+    fontSize: FontSize.xl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    textAlign: 'center',
+  },
+  onboardingBody: {
+    fontSize: FontSize.md,
+    color: Colors.inkLight,
+    lineHeight: 23,
+    textAlign: 'center',
+  },
+  onboardingDots: { flexDirection: 'row', gap: Spacing.xs, marginTop: Spacing.xs },
+  onboardingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.lightGrey,
+  },
+  onboardingDotActive: { width: 24, backgroundColor: Colors.needleGreen },
+  onboardingButton: {
+    width: '100%',
+    minHeight: 52,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreen,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  onboardingButtonText: {
+    fontSize: FontSize.md,
+    color: Colors.textInverse,
+    fontWeight: FontWeight.semibold,
+  },
 
   // Section
   section: { paddingTop: Spacing.md },
@@ -1212,7 +1888,6 @@ const styles = StyleSheet.create({
   continueQuery: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   continueMeta: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
   continueThumbnail: { width: 52, height: 52, borderRadius: Radius.md, overflow: 'hidden' },
-  continueThumbnailPlaceholder: { backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center' },
 
   // Recently viewed
   recentScroll: { marginLeft: Spacing.lg },
@@ -1258,7 +1933,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  firstOrderIconText: { fontSize: 20 },
   firstOrderTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   firstOrderHint: { fontSize: 13, color: MUTED_GREY, lineHeight: 18, marginTop: 2 },
 
@@ -1289,7 +1963,7 @@ const styles = StyleSheet.create({
   availBadgeFull: { backgroundColor: 'rgba(0,0,0,0.55)' },
   availDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: Colors.success },
   availText: { fontSize: 10, fontWeight: FontWeight.semibold, color: Colors.ink },
-  availTextFull: { color: Colors.white },
+  availTextFull: { color: Colors.textInverse },
   gridInfo: { padding: 10, gap: 4 },
   gridTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   gridName: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, flex: 1, marginRight: 4, fontFamily: 'Georgia' },
@@ -1312,7 +1986,17 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  emptyStateEmoji: { fontSize: 40 },
+  emptyStateIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyStateIconError: {
+    backgroundColor: Colors.kanteRustLight,
+  },
   emptyStateTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.inkLight },
   emptyStateHint: { fontSize: 13, color: MUTED_GREY, textAlign: 'center' },
   searchRetryBtn: {
@@ -1324,7 +2008,7 @@ const styles = StyleSheet.create({
     minHeight: 44,
     justifyContent: 'center',
   },
-  searchRetryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  searchRetryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   searchSecondaryBtn: {
     marginTop: Spacing.sm,
     backgroundColor: Colors.white,

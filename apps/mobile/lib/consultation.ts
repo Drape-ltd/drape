@@ -1,5 +1,5 @@
 import { Alert, Linking } from 'react-native'
-import { isLikelyConnectivityIssue, readFunctionErrorPayload } from '@/lib/function-errors'
+import { isLikelyConnectivityIssue, isMachineErrorCodeMessage, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import { invokeFunction } from '@/lib/supabase'
 
 type ConsultationAudience = 'customer' | 'tailor' | 'generic'
@@ -12,7 +12,9 @@ type ConsultationRoomResponse = {
 
 function readPayloadString(payload: Record<string, unknown> | null, key: string) {
   const value = payload?.[key]
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+  if (typeof value !== 'string' || value.trim().length === 0) return null
+  const trimmed = value.trim()
+  return key === 'code' || !isMachineErrorCodeMessage(trimmed) ? trimmed : null
 }
 
 function callUnavailableMessage(audience: ConsultationAudience) {
@@ -75,8 +77,8 @@ export async function createConsultationRoom(
 
   const payload = error ? await readFunctionErrorPayload(error) : null
   const code = readPayloadString(payload, 'code')
-  const payloadMessage = readPayloadString(payload, 'error')
-  const message = error?.message ?? payloadMessage ?? 'Could not start the consultation call right now.'
+  const payloadMessage = readPayloadString(payload, 'message') ?? readPayloadString(payload, 'error')
+  const message = await readFunctionErrorMessage(error, 'Could not start the consultation call right now.')
 
   if (/session expired/i.test(message)) {
     Alert.alert('Session expired', 'Please sign in again before starting a consultation call.')
@@ -96,6 +98,9 @@ export async function createConsultationRoom(
       Alert.alert('Consultation unavailable', payloadMessage ?? 'Consultation calling is not configured in this environment yet.')
       return null
     case 'CONSULTATION_NOT_READY':
+    case 'CONSULTATION_NOT_APPROVED':
+    case 'CONSULTATION_PAYMENT_REQUIRED':
+    case 'CONSULTATION_NOT_OPEN_YET':
       Alert.alert('Consultation not ready', payloadMessage ?? 'This order is no longer in the consultation stage. Refresh the order first.')
       return null
     case 'ORDER_NOT_FOUND':
@@ -115,7 +120,7 @@ export async function createConsultationRoom(
       Alert.alert('Session expired', payloadMessage ?? 'Please sign in again before starting a consultation call.')
       return null
     default:
-      Alert.alert('Call unavailable', payloadMessage ?? 'Could not start the consultation call right now.')
+      Alert.alert('Call unavailable', message)
       return null
   }
 }

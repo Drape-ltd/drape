@@ -5,23 +5,27 @@ import {
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { inviteCustomerFromTailor, shareTailorProfile } from '@/lib/invite'
 import { tailorOrderHint, tailorOrderStageLabel } from '@/lib/order-flow'
 import { deriveTailorReadiness } from '@/lib/tailor-readiness'
+import { loadPayoutAccountStatus, type TailorPayoutStatus } from '@/lib/payout-setup'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { useRefreshOnFocus, useTailorDashboard } from '@/lib/queries'
 import type { TailorStockAlert } from '@/lib/ready-made-stock'
+import { DRAPE_VISION_ROUTE, type DrapeVisionMode } from '@/constants/drapeVision'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
+import { MANUAL_BANK_ENTRY_NOTE } from '@drape/shared/payout-setup'
 import { stageColor } from '@/lib/stageColors'
 
-const HOME_BG = '#F9F7F3'
-const PRIMARY_GREEN = '#1D9E75'
-const CHARCOAL = '#2C2C2A'
-const MUTED_GREY = '#8F8D88'
+const HOME_BG = Colors.bone
+const PRIMARY_GREEN = Colors.needleGreen
+const CHARCOAL = Colors.ink
+const MUTED_GREY = Colors.midGrey
 
 type Availability = 'OPEN' | 'LIMITED' | 'FULLY_BOOKED'
 const AVAIL_OPTIONS: { value: Availability; label: string; desc: string; color: string }[] = [
@@ -37,6 +41,7 @@ type DashboardStats = {
   itemInquiries: number
   completedOrders: number
   monthEarnings: number
+  monthEarningsByCurrency: Array<{ currency: string; amount: number }>
   avgRating: number
   tier: string | null
   displayName: string
@@ -48,6 +53,13 @@ type DashboardStats = {
   profileCompleted: boolean
   stripeAccountId: string | null
   paystackAccountId: string | null
+  payoutCurrency: string | null
+  payoutProvider: 'PAYSTACK' | 'STRIPE' | null
+  payoutReverificationRequired: boolean | null
+  payoutAccountVerified: boolean | null
+  payoutAccountType: 'PAYSTACK' | 'STRIPE_CONNECT' | null
+  paystackRecipientCode: string | null
+  stripeConnectAccountId: string | null
 }
 
 type ActiveOrderRow = {
@@ -71,6 +83,9 @@ export default function TailorDashboard() {
   const [availModal, setAvailModal] = useState(false)
   const [availSaving, setAvailSaving] = useState(false)
   const [showGuide, setShowGuide] = useState(true)
+  const [payoutStatus, setPayoutStatus] = useState<TailorPayoutStatus | null>(null)
+  const [payoutStatusLoading, setPayoutStatusLoading] = useState(true)
+  const [payoutStatusError, setPayoutStatusError] = useState('')
   const {
     data: dashboardData,
     isLoading,
@@ -81,7 +96,21 @@ export default function TailorDashboard() {
   const stats = (dashboardData?.stats ?? null) as DashboardStats | null
   const orders = (dashboardData?.orders ?? []) as ActiveOrderRow[]
   const stockAlerts = (dashboardData?.stockAlerts ?? []) as StockAlertRow[]
-  const readiness = deriveTailorReadiness(stats)
+  const dashboardCurrency = (stats?.currency ?? 'GBP') as CurrencyCode
+  const monthCurrencyReviewHint = stats ? monthEarningsReviewHint(stats) : null
+  const readinessInput = stats && payoutStatus
+    ? {
+      ...stats,
+      payoutCurrency: payoutStatus.payoutCurrency,
+      payoutProvider: payoutStatus.payoutProvider,
+      payoutReverificationRequired: payoutStatus.payoutReverificationRequired,
+      payoutAccountVerified: payoutStatus.payoutAccountVerified,
+      payoutAccountType: payoutStatus.payoutAccountType,
+      paystackRecipientCode: payoutStatus.paystackRecipientCode,
+      stripeConnectAccountId: payoutStatus.stripeConnectAccountId,
+    }
+    : stats
+  const readiness = deriveTailorReadiness(readinessInput)
 
   useEffect(() => {
     AsyncStorage.getItem(DASHBOARD_GUIDE_KEY)
@@ -91,6 +120,31 @@ export default function TailorDashboard() {
       .catch(() => {})
   }, [])
 
+  async function loadPayoutSummary() {
+    if (!user?.id) {
+      setPayoutStatus(null)
+      setPayoutStatusLoading(false)
+      return
+    }
+
+    setPayoutStatusLoading(true)
+    const result = await loadPayoutAccountStatus()
+    if (result.error || !result.profile) {
+      setPayoutStatus(null)
+      setPayoutStatusError(result.error ?? 'Could not load payout status.')
+      setPayoutStatusLoading(false)
+      return
+    }
+
+    setPayoutStatus(result.profile)
+    setPayoutStatusError('')
+    setPayoutStatusLoading(false)
+  }
+
+  useEffect(() => {
+    void loadPayoutSummary()
+  }, [user?.id])
+
   const greeting = (() => {
     const h = new Date().getHours()
     if (h < 12) return 'Good morning'
@@ -98,11 +152,21 @@ export default function TailorDashboard() {
     return 'Good evening'
   })()
 
-  useRefreshOnFocus(() => { void refetch() })
+  function openDrapeVision(mode: Extract<DrapeVisionMode, 'tailor_client_scan' | 'garment_qc' | 'size_guide_scan'>) {
+    router.push({
+      pathname: DRAPE_VISION_ROUTE,
+      params: { mode, returnTo: '/(tailor)' },
+    } as never)
+  }
+
+  useRefreshOnFocus(() => {
+    void refetch()
+    void loadPayoutSummary()
+  })
 
   async function onRefresh() {
     setRefreshing(true)
-    await refetch()
+    await Promise.all([refetch(), loadPayoutSummary()])
     setRefreshing(false)
   }
 
@@ -261,6 +325,38 @@ export default function TailorDashboard() {
           </View>
         ) : null}
 
+        {stats ? (
+          <PayoutSummaryCard
+            stats={stats}
+            status={payoutStatus}
+            loading={payoutStatusLoading}
+            error={payoutStatusError}
+            onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)' } } as never)}
+          />
+        ) : null}
+
+        <View style={styles.visionPanel}>
+          <View style={styles.visionPanelHeader}>
+            <View style={styles.visionPanelIcon}>
+              <Feather name="aperture" size={18} color={PRIMARY_GREEN} />
+            </View>
+            <View style={styles.visionPanelCopy}>
+              <Text style={styles.visionPanelTitle}>Drape Vision</Text>
+              <Text style={styles.visionPanelText}>Client scans, garment QC, and ready-made size guides stay close to your daily workflow.</Text>
+            </View>
+          </View>
+          <View style={styles.visionActionRow}>
+            <TouchableOpacity style={styles.visionAction} onPress={() => openDrapeVision('tailor_client_scan')}>
+              <Feather name="user-check" size={15} color={PRIMARY_GREEN} />
+              <Text style={styles.visionActionText}>Scan client</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.visionAction} onPress={() => openDrapeVision('garment_qc')}>
+              <Feather name="shield" size={15} color={PRIMARY_GREEN} />
+              <Text style={styles.visionActionText}>QC garment</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
         {/* Availability modal */}
         <Modal visible={availModal} transparent animationType="slide" onRequestClose={() => setAvailModal(false)}>
           <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setAvailModal(false)}>
@@ -359,13 +455,14 @@ export default function TailorDashboard() {
           <View style={styles.statsRow}>
             <TouchableOpacity onPress={() => router.navigate('/(tailor)/earnings')} style={{ flex: 1 }}>
               <StatCard
-                label="This month"
+                label={monthCurrencyReviewHint ? `This month (${dashboardCurrency})` : 'This month'}
                 value={formatAmount(
                   stats?.monthEarnings ?? 0,
-                  (stats?.currency ?? 'GBP') as CurrencyCode,
-                  (stats?.currency ?? 'GBP') as CurrencyCode,
+                  dashboardCurrency,
+                  dashboardCurrency,
                   STATIC_FALLBACK_RATES
                 )}
+                hint={monthCurrencyReviewHint ?? undefined}
               />
             </TouchableOpacity>
             <TouchableOpacity onPress={() => router.push('/(tailor)/profile/reviews' as never)} style={{ flex: 1 }}>
@@ -492,12 +589,203 @@ function LiveStatusBadge({ isLive, idStatus }: { isLive: boolean; idStatus: stri
   )
 }
 
-function StatCard({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function StatCard({ label, value, accent, hint }: { label: string; value: string; accent?: boolean; hint?: string }) {
   return (
     <View style={[styles.statCard, accent && styles.statCardAccent]}>
       <Text style={[styles.statValue, accent && styles.statValueAccent]}>{value}</Text>
       <Text style={styles.statLabel}>{label}</Text>
+      {hint ? <Text style={styles.statHint}>{hint}</Text> : null}
     </View>
+  )
+}
+
+function monthEarningsReviewHint(stats: DashboardStats) {
+  const displayCurrency = stats.currency.toUpperCase()
+  const otherCurrencies = (stats.monthEarningsByCurrency ?? [])
+    .filter((row) => row.amount > 0 && row.currency.toUpperCase() !== displayCurrency)
+
+  if (otherCurrencies.length === 0) return null
+
+  const amounts = otherCurrencies
+    .map((row) =>
+      formatAmount(
+        row.amount,
+        row.currency as CurrencyCode,
+        row.currency as CurrencyCode,
+        STATIC_FALLBACK_RATES,
+      ),
+    )
+    .join(' + ')
+
+  return `Also ${amounts} under currency review`
+}
+
+function lastFour(value: string | null | undefined) {
+  const digits = value?.replace(/\D+/gu, '').slice(-4) ?? ''
+  return digits || null
+}
+
+function futureDateLabel(value: string | null | undefined) {
+  if (!value) return ''
+  const time = Date.parse(value)
+  if (!Number.isFinite(time) || time <= Date.now()) return ''
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(time))
+}
+
+function payoutProviderName(stats: DashboardStats, status?: TailorPayoutStatus | null) {
+  const accountType = status?.payoutAccountType ?? stats.payoutAccountType
+  const provider = status?.payoutProvider ?? stats.payoutProvider
+  if (accountType === 'PAYSTACK' || provider === 'PAYSTACK') return 'Paystack'
+  if (accountType === 'STRIPE_CONNECT' || provider === 'STRIPE') return 'Stripe Connect'
+  return (status?.payoutCurrency ?? stats.payoutCurrency) ? 'Payout setup' : 'Not selected'
+}
+
+function payoutSummary(
+  stats: DashboardStats,
+  status: TailorPayoutStatus | null,
+  loading: boolean,
+  error: string,
+) {
+  const verified = status?.payoutAccountVerified ?? stats.payoutAccountVerified
+  const needsReview = status?.payoutReverificationRequired ?? stats.payoutReverificationRequired
+  const bankName = status?.payoutBankName ?? null
+  const maskedAccount = status?.payoutAccountMasked ?? null
+  const holdUntil = futureDateLabel(status?.payoutDestinationHoldUntil)
+  const hasSavedDetails =
+    !!bankName
+    || !!maskedAccount
+    || status?.manualBankEntry === true
+    || !!stats.paystackRecipientCode
+    || !!stats.stripeConnectAccountId
+    || !!stats.paystackAccountId
+    || !!stats.stripeAccountId
+  const last4 = lastFour(maskedAccount)
+
+  if (loading && !status && verified !== true && !hasSavedDetails) {
+    return {
+      badge: 'Checking',
+      badgeStyle: styles.payoutBadgeSetup,
+      badgeTextStyle: styles.payoutBadgeTextSetup,
+      title: 'Checking payout status',
+      detail: 'We are confirming whether your payout account is ready.',
+      cta: 'Open payout',
+      tone: 'setup' as const,
+    }
+  }
+
+  if (!status && error) {
+    return {
+      badge: 'Not set up',
+      badgeStyle: styles.payoutBadgeSetup,
+      badgeTextStyle: styles.payoutBadgeTextSetup,
+      title: 'Payout status unavailable',
+      detail: 'Open payout setup to refresh your account status.',
+      cta: 'Open payout',
+      tone: 'setup' as const,
+    }
+  }
+
+  if (verified === true && needsReview !== true && holdUntil) {
+    return {
+      badge: 'Guarded',
+      badgeStyle: styles.payoutBadgeReview,
+      badgeTextStyle: styles.payoutBadgeTextReview,
+      title: bankName ?? payoutProviderName(stats, status),
+      detail: `Verified. Payout releases resume after ${holdUntil}.`,
+      cta: 'Manage payout',
+      tone: 'review' as const,
+    }
+  }
+
+  if (verified === true && needsReview !== true) {
+    return {
+      badge: 'Verified',
+      badgeStyle: styles.payoutBadgeVerified,
+      badgeTextStyle: styles.payoutBadgeTextVerified,
+      title: bankName ?? payoutProviderName(stats, status),
+      detail: last4 ? `Account ending ${last4}` : 'Payout account verified',
+      cta: 'Manage payout',
+      tone: 'verified' as const,
+    }
+  }
+
+  if (needsReview === true || hasSavedDetails) {
+    return {
+      badge: 'Reverification needed',
+      badgeStyle: styles.payoutBadgeReview,
+      badgeTextStyle: styles.payoutBadgeTextReview,
+      title: bankName ?? payoutProviderName(stats, status),
+      detail: bankName && maskedAccount
+        ? `${bankName} · ${maskedAccount}`
+        : MANUAL_BANK_ENTRY_NOTE,
+      cta: 'Review payout',
+      tone: 'review' as const,
+    }
+  }
+
+  return {
+    badge: 'Not set up',
+    badgeStyle: styles.payoutBadgeSetup,
+    badgeTextStyle: styles.payoutBadgeTextSetup,
+    title: 'No payout account yet',
+    detail: 'Set up payouts before paid orders can release earnings.',
+    cta: 'Set up payout',
+    tone: 'setup' as const,
+  }
+}
+
+function PayoutSummaryCard({
+  stats,
+  status,
+  loading,
+  error,
+  onPress,
+}: {
+  stats: DashboardStats
+  status: TailorPayoutStatus | null
+  loading: boolean
+  error: string
+  onPress: () => void
+}) {
+  const summary = payoutSummary(stats, status, loading, error)
+  const payoutCurrency = status?.payoutCurrency ?? stats.payoutCurrency
+  return (
+    <TouchableOpacity
+      style={[
+        styles.payoutSummaryCard,
+        summary.tone === 'verified'
+          ? styles.payoutSummaryVerified
+          : summary.tone === 'review'
+            ? styles.payoutSummaryReview
+            : styles.payoutSummarySetup,
+      ]}
+      onPress={onPress}
+      activeOpacity={0.78}
+    >
+      <View style={styles.payoutSummaryHeader}>
+        <View style={[styles.payoutStatusBadge, summary.badgeStyle]}>
+          <Text style={[styles.payoutStatusBadgeText, summary.badgeTextStyle]}>{summary.badge}</Text>
+        </View>
+        <Text style={styles.payoutSummaryCta}>{summary.cta} →</Text>
+      </View>
+      <View style={styles.payoutSummaryBody}>
+        <View style={styles.payoutSummaryIcon}>
+          <Text style={styles.payoutSummaryIconText}>{payoutCurrency ?? 'PAY'}</Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.payoutSummaryTitle}>{summary.title}</Text>
+          <Text style={styles.payoutSummaryDetail}>{summary.detail}</Text>
+          <Text style={styles.payoutSummaryMeta}>
+            {[payoutCurrency, payoutProviderName(stats, status)].filter(Boolean).join(' · ')}
+          </Text>
+        </View>
+      </View>
+    </TouchableOpacity>
   )
 }
 
@@ -614,6 +902,138 @@ const styles = StyleSheet.create({
   readinessLinkText: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
   readinessSecondaryLink: { alignSelf: 'flex-start' },
   readinessSecondaryLinkText: { fontSize: 11, color: MUTED_GREY, fontWeight: FontWeight.medium },
+  payoutSummaryCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    padding: 12,
+    gap: 10,
+    borderWidth: 1,
+    ...Shadow.sm,
+  },
+  payoutSummaryVerified: {
+    borderColor: Colors.success + '35',
+  },
+  payoutSummaryReview: {
+    borderColor: Colors.error + '40',
+  },
+  payoutSummarySetup: {
+    borderColor: Colors.warning + '35',
+  },
+  payoutSummaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  payoutStatusBadge: {
+    borderRadius: Radius.full,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    minHeight: 26,
+    justifyContent: 'center',
+  },
+  payoutBadgeVerified: {
+    backgroundColor: Colors.needleGreenLight,
+  },
+  payoutBadgeSetup: {
+    backgroundColor: Colors.warning + '18',
+  },
+  payoutBadgeReview: {
+    backgroundColor: Colors.errorLight,
+  },
+  payoutStatusBadgeText: {
+    fontSize: 11,
+    fontWeight: FontWeight.semibold,
+  },
+  payoutBadgeTextVerified: {
+    color: Colors.needleGreenDark,
+  },
+  payoutBadgeTextSetup: {
+    color: Colors.warning,
+  },
+  payoutBadgeTextReview: {
+    color: Colors.error,
+  },
+  payoutSummaryCta: {
+    fontSize: 12,
+    color: PRIMARY_GREEN,
+    fontWeight: FontWeight.semibold,
+  },
+  payoutSummaryBody: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  payoutSummaryIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.boneDeep,
+  },
+  payoutSummaryIconText: {
+    fontSize: 11,
+    color: PRIMARY_GREEN,
+    fontWeight: FontWeight.bold,
+  },
+  payoutSummaryTitle: {
+    fontSize: 15,
+    color: CHARCOAL,
+    fontWeight: FontWeight.semibold,
+    lineHeight: 19,
+  },
+  payoutSummaryDetail: {
+    marginTop: 2,
+    fontSize: 12,
+    color: Colors.inkLight,
+    lineHeight: 17,
+  },
+  payoutSummaryMeta: {
+    marginTop: 4,
+    fontSize: 11,
+    color: MUTED_GREY,
+    lineHeight: 15,
+  },
+  visionPanel: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    padding: 12,
+    gap: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '30',
+    ...Shadow.sm,
+  },
+  visionPanelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  visionPanelIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  visionPanelCopy: { flex: 1, gap: 2 },
+  visionPanelTitle: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
+  visionPanelText: { fontSize: 12, color: Colors.inkLight, lineHeight: 17 },
+  visionActionRow: { flexDirection: 'row', gap: Spacing.sm },
+  visionAction: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.bone,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  visionActionText: { fontSize: 12, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
 
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: Spacing.md },
   headerRight: { alignItems: 'flex-end', gap: 8 },
@@ -697,7 +1117,7 @@ const styles = StyleSheet.create({
     minHeight: 44,
     justifyContent: 'center',
   },
-  retryBtnText: { color: Colors.white, fontSize: 13, fontWeight: FontWeight.semibold },
+  retryBtnText: { color: Colors.textInverse, fontSize: 13, fontWeight: FontWeight.semibold },
   secondaryErrorBtn: {
     borderRadius: Radius.full,
     borderWidth: 1,
@@ -722,6 +1142,12 @@ const styles = StyleSheet.create({
   statValue: { fontSize: 20, fontWeight: FontWeight.bold, color: CHARCOAL, fontFamily: 'Georgia' },
   statValueAccent: { color: Colors.warning },
   statLabel: { fontSize: 11, color: MUTED_GREY, lineHeight: 15 },
+  statHint: {
+    marginTop: 4,
+    fontSize: 10,
+    color: Colors.warning,
+    lineHeight: 14,
+  },
 
   section: { gap: 8 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
@@ -764,7 +1190,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: PRIMARY_GREEN,
   },
-  shareBtnText: { fontSize: 13, fontWeight: FontWeight.semibold, color: Colors.white },
+  shareBtnText: { fontSize: 13, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   shareBtnTextSecondary: { color: PRIMARY_GREEN },
 
   orderRow: {

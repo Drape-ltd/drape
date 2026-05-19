@@ -52,6 +52,7 @@ export type TailorPayoutProfile = {
   payout_reverification_required?: boolean | null
   payout_account_verified?: boolean | null
   payout_account_type?: 'STRIPE_CONNECT' | 'PAYSTACK' | null
+  payout_destination_hold_until?: string | null
   paystack_recipient_code?: string | null
   stripe_connect_account_id?: string | null
 }

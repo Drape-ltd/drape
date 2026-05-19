@@ -10,7 +10,7 @@ import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
 import { Sentry } from '@/lib/sentry'
 import { referToTailor } from '@/lib/invite'
-import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
+import { isLikelyConnectivityIssue, isMachineErrorCodeMessage, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import { Button, Input } from '@/components/ui'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -61,13 +61,15 @@ export default function ReviewScreen() {
 
   function readPayloadString(payload: Record<string, unknown> | null, key: string) {
     const value = payload?.[key]
-    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+    if (typeof value !== 'string' || value.trim().length === 0) return null
+    const trimmed = value.trim()
+    return key === 'code' || !isMachineErrorCodeMessage(trimmed) ? trimmed : null
   }
 
   async function resolveReviewSubmitFailure(error: Error | null) {
     const payload = error ? await readFunctionErrorPayload(error) : null
     const code = readPayloadString(payload, 'code')
-    const payloadMessage = readPayloadString(payload, 'error')
+    const payloadMessage = readPayloadString(payload, 'message') ?? readPayloadString(payload, 'error')
 
     if (code === 'UNAUTHORIZED') {
       return { message: payloadMessage ?? 'Please sign in again before submitting your review.', bodyError: '', showAlert: true }
@@ -191,7 +193,7 @@ export default function ReviewScreen() {
     if (submitting || skipping) return
     if (!orderSummary) return
     if (rating === 0) { Alert.alert('Rating required', 'Please select a star rating.'); return }
-    if (body.trim() && !validateBody(body)) return
+    if (!validateBody(body)) return
 
     setSubmitError('')
     setSubmitting(true)
@@ -215,15 +217,16 @@ export default function ReviewScreen() {
     })
 
     if (error) {
-      console.error('review submit failed', {
-        orderId,
-        orderSummary,
-        rating,
-        tags,
-        bodyLength: body.trim().length,
-        error,
+      Sentry.captureException(error, {
+        extra: {
+          context: 'review_submit',
+          orderId,
+          orderSummary,
+          rating,
+          tags,
+          bodyLength: body.trim().length,
+        },
       })
-      Sentry.captureException(error, { extra: { context: 'review_submit', orderId } })
       setSubmitting(false)
       const failure = await resolveReviewSubmitFailure(error)
       if (failure.bodyError) setBodyError(failure.bodyError)
@@ -310,7 +313,7 @@ export default function ReviewScreen() {
             ? 'Connection looks weak. We could not complete this order yet. Retry when the signal improves.'
             : 'We could not complete this order right now. Please try again.'
           setSubmitError(message)
-          Alert.alert('Error', message)
+          Alert.alert('Could not complete order', message)
           return
         }
       }
@@ -321,7 +324,7 @@ export default function ReviewScreen() {
         ? 'Connection looks weak. We could not complete this order yet. Retry when the signal improves.'
         : 'We could not complete this order right now. Please try again.'
       setSubmitError(message)
-      Alert.alert('Error', message)
+      Alert.alert('Could not complete order', message)
       return
     }
     setSkipping(false)
@@ -416,7 +419,7 @@ export default function ReviewScreen() {
 
             {/* Tags */}
             <View style={styles.section}>
-              <Text style={styles.sectionLabel}>What stood out? (optional)</Text>
+              <Text style={styles.sectionLabel}>What stood out?</Text>
               <View style={styles.tagWrap}>
                 {REVIEW_TAGS.map((tag) => (
                   <TouchableOpacity
@@ -444,7 +447,7 @@ export default function ReviewScreen() {
               numberOfLines={5}
               maxLength={300}
               filterContact
-              hint={`${body.length}/300`}
+              hint={`${body.length}/300 · Stars and tags are enough. Add a note only if you want.`}
             />
 
             {/* Reviewer note */}
@@ -501,7 +504,7 @@ const styles = StyleSheet.create({
   stars: { flexDirection: 'row', gap: Spacing.sm },
   starBtn: { padding: Spacing.xs },
   star: { fontSize: 44, color: Colors.lightGrey },
-  starFilled: { color: '#F59E0B' },
+  starFilled: { color: Colors.statusPending },
 
   section: { gap: Spacing.md },
   sectionLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
@@ -546,7 +549,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     borderRadius: Radius.full,
   },
-  retryBtnText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  retryBtnText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   secondaryBtn: {
     backgroundColor: Colors.white,
     borderColor: Colors.lightGrey,

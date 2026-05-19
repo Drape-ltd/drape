@@ -233,6 +233,7 @@ export async function createStripeTransfer(options: {
   amount: number
   currency: string
   destinationAccountId: string
+  idempotencyKey?: string
   transferGroup?: string | null
   metadata?: Record<string, string>
 }): Promise<StripeTransfer> {
@@ -253,6 +254,7 @@ export async function createStripeTransfer(options: {
     headers: {
       ...authHeaders(),
       'Content-Type': 'application/x-www-form-urlencoded',
+      ...(options.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : {}),
     },
     body,
   })
@@ -297,7 +299,7 @@ function secureEqual(left: string, right: string) {
 export async function verifyStripeWebhookSignature(options: {
   payload: string
   signatureHeader: string
-  webhookSecret: string
+  webhookSecret: string | string[]
 }) {
   const { payload, signatureHeader, webhookSecret } = options
   const { timestamp, signatures } = parseStripeSignature(signatureHeader)
@@ -307,17 +309,21 @@ export async function verifyStripeWebhookSignature(options: {
   }
 
   const signingPayload = `${timestamp}.${payload}`
-  const key = await crypto.subtle.importKey(
-    'raw',
-    textEncoder.encode(webhookSecret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  )
-  const digest = await crypto.subtle.sign('HMAC', key, textEncoder.encode(signingPayload))
-  const expected = hex(digest)
+  const secrets = Array.isArray(webhookSecret) ? webhookSecret : [webhookSecret]
 
-  if (!signatures.some((signature) => secureEqual(signature, expected))) {
-    throw new Error('No Stripe webhook signatures matched the expected signature.')
+  for (const secret of secrets) {
+    const key = await crypto.subtle.importKey(
+      'raw',
+      textEncoder.encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    )
+    const digest = await crypto.subtle.sign('HMAC', key, textEncoder.encode(signingPayload))
+    const expected = hex(digest)
+
+    if (signatures.some((signature) => secureEqual(signature, expected))) return
   }
+
+  throw new Error('No Stripe webhook signatures matched the expected signature.')
 }

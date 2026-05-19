@@ -23,11 +23,15 @@ export function goBackOrReturnTo(
   returnTo: unknown,
   fallback: ReplaceTarget,
 ) {
+  if (navigation.canGoBack()) {
+    router.back()
+    return
+  }
   if (typeof returnTo === 'string' && returnTo.trim().length > 0) {
     router.replace(returnTo as ReplaceTarget)
     return
   }
-  goBackOrFallback(router, navigation, fallback)
+  router.replace(fallback)
 }
 
 export function goBackOrReturnToIfNeeded(
@@ -36,12 +40,12 @@ export function goBackOrReturnToIfNeeded(
   returnTo: unknown,
   fallback: ReplaceTarget,
 ) {
-  if (navigation.canGoBack()) {
-    router.back()
-    return
-  }
   if (typeof returnTo === 'string' && returnTo.trim().length > 0) {
     router.replace(returnTo as ReplaceTarget)
+    return
+  }
+  if (navigation.canGoBack()) {
+    router.back()
     return
   }
   router.replace(fallback)

@@ -14,9 +14,18 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import * as ExpoLinking from 'expo-linking'
 import * as WebBrowser from 'expo-web-browser'
-import { Button, Input } from '@/components/ui'
+import { Button, Input, RemoteImage } from '@/components/ui'
 import { useAuth } from '@/lib/auth'
 import { goBackOrReturnTo } from '@/lib/navigation'
+import {
+  MANUAL_BANK_COUNTRIES,
+  MANUAL_BANK_ENTRY_NOTE,
+  MANUAL_BANK_ENTRY_OPTION_LABEL,
+  normalizeSwiftBic,
+  validateManualBankEntry,
+  type ManualBankEntryField,
+  type ManualBankEntryFieldErrors,
+} from '@drape/shared/payout-setup'
 import {
   confirmPaystackPayoutAccount,
   listPaystackPayoutBanks,
@@ -24,6 +33,7 @@ import {
   type PaystackBankDirectory,
   refreshStripeConnectPayoutStatus,
   startStripeConnectOnboarding,
+  submitManualBankEntry,
   type PaystackBank,
   type PaystackVerification,
   type PayoutSetupCurrency,
@@ -93,6 +103,24 @@ function formatMaskedAccount(value: string | null | undefined) {
   return `Ending in ${rawLast4}`
 }
 
+function isFutureTime(value: string | null | undefined) {
+  if (!value) return false
+  const time = Date.parse(value)
+  return Number.isFinite(time) && time > Date.now()
+}
+
+function formatGuardDate(value: string | null | undefined) {
+  if (!value) return ''
+  const time = Date.parse(value)
+  if (!Number.isFinite(time)) return ''
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(time))
+}
+
 function SummaryRow({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.summaryRow}>
@@ -109,6 +137,51 @@ function StepChip({ number, label, active, complete }: { number: number; label: 
         <Text style={[styles.stepNumberText, (active || complete) && styles.stepNumberTextActive]}>{complete ? '✓' : number}</Text>
       </View>
       <Text style={[styles.stepChipText, active && styles.stepChipTextActive]}>{label}</Text>
+    </View>
+  )
+}
+
+function bankInitials(name: string) {
+  const words = name
+    .trim()
+    .split(/\s+/u)
+    .filter((word) => !['bank', 'of', 'the', 'for'].includes(word.toLowerCase()))
+  const first = words[0]?.[0] ?? name[0] ?? 'B'
+  const second = words[1]?.[0] ?? ''
+  return `${first}${second}`.toUpperCase()
+}
+
+function BankLogo({
+  bank,
+  failed,
+  onError,
+}: {
+  bank: PaystackBank
+  failed: boolean
+  onError: () => void
+}) {
+  if (bank.logoUrl && !failed) {
+    return (
+      <RemoteImage
+        uri={bank.logoUrl}
+        style={styles.bankLogoImage}
+        contentFit="contain"
+        transition={120}
+        surface="payout_bank_logo"
+        onLoadError={onError}
+        fallback={(
+          <View style={styles.bankLogoFallback}>
+            <Text style={styles.bankLogoFallbackText}>{bankInitials(bank.name)}</Text>
+          </View>
+        )}
+        accessibilityIgnoresInvertColors
+      />
+    )
+  }
+
+  return (
+    <View style={styles.bankLogoFallback}>
+      <Text style={styles.bankLogoFallbackText}>{bankInitials(bank.name)}</Text>
     </View>
   )
 }
@@ -153,9 +226,29 @@ export default function TailorPayoutSetupScreen() {
   const [selectedBank, setSelectedBank] = useState<PaystackBank | null>(null)
   const [accountNumber, setAccountNumber] = useState('')
   const [verification, setVerification] = useState<PaystackVerification | null>(null)
+  const [manualBankMode, setManualBankMode] = useState(false)
+  const [manualBankName, setManualBankName] = useState('')
+  const [manualBankCountryCode, setManualBankCountryCode] = useState('US')
+  const [manualSwiftBic, setManualSwiftBic] = useState('')
+  const [manualAccountNumber, setManualAccountNumber] = useState('')
+  const [manualAccountName, setManualAccountName] = useState('')
+  const [manualCountryOpen, setManualCountryOpen] = useState(false)
+  const [manualFieldErrors, setManualFieldErrors] = useState<ManualBankEntryFieldErrors>({})
+  const [failedBankLogos, setFailedBankLogos] = useState<Record<string, true>>({})
 
   const selectedOption = optionForCurrency(selectedCurrency)
   const provider = providerForCurrency(selectedCurrency)
+  const connectStepLabel = provider === 'PAYSTACK'
+    ? manualBankMode
+      ? 'Review'
+      : verification
+        ? 'Confirm'
+        : 'Bank'
+    : 'Stripe'
+  const manualBankCountry = useMemo(
+    () => MANUAL_BANK_COUNTRIES.find((country) => country.code === manualBankCountryCode) ?? null,
+    [manualBankCountryCode],
+  )
   const filteredBanks = useMemo(() => {
     const query = bankSearch.trim().toLowerCase()
     if (!query) return banks.slice(0, 40)
@@ -167,7 +260,17 @@ export default function TailorPayoutSetupScreen() {
     && status.payoutReverificationRequired !== true
     && !editingVerifiedAccount
     && activeStep !== 'SUCCESS'
+  const showManualPendingSummary =
+    status?.manualBankEntry === true
+    && status.payoutAccountVerified !== true
+    && !editingVerifiedAccount
+    && activeStep !== 'SUCCESS'
+  const payoutChangeLocked = isFutureTime(status?.payoutAccountChangeLockedUntil)
+  const payoutDestinationHoldActive = isFutureTime(status?.payoutDestinationHoldUntil)
   const environmentUnavailable = isUnavailableEnvironmentError(loadError)
+  const successIsManualPending =
+    status?.manualBankEntry === true
+    && status.payoutAccountVerified !== true
 
   async function load() {
     if (!user?.id) {
@@ -220,6 +323,15 @@ export default function TailorPayoutSetupScreen() {
     setBankDirectory(null)
     setBanksLoadedFor(null)
     setAccountNumber('')
+    setManualBankMode(false)
+    setManualBankName('')
+    setManualBankCountryCode(option.countryCode)
+    setManualSwiftBic('')
+    setManualAccountNumber('')
+    setManualAccountName('')
+    setManualCountryOpen(false)
+    setManualFieldErrors({})
+    setFailedBankLogos({})
   }, [selectedCurrency])
 
   useEffect(() => {
@@ -234,6 +346,13 @@ export default function TailorPayoutSetupScreen() {
   }
 
   function startSetupFlow() {
+    if (payoutChangeLocked) {
+      Alert.alert(
+        'Payout change cooling down',
+        `For account safety, payout destination changes are limited for a short period. You can change this again after ${formatGuardDate(status?.payoutAccountChangeLockedUntil)}.`,
+      )
+      return
+    }
     setEditingVerifiedAccount(true)
     setActiveStep('CURRENCY')
     setFieldError('')
@@ -286,6 +405,66 @@ export default function TailorPayoutSetupScreen() {
     setVerification(result.verification)
   }
 
+  function clearManualFieldError(field: ManualBankEntryField) {
+    if (!manualFieldErrors[field]) return
+    setManualFieldErrors((current) => {
+      const next = { ...current }
+      delete next[field]
+      return next
+    })
+  }
+
+  function handleSelectListedBank(bank: PaystackBank) {
+    setManualBankMode(false)
+    setManualCountryOpen(false)
+    setSelectedBank(bank)
+    setVerification(null)
+    setFieldError('')
+    setManualFieldErrors({})
+  }
+
+  function handleSelectManualBank() {
+    setManualBankMode(true)
+    setManualCountryOpen(false)
+    setSelectedBank(null)
+    setVerification(null)
+    setFieldError('')
+    setManualFieldErrors({})
+  }
+
+  async function handleSubmitManualBank() {
+    const validation = validateManualBankEntry({
+      payoutCurrency: selectedCurrency,
+      bankName: manualBankName,
+      bankCountryCode: manualBankCountryCode,
+      swiftBic: manualSwiftBic,
+      accountNumber: manualAccountNumber,
+      accountName: manualAccountName,
+    })
+
+    if (!validation.ok) {
+      setManualFieldErrors(validation.fieldErrors)
+      setFieldError(validation.message)
+      return
+    }
+
+    setSubmitting(true)
+    setFieldError('')
+    setManualFieldErrors({})
+    const result = await submitManualBankEntry(validation.value)
+    setSubmitting(false)
+
+    if (result.error || !result.account) {
+      setFieldError(result.error ?? 'We could not submit these manual bank details right now.')
+      return
+    }
+
+    setStatus(result.account)
+    await load()
+    setEditingVerifiedAccount(false)
+    setActiveStep('SUCCESS')
+  }
+
   async function handleConfirmPaystack() {
     if (!selectedBank || !verification) {
       setFieldError('Verify the bank account before saving it.')
@@ -309,9 +488,10 @@ export default function TailorPayoutSetupScreen() {
       return
     }
 
-    await load()
+    setStatus(result.account)
     setEditingVerifiedAccount(false)
     setActiveStep('SUCCESS')
+    void load()
   }
 
   async function handleStartStripe() {
@@ -365,6 +545,12 @@ export default function TailorPayoutSetupScreen() {
       return
     }
     if (activeStep === 'CURRENCY') {
+      if (editingVerifiedAccount) {
+        setEditingVerifiedAccount(false)
+        setActiveStep('INTRO')
+        setFieldError('')
+        return
+      }
       setActiveStep('INTRO')
       return
     }
@@ -404,27 +590,27 @@ export default function TailorPayoutSetupScreen() {
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>
-              {environmentUnavailable ? 'Environment update needed' : 'Payments & payouts'}
+              {environmentUnavailable ? 'Payout setup unavailable' : 'Payments & payouts'}
             </Text>
             <Text style={styles.stateTitle}>
-              {environmentUnavailable ? 'This payout flow is still deploying here.' : 'Couldn’t load this yet.'}
+              {environmentUnavailable ? 'We could not open payout setup right now.' : 'Couldn’t load this yet.'}
             </Text>
             <Text style={styles.stateHint}>
               {environmentUnavailable
-                ? 'Your account is fine. This development environment is missing the latest payout setup function. Deploy it, then reopen this screen.'
+                ? 'Your account is fine. Try again in a moment, or contact support if this keeps happening.'
                 : loadError}
             </Text>
             {environmentUnavailable ? (
               <View style={styles.inlineInfoCard}>
                 <Feather name="tool" size={16} color={Colors.needleGreen} />
                 <Text style={styles.inlineInfoText}>
-                  Once `payout-account-action` is deployed, this screen will load normally for new and existing tailor accounts.
+                  Payout setup is protected so incomplete or unavailable bank checks do not save partial account details.
                 </Text>
               </View>
             ) : null}
             <Button label={environmentUnavailable ? 'Go back' : 'Try again'} onPress={environmentUnavailable ? goBack : () => { void load() }} />
             {environmentUnavailable ? (
-              <Button label="Try again after deploy" variant="secondary" onPress={() => { void load() }} />
+              <Button label="Try again" variant="secondary" onPress={() => { void load() }} />
             ) : null}
           </View>
         </View>
@@ -441,21 +627,54 @@ export default function TailorPayoutSetupScreen() {
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Payout setup</Text>
         </View>
+        <View style={styles.stepRow}>
+          <StepChip number={1} label="Intro" active={false} complete />
+          <StepChip number={2} label="Currency" active={false} complete />
+          <StepChip number={3} label={connectStepLabel} active={false} complete />
+          <StepChip number={4} label="Done" active complete={false} />
+        </View>
         <View style={styles.successWrap}>
-          <Animated.View style={[styles.successOrb, { transform: [{ scale: successScale }] }]}>
-            <Feather name="check" size={38} color={Colors.white} />
+          <Animated.View style={[
+            styles.successOrb,
+            successIsManualPending && styles.successOrbPending,
+            { transform: [{ scale: successScale }] },
+          ]}>
+            <Feather name={successIsManualPending ? 'clock' : 'check'} size={38} color={Colors.textInverse} />
           </Animated.View>
-          <Text style={styles.successTitle}>You&apos;re all set to get paid</Text>
+          <Text style={styles.successTitle}>
+            {successIsManualPending ? 'Manual bank details submitted' : "You're all set to get paid"}
+          </Text>
           <Text style={styles.successBody}>
-            Your payout account is verified. Earnings from completed orders will be sent automatically after the 72-hour delivery window closes.
+            {successIsManualPending
+              ? MANUAL_BANK_ENTRY_NOTE
+              : 'Your payout account is verified. Earnings from completed orders will be sent automatically after the 72-hour delivery window closes.'}
           </Text>
 
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Verified account summary</Text>
+            <Text style={styles.sectionTitle}>
+              {successIsManualPending ? 'Pending verification summary' : 'Verified account summary'}
+            </Text>
             <SummaryRow label="Payout method" value={status.payoutBankName ? `${status.payoutBankName} · ${formatMaskedAccount(status.payoutAccountMasked)}` : providerLabel(status.payoutAccountType)} />
             <SummaryRow label="Payout currency" value={status.payoutCurrency} />
-            <SummaryRow label="Provider" value={providerLabel(status.payoutAccountType)} />
+            <SummaryRow label="Provider" value={successIsManualPending ? 'Ops verification' : providerLabel(status.payoutAccountType)} />
+            {successIsManualPending ? <SummaryRow label="Status" value="Pending review" /> : null}
+            {!successIsManualPending && payoutDestinationHoldActive ? (
+              <SummaryRow label="Release guard" value={`Payouts resume after ${formatGuardDate(status.payoutDestinationHoldUntil)}`} />
+            ) : null}
           </View>
+
+          {!successIsManualPending ? (
+            <View style={styles.successChecklist}>
+              <View style={styles.successCheckRow}>
+                <Feather name="check-circle" size={17} color={Colors.needleGreen} />
+                <Text style={styles.successCheckText}>Paid orders can release to this account after delivery.</Text>
+              </View>
+              <View style={styles.successCheckRow}>
+                <Feather name="check-circle" size={17} color={Colors.needleGreen} />
+                <Text style={styles.successCheckText}>Your dashboard will show this payout path at a glance.</Text>
+              </View>
+            </View>
+          ) : null}
 
           <Button label="Go back" onPress={goBack} />
         </View>
@@ -472,28 +691,58 @@ export default function TailorPayoutSetupScreen() {
         <Text style={styles.headerTitle}>Payout setup</Text>
       </View>
 
-      {showVerifiedSummary && status ? (
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
+      {(showVerifiedSummary || showManualPendingSummary) && status ? (
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          nestedScrollEnabled
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.body}
+        >
           <View style={styles.heroCard}>
             <View style={styles.heroBadge}>
-              <Text style={styles.heroBadgeText}>Verified payout account</Text>
+              <Text style={styles.heroBadgeText}>
+                {showManualPendingSummary ? 'Manual bank review' : 'Verified payout account'}
+              </Text>
             </View>
-            <Text style={styles.heroTitle}>Your payout path is ready.</Text>
+            <Text style={styles.heroTitle}>
+              {showManualPendingSummary ? 'Your manual bank details are with ops.' : 'Your payout path is ready.'}
+            </Text>
             <Text style={styles.heroCopy}>
-              Drape will only release earnings to a verified payout account. You can change this later, but changing payout currency or provider will require verification again.
+              {showManualPendingSummary
+                ? MANUAL_BANK_ENTRY_NOTE
+                : 'Drape will only release earnings to a verified payout account. You can change this later, but changing payout currency or provider will require verification again.'}
             </Text>
           </View>
 
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Saved payout details</Text>
-            <SummaryRow label="Provider" value={providerLabel(status.payoutAccountType)} />
+            <Text style={styles.sectionTitle}>
+              {showManualPendingSummary ? 'Pending payout details' : 'Saved payout details'}
+            </Text>
+            <SummaryRow label="Provider" value={showManualPendingSummary ? 'Manual ops verification' : providerLabel(status.payoutAccountType)} />
             <SummaryRow label="Payout currency" value={status.payoutCurrency} />
             {status.payoutBankName ? <SummaryRow label="Bank" value={status.payoutBankName} /> : null}
             {status.payoutAccountName ? <SummaryRow label="Account name" value={status.payoutAccountName} /> : null}
             <SummaryRow label="Account" value={formatMaskedAccount(status.payoutAccountMasked)} />
+            {showManualPendingSummary ? <SummaryRow label="Status" value="Pending review" /> : null}
+            {payoutDestinationHoldActive ? (
+              <SummaryRow label="Release guard" value={`Payouts resume after ${formatGuardDate(status.payoutDestinationHoldUntil)}`} />
+            ) : null}
+            {payoutChangeLocked ? (
+              <SummaryRow label="Next change" value={formatGuardDate(status.payoutAccountChangeLockedUntil)} />
+            ) : null}
           </View>
 
-          <Button label="Change payout setup" variant="secondary" onPress={startSetupFlow} />
+          <Button
+            label={payoutChangeLocked ? 'Payout change cooling down' : 'Change payout setup'}
+            variant="secondary"
+            disabled={payoutChangeLocked}
+            onPress={startSetupFlow}
+          />
+          {payoutChangeLocked ? (
+            <Text style={styles.guardHint}>
+              You can update this destination again after {formatGuardDate(status.payoutAccountChangeLockedUntil)}. Contact support if your bank account is closed or compromised before then.
+            </Text>
+          ) : null}
           <Button label="Go back" onPress={goBack} />
         </ScrollView>
       ) : (
@@ -501,11 +750,16 @@ export default function TailorPayoutSetupScreen() {
           <View style={styles.stepRow}>
             <StepChip number={1} label="Intro" active={activeStep === 'INTRO'} complete={activeStep !== 'INTRO'} />
             <StepChip number={2} label="Currency" active={activeStep === 'CURRENCY'} complete={activeStep === 'CONNECT' || activeStep === 'SUCCESS'} />
-            <StepChip number={3} label="Connect" active={activeStep === 'CONNECT'} complete={activeStep === 'SUCCESS'} />
+            <StepChip number={3} label={connectStepLabel} active={activeStep === 'CONNECT'} complete={activeStep === 'SUCCESS'} />
             <StepChip number={4} label="Done" active={activeStep === 'SUCCESS'} complete={false} />
           </View>
 
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            nestedScrollEnabled
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.body}
+          >
             {activeStep === 'INTRO' ? (
               <>
                 <View style={styles.heroCard}>
@@ -634,87 +888,275 @@ export default function TailorPayoutSetupScreen() {
                       />
                     )}
 
-                    {selectedBank ? (
+                    {banks.length === 0 && !banksLoading ? (
+                      <Button
+                        label={MANUAL_BANK_ENTRY_OPTION_LABEL}
+                        variant="secondary"
+                        onPress={handleSelectManualBank}
+                      />
+                    ) : null}
+
+                    {selectedBank && !manualBankMode ? (
                       <View style={styles.selectedBankCard}>
                         <Text style={styles.selectedBankLabel}>Selected bank</Text>
                         <Text style={styles.selectedBankName}>{selectedBank.name}</Text>
                       </View>
                     ) : null}
 
-                    {filteredBanks.length > 0 ? (
-                      <View style={styles.bankList}>
-                        {filteredBanks.map((bank) => (
-                          <TouchableOpacity
-                            key={`${bank.code}:${bank.name}`}
-                            style={[styles.bankRow, selectedBank?.code === bank.code && styles.bankRowActive]}
-                            onPress={() => {
-                              setSelectedBank(bank)
-                              setVerification(null)
-                              setFieldError('')
-                            }}
-                          >
-                            <Text style={[styles.bankRowText, selectedBank?.code === bank.code && styles.bankRowTextActive]}>
-                              {bank.name}
-                            </Text>
-                          </TouchableOpacity>
-                        ))}
+                    {manualBankMode ? (
+                      <View style={styles.selectedBankCard}>
+                        <Text style={styles.selectedBankLabel}>Manual bank entry</Text>
+                        <Text style={styles.selectedBankName}>{MANUAL_BANK_ENTRY_OPTION_LABEL}</Text>
                       </View>
                     ) : null}
 
-                    <Input
-                      label="Account number"
-                      value={accountNumber}
-                      onChangeText={(value) => {
-                        setAccountNumber(value.replace(/\D+/gu, ''))
-                        setVerification(null)
-                        setFieldError('')
-                      }}
-                      keyboardType="number-pad"
-                      placeholder="Enter the account number"
-                    />
+                    {banks.length > 0 ? (
+                      <View style={styles.bankList}>
+                        <ScrollView
+                          nestedScrollEnabled
+                          keyboardShouldPersistTaps="handled"
+                          showsVerticalScrollIndicator
+                          style={styles.bankListScroll}
+                        >
+                          {filteredBanks.length > 0 ? (
+                            filteredBanks.map((bank) => (
+                              <TouchableOpacity
+                                key={`${bank.code}:${bank.name}`}
+                                style={[styles.bankRow, !manualBankMode && selectedBank?.code === bank.code && styles.bankRowActive]}
+                                onPress={() => handleSelectListedBank(bank)}
+                              >
+                                <View style={styles.bankRowContent}>
+                                  <BankLogo
+                                    bank={bank}
+                                    failed={failedBankLogos[`${bank.code}:${bank.name}`] === true}
+                                    onError={() => setFailedBankLogos((current) => ({
+                                      ...current,
+                                      [`${bank.code}:${bank.name}`]: true,
+                                    }))}
+                                  />
+                                  <View style={{ flex: 1 }}>
+                                    <Text style={[styles.bankRowText, !manualBankMode && selectedBank?.code === bank.code && styles.bankRowTextActive]}>
+                                      {bank.name}
+                                    </Text>
+                                    {bank.country || bank.currency ? (
+                                      <Text style={styles.bankRowMeta}>{[bank.country, bank.currency].filter(Boolean).join(' · ')}</Text>
+                                    ) : null}
+                                  </View>
+                                </View>
+                              </TouchableOpacity>
+                            ))
+                          ) : (
+                            <Text style={styles.emptyBankText}>No listed banks match your search.</Text>
+                          )}
+                          <TouchableOpacity
+                            style={[styles.bankRow, styles.manualBankRow, manualBankMode && styles.bankRowActive]}
+                            onPress={handleSelectManualBank}
+                          >
+                            <View style={styles.manualBankRowContent}>
+                              <View style={styles.manualBankIcon}>
+                                <Feather name="edit-3" size={14} color={Colors.needleGreen} />
+                              </View>
+                              <View style={{ flex: 1 }}>
+                                <Text style={[styles.bankRowText, manualBankMode && styles.bankRowTextActive]}>
+                                  {MANUAL_BANK_ENTRY_OPTION_LABEL}
+                                </Text>
+                                <Text style={styles.bankRowMeta}>Enter SWIFT / BIC and account details manually</Text>
+                              </View>
+                            </View>
+                          </TouchableOpacity>
+                        </ScrollView>
+                      </View>
+                    ) : null}
 
-                    {!verification ? (
-                      <Button
-                        label={submitting ? 'Verifying account…' : 'Verify account'}
-                        loading={submitting}
-                        onPress={() => { void handleVerifyPaystack() }}
-                      />
-                    ) : (
-                      <View style={styles.verifiedCard}>
-                        <View style={styles.verifiedHeader}>
-                          <View style={styles.verifiedIcon}>
-                            <Feather name="check" size={16} color={Colors.white} />
-                          </View>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.verifiedTitle}>Account verified</Text>
-                            <Text style={styles.verifiedMeta}>Is this your account?</Text>
-                          </View>
+                    {manualBankMode ? (
+                      <View style={styles.manualForm}>
+                        <View style={styles.inlineInfoCard}>
+                          <Feather name="info" size={16} color={Colors.needleGreen} />
+                          <Text style={styles.inlineInfoText}>
+                            {selectedCurrency === 'NGN'
+                              ? 'Manual entry is only for banks missing from the picker. If your bank is listed, go back and choose it from the bank list.'
+                              : MANUAL_BANK_ENTRY_NOTE}
+                          </Text>
                         </View>
-                        <Text style={styles.verifiedName}>{verification.resolvedAccountName}</Text>
-                        <Text style={styles.verifiedAccountText}>{verification.maskedAccountNumber}</Text>
-                        <View style={styles.inlineActions}>
+
+                        {selectedCurrency === 'NGN' ? (
                           <Button
-                            label="Yes, that’s me"
-                            size="md"
-                            fullWidth={false}
-                            style={styles.inlineButton}
-                            loading={submitting}
-                            onPress={() => { void handleConfirmPaystack() }}
-                          />
-                          <Button
-                            label="No, try again"
-                            size="md"
-                            fullWidth={false}
+                            label="Back to bank list"
                             variant="secondary"
-                            style={styles.inlineButton}
                             onPress={() => {
-                              setVerification(null)
-                              setSelectedBank(null)
-                              setBankSearch('')
+                              setManualBankMode(false)
+                              setManualCountryOpen(false)
+                              setManualFieldErrors({})
+                              setFieldError('')
+                              setBankSearch('Paystack')
                             }}
                           />
+                        ) : null}
+
+                        <Input
+                          label="Bank name"
+                          required
+                          value={manualBankName}
+                          onChangeText={(value) => {
+                            setManualBankName(value)
+                            clearManualFieldError('bankName')
+                            setFieldError('')
+                          }}
+                          error={manualFieldErrors.bankName}
+                          placeholder="Enter your bank name"
+                        />
+
+                        <View style={styles.countryField}>
+                          <Text style={styles.countryLabel}>Bank country <Text style={styles.requiredMark}>*</Text></Text>
+                          <TouchableOpacity
+                            style={[styles.countrySelector, manualFieldErrors.bankCountryCode && styles.countrySelectorError]}
+                            onPress={() => setManualCountryOpen((open) => !open)}
+                            activeOpacity={0.8}
+                          >
+                            <Text style={styles.countrySelectorText}>
+                              {manualBankCountry ? manualBankCountry.name : 'Choose bank country'}
+                            </Text>
+                            <Feather name={manualCountryOpen ? 'chevron-up' : 'chevron-down'} size={16} color={Colors.midGrey} />
+                          </TouchableOpacity>
+                          {manualFieldErrors.bankCountryCode ? (
+                            <Text style={styles.errorText}>{manualFieldErrors.bankCountryCode}</Text>
+                          ) : null}
+                          {manualCountryOpen ? (
+                            <View style={styles.countryList}>
+                              <ScrollView nestedScrollEnabled showsVerticalScrollIndicator={false} style={styles.countryListScroll}>
+                                {MANUAL_BANK_COUNTRIES.map((country) => (
+                                  <TouchableOpacity
+                                    key={country.code}
+                                    style={[
+                                      styles.countryRow,
+                                      manualBankCountryCode === country.code && styles.countryRowActive,
+                                    ]}
+                                    onPress={() => {
+                                      setManualBankCountryCode(country.code)
+                                      setManualCountryOpen(false)
+                                      clearManualFieldError('bankCountryCode')
+                                      setFieldError('')
+                                    }}
+                                  >
+                                    <Text style={[
+                                      styles.countryRowText,
+                                      manualBankCountryCode === country.code && styles.countryRowTextActive,
+                                    ]}>
+                                      {country.name}
+                                    </Text>
+                                    <Text style={styles.countryCodeText}>{country.code}</Text>
+                                  </TouchableOpacity>
+                                ))}
+                              </ScrollView>
+                            </View>
+                          ) : null}
                         </View>
+
+                        <Input
+                          label="SWIFT / BIC code"
+                          required
+                          value={manualSwiftBic}
+                          onChangeText={(value) => {
+                            setManualSwiftBic(normalizeSwiftBic(value))
+                            clearManualFieldError('swiftBic')
+                            setFieldError('')
+                          }}
+                          error={manualFieldErrors.swiftBic}
+                          hint="Use the bank's international SWIFT/BIC, not its Paystack bank code."
+                          autoCapitalize="characters"
+                          placeholder="8 or 11 characters"
+                        />
+
+                        <Input
+                          label="Account number"
+                          required
+                          value={manualAccountNumber}
+                          onChangeText={(value) => {
+                            setManualAccountNumber(value)
+                            clearManualFieldError('accountNumber')
+                            setFieldError('')
+                          }}
+                          error={manualFieldErrors.accountNumber}
+                          placeholder="Enter the account number"
+                        />
+
+                        <Input
+                          label="Account name"
+                          required
+                          value={manualAccountName}
+                          onChangeText={(value) => {
+                            setManualAccountName(value)
+                            clearManualFieldError('accountName')
+                            setFieldError('')
+                          }}
+                          error={manualFieldErrors.accountName}
+                          placeholder="Enter the account holder name"
+                        />
+
+                        <Button
+                          label={submitting ? 'Submitting for review…' : 'Submit for verification'}
+                          loading={submitting}
+                          onPress={() => { void handleSubmitManualBank() }}
+                        />
                       </View>
+                    ) : (
+                      <>
+                        <Input
+                          label="Account number"
+                          value={accountNumber}
+                          onChangeText={(value) => {
+                            setAccountNumber(value.replace(/\D+/gu, ''))
+                            setVerification(null)
+                            setFieldError('')
+                          }}
+                          keyboardType="number-pad"
+                          placeholder="Enter the account number"
+                        />
+
+                        {!verification ? (
+                          <Button
+                            label={submitting ? 'Verifying account…' : 'Verify account'}
+                            loading={submitting}
+                            onPress={() => { void handleVerifyPaystack() }}
+                          />
+                        ) : (
+                          <View style={styles.verifiedCard}>
+                            <View style={styles.verifiedHeader}>
+                              <View style={styles.verifiedIcon}>
+                                <Feather name="check" size={16} color={Colors.textInverse} />
+                              </View>
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.verifiedTitle}>Account verified</Text>
+                                <Text style={styles.verifiedMeta}>Is this your account?</Text>
+                              </View>
+                            </View>
+                            <Text style={styles.verifiedName}>{verification.resolvedAccountName}</Text>
+                            <Text style={styles.verifiedAccountText}>{verification.maskedAccountNumber}</Text>
+                            <View style={styles.inlineActions}>
+                              <Button
+                                label="Confirm payout account"
+                                size="md"
+                                fullWidth={false}
+                                style={styles.inlineButton}
+                                loading={submitting}
+                                onPress={() => { void handleConfirmPaystack() }}
+                              />
+                              <Button
+                                label="Edit details"
+                                size="md"
+                                fullWidth={false}
+                                variant="secondary"
+                                style={styles.inlineButton}
+                                onPress={() => {
+                                  setVerification(null)
+                                  setSelectedBank(null)
+                                  setBankSearch('')
+                                }}
+                              />
+                            </View>
+                          </View>
+                        )}
+                      </>
                     )}
 
                     {fieldError ? <Text style={styles.errorText}>{fieldError}</Text> : null}
@@ -869,7 +1311,7 @@ const styles = StyleSheet.create({
     color: Colors.midGrey,
   },
   stepNumberTextActive: {
-    color: Colors.white,
+    color: Colors.textInverse,
   },
   stepChipText: {
     fontSize: 11,
@@ -1043,8 +1485,15 @@ const styles = StyleSheet.create({
     padding: Spacing.md,
   },
   inlineInfoText: {
+    flex: 1,
     fontSize: FontSize.xs,
     color: Colors.inkLight,
+  },
+  guardHint: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    lineHeight: 18,
+    textAlign: 'center',
   },
   selectedBankCard: {
     padding: Spacing.md,
@@ -1065,11 +1514,13 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
   },
   bankList: {
-    maxHeight: 240,
     borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     overflow: 'hidden',
+  },
+  bankListScroll: {
+    maxHeight: 240,
   },
   bankRow: {
     minHeight: 44,
@@ -1083,12 +1534,139 @@ const styles = StyleSheet.create({
   bankRowActive: {
     backgroundColor: Colors.needleGreenLight,
   },
+  manualBankRow: {
+    backgroundColor: Colors.boneDeep,
+  },
+  manualBankRowContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  bankRowContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  bankLogoImage: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  bankLogoFallback: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.boneDeep,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  bankLogoFallbackText: {
+    fontSize: 11,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.bold,
+  },
+  manualBankIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
   bankRowText: {
     fontSize: FontSize.xs,
     color: Colors.ink,
   },
+  bankRowMeta: {
+    marginTop: 2,
+    fontSize: 11,
+    color: Colors.midGrey,
+    lineHeight: 15,
+  },
   bankRowTextActive: {
     color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+  },
+  emptyBankText: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 12,
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+  },
+  manualForm: {
+    gap: Spacing.sm,
+  },
+  countryField: {
+    gap: 6,
+  },
+  countryLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.medium,
+    color: Colors.midGrey,
+  },
+  requiredMark: {
+    color: Colors.kanteRust,
+  },
+  countrySelector: {
+    minHeight: 44,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.sm,
+  },
+  countrySelectorError: {
+    borderColor: Colors.error,
+  },
+  countrySelectorText: {
+    flex: 1,
+    fontSize: FontSize.md,
+    color: Colors.ink,
+  },
+  countryList: {
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.white,
+    overflow: 'hidden',
+  },
+  countryListScroll: {
+    maxHeight: 220,
+  },
+  countryRow: {
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.lightGrey,
+  },
+  countryRowActive: {
+    backgroundColor: Colors.needleGreenLight,
+  },
+  countryRowText: {
+    flex: 1,
+    fontSize: FontSize.xs,
+    color: Colors.ink,
+  },
+  countryRowTextActive: {
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+  },
+  countryCodeText: {
+    fontSize: 11,
+    color: Colors.midGrey,
     fontWeight: FontWeight.semibold,
   },
   verifiedCard: {
@@ -1174,6 +1752,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen,
     ...Shadow.lg,
   },
+  successOrbPending: {
+    backgroundColor: Colors.warning,
+  },
   successTitle: {
     fontSize: FontSize.xl,
     fontWeight: FontWeight.bold,
@@ -1186,5 +1767,25 @@ const styles = StyleSheet.create({
     color: Colors.inkLight,
     lineHeight: 21,
     textAlign: 'center',
+  },
+  successChecklist: {
+    backgroundColor: Colors.needleGreenLight,
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '30',
+  },
+  successCheckRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+  },
+  successCheckText: {
+    flex: 1,
+    fontSize: FontSize.xs,
+    color: Colors.needleGreenDark,
+    lineHeight: 18,
+    fontWeight: FontWeight.medium,
   },
 })

@@ -1,4 +1,5 @@
-import { Fragment, type ReactNode } from 'react'
+/* eslint-disable @typescript-eslint/no-require-imports -- Stripe native module is optional in some app runtimes and must be resolved lazily. */
+import { Fragment, createElement, type ComponentType, type ReactNode } from 'react'
 
 type StripeSheetError = {
   code?: string
@@ -19,14 +20,14 @@ type StripeProviderProps = {
   publishableKey: string
   urlScheme: string
   setReturnUrlSchemeOnAndroid?: boolean
-  children: ReactNode
+  children?: ReactNode
 }
 
 const STRIPE_UNAVAILABLE_MESSAGE =
   'Stripe checkout is not available in this app runtime yet. Open Drape in the rebuilt development client before testing Stripe payments.'
 
 let stripeRuntimeResolved = false
-let stripeProviderImpl: ((props: StripeProviderProps) => ReactNode) | null = null
+let stripeProviderImpl: ComponentType<StripeProviderProps> | null = null
 let stripeUseStripeImpl: (() => StripeHookValue) | null = null
 let stripeCanceledCode = 'Canceled'
 
@@ -72,16 +73,14 @@ export function OptionalStripeProvider({
     return <Fragment>{children}</Fragment>
   }
 
-  const Provider = stripeProviderImpl
-
-  return (
-    <Provider
-      publishableKey={publishableKey}
-      urlScheme={urlScheme}
-      setReturnUrlSchemeOnAndroid={setReturnUrlSchemeOnAndroid}
-    >
-      {children}
-    </Provider>
+  return createElement(
+    stripeProviderImpl,
+    {
+      publishableKey,
+      urlScheme,
+      setReturnUrlSchemeOnAndroid,
+    },
+    children,
   )
 }
 

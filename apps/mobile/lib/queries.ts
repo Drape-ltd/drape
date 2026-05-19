@@ -20,7 +20,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useFocusEffect } from 'expo-router'
 import { supabase } from '@/lib/supabase'
 import type { OrderStage } from '@drape/shared/order-machine'
-import { fetchRates, STATIC_FALLBACK_RATES, type CurrencyCode, type Rates } from '@/lib/currency'
+import type { CurrencyCode } from '@/lib/currency'
 import {
   CUSTOMER_ACTIVE_ORDER_STAGES,
   CUSTOMER_COMPLETED_ORDER_STAGES,
@@ -53,6 +53,8 @@ export const qk = {
     ['customer-measurements', userId] as const,
   savedTailors:     (userId: string) =>
     ['saved-tailors', userId] as const,
+  wishlistCollections: (userId: string) =>
+    ['wishlist-collections', userId] as const,
   tailorDashboard:  (userId: string) =>
     ['tailor-dashboard', userId] as const,
   customerProfileOverview: (userId: string) =>
@@ -175,6 +177,11 @@ export type CustomerProfileData = {
     sleeveLength: number | null
     neckCircumference: number | null
     height: number | null
+    backLength?: number | null
+    outseam?: number | null
+    thighCircumference?: number | null
+    kneeCircumference?: number | null
+    torsoLength?: number | null
     unit: 'in' | 'cm'
   } | null
   avatarUrl: string | null
@@ -199,8 +206,58 @@ export type SavedTailor = {
   avgRating: number
   totalReviews: number
   availability: string
+  avatarUrl: string | null
   portfolioPhoto: string | null
 }
+
+export type WishlistCollection = {
+  id: string
+  name: string
+  coverImageUrl: string | null
+  itemCount: number
+  createdAt: string
+  updatedAt: string
+  items: WishlistItem[]
+}
+
+export type WishlistItem =
+  | {
+      id: string
+      itemType: 'TAILOR'
+      note: string | null
+      createdAt: string
+      tailor: {
+        id: string
+        displayName: string
+        location: string
+        tier: string
+        avgRating: number
+        totalReviews: number
+        portfolioPhoto: string | null
+      }
+      readyMadeItem: null
+    }
+  | {
+      id: string
+      itemType: 'READY_MADE_ITEM'
+      note: string | null
+      createdAt: string
+      tailor: null
+      readyMadeItem: {
+        id: string
+        title: string
+        category: string | null
+        currency: CurrencyCode
+        priceAmount: number
+        photoUrl: string | null
+        tailorProfileId: string
+        sellerName: string
+        stockStatus: string
+        inventoryQuantity: number
+        isLive: boolean
+        updatedAt: string | null
+      }
+    }
 
 export type TailorDashboardData = {
   stats: {
@@ -209,6 +266,7 @@ export type TailorDashboardData = {
     itemInquiries: number
     completedOrders: number
     monthEarnings: number
+    monthEarningsByCurrency: Array<{ currency: string; amount: number }>
     avgRating: number
     tier: string | null
     displayName: string
@@ -220,6 +278,13 @@ export type TailorDashboardData = {
     profileCompleted: boolean
     stripeAccountId: string | null
     paystackAccountId: string | null
+    payoutCurrency: string | null
+    payoutProvider: 'PAYSTACK' | 'STRIPE' | null
+    payoutReverificationRequired: boolean | null
+    payoutAccountVerified: boolean | null
+    payoutAccountType: 'PAYSTACK' | 'STRIPE_CONNECT' | null
+    paystackRecipientCode: string | null
+    stripeConnectAccountId: string | null
   } | null
   orders: Array<{
     id: string
@@ -246,6 +311,11 @@ export type CustomerProfileOverview = {
     sleeveLength: number | null
     neckCircumference: number | null
     height: number | null
+    backLength?: number | null
+    outseam?: number | null
+    thighCircumference?: number | null
+    kneeCircumference?: number | null
+    torsoLength?: number | null
     unit: 'in' | 'cm'
   } | null
   createdAt: string | null
@@ -304,7 +374,9 @@ export type TailorPublicProfile = {
   currency: string
   priceRangeMin: number | null
   priceRangeMax: number | null
+  avatarUrl: string | null
   portfolioPhotos: string[]
+  portfolioVideos: string[]
   supportsCustomOrders: boolean
   supportsReadyMade: boolean
   pickupAvailable: boolean
@@ -334,6 +406,9 @@ export type SellerShopItem = {
 
 export type TailorShopData = {
   tailorName: string
+  sellerAvailability: string | null
+  sellerLive: boolean
+  supportsCustomOrders: boolean
   items: SellerShopItem[]
 }
 
@@ -343,6 +418,8 @@ export type SellerItemDetail = {
   tailorUserId: string | null
   sellerName: string
   sellerLocation: string | null
+  sellerAvailability: string | null
+  sellerLive: boolean
   title: string
   description: string | null
   category: string | null
@@ -372,20 +449,6 @@ function asStringList(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
   if (typeof value === 'string' && value.length > 0) return [value]
   return []
-}
-
-function normalizeMinorAmount(
-  amountMinorUnits: number,
-  fromCurrency: CurrencyCode,
-  toCurrency: CurrencyCode,
-  rates: Rates,
-) {
-  if (fromCurrency === toCurrency) return amountMinorUnits
-
-  const fromRate = rates[fromCurrency] ?? STATIC_FALLBACK_RATES[fromCurrency] ?? 1
-  const toRate = rates[toCurrency] ?? STATIC_FALLBACK_RATES[toCurrency] ?? 1
-
-  return Math.round((amountMinorUnits / fromRate) * toRate)
 }
 
 function readyMadePurchaseKey(input: {
@@ -682,7 +745,7 @@ async function fetchSavedTailors(userId: string): Promise<SavedTailor[]> {
     .select(`
       id,
       tailor_profiles!tailor_profile_id(
-        id, display_name, location, tier, avg_rating, total_reviews, availability, portfolio_photo_urls
+        id, display_name, location, tier, avg_rating, total_reviews, availability, avatar_url, portfolio_photo_urls
       )
     `)
     .eq('user_id', userId)
@@ -704,7 +767,171 @@ async function fetchSavedTailors(userId: string): Promise<SavedTailor[]> {
       avgRating: t.avg_rating,
       totalReviews: t.total_reviews,
       availability: t.availability,
-      portfolioPhoto: portfolioPhotos[0] ?? null,
+      avatarUrl: t.avatar_url ?? null,
+      portfolioPhoto: portfolioPhotos[0] ?? t.avatar_url ?? null,
+    }
+  })
+}
+
+async function fetchWishlistCollections(userId: string): Promise<WishlistCollection[]> {
+  const { data: collectionRows, error: collectionError } = await supabase
+    .from('wishlist_collections')
+    .select('id, name, cover_image_url, item_count, created_at, updated_at')
+    .eq('customer_id', userId)
+    .order('updated_at', { ascending: false })
+
+  if (collectionError) throw collectionError
+
+  const collections = (collectionRows ?? []) as any[]
+  if (collections.length === 0) return []
+
+  const collectionIds = collections.map((row) => row.id)
+  const { data: itemRows, error: itemError } = await supabase
+    .from('wishlist_items')
+    .select('id, collection_id, item_type, tailor_id, ready_made_item_id, note, created_at')
+    .in('collection_id', collectionIds)
+    .order('created_at', { ascending: false })
+
+  if (itemError) throw itemError
+
+  const items = (itemRows ?? []) as any[]
+  const tailorIds = items
+    .filter((row) => row.item_type === 'TAILOR' && typeof row.tailor_id === 'string')
+    .map((row) => row.tailor_id)
+  const readyMadeIds = items
+    .filter((row) => row.item_type === 'READY_MADE_ITEM' && typeof row.ready_made_item_id === 'string')
+    .map((row) => row.ready_made_item_id)
+
+  const [tailorsRes, readyMadeRes] = await Promise.all([
+    tailorIds.length > 0
+      ? supabase
+          .from('tailor_profiles')
+          .select('id, display_name, location, tier, avg_rating, total_reviews, avatar_url, portfolio_photo_urls')
+          .in('id', tailorIds)
+      : Promise.resolve({ data: [], error: null }),
+    readyMadeIds.length > 0
+      ? supabase
+          .from('seller_items')
+          .select('id, title, category, currency, price_amount, photo_urls, tailor_profile_id, stock_status, inventory_quantity, is_live, updated_at, tailor_profiles(display_name)')
+          .in('id', readyMadeIds)
+      : Promise.resolve({ data: [], error: null }),
+  ])
+
+  if (tailorsRes.error) throw tailorsRes.error
+  if (readyMadeRes.error) throw readyMadeRes.error
+
+  const tailorById = new Map(
+    ((tailorsRes.data ?? []) as any[]).map((tailor) => {
+      const portfolioPhotos = asStringList(tailor.portfolio_photo_urls)
+      return [
+        tailor.id,
+        {
+          id: tailor.id,
+          displayName: tailor.display_name,
+          location: tailor.location,
+          tier: tailor.tier,
+          avgRating: tailor.avg_rating ?? 0,
+          totalReviews: tailor.total_reviews ?? 0,
+          avatarUrl: tailor.avatar_url ?? null,
+          portfolioPhoto: portfolioPhotos[0] ?? tailor.avatar_url ?? null,
+        },
+      ]
+    }),
+  )
+
+  const readyMadeById = new Map(
+    ((readyMadeRes.data ?? []) as any[]).map((item) => {
+      const photoUrls = asStringList(item.photo_urls)
+      return [
+        item.id,
+        {
+          id: item.id,
+          title: item.title,
+          category: item.category ?? null,
+          currency: item.currency as CurrencyCode,
+          priceAmount: item.price_amount,
+          photoUrl: photoUrls[0] ?? null,
+          tailorProfileId: item.tailor_profile_id,
+          sellerName: item.tailor_profiles?.display_name ?? 'Tailor',
+          stockStatus: item.stock_status ?? 'IN_STOCK',
+          inventoryQuantity:
+            typeof item.inventory_quantity === 'number'
+              ? item.inventory_quantity
+              : fallbackInventoryQuantity(item.stock_status, item.is_live ?? true),
+          isLive: item.is_live ?? true,
+          updatedAt: item.updated_at ?? null,
+        },
+      ]
+    }),
+  )
+
+  const itemsByCollection = new Map<string, WishlistItem[]>()
+  for (const row of items) {
+    let mapped: WishlistItem | null = null
+
+    if (row.item_type === 'TAILOR') {
+      const tailor = tailorById.get(row.tailor_id)
+      if (tailor) {
+        mapped = {
+          id: row.id,
+          itemType: 'TAILOR',
+          note: row.note ?? null,
+          createdAt: row.created_at,
+          tailor,
+          readyMadeItem: null,
+        }
+      }
+    } else if (row.item_type === 'READY_MADE_ITEM') {
+      if (typeof row.ready_made_item_id !== 'string') continue
+
+      const readyMadeItem =
+        readyMadeById.get(row.ready_made_item_id) ??
+        {
+          id: row.ready_made_item_id,
+          title: 'Saved item',
+          category: null,
+          currency: 'USD' as CurrencyCode,
+          priceAmount: 0,
+          photoUrl: null,
+          tailorProfileId: '',
+          sellerName: 'Tailor',
+          stockStatus: 'HIDDEN',
+          inventoryQuantity: 0,
+          isLive: false,
+          updatedAt: null,
+        }
+
+      mapped = {
+        id: row.id,
+        itemType: 'READY_MADE_ITEM',
+        note: row.note ?? null,
+        createdAt: row.created_at,
+        tailor: null,
+        readyMadeItem,
+      }
+    }
+
+    if (!mapped) continue
+    const existing = itemsByCollection.get(row.collection_id) ?? []
+    existing.push(mapped)
+    itemsByCollection.set(row.collection_id, existing)
+  }
+
+  return collections.map((row) => {
+    const collectionItems = itemsByCollection.get(row.id) ?? []
+    const firstItemCover =
+      collectionItems.find((item) => item.itemType === 'TAILOR')?.tailor?.portfolioPhoto ??
+      collectionItems.find((item) => item.itemType === 'READY_MADE_ITEM')?.readyMadeItem?.photoUrl ??
+      null
+
+    return {
+      id: row.id,
+      name: row.name,
+      coverImageUrl: row.cover_image_url ?? firstItemCover,
+      itemCount: row.item_count ?? collectionItems.length,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      items: collectionItems,
     }
   })
 }
@@ -713,7 +940,7 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
   const queries = [
     supabase
       .from('tailor_profiles')
-      .select('id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, bio, specialty_tags, languages, currency, price_range_min, price_range_max, portfolio_photo_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available')
+      .select('id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, bio, specialty_tags, languages, currency, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, portfolio_video_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available')
       .eq('id', tailorId)
       .maybeSingle(),
     supabase
@@ -722,6 +949,7 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
       .eq('tailor_profile_id', tailorId)
       .eq('flagged', false)
       .not('published_at', 'is', null)
+      .lte('published_at', new Date().toISOString())
       .order('created_at', { ascending: false })
       .limit(10),
     supabase
@@ -795,10 +1023,12 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
           currency: profileData.currency ?? 'USD',
           priceRangeMin: profileData.price_range_min ?? null,
           priceRangeMax: profileData.price_range_max ?? null,
+          avatarUrl: profileData.avatar_url ?? null,
           portfolioPhotos:
             portfolioPhotosFromItems.length > 0
               ? portfolioPhotosFromItems
               : asStringList(profileData.portfolio_photo_urls),
+          portfolioVideos: asStringList(profileData.portfolio_video_urls),
           supportsCustomOrders: profileData.supports_custom_orders ?? true,
           supportsReadyMade: profileData.supports_ready_made ?? false,
           pickupAvailable: profileData.pickup_available ?? false,
@@ -822,7 +1052,7 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
 
 async function fetchTailorShop(tailorId: string): Promise<TailorShopData> {
   const [{ data: profileData, error: profileError }, { data: itemsData, error: itemsError }] = await Promise.all([
-    supabase.from('tailor_profiles').select('display_name').eq('id', tailorId).maybeSingle(),
+    supabase.from('tailor_profiles').select('display_name, availability, is_live, supports_custom_orders').eq('id', tailorId).maybeSingle(),
     supabase
       .from('seller_items')
       .select('id, title, category, price_amount, currency, photo_urls, stock_status, inventory_quantity, pickup_available, delivery_available, shipping_available')
@@ -880,6 +1110,9 @@ async function fetchTailorShop(tailorId: string): Promise<TailorShopData> {
 
   return {
     tailorName: (profileData as any)?.display_name ?? 'This seller',
+    sellerAvailability: (profileData as any)?.availability ?? null,
+    sellerLive: (profileData as any)?.is_live === true,
+    supportsCustomOrders: (profileData as any)?.supports_custom_orders ?? true,
     items,
   }
 }
@@ -904,7 +1137,7 @@ async function fetchSellerItem(itemId: string): Promise<SellerItemDetail | null>
       pickup_available,
       delivery_available,
       shipping_available,
-      tailor_profiles(display_name, user_id, location)
+      tailor_profiles(display_name, user_id, location, availability, is_live)
     `)
     .eq('id', itemId)
     .eq('is_live', true)
@@ -930,7 +1163,7 @@ async function fetchSellerItem(itemId: string): Promise<SellerItemDetail | null>
         pickup_available,
         delivery_available,
         shipping_available,
-        tailor_profiles(display_name, user_id, location)
+        tailor_profiles(display_name, user_id, location, availability, is_live)
       `)
       .eq('id', itemId)
       .eq('is_live', true)
@@ -952,6 +1185,8 @@ async function fetchSellerItem(itemId: string): Promise<SellerItemDetail | null>
     tailorUserId: row.tailor_profiles?.user_id ?? null,
     sellerName: row.tailor_profiles?.display_name ?? 'This seller',
     sellerLocation: row.tailor_profiles?.location ?? null,
+    sellerAvailability: row.tailor_profiles?.availability ?? null,
+    sellerLive: row.tailor_profiles?.is_live === true,
     title: row.title,
     description: row.description ?? null,
     category: row.category ?? null,
@@ -998,10 +1233,10 @@ async function fetchCustomerMeasurements(userId: string): Promise<Record<string,
 }
 
 async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): Promise<TailorDashboardData> {
-  const [profileRes, ordersRes, completedRes, liveRatesRes] = await Promise.allSettled([
+  const [profileRes, ordersRes, completedRes] = await Promise.allSettled([
     supabase
       .from('tailor_profiles')
-      .select('id, display_name, tier, avg_rating, availability, currency, is_live, id_verification_status, profile_completed, stripe_account_id, paystack_account_id')
+      .select('id, display_name, tier, avg_rating, availability, currency, payout_currency, payout_provider, payout_reverification_required, payout_account_verified, payout_account_type, is_live, id_verification_status, profile_completed')
       .eq('user_id', userId)
       .maybeSingle(),
     supabase
@@ -1019,7 +1254,6 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
       .select('id', { count: 'exact', head: true })
       .eq('tailor_id', userId)
       .in('stage', ['COMPLETE', 'DELIVERED', 'COLLECTED']),
-    fetchRates(),
   ])
 
   const profile =
@@ -1048,7 +1282,6 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
     completedRes.status === 'fulfilled' && !completedRes.value.error
       ? (completedRes.value.count ?? 0)
       : 0
-  const liveRates = liveRatesRes.status === 'fulfilled' ? liveRatesRes.value : STATIC_FALLBACK_RATES
   let stockAlerts: TailorStockAlert[] = []
 
   if (
@@ -1071,6 +1304,7 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
   monthStart.setHours(0, 0, 0, 0)
 
   let monthEarnings = 0
+  let monthEarningsByCurrency: Array<{ currency: string; amount: number }> = []
   const { data: monthOrders, error: monthOrdersError } = await supabase
     .from('orders')
     .select('quoted_amount, currency, quoted_currency')
@@ -1079,11 +1313,20 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
     .gte('updated_at', monthStart.toISOString())
 
   if (!monthOrdersError) {
-    monthEarnings = (monthOrders ?? []).reduce((sum: number, o: any) => {
+    const earningsByCurrency = new Map<string, number>()
+    ;(monthOrders ?? []).forEach((o: any) => {
       const amountMinorUnits = o.quoted_amount ?? 0
-      const fromCurrency = (o.currency ?? o.quoted_currency ?? displayCurrency) as CurrencyCode
-      return sum + normalizeMinorAmount(amountMinorUnits, fromCurrency, displayCurrency, liveRates)
-    }, 0)
+      const currency = String(o.currency ?? o.quoted_currency ?? displayCurrency).toUpperCase()
+      earningsByCurrency.set(currency, (earningsByCurrency.get(currency) ?? 0) + amountMinorUnits)
+    })
+    monthEarningsByCurrency = Array.from(earningsByCurrency, ([currency, amount]) => ({ currency, amount }))
+      .filter((row) => row.amount > 0)
+      .sort((a, b) => {
+        if (a.currency === displayCurrency && b.currency !== displayCurrency) return -1
+        if (b.currency === displayCurrency && a.currency !== displayCurrency) return 1
+        return b.amount - a.amount
+      })
+    monthEarnings = monthEarningsByCurrency.find((row) => row.currency === displayCurrency)?.amount ?? 0
   }
 
   if (profile?.id) {
@@ -1141,6 +1384,7 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
       itemInquiries,
       completedOrders,
       monthEarnings,
+      monthEarningsByCurrency,
       avgRating: profile?.avg_rating ?? 0,
       tier: profile?.tier ?? null,
       displayName: profile?.display_name ?? fallbackDisplayName,
@@ -1150,8 +1394,15 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
       idVerificationStatus: profile?.id_verification_status ?? 'NOT_SUBMITTED',
       profileId: profile?.id ?? null,
       profileCompleted: profile?.profile_completed ?? false,
-      stripeAccountId: profile?.stripe_account_id ?? null,
-      paystackAccountId: profile?.paystack_account_id ?? null,
+      stripeAccountId: null,
+      paystackAccountId: null,
+      payoutCurrency: profile?.payout_currency ?? null,
+      payoutProvider: profile?.payout_provider ?? null,
+      payoutReverificationRequired: profile?.payout_reverification_required ?? null,
+      payoutAccountVerified: profile?.payout_account_verified ?? null,
+      payoutAccountType: profile?.payout_account_type ?? null,
+      paystackRecipientCode: null,
+      stripeConnectAccountId: null,
     },
     orders: visibleOrderList.map((o) => ({
       id: o.id,
@@ -1329,7 +1580,9 @@ export function useCustomerOrders(userId: string | undefined, tab: 'active' | 'c
     queryKey: qk.customerOrders(userId ?? '', tab),
     queryFn: () => fetchCustomerOrders(userId!, tab),
     enabled: !!userId,
-    staleTime: 90_000,
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnReconnect: true,
   })
 }
 
@@ -1338,7 +1591,9 @@ export function useTailorOrders(userId: string | undefined, tab: 'active' | 'com
     queryKey: qk.tailorOrders(userId ?? '', tab),
     queryFn: () => fetchTailorOrders(userId!, tab),
     enabled: !!userId,
-    staleTime: 90_000,
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnReconnect: true,
   })
 }
 
@@ -1366,6 +1621,15 @@ export function useSavedTailors(userId: string | undefined) {
     queryFn: () => fetchSavedTailors(userId!),
     enabled: !!userId,
     staleTime: 10 * 60_000,
+  })
+}
+
+export function useWishlistCollections(userId: string | undefined) {
+  return useQuery({
+    queryKey: qk.wishlistCollections(userId ?? ''),
+    queryFn: () => fetchWishlistCollections(userId!),
+    enabled: !!userId,
+    staleTime: 2 * 60_000,
   })
 }
 

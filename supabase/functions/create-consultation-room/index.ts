@@ -16,13 +16,13 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { z, parseBody, uuid } from '../_shared/validate.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getDailyApiKey, getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
-import { parseOrderSupportMeta } from '../_shared/order-support.ts'
+import { parseOrderSupportMeta, serializeOrderSupportMeta } from '../_shared/order-support.ts'
 
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
@@ -70,6 +70,17 @@ function isFreshRoomUrl(url: string) {
   return Date.now() - createdAt < ROOM_TTL_SECONDS * 1000
 }
 
+function consultationStartGate(scheduledStartAt: string | null | undefined) {
+  if (!scheduledStartAt) return null
+  const starts = new Date(scheduledStartAt).getTime()
+  if (!Number.isFinite(starts)) return null
+  const opensAt = starts - 15 * 60 * 1000
+  if (Date.now() < opensAt) {
+    return 'This consultation opens 15 minutes before the scheduled time.'
+  }
+  return null
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
@@ -93,7 +104,7 @@ Deno.serve(async (req) => {
     // Rate limit: 10 room creations per hour per user
     const allowed = await checkRateLimit(supabase, `create-consultation-room:${caller.id}`, 3600, 10)
     if (!allowed) {
-      return jsonError(corsHeaders, 429, 'RATE_LIMITED', 'Too many consultation attempts right now. Please try again later.')
+      return rateLimitExceededResponse(corsHeaders)
     }
 
     // Check for existing room URL — also fetch tailor ownership fields
@@ -105,10 +116,12 @@ Deno.serve(async (req) => {
 
     if (!order) return jsonError(corsHeaders, 404, 'ORDER_NOT_FOUND', 'That order could not be found anymore.')
 
-    // Verify the caller is the tailor on this order
+    // Verify the caller is one of the two people on this order
     const tailorUserId = order.tailor_id ?? (order.tailor_profiles as any)?.user_id
-    if (tailorUserId !== caller.id) {
-      return jsonError(corsHeaders, 403, 'FORBIDDEN', 'Only the tailor on this order can start the consultation room.')
+    const customerUserId = (order as { customer_id?: string | null }).customer_id ?? null
+    const callerRole = tailorUserId === caller.id ? 'TAILOR' : customerUserId === caller.id ? 'CUSTOMER' : null
+    if (!callerRole) {
+      return jsonError(corsHeaders, 403, 'FORBIDDEN', 'Only the customer or tailor on this order can start the consultation room.')
     }
 
     if (order.stage !== 'CONSULTATION') {
@@ -117,6 +130,15 @@ Deno.serve(async (req) => {
 
     const supportMeta = parseOrderSupportMeta((order as { special_note?: string | null }).special_note)
     const consultationMeta = supportMeta.consultation ?? null
+    if (!consultationMeta || consultationMeta.status === 'REQUESTED' || consultationMeta.status === 'DECLINED') {
+      return jsonError(
+        corsHeaders,
+        409,
+        'CONSULTATION_NOT_APPROVED',
+        'This consultation has not been approved and scheduled yet.',
+      )
+    }
+
     const consultationPaymentRequired =
       typeof (order as { consultation_fee?: number | null }).consultation_fee === 'number'
       && ((order as { consultation_fee?: number | null }).consultation_fee ?? 0) > 0
@@ -130,6 +152,11 @@ Deno.serve(async (req) => {
         'CONSULTATION_PAYMENT_REQUIRED',
         'The customer still needs to pay the consultation fee before you can start the consultation call.',
       )
+    }
+
+    const startGate = consultationStartGate(consultationMeta.scheduledStartAt)
+    if (startGate) {
+      return jsonError(corsHeaders, 409, 'CONSULTATION_NOT_OPEN_YET', startGate)
     }
 
     // Reuse only rooms that still fall within the app TTL. Old Daily rooms can expire
@@ -197,7 +224,6 @@ Deno.serve(async (req) => {
       .from('orders')
       .update({ video_call_url: roomUrl })
       .eq('id', orderId)
-      .eq('tailor_id', order.tailor_id)
       .eq('stage', 'CONSULTATION')
 
     updateQuery = order.video_call_url
@@ -230,16 +256,38 @@ Deno.serve(async (req) => {
       payload: {
         function: 'create-consultation-room',
         call_type: callType,
+        actor_role: callerRole,
       },
     })
 
-    if (order.customer_id) {
+    if (consultationMeta.status !== 'COMPLETED') {
       EdgeRuntime.waitUntil(
-        sendPushToUser(supabase, order.customer_id.toString(), {
+        (async () => {
+          await supabase
+            .from('orders')
+            .update({
+              special_note: serializeOrderSupportMeta({
+                ...supportMeta,
+                consultation: {
+                  ...consultationMeta,
+                  status: 'COMPLETED',
+                },
+              }),
+            })
+            .eq('id', orderId)
+        })(),
+      )
+    }
+
+    const recipientId = callerRole === 'TAILOR' ? customerUserId : tailorUserId
+    if (recipientId) {
+      EdgeRuntime.waitUntil(
+        sendPushToUser(supabase, recipientId.toString(), {
           title: audioOnly ? 'Consultation audio ready' : 'Consultation call ready',
           body: audioOnly
-            ? 'Your tailor started an audio consultation. Join from your order or messages.'
-            : 'Your tailor started a consultation call. Join from your order or messages.',
+            ? 'Your consultation audio room is ready. Join from your order or messages.'
+            : 'Your consultation call is ready. Join from your order or messages.',
+          preferenceKey: 'orderUpdates',
           data: { orderId },
         }),
       )

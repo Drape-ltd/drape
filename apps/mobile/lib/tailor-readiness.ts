@@ -12,6 +12,7 @@ export type TailorReadinessInput = {
   idVerificationStatus?: string | null
   isLive?: boolean | null
   payoutCurrency?: string | null
+  payoutProvider?: string | null
   stripeAccountId?: string | null
   paystackAccountId?: string | null
   stripeConnectAccountId?: string | null

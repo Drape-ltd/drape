@@ -6,8 +6,8 @@ type TierBadge = 'VERIFIED' | 'RISING' | 'MASTER'
 
 const TIER_CONFIG: Record<TierBadge, { label: string; emoji: string; bg: string; text: string }> = {
   VERIFIED: { label: 'Verified', emoji: '✓', bg: Colors.needleGreenLight, text: Colors.needleGreen },
-  RISING: { label: 'Rising', emoji: '★', bg: '#FEF9C3', text: '#92400E' },
-  MASTER: { label: 'Master', emoji: '◆', bg: '#F3E8FF', text: '#7C3AED' },
+  RISING: { label: 'Rising', emoji: '★', bg: Colors.statusPendingBg, text: Colors.statusPending },
+  MASTER: { label: 'Master', emoji: '◆', bg: Colors.boneDeep, text: Colors.needleGreenDark },
 }
 
 export function TierBadgeChip({ tier, size = 'md' }: { tier: TierBadge | null | undefined; size?: 'sm' | 'md' | 'lg' }) {
@@ -59,7 +59,7 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   star: {
-    color: '#F59E0B',
+    color: Colors.statusPending,
     fontSize: FontSize.sm,
   },
   ratingText: {

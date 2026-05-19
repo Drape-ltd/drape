@@ -187,7 +187,7 @@ export async function createWebhookEvent(
 ) {
   const { data, error } = await supabase
     .from('payment_webhook_events')
-    .insert({
+    .upsert({
       provider: input.provider,
       provider_event_id: input.providerEventId,
       event_type: input.eventType,
@@ -196,11 +196,27 @@ export async function createWebhookEvent(
       payment_id: input.paymentId ?? null,
       signature_valid: input.signatureValid,
       payload: input.payload,
+    }, {
+      onConflict: 'provider,provider_event_id',
+      ignoreDuplicates: true,
     })
-    .select('id')
-    .single()
+    .select('id, processed_at, processing_result')
 
-  if (error && isUniqueViolation(error)) {
+  if (error) {
+    throw error
+  }
+
+  const rows = (data ?? []) as PaymentWebhookEventRecord[]
+  if (rows.length > 0) {
+    return {
+      duplicate: false as const,
+      id: rows[0].id,
+      alreadyProcessed: false as const,
+      processingResult: null,
+    }
+  }
+
+  {
     const { data: existingEvent, error: existingError } = await supabase
       .from('payment_webhook_events')
       .select('id, processed_at, processing_result')
@@ -216,13 +232,6 @@ export async function createWebhookEvent(
       alreadyProcessed: !!(existingEvent as PaymentWebhookEventRecord).processed_at,
       processingResult: (existingEvent as PaymentWebhookEventRecord).processing_result,
     }
-  }
-  if (error) throw error
-  return {
-    duplicate: false as const,
-    id: (data as { id: string }).id,
-    alreadyProcessed: false as const,
-    processingResult: null,
   }
 }
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  ActivityIndicator, RefreshControl, Linking, ScrollView, Alert,
+  RefreshControl, Linking, ScrollView, Alert,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
@@ -12,6 +12,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { customerOrderStageLabel } from '@/lib/customer-order-copy'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
+import { SkeletonBlock } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
 
@@ -56,9 +57,9 @@ function orderPreview(stage: OrderStage, garmentType: string, orderKind: 'CUSTOM
     case 'READY_FOR_COLLECTION':
       return `${garmentType} · Ready for collection`
     case 'DELIVERED':
-      return `${garmentType} · Delivered, ready to finish`
+      return `${garmentType} · Delivered, review window open`
     case 'COLLECTED':
-      return `${garmentType} · Collected, ready to finish`
+      return `${garmentType} · Collected, review window open`
     case 'COMPLETE':
       return `${garmentType} · Order complete`
     case 'IN_DISPUTE':
@@ -214,9 +215,17 @@ export default function MessagesInboxScreen() {
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Messages</Text>
-            <ActivityIndicator color={Colors.needleGreen} size="large" />
-            <Text style={styles.stateTitle}>Loading your conversations…</Text>
-            <Text style={styles.stateHint}>Checking recent threads.</Text>
+            <View style={styles.messageSkeletonList}>
+              {[0, 1, 2].map((index) => (
+                <View key={index} style={styles.messageSkeletonRow}>
+                  <SkeletonBlock style={styles.messageSkeletonAvatar} />
+                  <View style={styles.messageSkeletonCopy}>
+                    <SkeletonBlock style={styles.messageSkeletonTitle} />
+                    <SkeletonBlock style={styles.messageSkeletonLine} />
+                  </View>
+                </View>
+              ))}
+            </View>
           </View>
         </View>
       ) : fetchErrorMessage && conversations.length === 0 ? (
@@ -448,6 +457,35 @@ const styles = StyleSheet.create({
   },
   stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
+  messageSkeletonList: {
+    alignSelf: 'stretch',
+    gap: Spacing.sm,
+  },
+  messageSkeletonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+  },
+  messageSkeletonAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.full,
+  },
+  messageSkeletonCopy: {
+    flex: 1,
+    gap: Spacing.xs,
+  },
+  messageSkeletonTitle: {
+    width: '62%',
+    height: 16,
+  },
+  messageSkeletonLine: {
+    width: '86%',
+    height: 13,
+  },
   header: {
     paddingHorizontal: Spacing.lg,
     paddingTop: 10,
@@ -512,12 +550,12 @@ const styles = StyleSheet.create({
   },
   filterChipActive: { backgroundColor: Colors.ink },
   filterLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.inkLight },
-  filterLabelActive: { color: Colors.white },
+  filterLabelActive: { color: Colors.textInverse },
   filterBadge: {
     minWidth: 16, height: 16, borderRadius: 8,
     backgroundColor: Colors.needleGreen, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3,
   },
-  filterBadgeText: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white },
+  filterBadgeText: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.textInverse },
 
   separator: { height: 1, backgroundColor: Colors.lightGrey, marginLeft: 68 },
   listContent: { paddingBottom: Spacing.xxxl },
@@ -553,7 +591,7 @@ const styles = StyleSheet.create({
     minWidth: 20, height: 20, borderRadius: 10,
     backgroundColor: Colors.needleGreen, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5,
   },
-  badgeText: { fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white },
+  badgeText: { fontSize: 11, fontWeight: FontWeight.bold, color: Colors.textInverse },
 
   emptyContainer: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: Spacing.lg, paddingBottom: Spacing.xxl },
   emptyWrap: { flex: 1, justifyContent: 'center' },
@@ -577,7 +615,7 @@ const styles = StyleSheet.create({
     minHeight: 44,
     justifyContent: 'center',
   },
-  retryBtnText: { fontSize: FontSize.sm, color: Colors.white, fontWeight: FontWeight.semibold },
+  retryBtnText: { fontSize: FontSize.sm, color: Colors.textInverse, fontWeight: FontWeight.semibold },
   secondaryBtn: {
     backgroundColor: Colors.white,
     borderColor: Colors.lightGrey,

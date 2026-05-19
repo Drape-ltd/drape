@@ -5,6 +5,12 @@ import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import {
+  getClientIp,
+  RATE_LIMITS,
+  rateLimit,
+  rateLimitExceededResponse,
+} from '../_shared/rateLimit.ts'
+import {
   escalationWindowMinutes,
   handoffEscalationSummary,
   handoffIssueLabel,
@@ -51,6 +57,17 @@ Deno.serve(async (req) => {
     if (unauthorized) return unauthorized
 
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
+    const clientIp = getClientIp(req)
+    const limit = await rateLimit(
+      supabase,
+      clientIp,
+      FN,
+      RATE_LIMITS.authenticated.limit,
+      RATE_LIMITS.authenticated.windowMs,
+      { ip: clientIp, userAgent: req.headers.get('user-agent') },
+    )
+    if (!limit.allowed) return rateLimitExceededResponse(cors, limit.retryAfter)
+
     const now = Date.now()
 
     const { data, error } = await supabase
@@ -61,7 +78,13 @@ Deno.serve(async (req) => {
 
     if (error) {
       log('error', FN, 'db.error', { error: error.message })
-      return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: cors })
+      return new Response(
+        JSON.stringify({
+          error: 'Handoff escalation check failed.',
+          code: 'HANDOFF_ESCALATION_LOOKUP_FAILED',
+        }),
+        { status: 500, headers: { ...cors, 'Content-Type': 'application/json' } },
+      )
     }
 
     let escalated = 0

@@ -38,6 +38,7 @@ export const PAYOUT_BLOCKED_REASONS = {
   OPEN_DISPUTE: 'OPEN_DISPUTE',
   PAYOUT_ACCOUNT_UNVERIFIED: 'PAYOUT_ACCOUNT_UNVERIFIED',
   PAYOUT_ACCOUNT_MISSING: 'PAYOUT_ACCOUNT_MISSING',
+  PAYOUT_DESTINATION_HOLD: 'PAYOUT_DESTINATION_HOLD',
   PAYOUT_CURRENCY_MISMATCH: 'PAYOUT_CURRENCY_MISMATCH',
   NO_SETTLED_PAYMENT: 'NO_SETTLED_PAYMENT',
   PAYOUT_ALREADY_TRIGGERED: 'PAYOUT_ALREADY_TRIGGERED',
@@ -90,6 +91,8 @@ export function payoutBlockReasonMessage(reason: PayoutBlockedReason) {
       return 'Tailor payout account is not verified yet.'
     case PAYOUT_BLOCKED_REASONS.PAYOUT_ACCOUNT_MISSING:
       return 'Tailor payout account details are incomplete for the selected provider.'
+    case PAYOUT_BLOCKED_REASONS.PAYOUT_DESTINATION_HOLD:
+      return 'Tailor payout destination was recently changed and is in the safety hold window.'
     case PAYOUT_BLOCKED_REASONS.PAYOUT_CURRENCY_MISMATCH:
       return 'Tailor payout currency no longer matches the locked order earnings currency.'
     case PAYOUT_BLOCKED_REASONS.NO_SETTLED_PAYMENT:

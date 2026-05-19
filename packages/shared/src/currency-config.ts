@@ -85,6 +85,74 @@ export function resolvePaymentProviderForCurrency(currency: AccountCurrencyCode)
   }
 }
 
+export function resolveSellerPayoutCurrency(input: {
+  payoutCurrency?: string | null
+  payoutProvider?: string | null
+  payoutAccountType?: string | null
+  hasPaystackRecipient?: boolean | null
+  hasStripeConnectAccount?: boolean | null
+  fallbackCurrency?: string | null
+}): AccountCurrencyCode | null {
+  const explicit = normalizeAccountCurrency(input.payoutCurrency)
+
+  const provider = `${input.payoutProvider ?? ''} ${input.payoutAccountType ?? ''}`.toUpperCase()
+  const isPaystackRoute = provider.includes('PAYSTACK') || input.hasPaystackRecipient
+  const isStripeRoute = provider.includes('STRIPE') || provider.includes('CONNECT') || input.hasStripeConnectAccount
+
+  if (isPaystackRoute) {
+    return explicit && (PAYSTACK_ACCOUNT_CURRENCIES as readonly string[]).includes(explicit) ? explicit : 'NGN'
+  }
+
+  if (isStripeRoute) {
+    const fallback = normalizeAccountCurrency(input.fallbackCurrency)
+    if (explicit && (STRIPE_ACCOUNT_CURRENCIES as readonly string[]).includes(explicit)) return explicit
+    return fallback && (STRIPE_ACCOUNT_CURRENCIES as readonly string[]).includes(fallback) ? fallback : 'USD'
+  }
+
+  return explicit
+}
+
+export function resolveSellerOrderCurrency(input: {
+  itemCurrency?: string | null
+  tailorCurrency?: string | null
+  payoutCurrency?: string | null
+  payoutProvider?: string | null
+  payoutAccountType?: string | null
+  hasPaystackRecipient?: boolean | null
+  hasStripeConnectAccount?: boolean | null
+  customerCurrency?: string | null
+}): AccountCurrencyCode {
+  const payoutCurrency = resolveSellerPayoutCurrency({
+    payoutCurrency: input.payoutCurrency,
+    payoutProvider: input.payoutProvider,
+    payoutAccountType: input.payoutAccountType,
+    hasPaystackRecipient: input.hasPaystackRecipient,
+    hasStripeConnectAccount: input.hasStripeConnectAccount,
+    fallbackCurrency: input.tailorCurrency,
+  })
+
+  return normalizeAccountCurrency(input.itemCurrency)
+    ?? payoutCurrency
+    ?? normalizeAccountCurrency(input.tailorCurrency)
+    ?? normalizeAccountCurrency(input.customerCurrency)
+    ?? DEFAULT_ACCOUNT_CURRENCY
+}
+
+export function hasSellerPayoutCurrencyMismatch(input: {
+  itemCurrency?: string | null
+  payoutCurrency?: string | null
+  payoutProvider?: string | null
+  payoutAccountType?: string | null
+  hasPaystackRecipient?: boolean | null
+  hasStripeConnectAccount?: boolean | null
+  fallbackCurrency?: string | null
+}): boolean {
+  const itemCurrency = normalizeAccountCurrency(input.itemCurrency)
+  const payoutCurrency = resolveSellerPayoutCurrency(input)
+  if (!itemCurrency || !payoutCurrency) return false
+  return itemCurrency !== payoutCurrency
+}
+
 export function extractRegionCodeFromLocale(locale: string | null | undefined): string | null {
   if (typeof locale !== 'string' || locale.trim().length === 0) return null
   const normalized = locale.trim().replace('_', '-')

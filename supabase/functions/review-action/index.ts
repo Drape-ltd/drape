@@ -1,15 +1,17 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
 import { rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
+import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
 import { parseBody, uuid, z } from '../_shared/validate.ts'
 
 const FN = 'review-action'
 const REVIEW_WINDOW_MS = 14 * 24 * 60 * 60 * 1000
+const REVIEW_PUBLICATION_HOLD_MS = 10 * 60 * 1000
 const THREATENING_LANGUAGE_PATTERNS = [
   /\b(i('ll| will|'m going to| am going to)) (kill|hurt|harm|beat|attack|destroy|ruin) (you|u|your|ur)\b/i,
   /\b(you('re| are) (dead|finished|done)|watch your back|i know where you live)\b/i,
@@ -33,7 +35,7 @@ const BodySchema = z.discriminatedUnion('action', [
     orderId: uuid,
     reviewerName: z.string().trim().min(1).max(80),
     rating: z.number().int().min(1).max(5),
-    body: z.string().trim().max(300).optional(),
+    body: z.string().trim().max(1000).optional(),
     tags: ReviewTags,
   }),
   z.object({
@@ -42,7 +44,7 @@ const BodySchema = z.discriminatedUnion('action', [
     customerId: uuid.optional(),
     reviewerName: z.string().trim().min(1).max(80),
     rating: z.number().int().min(1).max(5),
-    body: z.string().trim().max(300).optional(),
+    body: z.string().trim().max(1000).optional(),
     tags: ReviewTags,
   }),
 ])
@@ -95,7 +97,7 @@ Deno.serve(async (req) => {
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
     const allowed = await checkRateLimit(supabase, `${FN}:${caller.id}`, 3600, 30)
     if (!allowed) {
-      return jsonError(cors, 429, 'RATE_LIMITED', 'Too many review attempts right now. Please wait a moment before trying again.')
+      return rateLimitExceededResponse(cors)
     }
 
     const body = parsed.data
@@ -156,12 +158,6 @@ Deno.serve(async (req) => {
       }
       if (!order) return jsonError(cors, 404, 'ORDER_NOT_FOUND', 'This order review could not be found anymore.')
       if (order.customer_id?.toString() !== caller.id) return jsonError(cors, 403, 'FORBIDDEN', 'This review is not available from your account.')
-      if (!['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(order.stage)) {
-        return jsonError(cors, 409, 'ORDER_NOT_READY_FOR_REVIEW', 'This order is not ready for review yet.')
-      }
-      if (reviewWindowClosed(order.stage_updated_at ?? null)) {
-        return jsonError(cors, 409, 'REVIEW_WINDOW_CLOSED', 'This review window has closed. Reviews can only be added within 14 days of delivery, collection, or completion.')
-      }
 
       const { data: dispute, error: disputeError } = await supabase
         .from('disputes')
@@ -174,16 +170,74 @@ Deno.serve(async (req) => {
         return jsonError(cors, 500, 'DATABASE_ERROR', 'Could not load this order review right now.')
       }
 
+      const { data: existingReview, error: existingReviewError } = await supabase
+        .from('reviews')
+        .select('id')
+        .eq('order_id', body.orderId)
+        .maybeSingle()
+
+      if (existingReviewError) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: body.orderId, error: existingReviewError.message, surface: 'reviews.existing' })
+        return jsonError(cors, 500, 'DATABASE_ERROR', 'Could not load this order review right now.')
+      }
+
+      const reviewPreflight = runPreflight([
+        {
+          name: 'order_ready_for_review',
+          condition: ['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(order.stage),
+          errorCode: 'ORDER_NOT_READY_FOR_REVIEW',
+          message: 'This order is not ready for review yet.',
+          field: 'stage',
+          severity: 'BLOCKING',
+          actual: { stage: order.stage },
+        },
+        {
+          name: 'review_window_open',
+          condition: !reviewWindowClosed(order.stage_updated_at ?? null),
+          errorCode: 'REVIEW_WINDOW_CLOSED',
+          message: 'This review window has closed. Reviews can only be added within 14 days of delivery, collection, or completion.',
+          field: 'stage_updated_at',
+          severity: 'BLOCKING',
+          actual: { stage_updated_at: order.stage_updated_at ?? null },
+        },
+        {
+          name: 'one_review_per_order',
+          condition: !existingReview?.id,
+          errorCode: 'REVIEW_ALREADY_SUBMITTED',
+          message: 'You already reviewed this order.',
+          field: 'order_id',
+          severity: 'BLOCKING',
+          actual: { existingReviewId: existingReview?.id ?? null },
+        },
+      ])
+
+      if (!reviewPreflight.passed) {
+        await logPreflightFailure(supabase, reviewPreflight, {
+          operation: 'submit_tailor_review',
+          entityType: 'order',
+          entityId: body.orderId,
+          orderId: body.orderId,
+          actorId: caller.id,
+          actorRole: 'CUSTOMER',
+          userId: caller.id,
+          source: FN,
+          metadata: { rating: body.rating },
+        })
+        return preflightFailureResponse(reviewPreflight, cors, 409)
+      }
+
       const holdReasons = [
         ...reviewHoldReasons(reviewBody),
         ...(dispute && ['OPEN', 'UNDER_REVIEW'].includes(dispute.status) ? ['OPEN_DISPUTE'] : []),
       ]
-      const publicationStatus = holdReasons.length > 0 ? 'held' : 'published'
-      const publishedAt = publicationStatus === 'published' ? new Date().toISOString() : null
+      const publicationStatus = holdReasons.length > 0 ? 'held' : 'pending'
+      const publishedAt = publicationStatus === 'pending'
+        ? new Date(Date.now() + REVIEW_PUBLICATION_HOLD_MS).toISOString()
+        : null
 
       const { data: savedReview, error } = await supabase
         .from('reviews')
-        .upsert({
+        .insert({
           order_id: body.orderId,
           tailor_id: order.tailor_id,
           tailor_profile_id: order.tailor_profile_id,
@@ -193,13 +247,13 @@ Deno.serve(async (req) => {
           tags: body.tags,
           published_at: publishedAt,
           flagged: publicationStatus === 'held',
-        }, { onConflict: 'order_id' })
+        })
         .select('id')
         .single()
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: body.orderId, error: error.message })
-        return jsonError(cors, 500, 'REVIEW_SAVE_FAILED', error.message ?? 'Could not submit review.')
+        return jsonError(cors, 500, 'REVIEW_SAVE_FAILED', 'We could not save your review right now. Please try again in a moment.')
       }
 
       if (publicationStatus === 'held') {
@@ -253,25 +307,104 @@ Deno.serve(async (req) => {
       .from('orders')
       .select('id, stage, stage_updated_at, customer_id, tailor_id')
       .eq('id', body.orderId)
-      .single()
+      .maybeSingle()
 
     if (orderError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: orderError.message })
       return jsonError(cors, 500, 'DATABASE_ERROR', 'Could not load this customer review right now.')
     }
-    if (!order) return jsonError(cors, 404, 'ORDER_NOT_FOUND', 'This order review could not be found anymore.')
-    if (order.tailor_id?.toString() !== caller.id) return jsonError(cors, 403, 'FORBIDDEN', 'This review is not available from your account.')
-    if (!order.customer_id?.toString()) return jsonError(cors, 409, 'CUSTOMER_MISSING', 'This order is missing the customer details needed for review.')
-    if (!['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(order.stage)) {
-      return jsonError(cors, 409, 'ORDER_NOT_READY_FOR_REVIEW', 'You can review a customer after delivery or collection.')
+
+    const { data: existingCustomerReview, error: existingCustomerReviewError } = await supabase
+      .from('customer_reviews')
+      .select('id')
+      .eq('order_id', body.orderId)
+      .maybeSingle()
+
+    if (existingCustomerReviewError) {
+      log('error', FN, 'db.error', { actor_id: caller.id, order_id: body.orderId, error: existingCustomerReviewError.message, surface: 'customer_reviews.existing' })
+      return jsonError(cors, 500, 'DATABASE_ERROR', 'Could not load this customer review right now.')
     }
-    if (reviewWindowClosed(order.stage_updated_at ?? null)) {
-      return jsonError(cors, 409, 'REVIEW_WINDOW_CLOSED', 'This review window has closed. Reviews can only be added within 14 days of delivery, collection, or completion.')
+
+    const customerReviewPreflight = runPreflight([
+      {
+        name: 'order_exists',
+        condition: !!order?.id,
+        errorCode: 'ORDER_NOT_FOUND',
+        message: 'This order review could not be found anymore.',
+        field: 'orderId',
+        severity: 'BLOCKING',
+        actual: { orderId: body.orderId },
+      },
+      {
+        name: 'tailor_owns_order',
+        condition: order?.tailor_id?.toString() === caller.id,
+        errorCode: 'REVIEW_FORBIDDEN',
+        message: 'This review is not available from your account.',
+        field: 'orderId',
+        severity: 'BLOCKING',
+        actual: { callerId: caller.id, tailorId: order?.tailor_id ?? null },
+      },
+      {
+        name: 'customer_present',
+        condition: !!order?.customer_id?.toString(),
+        errorCode: 'CUSTOMER_MISSING',
+        message: 'This order is missing the customer details needed for review.',
+        field: 'customer_id',
+        severity: 'BLOCKING',
+        actual: { customerId: order?.customer_id ?? null },
+      },
+      {
+        name: 'order_ready_for_review',
+        condition: !!order?.stage && ['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(order.stage),
+        errorCode: 'ORDER_NOT_READY_FOR_REVIEW',
+        message: 'You can review a customer after delivery or collection.',
+        field: 'stage',
+        severity: 'BLOCKING',
+        actual: { stage: order?.stage ?? null },
+      },
+      {
+        name: 'review_window_open',
+        condition: !reviewWindowClosed(order?.stage_updated_at ?? null),
+        errorCode: 'REVIEW_WINDOW_CLOSED',
+        message: 'This review window has closed. Reviews can only be added within 14 days of delivery, collection, or completion.',
+        field: 'stage_updated_at',
+        severity: 'BLOCKING',
+        actual: { stage_updated_at: order?.stage_updated_at ?? null },
+      },
+      {
+        name: 'one_review_per_order',
+        condition: !existingCustomerReview?.id,
+        errorCode: 'REVIEW_ALREADY_SUBMITTED',
+        message: 'You already reviewed this customer for this order.',
+        field: 'order_id',
+        severity: 'BLOCKING',
+        actual: { existingReviewId: existingCustomerReview?.id ?? null },
+      },
+    ])
+
+    if (!customerReviewPreflight.passed) {
+      await logPreflightFailure(supabase, customerReviewPreflight, {
+        operation: 'submit_customer_review',
+        entityType: 'order',
+        entityId: body.orderId,
+        orderId: body.orderId,
+        actorId: caller.id,
+        actorRole: 'TAILOR',
+        userId: caller.id,
+        source: FN,
+        metadata: { rating: body.rating },
+      })
+      return preflightFailureResponse(
+        customerReviewPreflight,
+        cors,
+        !order?.id ? 404 : order.tailor_id?.toString() !== caller.id ? 403 : 409,
+      )
     }
+    if (!order?.id || !order.customer_id) return jsonError(cors, 404, 'ORDER_NOT_FOUND', 'This order review could not be found anymore.')
 
     const { error } = await supabase
       .from('customer_reviews')
-      .upsert({
+      .insert({
         order_id: body.orderId,
         customer_id: order.customer_id,
         tailor_id: caller.id,
@@ -280,11 +413,11 @@ Deno.serve(async (req) => {
         body: reviewBody || null,
         tags: body.tags,
         updated_at: new Date().toISOString(),
-      }, { onConflict: 'order_id' })
+      })
 
     if (error) {
       log('error', FN, 'db.error', { actor_id: caller.id, order_id: body.orderId, error: error.message })
-      return jsonError(cors, 500, 'REVIEW_SAVE_FAILED', error.message ?? 'Could not save review.')
+      return jsonError(cors, 500, 'REVIEW_SAVE_FAILED', 'We could not save your review right now. Please try again in a moment.')
     }
 
     await audit(supabase, {

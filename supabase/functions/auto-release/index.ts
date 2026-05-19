@@ -12,6 +12,12 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
+import {
+  getClientIp,
+  RATE_LIMITS,
+  rateLimit,
+  rateLimitExceededResponse,
+} from '../_shared/rateLimit.ts'
 
 const FN = 'auto-release'
 const WARNING_AFTER_DAYS = 12
@@ -20,6 +26,17 @@ const WARNING_EVENT = 'order.auto_release_warning_sent'
 
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
+}
+
+function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
+  if (typeof body.error === 'string' && typeof body.message !== 'string') {
+    body.message = body.error
+  }
+
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...headers, 'Content-Type': 'application/json' },
+  })
 }
 
 type OrderRow = {
@@ -80,6 +97,7 @@ async function markOrderDelivered(supabase: any, order: OrderRow) {
       sendPushToUser(supabase, order.customer_id, {
         title: 'Order marked delivered',
         body: `Your ${orderLabel} was automatically marked as delivered after 14 days. If something is wrong, contact support with the order reference.`,
+        preferenceKey: 'orderUpdates',
         data: { orderId: order.id },
       }),
     )
@@ -90,6 +108,7 @@ async function markOrderDelivered(supabase: any, order: OrderRow) {
       sendPushToUser(supabase, order.tailor_id, {
         title: 'Order auto-delivered',
         body: `${orderLabel} was automatically marked as delivered after 14 days in the final handoff stage. Review the order in Drape if any follow-up is still needed.`,
+        preferenceKey: 'newOrders',
         data: { orderId: order.id },
       }),
     )
@@ -128,6 +147,7 @@ async function sendAutoReleaseWarning(supabase: any, order: OrderRow) {
     sendPushToUser(supabase, order.customer_id, {
       title: 'Confirm your order soon',
       body: `Your ${orderLabel} has been in the final delivery stage for 12 days. Confirm receipt or raise a concern within 2 days before Drape marks delivery automatically.`,
+      preferenceKey: 'orderUpdates',
       data: { orderId: order.id },
     }),
   )
@@ -155,6 +175,17 @@ Deno.serve(async (req) => {
     if (unauthorized) return unauthorized
 
     const supabase: any = createClient(getSupabaseUrl(), getServiceRoleKey())
+    const clientIp = getClientIp(req)
+    const limit = await rateLimit(
+      supabase,
+      clientIp,
+      FN,
+      RATE_LIMITS.authenticated.limit,
+      RATE_LIMITS.authenticated.windowMs,
+      { ip: clientIp, userAgent: req.headers.get('user-agent') },
+    )
+    if (!limit.allowed) return rateLimitExceededResponse(cors, limit.retryAfter)
+
     const now = Date.now()
     const warningCutoff = new Date(now - WARNING_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString()
     const releaseCutoff = new Date(now - RELEASE_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString()
@@ -221,11 +252,9 @@ Deno.serve(async (req) => {
       }
     }
 
-    return new Response(JSON.stringify({ released, warned, skipped }), {
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    })
+    return jsonResponse({ released, warned, skipped }, 200, cors)
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return new Response('Internal server error', { status: 500, headers: cors })
+    return jsonResponse({ error: 'Auto-release job could not complete right now.' }, 500, cors)
   }
 })

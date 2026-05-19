@@ -6,9 +6,11 @@
 import { useState } from 'react'
 import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { syncUserRow } from '@/lib/syncUserRow'
+import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { Colors, FontSize, FontWeight, Spacing, Radius } from '@/constants/theme'
 
 type Role = 'CUSTOMER' | 'TAILOR'
@@ -31,7 +33,12 @@ export default function RoleSelectScreen() {
     setLoading(true)
     const { error } = await supabase.auth.updateUser({ data: { role } })
     if (error) {
-      Alert.alert('Error', error.message)
+      Alert.alert(
+        'Could not save your role',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. We could not save your role yet. Retry when the signal improves.'
+          : 'We could not save your role right now. Please try again in a moment.',
+      )
       setLoading(false)
       return
     }
@@ -45,7 +52,7 @@ export default function RoleSelectScreen() {
     // RouteGuard will redirect once role is set in the session
   }
 
-  async function useDifferentAccount() {
+  async function switchAccount() {
     if (loading) return
     setLoading(true)
     try {
@@ -72,9 +79,12 @@ export default function RoleSelectScreen() {
           <TouchableOpacity
             style={[styles.roleCard, role === 'CUSTOMER' && styles.roleCardActive]}
             onPress={() => setRole('CUSTOMER')}
+            accessibilityRole="button"
+            accessibilityLabel="Use Drape as a customer"
+            accessibilityState={{ selected: role === 'CUSTOMER' }}
           >
             <View style={[styles.roleIconWrap, role === 'CUSTOMER' && styles.roleIconWrapActive]}>
-              <Text style={styles.roleEmoji}>👔</Text>
+              <Ionicons name="person-outline" size={24} color={role === 'CUSTOMER' ? Colors.needleGreen : Colors.ink} />
             </View>
             <View style={styles.roleTextWrap}>
               <Text style={[styles.roleLabel, role === 'CUSTOMER' && styles.roleLabelActive]}>
@@ -90,9 +100,12 @@ export default function RoleSelectScreen() {
           <TouchableOpacity
             style={[styles.roleCard, role === 'TAILOR' && styles.roleCardActive]}
             onPress={() => setRole('TAILOR')}
+            accessibilityRole="button"
+            accessibilityLabel="Use Drape as a tailor"
+            accessibilityState={{ selected: role === 'TAILOR' }}
           >
             <View style={[styles.roleIconWrap, role === 'TAILOR' && styles.roleIconWrapActive]}>
-              <Text style={styles.roleEmoji}>🧵</Text>
+              <Ionicons name="cut-outline" size={24} color={role === 'TAILOR' ? Colors.needleGreen : Colors.ink} />
             </View>
             <View style={styles.roleTextWrap}>
               <Text style={[styles.roleLabel, role === 'TAILOR' && styles.roleLabelActive]}>
@@ -115,17 +128,21 @@ export default function RoleSelectScreen() {
             style={[styles.btn, loading && styles.btnDisabled]}
             onPress={confirm}
             disabled={loading}
+            accessibilityRole="button"
+            accessibilityLabel="Continue to setup"
           >
             {loading
-              ? <ActivityIndicator color={Colors.white} />
+              ? <ActivityIndicator color={Colors.textInverse} />
               : <Text style={styles.btnText}>Continue</Text>
             }
           </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.altAction}
-            onPress={() => { void useDifferentAccount() }}
+            onPress={() => { void switchAccount() }}
             disabled={loading}
+            accessibilityRole="button"
+            accessibilityLabel="Use a different account"
           >
             <Text style={styles.altActionText}>Use a different account</Text>
           </TouchableOpacity>
@@ -172,7 +189,6 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
   },
   roleCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
-  roleEmoji: { fontSize: 28 },
   roleIconWrap: {
     width: 44,
     height: 44,
@@ -182,7 +198,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   roleIconWrapActive: {
-    backgroundColor: '#EAF6F1',
+    backgroundColor: Colors.needleGreenLight,
   },
   roleTextWrap: { flex: 1, gap: 2 },
   roleLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
@@ -208,7 +224,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
   },
   roleCheckTextActive: {
-    color: Colors.white,
+    color: Colors.textInverse,
   },
   actionCard: {
     backgroundColor: Colors.white,
@@ -245,7 +261,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   btnDisabled: { opacity: 0.6 },
-  btnText: { color: Colors.white, fontSize: FontSize.md, fontWeight: FontWeight.semibold },
+  btnText: { color: Colors.textInverse, fontSize: FontSize.md, fontWeight: FontWeight.semibold },
   altAction: { alignItems: 'center', paddingVertical: Spacing.sm },
   altActionText: { color: Colors.inkLight, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
 })

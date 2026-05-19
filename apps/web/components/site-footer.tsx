@@ -1,6 +1,9 @@
 import { CONTACTS } from '@drape/shared'
 import Link from 'next/link'
+import type { Route } from 'next'
 import type { JSX } from 'react'
+
+const accountDeletionRoute = '/account-deletion' as Route
 
 export function SiteFooter(): JSX.Element {
   return (
@@ -82,6 +85,9 @@ export function SiteFooter(): JSX.Element {
       <div className="mt-10 flex flex-wrap gap-4 border-t border-ink/6 pt-6 text-sm text-ink/60">
         <Link href="/privacy" className="transition hover:text-ink">
           Privacy
+        </Link>
+        <Link href={accountDeletionRoute} className="transition hover:text-ink">
+          Account deletion
         </Link>
         <Link href="/terms" className="transition hover:text-ink">
           Terms

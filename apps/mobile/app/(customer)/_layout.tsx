@@ -3,10 +3,12 @@ import { Pressable } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, Radius } from '@/constants/theme'
 import { useCustomerProfile } from '@/lib/customerProfile'
+import { useAuth } from '@/lib/auth'
+import { useUnreadMessageCount } from '@/lib/unread-messages'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 
-const PRIMARY_GREEN = '#1D9E75'
-const MUTED_GREY = '#8F8D88'
+const PRIMARY_GREEN = Colors.needleGreen
+const MUTED_GREY = Colors.midGrey
 
 function ProfileTabIcon({ color, focused }: { color: string; focused: boolean }) {
   const { avatarUrl } = useCustomerProfile()
@@ -27,13 +29,15 @@ function ProfileTabIcon({ color, focused }: { color: string; focused: boolean })
 
 export default function CustomerTabLayout() {
   const router = useRouter()
+  const { user } = useAuth()
+  const unreadMessages = useUnreadMessageCount(user?.id, 'CUSTOMER')
 
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
         sceneStyle: {
-          backgroundColor: '#F9F7F3',
+          backgroundColor: Colors.bone,
         },
         tabBarActiveTintColor: PRIMARY_GREEN,
         tabBarInactiveTintColor: MUTED_GREY,
@@ -66,6 +70,8 @@ export default function CustomerTabLayout() {
             <Pressable
               {...props}
               testID="tab-home"
+              accessibilityRole="button"
+              accessibilityLabel="Explore tab"
               onPress={() => router.replace('/(customer)')}
             />
           ),
@@ -82,6 +88,8 @@ export default function CustomerTabLayout() {
             <Pressable
               {...props}
               testID="tab-saved"
+              accessibilityRole="button"
+              accessibilityLabel="Wishlists tab"
               onPress={() => router.replace('/(customer)/saved')}
             />
           ),
@@ -98,6 +106,8 @@ export default function CustomerTabLayout() {
             <Pressable
               {...props}
               testID="tab-orders"
+              accessibilityRole="button"
+              accessibilityLabel="Orders tab"
               onPress={() => router.replace({ pathname: '/(customer)/orders', params: { tab: 'active' } })}
             />
           ),
@@ -108,12 +118,16 @@ export default function CustomerTabLayout() {
         options={{
           title: 'Messages',
           popToTopOnBlur: true,
+          tabBarBadge: unreadMessages > 0 ? (unreadMessages > 99 ? '99+' : unreadMessages) : undefined,
+          tabBarBadgeStyle: { backgroundColor: Colors.kanteRust, fontSize: 10, minWidth: 16, height: 16 },
           tabBarIcon: ({ color }) => <Feather name="message-circle" size={25} color={color} />,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           tabBarButton: (props: any) => (
             <Pressable
               {...props}
               testID="tab-messages"
+              accessibilityRole="button"
+              accessibilityLabel={unreadMessages > 0 ? `Messages tab, ${unreadMessages} unread` : 'Messages tab'}
               onPress={() => router.replace('/(customer)/messages')}
             />
           ),
@@ -131,6 +145,8 @@ export default function CustomerTabLayout() {
             <Pressable
               {...props}
               testID="tab-profile"
+              accessibilityRole="button"
+              accessibilityLabel="Profile tab"
               onPress={() => router.replace('/(customer)/profile')}
             />
           ),

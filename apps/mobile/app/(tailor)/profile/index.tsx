@@ -8,14 +8,16 @@ import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Feather } from '@expo/vector-icons'
-import * as ImagePicker from 'expo-image-picker'
 import * as ImageManipulator from 'expo-image-manipulator'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { pickAvatarImageUri, type AvatarImageSource } from '@/lib/avatar-picker'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { deriveTailorReadiness } from '@/lib/tailor-readiness'
+import { uploadPublicStorageImage } from '@/lib/storage-upload'
 import { useTailorProfile } from '@/lib/tailorProfile'
 import { shareTailorProfile, inviteTailorColleague, inviteCustomerFromTailor } from '@/lib/invite'
+import { Sentry } from '@/lib/sentry'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 
@@ -42,6 +44,11 @@ type TailorProfile = {
   profileCompleted: boolean
   stripeAccountId: string | null
   paystackAccountId: string | null
+  payoutCurrency: string | null
+  payoutProvider: string | null
+  payoutReverificationRequired: boolean | null
+  payoutAccountVerified: boolean | null
+  payoutAccountType: 'PAYSTACK' | 'STRIPE_CONNECT' | null
 }
 
 const TAILOR_STOREFRONT_GUIDE_KEY = 'drape_tailor_storefront_best_use_dismissed'
@@ -71,9 +78,9 @@ const ID_STATUS_COLOR: Record<string, string> = {
 }
 const ID_STATUS_BG: Record<string, string> = {
   NOT_SUBMITTED: Colors.bone,
-  PENDING: '#FFFBEB',
-  VERIFIED: '#F0FDF4',
-  APPROVED: '#F0FDF4',
+  PENDING: Colors.statusPendingBg,
+  VERIFIED: Colors.needleGreenLight,
+  APPROVED: Colors.needleGreenLight,
   REJECTED: Colors.errorLight,
 }
 
@@ -145,7 +152,7 @@ export default function TailorProfileScreen() {
       const [profileRes, pendingRes] = await Promise.allSettled([
         supabase
           .from('tailor_profiles')
-          .select('id, display_name, location, bio, seller_type, tier, avg_rating, total_reviews, total_orders, availability, specialty_tags, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, ships_internationally, id_verification_status, is_live, avatar_url, profile_completed, stripe_account_id, paystack_account_id')
+          .select('id, display_name, location, bio, seller_type, tier, avg_rating, total_reviews, total_orders, availability, specialty_tags, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, ships_internationally, id_verification_status, is_live, avatar_url, profile_completed, payout_currency, payout_provider, payout_reverification_required, payout_account_verified, payout_account_type')
           .eq('user_id', user.id)
           .maybeSingle(),
         supabase
@@ -211,8 +218,13 @@ export default function TailorProfileScreen() {
           idVerificationStatus: d.id_verification_status ?? 'NOT_SUBMITTED',
           isLive: d.is_live,
           profileCompleted: d.profile_completed ?? false,
-          stripeAccountId: d.stripe_account_id ?? null,
-          paystackAccountId: d.paystack_account_id ?? null,
+          stripeAccountId: null,
+          paystackAccountId: null,
+          payoutCurrency: d.payout_currency ?? null,
+          payoutProvider: d.payout_provider ?? null,
+          payoutReverificationRequired: d.payout_reverification_required ?? null,
+          payoutAccountVerified: d.payout_account_verified ?? null,
+          payoutAccountType: d.payout_account_type ?? null,
         })
         if (d.avatar_url) setAvatarUrl(d.avatar_url)
       } else {
@@ -235,48 +247,35 @@ export default function TailorProfileScreen() {
 
   // ── Avatar upload ────────────────────────────────────────────────────────────
 
-  async function handleAvatarPress() {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Allow photo access to set a profile picture.')
-      return
-    }
+  function handleAvatarPress() {
+    Alert.alert('Profile photo', 'Take a new photo or choose one from your library.', [
+      { text: 'Take photo', onPress: () => void updateAvatarFromSource('camera') },
+      { text: 'Choose from library', onPress: () => void updateAvatarFromSource('library') },
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'images',
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.9,
-    })
-
-    if (result.canceled || !result.assets[0]) return
+  async function updateAvatarFromSource(source: AvatarImageSource) {
+    const imageUri = await pickAvatarImageUri(source)
+    if (!imageUri) return
 
     setUploadingAvatar(true)
     try {
       const compressed = await ImageManipulator.manipulateAsync(
-        result.assets[0].uri,
+        imageUri,
         [{ resize: { width: 800, height: 800 } }],
         { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
       )
 
       const fileName = `${user!.id}/avatar.jpg`
-      const response = await fetch(compressed.uri)
-      const blob = await response.blob()
-
-      if (blob.size > 5 * 1024 * 1024) {
-        Alert.alert('Image too large', 'Please choose a photo under 5 MB.')
-        return
-      }
-
-      const { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(fileName, blob, { contentType: 'image/jpeg', upsert: true })
-
-      if (uploadError) throw uploadError
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('avatars')
-        .getPublicUrl(fileName)
+      const publicUrl = await uploadPublicStorageImage({
+        bucket: 'avatars',
+        path: fileName,
+        uri: compressed.uri,
+        contentType: 'image/jpeg',
+        maxBytes: 5 * 1024 * 1024,
+        upsert: true,
+      })
 
       const bustUrl = `${publicUrl}?t=${Date.now()}`
 
@@ -288,7 +287,7 @@ export default function TailorProfileScreen() {
 
       setAvatarUrl(bustUrl)
     } catch (err) {
-      console.error('[avatar upload]', err)
+      Sentry.captureException(err, { extra: { context: 'tailor_avatar_upload', userId: user?.id } })
       Alert.alert(
         'Upload failed',
         isLikelyConnectivityIssue(err)
@@ -301,14 +300,14 @@ export default function TailorProfileScreen() {
   }
 
   function handleSignOut() {
-    Alert.alert('Log out', 'Are you sure you want to log out?', [
+    Alert.alert('Sign out', 'Are you sure you want to sign out?', [
       { text: 'Cancel', style: 'cancel' },
       {
-        text: 'Log out',
+        text: 'Sign out',
         style: 'destructive',
         onPress: () => {
           void signOut().catch(() => {
-            Alert.alert('Unable to log out', 'Please try again in a moment. Your storefront settings are still here, so you can keep working and log out later.')
+            Alert.alert('Unable to sign out', 'Please try again in a moment. Your storefront settings are still here, so you can keep working and sign out later.')
           })
         },
       },
@@ -398,7 +397,7 @@ export default function TailorProfileScreen() {
             onPress={() => router.push('/(tailor)/profile/notifications')}
             activeOpacity={0.7}
           >
-            <Feather name="bell" size={20} color={Colors.white} />
+            <Feather name="bell" size={20} color={Colors.textInverse} />
             {pendingQuoteCount > 0 && (
               <View style={styles.bellBadge}>
                 <Text style={styles.bellBadgeText}>{pendingQuoteCount > 9 ? '9+' : String(pendingQuoteCount)}</Text>
@@ -418,7 +417,7 @@ export default function TailorProfileScreen() {
           >
             {uploadingAvatar ? (
               <View style={[styles.avatar, styles.avatarLoading]}>
-                <ActivityIndicator color={Colors.white} />
+                <ActivityIndicator color={Colors.textInverse} />
               </View>
             ) : (
               <AvatarImage
@@ -431,7 +430,7 @@ export default function TailorProfileScreen() {
             )}
             {/* Camera badge */}
             <View style={styles.cameraBadge}>
-              <Feather name="camera" size={11} color={Colors.white} />
+              <Feather name="camera" size={11} color={Colors.textInverse} />
             </View>
             {/* Live indicator dot */}
             {profile && (
@@ -649,10 +648,10 @@ export default function TailorProfileScreen() {
             />
           </View>
 
-          {/* ── Log out ── */}
-          <TouchableOpacity style={styles.logOutRow} onPress={handleSignOut} activeOpacity={0.6}>
+          {/* ── Sign out ── */}
+          <TouchableOpacity style={styles.logOutRow} onPress={handleSignOut} activeOpacity={0.6} accessibilityRole="button" accessibilityLabel="Sign out">
             <Feather name="log-out" size={18} color={Colors.error} />
-            <Text style={styles.logOutText}>Log out</Text>
+            <Text style={styles.logOutText}>Sign out</Text>
           </TouchableOpacity>
 
         </View>
@@ -709,6 +708,8 @@ function FlatRow({
       style={[styles.flatRow, last && styles.rowLast]}
       onPress={onPress}
       activeOpacity={0.6}
+      accessibilityRole="button"
+      accessibilityLabel={label}
     >
       <Feather name={icon} size={20} color={Colors.inkLight} style={{ width: 24 }} />
       <Text style={styles.flatRowLabel}>{label}</Text>
@@ -758,7 +759,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.xxxl,
   },
-  statePrimaryBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
+  statePrimaryBtnText: { color: Colors.textInverse, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
   stateSecondaryBtn: {
     borderRadius: Radius.full,
     borderWidth: 1,
@@ -777,7 +778,7 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.xs,
     backgroundColor: Colors.needleGreen,
   },
-  profileHeaderTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.white },
+  profileHeaderTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textInverse },
   bellBtn: {
     width: 44, height: 44, borderRadius: Radius.full,
     backgroundColor: 'rgba(255,255,255,0.2)',
@@ -792,7 +793,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     borderWidth: 2, borderColor: Colors.needleGreen,
   },
-  bellBadgeText: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white },
+  bellBadgeText: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.textInverse },
 
   // Hero
   hero: {
@@ -816,7 +817,7 @@ const styles = StyleSheet.create({
     borderWidth: 2.5, borderColor: 'rgba(255,255,255,0.45)',
     overflow: 'hidden',
   },
-  avatarText: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.white },
+  avatarText: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textInverse },
   cameraBadge: {
     position: 'absolute', bottom: 0, right: 0,
     width: 22, height: 22, borderRadius: Radius.full,
@@ -829,7 +830,7 @@ const styles = StyleSheet.create({
     width: 12, height: 12, borderRadius: 6,
     borderWidth: 2, borderColor: Colors.needleGreen,
   },
-  heroName: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.white },
+  heroName: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.textInverse },
   heroLocationRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   heroLocation: { fontSize: FontSize.xs, color: 'rgba(255,255,255,0.7)' },
   pillRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginTop: 2 },
@@ -840,14 +841,14 @@ const styles = StyleSheet.create({
     borderRadius: Radius.full,
   },
   availDot: { width: 6, height: 6, borderRadius: 3 },
-  availText: { fontSize: FontSize.xs, color: Colors.white, fontWeight: FontWeight.medium },
+  availText: { fontSize: FontSize.xs, color: Colors.textInverse, fontWeight: FontWeight.medium },
   liveBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
     paddingHorizontal: 10, paddingVertical: 4,
     borderRadius: Radius.full,
   },
   liveDot: { width: 6, height: 6, borderRadius: 3 },
-  liveBadgeText: { fontSize: FontSize.xs, color: Colors.white, fontWeight: FontWeight.medium },
+  liveBadgeText: { fontSize: FontSize.xs, color: Colors.textInverse, fontWeight: FontWeight.medium },
 
   body: {
     marginTop: -(Spacing.lg + 2),
@@ -1017,7 +1018,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.sm,
   },
-  emptySectionCtaText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  emptySectionCtaText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   reviewCard: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
     padding: 14, gap: Spacing.xs, ...Shadow.sm,
@@ -1068,7 +1069,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen, borderRadius: Radius.md,
     paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
   },
-  replySubmitText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  replySubmitText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
 
   // Flat action list
   flatList: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },

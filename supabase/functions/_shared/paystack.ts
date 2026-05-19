@@ -3,6 +3,24 @@ import { getPaystackSecretKey } from './env.ts'
 const PAYSTACK_API_BASE = 'https://api.paystack.co'
 const PAYSTACK_REQUEST_TIMEOUT_MS = 8_000
 const textEncoder = new TextEncoder()
+const PAYSTACK_TEST_TRANSFER_ACCOUNTS = [
+  {
+    accountNumber: '0000000000',
+    bankCode: '057',
+    bankName: 'Zenith Bank',
+    currency: 'NGN',
+    accountName: 'Paystack Test Account',
+    recipientCode: 'RCP_DRAPE_PAYSTACK_TEST_057_0000000000',
+  },
+  {
+    accountNumber: '0000000000',
+    bankCode: '001',
+    bankName: 'Paystack Test Bank',
+    currency: 'NGN',
+    accountName: 'Paystack Test Account',
+    recipientCode: 'RCP_DRAPE_PAYSTACK_TEST_001_0000000000',
+  },
+] as const
 
 export type PaystackTransaction = {
   id?: number
@@ -83,6 +101,51 @@ function authHeaders() {
   }
 }
 
+function isPaystackTestMode() {
+  return getPaystackSecretKey().trim().startsWith('sk_test_')
+}
+
+function normalizePaystackAccountNumber(value: string) {
+  return value.trim().replace(/[\s-]+/gu, '')
+}
+
+function paystackTestTransferAccountFor(options: {
+  accountNumber: string
+  bankCode: string
+  currency?: string | null
+}) {
+  if (!isPaystackTestMode()) return null
+  const currency = options.currency?.trim().toUpperCase() || 'NGN'
+  const accountNumber = normalizePaystackAccountNumber(options.accountNumber)
+  const bankCode = options.bankCode.trim()
+  return PAYSTACK_TEST_TRANSFER_ACCOUNTS.find((account) => (
+    accountNumber === account.accountNumber
+    && bankCode === account.bankCode
+    && currency === account.currency
+  )) ?? null
+}
+
+function includePaystackTestBanks(banks: PaystackBank[], options: {
+  countryCode?: string | null
+  currency?: string | null
+}) {
+  const country = options.countryCode?.trim().toUpperCase() ?? ''
+  const currency = options.currency?.trim().toUpperCase() ?? ''
+  if (!isPaystackTestMode() || (country !== 'NG' && currency !== 'NGN')) return banks
+  const existingCodes = new Set(banks.map((bank) => bank.code.trim()))
+  const testBanks = PAYSTACK_TEST_TRANSFER_ACCOUNTS
+    .filter((account) => !existingCodes.has(account.bankCode))
+    .map((account) => ({
+      name: account.bankName,
+      code: account.bankCode,
+      country: 'Nigeria',
+      currency: account.currency,
+      type: 'nuban',
+      active: true,
+    }))
+  return [...testBanks, ...banks]
+}
+
 function isAbortError(error: unknown) {
   return error instanceof Error && error.name === 'AbortError'
 }
@@ -107,7 +170,7 @@ async function parsePaystackError(response: Response): Promise<never> {
     typeof payload?.message === 'string'
       ? payload.message
       : `Paystack request failed with status ${response.status}`
-  throw new Error(message)
+  throw new Error(`Paystack error: ${message}`)
 }
 
 export async function initializePaystackTransaction(options: {
@@ -231,7 +294,7 @@ export async function listPaystackBanks(options: {
     throw new Error('Paystack did not return a usable bank list.')
   }
 
-  return payload.data as PaystackBank[]
+  return includePaystackTestBanks(payload.data as PaystackBank[], options)
 }
 
 export function fallbackPaystackBanks(options: {
@@ -241,7 +304,7 @@ export function fallbackPaystackBanks(options: {
   const country = options.countryCode?.trim().toUpperCase() ?? ''
   const currency = options.currency?.trim().toUpperCase() ?? ''
   if (country === 'NG' || currency === 'NGN') {
-    return FALLBACK_PAYSTACK_BANKS_NG
+    return includePaystackTestBanks(FALLBACK_PAYSTACK_BANKS_NG, options)
   }
   return []
 }
@@ -251,9 +314,11 @@ export async function resolvePaystackAccountNumber(options: {
   bankCode: string
   currency?: string | null
 }): Promise<PaystackResolvedAccount> {
+  const accountNumber = normalizePaystackAccountNumber(options.accountNumber)
+  const bankCode = options.bankCode.trim()
   const url = new URL(`${PAYSTACK_API_BASE}/bank/resolve`)
-  url.searchParams.set('account_number', options.accountNumber.trim())
-  url.searchParams.set('bank_code', options.bankCode.trim())
+  url.searchParams.set('account_number', accountNumber)
+  url.searchParams.set('bank_code', bankCode)
   if (options.currency?.trim()) {
     url.searchParams.set('currency', options.currency.trim().toUpperCase())
   }
@@ -263,11 +328,27 @@ export async function resolvePaystackAccountNumber(options: {
   }, 'account verification')
 
   if (!response.ok) {
+    const testAccount = paystackTestTransferAccountFor({ accountNumber, bankCode, currency: options.currency })
+    if (testAccount) {
+      return {
+        account_number: testAccount.accountNumber,
+        account_name: testAccount.accountName,
+        bank_id: null,
+      }
+    }
     await parsePaystackError(response)
   }
 
   const payload = await response.json()
   if (!payload?.status || !payload?.data?.account_name || !payload?.data?.account_number) {
+    const testAccount = paystackTestTransferAccountFor({ accountNumber, bankCode, currency: options.currency })
+    if (testAccount) {
+      return {
+        account_number: testAccount.accountNumber,
+        account_name: testAccount.accountName,
+        bank_id: null,
+      }
+    }
     throw new Error('Paystack could not verify this bank account.')
   }
 
@@ -280,6 +361,9 @@ export async function createPaystackTransferRecipient(options: {
   bankCode: string
   currency: string
 }): Promise<PaystackTransferRecipient> {
+  const accountNumber = normalizePaystackAccountNumber(options.accountNumber)
+  const bankCode = options.bankCode.trim()
+  const currency = options.currency.trim().toUpperCase()
   const response = await fetchPaystack(`${PAYSTACK_API_BASE}/transferrecipient`, {
     method: 'POST',
     headers: {
@@ -289,18 +373,38 @@ export async function createPaystackTransferRecipient(options: {
     body: JSON.stringify({
       type: 'nuban',
       name: options.name.trim(),
-      account_number: options.accountNumber.trim(),
-      bank_code: options.bankCode.trim(),
-      currency: options.currency.trim().toUpperCase(),
+      account_number: accountNumber,
+      bank_code: bankCode,
+      currency,
     }),
   }, 'transfer recipient setup')
 
   if (!response.ok) {
+    const testAccount = paystackTestTransferAccountFor({ accountNumber, bankCode, currency })
+    if (testAccount) {
+      return {
+        recipient_code: testAccount.recipientCode,
+        type: 'nuban',
+        name: options.name.trim() || testAccount.accountName,
+        currency,
+        active: true,
+      }
+    }
     await parsePaystackError(response)
   }
 
   const payload = await response.json()
   if (!payload?.status || !payload?.data?.recipient_code) {
+    const testAccount = paystackTestTransferAccountFor({ accountNumber, bankCode, currency })
+    if (testAccount) {
+      return {
+        recipient_code: testAccount.recipientCode,
+        type: 'nuban',
+        name: options.name.trim() || testAccount.accountName,
+        currency,
+        active: true,
+      }
+    }
     throw new Error('Paystack did not return a usable transfer recipient.')
   }
 

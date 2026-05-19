@@ -293,8 +293,8 @@ export default function PassportClaimScreen() {
         )}
         {expired && !alreadyClaimed && (
           <View style={[styles.statusBanner, styles.statusWarn]}>
-            <Feather name="clock" size={14} color="#856404" />
-            <Text style={[styles.statusText, { color: '#856404' }]}>
+            <Feather name="clock" size={14} color={Colors.statusPending} />
+            <Text style={[styles.statusText, { color: Colors.statusPending }]}>
               This invite link has expired. Ask your tailor to send a new one.
             </Text>
           </View>
@@ -317,7 +317,7 @@ export default function PassportClaimScreen() {
               disabled={claiming}
             >
               {claiming
-                ? <ActivityIndicator size="small" color={Colors.white} />
+                ? <ActivityIndicator size="small" color={Colors.textInverse} />
                 : <Text style={styles.primaryBtnText}>Add to my profile</Text>
               }
             </TouchableOpacity>
@@ -505,7 +505,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md, padding: Spacing.md, marginBottom: Spacing.lg,
   },
   statusInfo: { backgroundColor: Colors.needleGreenLight },
-  statusWarn: { backgroundColor: '#FFF3CD' },
+  statusWarn: { backgroundColor: Colors.statusPendingBg },
   statusText: { fontSize: FontSize.sm, flex: 1, lineHeight: 18 },
 
   primaryBtn: {
@@ -522,7 +522,7 @@ const styles = StyleSheet.create({
   primaryBtnText: {
     fontSize: FontSize.md,
     fontWeight: FontWeight.semibold,
-    color: Colors.white,
+    color: Colors.textInverse,
   },
 
   secondaryBtn: {
@@ -593,7 +593,7 @@ const styles = StyleSheet.create({
 
   errorIcon: {
     width: 64, height: 64, borderRadius: Radius.full,
-    backgroundColor: '#FEE2E2',
+    backgroundColor: Colors.statusErrorBg,
     alignItems: 'center', justifyContent: 'center',
     marginBottom: Spacing.lg,
   },

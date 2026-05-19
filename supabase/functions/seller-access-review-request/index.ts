@@ -12,7 +12,7 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { deriveTailorReadiness } from '../_shared/tailor-readiness.ts'
 import { parseBody, z } from '../_shared/validate.ts'
 
@@ -24,6 +24,10 @@ const BodySchema = z.object({
 })
 
 function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
+  if (typeof body.error === 'string' && typeof body.message !== 'string') {
+    body.message = body.error
+  }
+
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...headers, 'Content-Type': 'application/json' },
@@ -38,13 +42,13 @@ Deno.serve(async (req) => {
     const caller = await getAuthUser(req)
     if (!caller) {
       log('warn', FN, 'auth.unauthenticated')
-      return new Response('Unauthorized', { status: 401, headers: cors })
+      return jsonResponse({ error: 'Please sign in again before requesting seller access review.' }, 401, cors)
     }
 
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
     if (!parsed.ok) {
       log('warn', FN, 'validation.failed', { actor_id: caller.id, error: parsed.error })
-      return new Response(parsed.error, { status: 400, headers: cors })
+      return jsonResponse({ error: parsed.error }, 400, cors)
     }
 
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
@@ -57,7 +61,7 @@ Deno.serve(async (req) => {
         severity: 'warn',
         payload: { function: FN },
       })
-      return new Response('Too many requests', { status: 429, headers: cors })
+      return rateLimitExceededResponse(cors)
     }
 
     const { data: profile, error: profileError } = await supabase
@@ -68,11 +72,11 @@ Deno.serve(async (req) => {
 
     if (profileError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: profileError.message })
-      return new Response('Database error', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not load your seller profile right now. Please try again.' }, 500, cors)
     }
 
     if (!profile?.id) {
-      return new Response('Tailor profile not found', { status: 404, headers: cors })
+      return jsonResponse({ error: 'Complete your tailor profile before requesting a seller access review.' }, 404, cors)
     }
 
     const readiness = deriveTailorReadiness(profile)
@@ -105,7 +109,7 @@ Deno.serve(async (req) => {
 
     if (existingError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: existingError.message })
-      return new Response('Database error', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not check your recent review requests right now. Please try again.' }, 500, cors)
     }
 
     if (existing?.id) {
@@ -160,6 +164,6 @@ Deno.serve(async (req) => {
     return jsonResponse({ ok: true, alreadyPending: false }, 200, cors)
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return new Response('Internal server error', { status: 500, headers: cors })
+    return jsonResponse({ error: 'We could not submit your seller review request right now. Please try again.' }, 500, cors)
   }
 })

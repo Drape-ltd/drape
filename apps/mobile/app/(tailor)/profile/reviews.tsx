@@ -423,5 +423,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.sm,
   },
-  replySubmitText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  replySubmitText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
 })

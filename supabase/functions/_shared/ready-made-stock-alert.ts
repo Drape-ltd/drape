@@ -37,6 +37,7 @@ export async function notifyTailorAboutReadyMadeStockChange(
   await sendPushToUser(supabase, input.tailorId, {
     title: notification.title,
     body: notification.body,
+    preferenceKey: 'lowStockAlerts',
     data: {
       sellerItemId: input.sellerItemId,
       screen: 'shop',

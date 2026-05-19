@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native'
+import { KeyboardAvoidingView, Platform, ScrollView, View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { Button, Input } from '@/components/ui'
@@ -65,14 +66,17 @@ export default function ForgotPasswordScreen() {
         <Text style={styles.backText}>← Back</Text>
       </TouchableOpacity>
 
-      <View style={styles.content}>
+      <KeyboardAvoidingView style={styles.keyboardAvoider} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         {sent ? (
           <View style={styles.heroCard}>
             <View style={styles.heroBadge}>
               <Text style={styles.heroBadgeText}>Reset link sent</Text>
             </View>
             <View style={styles.successBlock}>
-              <Text style={styles.successEmoji}>📬</Text>
+              <View style={styles.successIcon}>
+                <Ionicons name="mail" size={32} color={Colors.needleGreen} />
+              </View>
               <Text style={styles.heading}>Check your email</Text>
               <Text style={styles.sub}>
                 We've sent a password reset link to{'\n'}
@@ -133,16 +137,18 @@ export default function ForgotPasswordScreen() {
             </View>
           </View>
         )}
-      </View>
+      </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   )
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.bone },
+  keyboardAvoider: { flex: 1 },
   back: { paddingHorizontal: Spacing.xl, paddingTop: Spacing.md },
   backText: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
-  content: { flex: 1, padding: Spacing.xl },
+  content: { padding: Spacing.xl, paddingBottom: Spacing.xxl },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: 28,
@@ -187,7 +193,14 @@ const styles = StyleSheet.create({
     gap: Spacing.lg,
   },
   successBlock: { gap: Spacing.lg, alignItems: 'center' },
-  successEmoji: { fontSize: 56 },
+  successIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
   emailHighlight: { color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   hint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
   nextCard: {

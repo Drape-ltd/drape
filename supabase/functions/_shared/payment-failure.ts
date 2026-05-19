@@ -13,8 +13,8 @@ type OrderForPaymentFailure = {
 
 function paymentFailedStageNote(orderKind: string | null | undefined) {
   return (orderKind ?? 'CUSTOM') === 'READY_MADE'
-    ? 'Checkout failed. Retry payment within 30 minutes or this order will cancel automatically.'
-    : 'Payment failed. Retry within 30 minutes or this order will cancel automatically.'
+    ? 'Checkout failed. Retry payment within 2 hours or this order will cancel automatically.'
+    : 'Payment failed. Retry within 2 hours or this order will cancel automatically.'
 }
 
 export async function markInitialOrderPaymentFailed(

@@ -5,8 +5,10 @@ import {
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
-import { Input, TierBadgeChip, StarRating, Tag } from '@/components/ui'
+import { Input, TierBadgeChip, StarRating, Tag, RemoteImage } from '@/components/ui'
+import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 const GARMENT_FILTERS = ['All', 'Agbada', 'Suits', 'Ankara', 'Bridal', 'Crochet', 'Knitwear', 'Ready-made']
@@ -25,6 +27,8 @@ type TailorResult = {
   availability: string
   avgResponseHours: number | null
   priceRangeMin: number | null
+  currency: CurrencyCode
+  avatarUrl: string | null
   supportsCustomOrders: boolean
   supportsReadyMade: boolean
 }
@@ -104,7 +108,7 @@ export default function SearchScreen() {
 
       const baseQuery = supabase
         .from('tailor_profiles')
-        .select('id, display_name, location, seller_type, specialty_tags, avg_rating, total_reviews, tier, availability, avg_response_hours, price_range_min, supports_custom_orders, supports_ready_made')
+        .select('id, display_name, location, seller_type, specialty_tags, avg_rating, total_reviews, tier, availability, avg_response_hours, price_range_min, currency, avatar_url, supports_custom_orders, supports_ready_made')
         .eq('is_live', true)
         .neq('availability', 'FULLY_BOOKED')
 
@@ -150,6 +154,8 @@ export default function SearchScreen() {
           availability: d.availability,
           avgResponseHours: d.avg_response_hours,
           priceRangeMin: d.price_range_min,
+          currency: (d.currency ?? 'USD') as CurrencyCode,
+          avatarUrl: d.avatar_url ?? null,
           supportsCustomOrders: d.supports_custom_orders ?? true,
           supportsReadyMade: d.supports_ready_made ?? false,
         }))
@@ -173,6 +179,8 @@ export default function SearchScreen() {
           availability: d.availability,
           avgResponseHours: d.avg_response_hours,
           priceRangeMin: d.price_range_min,
+          currency: (d.currency ?? 'USD') as CurrencyCode,
+          avatarUrl: d.avatar_url ?? null,
           supportsCustomOrders: d.supports_custom_orders ?? true,
           supportsReadyMade: d.supports_ready_made ?? false,
         }))
@@ -207,13 +215,18 @@ export default function SearchScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
-        <Text style={styles.title}>Find a seller</Text>
+        <Text style={styles.title}>Find a tailor</Text>
         {showGuide ? (
           <View style={styles.guideCard}>
             <View style={styles.guideHeader}>
               <Text style={styles.guideEyebrow}>Best use</Text>
-              <TouchableOpacity onPress={() => { void dismissGuide() }} hitSlop={8}>
-                <Text style={styles.guideClose}>×</Text>
+              <TouchableOpacity
+                onPress={() => { void dismissGuide() }}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss search tips"
+              >
+                <Feather name="x" size={16} color={Colors.midGrey} />
               </TouchableOpacity>
             </View>
             <Text style={styles.guideTitle}>Search by name, city, style, or craft, then narrow only if needed.</Text>
@@ -229,7 +242,7 @@ export default function SearchScreen() {
           testID="search-input"
           rightElement={
             <TouchableOpacity onPress={handleSearch} testID="search-submit-btn" style={{ padding: 4 }}>
-              <Text style={{ fontSize: 16 }}>🔍</Text>
+              <Feather name="search" size={16} color={Colors.needleGreen} />
             </TouchableOpacity>
           }
         />
@@ -278,7 +291,7 @@ export default function SearchScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Search</Text>
             <ActivityIndicator color={Colors.needleGreen} size="large" />
-            <Text style={styles.stateTitle}>Searching sellers…</Text>
+            <Text style={styles.stateTitle}>Searching tailors…</Text>
             <Text style={styles.stateHint}>Checking live matches now.</Text>
           </View>
         </View>
@@ -287,7 +300,7 @@ export default function SearchScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Search</Text>
             <Text style={styles.stateTitle}>Search when you already know the direction.</Text>
-            <Text style={styles.stateHint}>Try a city, style, craft, or seller name.</Text>
+            <Text style={styles.stateHint}>Try a city, style, craft, or tailor name.</Text>
             <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.replace('/(customer)')}>
               <Text style={styles.secondaryBtnText}>Browse home instead</Text>
             </TouchableOpacity>
@@ -311,13 +324,13 @@ export default function SearchScreen() {
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Search</Text>
-            <Text style={styles.stateTitle}>No sellers matched that search yet.</Text>
+            <Text style={styles.stateTitle}>No tailors matched that search yet.</Text>
             <Text style={styles.stateHint}>Try fewer filters or a broader search.</Text>
             <TouchableOpacity style={styles.retryBtn} onPress={() => search(query, 'All', 'All')}>
               <Text style={styles.retryBtnText}>Clear filters</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.replace('/(customer)')}>
-              <Text style={styles.secondaryBtnText}>Browse top sellers</Text>
+              <Text style={styles.secondaryBtnText}>Browse top tailors</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -333,7 +346,19 @@ export default function SearchScreen() {
             >
               <View style={styles.cardTop}>
                 <View style={styles.avatar}>
-                  <Text style={{ fontSize: 28 }}>👤</Text>
+                  <RemoteImage
+                    uri={item.avatarUrl}
+                    bucket="avatars"
+                    style={styles.avatarImage}
+                    contentFit="cover"
+                    transition={120}
+                    surface="customer_search_avatar"
+                    fallback={(
+                      <View style={styles.avatarFallback}>
+                        <Feather name="user" size={24} color={Colors.needleGreen} />
+                      </View>
+                    )}
+                  />
                 </View>
                 <View style={styles.info}>
                   <View style={styles.nameRow}>
@@ -344,7 +369,9 @@ export default function SearchScreen() {
                   <View style={styles.metaRow}>
                     <StarRating rating={item.avgRating} count={item.totalReviews} />
                     {item.priceRangeMin != null && (
-                      <Text style={styles.response}>From ${item.priceRangeMin}</Text>
+                      <Text style={styles.response}>
+                        From {formatAmount(item.priceRangeMin, item.currency, item.currency, STATIC_FALLBACK_RATES)}
+                      </Text>
                     )}
                   </View>
                 </View>
@@ -465,7 +492,6 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  guideClose: { fontSize: 20, lineHeight: 20, color: Colors.midGrey, paddingHorizontal: 4 },
   guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
   searchInput: { marginBottom: -Spacing.sm },
@@ -479,7 +505,7 @@ const styles = StyleSheet.create({
   },
   chipActive: { backgroundColor: Colors.needleGreen, borderColor: Colors.needleGreen },
   chipText: { fontSize: FontSize.sm, color: Colors.inkLight, fontWeight: FontWeight.medium },
-  chipTextActive: { color: Colors.white },
+  chipTextActive: { color: Colors.textInverse },
   retryBtn: {
     marginTop: Spacing.md,
     paddingHorizontal: Spacing.xl,
@@ -487,7 +513,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.full,
     backgroundColor: Colors.needleGreen,
   },
-  retryBtnText: { fontSize: FontSize.sm, color: Colors.white, fontWeight: FontWeight.semibold },
+  retryBtnText: { fontSize: FontSize.sm, color: Colors.textInverse, fontWeight: FontWeight.semibold },
   secondaryBtn: {
     marginTop: Spacing.sm,
     paddingHorizontal: Spacing.xl,
@@ -506,7 +532,17 @@ const styles = StyleSheet.create({
   cardTop: { flexDirection: 'row', gap: Spacing.md },
   avatar: {
     width: 52, height: 52, borderRadius: Radius.full,
+    overflow: 'hidden',
     backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center',
+  },
+  avatarImage: { width: 52, height: 52, borderRadius: Radius.full },
+  avatarFallback: {
+    width: 52,
+    height: 52,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
   },
   info: { flex: 1, gap: 4 },
   nameRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
@@ -517,8 +553,8 @@ const styles = StyleSheet.create({
   tags: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   availabilityHint: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium },
   limitedBadge: {
-    backgroundColor: '#FEF3C7', paddingHorizontal: Spacing.md,
+    backgroundColor: Colors.statusPendingBg, paddingHorizontal: Spacing.md,
     paddingVertical: 4, borderRadius: Radius.full, alignSelf: 'flex-start',
   },
-  limitedText: { fontSize: FontSize.xs, color: '#92400E', fontWeight: FontWeight.medium },
+  limitedText: { fontSize: FontSize.xs, color: Colors.statusPending, fontWeight: FontWeight.medium },
 })

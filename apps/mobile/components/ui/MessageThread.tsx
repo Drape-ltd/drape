@@ -1,7 +1,7 @@
 /**
  * Shared messaging thread component.
  * Used by both customer and tailor — pass senderId and the orderId.
- * Supports text, photo, and voice note messages.
+ * Supports text, camera/library photo, and voice note messages.
  * Contact filter applied inline before send.
  */
 import { useEffect, useRef, useState, useCallback } from 'react'
@@ -11,14 +11,17 @@ import {
 } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
 import { Audio } from 'expo-av'
-import { Image as ExpoImage } from 'expo-image'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { stripExif } from '@/lib/stripExif'
-import { readFunctionErrorPayload } from '@/lib/function-errors'
+import { createValidatedUploadPayload, uploadPublicStorageImage } from '@/lib/storage-upload'
+import { readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { RemoteImage } from '@/components/ui/RemoteImage'
 
 type MessageType = 'TEXT' | 'PHOTO' | 'VOICE'
+type MessagePhotoSource = 'camera' | 'library'
 type ThreadNotice = { tone: 'warning' | 'error'; text: string }
 
 type Message = {
@@ -146,8 +149,8 @@ async function resolveMessageSendFailure(error: Error | null, fallback: string) 
   }
 
   return {
-    title: 'Error',
-    message: rawMessage,
+    title: 'Message not sent',
+    message: await readFunctionErrorMessage(error, fallback),
   }
 }
 
@@ -158,12 +161,11 @@ function resolveThreadLoadError(error: unknown, hasCachedMessages: boolean) {
       : 'Connection is weak. We could not load this thread yet. Retry when the signal improves.'
   }
 
-  const rawMessage = readErrorMessage(error)
   if (hasCachedMessages) {
     return 'We could not refresh this conversation just now. Existing messages stay visible while you retry.'
   }
 
-  return rawMessage ?? 'Could not load this conversation right now.'
+  return 'Could not load this conversation right now. Refresh the thread or reopen the order.'
 }
 
 function resolveMediaFailure(kind: 'photo' | 'voice', error: unknown) {
@@ -179,10 +181,11 @@ function resolveMediaFailure(kind: 'photo' | 'voice', error: unknown) {
   }
 
   return {
-    title: 'Error',
+    title: kind === 'photo' ? 'Photo not sent' : 'Voice note not sent',
     message:
-      readErrorMessage(error) ??
-      (kind === 'photo' ? 'Could not send photo. Please try again.' : 'Could not send voice note. Please try again.'),
+      kind === 'photo'
+        ? 'Could not send this photo right now. Please try again in a moment.'
+        : 'Could not send this voice note right now. Please try again in a moment.',
     connectivity: false,
   }
 }
@@ -212,6 +215,8 @@ export function MessageThread({
   const [isRecording, setIsRecording] = useState(false)
   const flatListRef = useRef<FlatList>(null)
   const sendTimestamps = useRef<number[]>([])
+  const insets = useSafeAreaInsets()
+  const composerBottomPadding = Math.max(insets.bottom + Spacing.sm, Spacing.md)
 
   async function fetchMessages(options?: { silent?: boolean }) {
     const silent = options?.silent === true
@@ -292,6 +297,15 @@ export function MessageThread({
           setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100)
         }
       )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'messages', filter: `order_id=eq.${orderId}` },
+        (payload) => {
+          setMessages((prev) => prev.map((message) =>
+            message.id === payload.new.id ? { ...message, ...(payload.new as Partial<Message>) } : message
+          ))
+        }
+      )
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
@@ -304,12 +318,20 @@ export function MessageThread({
       .filter((m) => m.sender_id !== currentUserId && !m.read_at)
       .map((m) => m.id)
     if (unread.length > 0) {
+      const now = new Date().toISOString()
       supabase
         .from('messages')
-        .update({ read_at: new Date().toISOString() })
+        .update({ read_at: now })
         .in('id', unread)
+        .then(({ error }) => {
+          if (!error) {
+            setMessages((prev) => prev.map((message) =>
+              unread.includes(message.id) ? { ...message, read_at: message.read_at ?? now } : message
+            ))
+          }
+        })
     }
-  }, [messages])
+  }, [messages, currentUserId])
 
   function checkRateLimit(): boolean {
     const now = Date.now()
@@ -376,12 +398,44 @@ export function MessageThread({
     setSending(false)
   }
 
-  async function sendPhoto() {
-    if (!checkRateLimit()) return
-    const result = await ImagePicker.launchImageLibraryAsync({
+  function openPhotoSourceSheet() {
+    Alert.alert('Send photo', 'Take a photo now or choose one from your library.', [
+      { text: 'Take photo', onPress: () => void sendPhotoFromSource('camera') },
+      { text: 'Choose from library', onPress: () => void sendPhotoFromSource('library') },
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }
+
+  async function pickMessagePhoto(source: MessagePhotoSource) {
+    const permission =
+      source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync()
+
+    if (!permission.granted) {
+      Alert.alert(
+        'Permission needed',
+        source === 'camera'
+          ? 'Allow camera access to send a photo.'
+          : 'Allow photo access to send an image.',
+      )
+      return null
+    }
+
+    const pickerOptions = {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.8,
-    })
+    }
+
+    return source === 'camera'
+      ? ImagePicker.launchCameraAsync(pickerOptions)
+      : ImagePicker.launchImageLibraryAsync(pickerOptions)
+  }
+
+  async function sendPhotoFromSource(source: MessagePhotoSource) {
+    if (!checkRateLimit()) return
+    const result = await pickMessagePhoto(source)
+    if (!result) return
     if (result.canceled || !result.assets[0]) return
 
     setSending(true)
@@ -391,23 +445,20 @@ export function MessageThread({
     const filename = `messages/${orderId}/${Date.now()}.${ext}`
 
     try {
-      const response = await fetch(cleanUri)
-      const blob = await response.blob()
-      if (blob.size > 10 * 1024 * 1024) {
-        setSending(false)
-        Alert.alert('File too large', 'Photos must be under 10 MB.')
-        return
-      }
-      const { error: uploadError } = await supabase.storage.from('message-media').upload(filename, blob, { contentType: `image/${ext}` })
-      if (uploadError) throw uploadError
-      const { data: urlData } = supabase.storage.from('message-media').getPublicUrl(filename)
+      const publicUrl = await uploadPublicStorageImage({
+        bucket: 'message-media',
+        path: filename,
+        uri: cleanUri,
+        contentType: 'image/jpeg',
+        maxBytes: 10 * 1024 * 1024,
+      })
 
       const { error: insertError } = await invokeFunction('message-action', {
         body: {
           action: 'send-message',
           orderId,
           type: 'PHOTO',
-          photoUrl: urlData.publicUrl,
+          photoUrl: publicUrl,
         },
       })
       if (insertError) throw insertError
@@ -433,7 +484,7 @@ export function MessageThread({
       setRecording(rec)
       setIsRecording(true)
     } catch {
-      Alert.alert('Error', 'Could not access microphone.')
+      Alert.alert('Microphone unavailable', 'Drape could not access your microphone. Check your phone permissions and try again.')
     }
   }
 
@@ -451,14 +502,13 @@ export function MessageThread({
     setThreadNotice(null)
     const filename = `messages/${orderId}/${Date.now()}.m4a`
     try {
-      const response = await fetch(uri)
-      const blob = await response.blob()
-      if (blob.size > 25 * 1024 * 1024) {
+      const payload = await createValidatedUploadPayload(uri, 25 * 1024 * 1024)
+      if (payload.byteLength > 25 * 1024 * 1024) {
         setSending(false)
         Alert.alert('Recording too large', 'Voice notes must be under 25 MB.')
         return
       }
-      const { error: uploadError } = await supabase.storage.from('message-media').upload(filename, blob, { contentType: 'audio/m4a' })
+      const { error: uploadError } = await supabase.storage.from('message-media').upload(filename, payload.data, { contentType: 'audio/m4a' })
       if (uploadError) throw uploadError
       const { data: urlData } = supabase.storage.from('message-media').getPublicUrl(filename)
 
@@ -522,7 +572,7 @@ export function MessageThread({
                     disabled={refreshingThread}
                   >
                     {refreshingThread
-                      ? <ActivityIndicator size="small" color={Colors.white} />
+                      ? <ActivityIndicator size="small" color={Colors.textInverse} />
                       : <Text style={styles.retryThreadBtnText}>Refresh thread</Text>
                     }
                   </TouchableOpacity>
@@ -558,7 +608,7 @@ export function MessageThread({
 
       {/* Locked banner — shown when order is terminal */}
       {locked ? (
-        <View style={styles.lockedBar}>
+        <View style={[styles.lockedBar, { paddingBottom: composerBottomPadding }]}>
           <Text style={styles.lockedText}>{lockedMessage ?? 'This conversation is closed. You can still read previous messages.'}</Text>
         </View>
       ) : (
@@ -586,8 +636,14 @@ export function MessageThread({
           )}
 
           {/* Input bar */}
-          <View style={styles.inputBar}>
-            <TouchableOpacity style={styles.iconBtn} onPress={sendPhoto} disabled={sending || rateLimited}>
+          <View style={[styles.inputBar, { paddingBottom: composerBottomPadding }]}>
+            <TouchableOpacity
+              style={styles.iconBtn}
+              onPress={openPhotoSourceSheet}
+              disabled={sending || rateLimited}
+              accessibilityRole="button"
+              accessibilityLabel="Attach photo"
+            >
               <Text style={styles.iconBtnText}>📎</Text>
             </TouchableOpacity>
 
@@ -607,9 +663,15 @@ export function MessageThread({
             />
 
             {text.trim() ? (
-              <TouchableOpacity style={styles.sendBtn} onPress={sendText} disabled={sending || !!textError || rateLimited}>
+              <TouchableOpacity
+                style={styles.sendBtn}
+                onPress={sendText}
+                disabled={sending || !!textError || rateLimited}
+                accessibilityRole="button"
+                accessibilityLabel="Send message"
+              >
                 {sending
-                  ? <ActivityIndicator color={Colors.white} size="small" />
+                  ? <ActivityIndicator color={Colors.textInverse} size="small" />
                   : <Text style={styles.sendBtnText}>→</Text>
                 }
               </TouchableOpacity>
@@ -619,6 +681,8 @@ export function MessageThread({
                 onPressIn={startRecording}
                 onPressOut={stopRecording}
                 disabled={sending}
+                accessibilityRole="button"
+                accessibilityLabel={isRecording ? 'Recording voice note' : 'Hold to record voice note'}
               >
                 <Text style={styles.iconBtnText}>🎤</Text>
               </TouchableOpacity>
@@ -660,6 +724,9 @@ function MessageBubble({ message, isOwn }: { message: Message; isOwn: boolean })
   }
 
   const time = new Date(message.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+  const receipt = message.read_at
+    ? { text: '✓✓', label: 'Read', style: styles.readReceiptRead }
+    : { text: '✓✓', label: 'Delivered', style: styles.readReceiptDelivered }
 
   return (
     <View style={[styles.bubbleRow, isOwn && styles.bubbleRowOwn]}>
@@ -671,11 +738,24 @@ function MessageBubble({ message, isOwn }: { message: Message; isOwn: boolean })
         )}
 
         {message.type === 'PHOTO' && message.photo_url && (
-          <ExpoImage source={{ uri: message.photo_url }} style={styles.bubblePhoto} contentFit="cover" transition={120} />
+          <RemoteImage
+            uri={message.photo_url}
+            bucket="message-media"
+            style={styles.bubblePhoto}
+            contentFit="cover"
+            transition={120}
+            surface="message_photo"
+            fallback={<View style={[styles.bubblePhoto, styles.photoFallback]} />}
+          />
         )}
 
         {message.type === 'VOICE' && (
-          <TouchableOpacity style={styles.voiceNote} onPress={toggleVoice}>
+          <TouchableOpacity
+            style={styles.voiceNote}
+            onPress={toggleVoice}
+            accessibilityRole="button"
+            accessibilityLabel={playing ? 'Pause voice note' : 'Play voice note'}
+          >
             <Text style={styles.voiceNoteIcon}>{playing ? '⏸' : '▶'}</Text>
             <View style={styles.voiceWave}>
               {[...Array(12)].map((_, i) => {
@@ -689,7 +769,14 @@ function MessageBubble({ message, isOwn }: { message: Message; isOwn: boolean })
 
         <View style={styles.bubbleMeta}>
           <Text style={[styles.bubbleTime, isOwn && styles.bubbleTimeOwn]}>{time}</Text>
-          {isOwn && message.read_at && <Text style={styles.readReceipt}>✓✓</Text>}
+          {isOwn ? (
+            <Text
+              style={[styles.readReceipt, receipt.style]}
+              accessibilityLabel={`Message ${receipt.label.toLowerCase()}`}
+            >
+              {receipt.text} {receipt.label}
+            </Text>
+          ) : null}
         </View>
       </View>
     </View>
@@ -738,7 +825,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.xl,
     minHeight: 44,
   },
-  retryThreadBtnText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  retryThreadBtnText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
 
   lockedBar: {
     backgroundColor: Colors.lightGrey, paddingHorizontal: Spacing.xl,
@@ -796,7 +883,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
     backgroundColor: Colors.white, borderTopWidth: 1, borderTopColor: Colors.lightGrey,
   },
-  iconBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  iconBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   iconBtnText: { fontSize: 20 },
   textInput: {
     flex: 1, backgroundColor: Colors.bone, borderRadius: Radius.xl,
@@ -804,11 +891,11 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md, color: Colors.ink, maxHeight: 120,
   },
   sendBtn: {
-    width: 40, height: 40, borderRadius: 20,
+    width: 44, height: 44, borderRadius: 22,
     backgroundColor: Colors.needleGreen, alignItems: 'center', justifyContent: 'center',
   },
-  sendBtnText: { color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold },
-  voiceBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 20 },
+  sendBtnText: { color: Colors.textInverse, fontSize: 18, fontWeight: FontWeight.bold },
+  voiceBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22 },
   voiceBtnActive: { backgroundColor: Colors.needleGreenLight },
 
   bubbleRow: { flexDirection: 'row', justifyContent: 'flex-start' },
@@ -824,8 +911,9 @@ const styles = StyleSheet.create({
   bubbleOwn: { backgroundColor: Colors.needleGreen, borderBottomRightRadius: 4 },
   senderName: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen, fontFamily: 'Georgia' },
   bubbleText: { fontSize: FontSize.md, color: Colors.ink, lineHeight: 22 },
-  bubbleTextOwn: { color: Colors.white },
+  bubbleTextOwn: { color: Colors.textInverse },
   bubblePhoto: { width: 200, height: 200, borderRadius: Radius.md },
+  photoFallback: { backgroundColor: Colors.boneDeep },
   voiceNote: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, paddingVertical: 2 },
   voiceNoteIcon: { fontSize: 18 },
   voiceWave: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 2 },
@@ -834,5 +922,7 @@ const styles = StyleSheet.create({
   bubbleMeta: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, justifyContent: 'flex-end' },
   bubbleTime: { fontSize: 10, color: Colors.midGrey },
   bubbleTimeOwn: { color: 'rgba(255,255,255,0.7)' },
-  readReceipt: { fontSize: 10, color: 'rgba(255,255,255,0.7)' },
+  readReceipt: { fontSize: 10, fontWeight: FontWeight.semibold },
+  readReceiptDelivered: { color: 'rgba(255,255,255,0.72)' },
+  readReceiptRead: { color: Colors.accentLight },
 })

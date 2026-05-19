@@ -66,7 +66,7 @@ export const ORDER_TRANSITIONS: Transition[] = [
   { from: 'PAYMENT_FAILED', to: 'PAYMENT_PENDING', actor: 'CUSTOMER', trigger: 'retry_payment' },
   { from: 'PAYMENT_FAILED', to: 'CONFIRMED', actor: 'SYSTEM', trigger: 'payment_succeeded' },
   { from: 'PAYMENT_FAILED', to: 'CANCELLED', actor: 'CUSTOMER', trigger: 'cancel_after_failed_payment' },
-  { from: 'PAYMENT_FAILED', to: 'CANCELLED', actor: 'SYSTEM', trigger: 'failed_payment_timeout_30m' },
+  { from: 'PAYMENT_FAILED', to: 'CANCELLED', actor: 'SYSTEM', trigger: 'failed_payment_timeout_2h' },
 
   // Tailor pre-production stages (flexible order — tailor chooses what applies)
   { from: 'CONFIRMED', to: 'DESIGNING', actor: 'TAILOR', trigger: 'start_designing' },

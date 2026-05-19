@@ -16,8 +16,16 @@ config.resolver.nodeModulesPaths = [
 ]
 
 // Metro doesn't support the package.json "exports" field — resolve @drape/shared
-// sub-paths directly to their TypeScript source files.
+// and @drape/drape-vision sub-paths directly to their TypeScript source files.
 const sharedSrc = path.resolve(workspaceRoot, 'packages/shared/src')
+const drapeVisionSrc = path.resolve(workspaceRoot, 'packages/drape-vision/src')
+const drapeVisionSubpaths = {
+  'angle-detector': 'angleDetector',
+  calibration: 'calibration',
+  'capture-worklet': 'captureWorklet',
+  'ellipse-fitter': 'ellipseFitter',
+  'measurement-calculator': 'measurementCalculator',
+}
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   if (moduleName.startsWith('@drape/shared/')) {
     const subpath = moduleName.replace('@drape/shared/', '')
@@ -29,6 +37,20 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
   if (moduleName === '@drape/shared') {
     return {
       filePath: path.resolve(sharedSrc, 'index.ts'),
+      type: 'sourceFile',
+    }
+  }
+  if (moduleName.startsWith('@drape/drape-vision/')) {
+    const subpath = moduleName.replace('@drape/drape-vision/', '')
+    const file = drapeVisionSubpaths[subpath] ?? subpath
+    return {
+      filePath: path.resolve(drapeVisionSrc, `${file}.ts`),
+      type: 'sourceFile',
+    }
+  }
+  if (moduleName === '@drape/drape-vision') {
+    return {
+      filePath: path.resolve(drapeVisionSrc, 'index.ts'),
       type: 'sourceFile',
     }
   }

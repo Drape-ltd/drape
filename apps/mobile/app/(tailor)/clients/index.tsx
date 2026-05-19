@@ -473,7 +473,7 @@ export default function TailorClientsScreen() {
                     style={styles.addDiaryBtn}
                     onPress={() => router.push('/(tailor)/clients/diary/new')}
                   >
-                    <Feather name="plus" size={16} color={Colors.white} />
+                    <Feather name="plus" size={16} color={Colors.textInverse} />
                     <Text style={styles.addDiaryBtnText}>Add client</Text>
                   </TouchableOpacity>
                 )}
@@ -563,7 +563,7 @@ export default function TailorClientsScreen() {
           onPress={() => router.push('/(tailor)/clients/diary/new')}
           activeOpacity={0.85}
         >
-          <Feather name="plus" size={22} color={Colors.white} />
+          <Feather name="plus" size={22} color={Colors.textInverse} />
         </TouchableOpacity>
         </>
       ) : (
@@ -721,7 +721,7 @@ function ClientsEmptyState({
             style={clientEmptyStyles.cta}
             onPress={() => shareTailorProfile(profileId, displayName)}
           >
-            <Feather name="share-2" size={16} color={Colors.white} />
+            <Feather name="share-2" size={16} color={Colors.textInverse} />
             <Text style={clientEmptyStyles.ctaText}>Share my profile</Text>
           </TouchableOpacity>
         ) : null}
@@ -738,7 +738,7 @@ function ClientsEmptyState({
             style={clientEmptyStyles.cta}
             onPress={onSetupPress}
           >
-            <Feather name="user-check" size={16} color={Colors.white} />
+            <Feather name="user-check" size={16} color={Colors.textInverse} />
             <Text style={clientEmptyStyles.ctaText}>Complete profile</Text>
           </TouchableOpacity>
         )}
@@ -801,7 +801,7 @@ const clientEmptyStyles = StyleSheet.create({
     backgroundColor: Colors.white,
     borderWidth: 1.5, borderColor: Colors.needleGreen,
   },
-  ctaText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  ctaText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
 })
 
 const styles = StyleSheet.create({
@@ -832,7 +832,7 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.ink },
   count: {
-    fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white,
+    fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse,
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
     paddingHorizontal: Spacing.sm, paddingVertical: 4, overflow: 'hidden', minWidth: 26, textAlign: 'center',
   },
@@ -923,7 +923,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
     paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md, marginTop: Spacing.xl,
   },
-  addDiaryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  addDiaryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   emptySecondaryBtn: {
     marginTop: Spacing.md,
     paddingHorizontal: Spacing.xl,
@@ -972,7 +972,7 @@ const styles = StyleSheet.create({
     marginTop: Spacing.xs,
   },
   diaryBannerCtaText: {
-    fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white,
+    fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse,
   },
 
   // Share button inside diary card

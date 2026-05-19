@@ -8,6 +8,7 @@ import {
   type TextInputProps,
   type ViewStyle,
 } from 'react-native'
+import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 
@@ -30,10 +31,14 @@ export function Input({
   rightElement,
   required,
   onChangeText,
+  onFocus,
+  onBlur,
+  secureTextEntry,
   ...props
 }: InputProps) {
   const [contactWarning, setContactWarning] = useState('')
   const [focused, setFocused] = useState(false)
+  const [passwordVisible, setPasswordVisible] = useState(false)
 
   function handleChangeText(text: string) {
     if (filterContact && text.length > 3) {
@@ -47,6 +52,8 @@ export function Input({
 
   const displayError = error || contactWarning
   const hasError = !!displayError
+  const isPasswordField = secureTextEntry === true
+  const resolvedSecureTextEntry = isPasswordField ? !passwordVisible : secureTextEntry
 
   return (
     <View style={[styles.container, containerStyle]}>
@@ -60,20 +67,46 @@ export function Input({
         <TextInput
           style={styles.input}
           placeholderTextColor={Colors.midGrey}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
+          accessibilityLabel={props.accessibilityLabel ?? label ?? props.placeholder}
+          accessibilityHint={props.accessibilityHint ?? hint}
+          onFocus={(event) => {
+            setFocused(true)
+            onFocus?.(event)
+          }}
+          onBlur={(event) => {
+            setFocused(false)
+            onBlur?.(event)
+          }}
           onChangeText={handleChangeText}
-          autoCapitalize={props.secureTextEntry ? 'none' : props.autoCapitalize}
-          autoCorrect={props.secureTextEntry ? false : props.autoCorrect}
-          spellCheck={props.secureTextEntry ? false : props.spellCheck}
-          textContentType={props.textContentType ?? (props.secureTextEntry ? 'password' : undefined)}
-          autoComplete={props.autoComplete ?? (props.secureTextEntry ? 'password' : undefined)}
+          secureTextEntry={resolvedSecureTextEntry}
+          autoCapitalize={isPasswordField ? 'none' : props.autoCapitalize}
+          autoCorrect={isPasswordField ? false : props.autoCorrect}
+          spellCheck={isPasswordField ? false : props.spellCheck}
+          textContentType={props.textContentType ?? (isPasswordField ? 'password' : undefined)}
+          autoComplete={props.autoComplete ?? (isPasswordField ? 'password' : undefined)}
           {...props}
         />
         {rightElement && <View style={styles.right}>{rightElement}</View>}
+        {isPasswordField ? (
+          <TouchableOpacity
+            style={styles.passwordToggle}
+            onPress={() => setPasswordVisible((visible) => !visible)}
+            accessibilityRole="button"
+            accessibilityLabel={passwordVisible ? 'Hide password' : 'Show password'}
+            hitSlop={8}
+          >
+            <Feather
+              name={passwordVisible ? 'eye-off' : 'eye'}
+              size={20}
+              color={focused ? Colors.needleGreen : Colors.midGrey}
+            />
+          </TouchableOpacity>
+        ) : null}
       </View>
       {displayError ? (
-        <Text style={styles.errorText}>{displayError}</Text>
+        <Text style={styles.errorText} accessibilityRole="alert">
+          {displayError}
+        </Text>
       ) : hint ? (
         <Text style={styles.hint}>{hint}</Text>
       ) : null}
@@ -97,7 +130,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.lg,
     backgroundColor: Colors.white,
     paddingHorizontal: Spacing.md,
-    minHeight: 44,
+    minHeight: 52,
   },
   focused: { borderColor: Colors.needleGreen },
   errorBorder: { borderColor: Colors.error },
@@ -106,9 +139,16 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md,
     color: Colors.ink,
     paddingVertical: 10,
-    minHeight: 44,
+    minHeight: 50,
   },
   right: { marginLeft: Spacing.sm },
+  passwordToggle: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: -Spacing.sm,
+  },
   errorText: {
     fontSize: FontSize.xs,
     color: Colors.error,

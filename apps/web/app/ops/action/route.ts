@@ -375,6 +375,46 @@ async function triggerOrderPayoutRelease(orderId: string) {
   return { ok: true as const }
 }
 
+async function submitVerificationDecision(input: {
+  tailorUserId: string
+  decision: string
+  reason: string | null
+  performedBy: string
+  performedRole: string
+}) {
+  const supabaseUrl = getSupabaseUrl()
+  const serviceRoleKey = getSupabaseServiceRoleKey()
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    return { ok: false as const, error: 'missing-service-role-config' }
+  }
+
+  const response = await fetch(`${supabaseUrl.replace(/\/+$/u, '')}/functions/v1/handle-verification-decision`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  })
+
+  const payload = await response.json().catch(() => null) as {
+    ok?: boolean
+    error?: string
+    message?: string
+  } | null
+
+  if (!response.ok || !payload?.ok) {
+    return {
+      ok: false as const,
+      error: payload?.error ?? `verification-decision-function-${response.status}`,
+    }
+  }
+
+  return { ok: true as const }
+}
+
 function ensureAuthorizedAction(kind: string): OpsActionKind | null {
   switch (kind) {
     case 'dispute-status':
@@ -559,84 +599,30 @@ export async function POST(request: Request) {
     if (kind === 'verification-decision') {
       const tailorUserId = readString(formData, 'tailorUserId')
       const decision = readString(formData, 'decision').toUpperCase()
-      const note = readString(formData, 'note')
+      const reason = readString(formData, 'reason') || readString(formData, 'note')
 
       if (!tailorUserId || !VERIFICATION_DECISIONS.has(decision)) {
         return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
       }
 
-      const { data, error } = await client.rpc('ops_decide_verification', {
-        p_tailor_user_id: tailorUserId,
-        p_decision: decision,
+      const result = await submitVerificationDecision({
+        tailorUserId,
+        decision,
+        reason: reason.length > 0 ? reason : null,
+        performedBy: session.email ?? session.role,
+        performedRole: session.role.toUpperCase(),
       })
 
-      if (error) {
-        return redirectWithMessage(
-          request,
-          redirectTo,
-          'error',
-          isConflictError(error) ? 'conflict' : 'save-failed',
-        )
+      if (!result.ok) {
+        const error =
+          result.error === 'REJECTION_REASON_REQUIRED'
+            ? 'verification-rejection-reason-required'
+            : result.error === 'VERIFICATION_ALREADY_PROCESSED'
+              ? 'conflict'
+              : 'save-failed'
+
+        return redirectWithMessage(request, redirectTo, 'error', error)
       }
-
-      const verificationDecision = Array.isArray(data) ? data[0] : null
-      const verificationProfileId =
-        verificationDecision && typeof verificationDecision === 'object' && 'profile_id' in verificationDecision
-          ? String(verificationDecision.profile_id)
-          : null
-
-      const { data: verificationIssue } = await client
-        .from('ops_issues')
-        .select('id, status, assigned_to, resolved_at')
-        .eq('issue_type', 'TAILOR_VERIFICATION')
-        .eq('user_id', tailorUserId)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-
-      if (verificationIssue?.id) {
-        const resolvedAt = new Date().toISOString()
-        await client
-          .from('ops_issues')
-          .update({
-            status: 'RESOLVED',
-            assigned_to: session.email ?? session.role,
-            resolved_at: resolvedAt,
-            tailor_profile_id: verificationProfileId ?? undefined,
-          })
-          .eq('id', verificationIssue.id)
-
-        await client.from('ops_audit_logs').insert({
-          issue_id: verificationIssue.id,
-          action_taken: decision === 'APPROVE' ? 'VERIFICATION_APPROVED' : 'VERIFICATION_REJECTED',
-          performed_by: session.email ?? 'ops-session',
-          performed_role: session.role.toUpperCase(),
-          reason: note.length > 0 ? note : null,
-          before_state: {
-            status: verificationIssue.status,
-            assigned_to: verificationIssue.assigned_to ?? null,
-            resolved_at: verificationIssue.resolved_at ?? null,
-          },
-          after_state: {
-            status: 'RESOLVED',
-            assigned_to: session.email ?? session.role,
-            resolved_at: resolvedAt,
-            decision,
-          },
-        })
-      }
-
-      await client.from('audit_logs').insert({
-        actor_role: 'OPS',
-        event: 'ops.verification_decision_logged',
-        severity: decision === 'APPROVE' ? 'info' : 'warn',
-        payload: {
-          tailor_user_id: tailorUserId,
-          tailor_profile_id: verificationProfileId,
-          decision,
-          note: note.length > 0 ? note : null,
-        },
-      })
 
       return redirectWithMessage(
         request,

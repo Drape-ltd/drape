@@ -1,10 +1,14 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
+import { sendPushToUser } from '../_shared/notify.ts'
+import { sendOrderEventEmail } from '../_shared/order-email.ts'
 import { finalizeOrderTerminal } from '../_shared/order-terminal.ts'
+import { serializeOrderSupportMeta } from '../_shared/order-support.ts'
+import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
 import {
   deriveReadyMadeStockStatus,
   normalizeReadyMadeSizeInventory,
@@ -17,11 +21,22 @@ import { fetchFxQuote, convertMinorUnitsWithFx } from '../_shared/fx.ts'
 import { calculateLockedOrderAmountsWithTaxBase, resolveOrderTax } from '../_shared/tax.ts'
 import { resolveDrapeManagedFulfillmentFee } from '../../../packages/shared/src/fulfillment-fees.ts'
 import { buildReadyMadeInquiryClosedTerminalRequest } from '../../../packages/shared/src/order-terminal.ts'
-import { normalizeAccountCurrency, resolvePaymentProviderForCurrency, type AccountCurrencyCode } from '../../../packages/shared/src/currency-config.ts'
+import {
+  hasSellerPayoutCurrencyMismatch,
+  normalizeAccountCurrency,
+  resolvePaymentProviderForCurrency,
+  resolveSellerOrderCurrency,
+  type AccountCurrencyCode,
+} from '../../../packages/shared/src/currency-config.ts'
+import { ORDER_CANCELLATION_POLICY_VERSION } from '../../../packages/shared/src/checkout-policy.ts'
 import { normalizeTaxCountryCode } from '../../../packages/shared/src/tax.ts'
 
 const FN = 'ready-made-order-action'
 const MAX_READY_MADE_CHECKOUT_QUANTITY = 3
+
+declare const EdgeRuntime: {
+  waitUntil(promise: Promise<unknown>): void
+}
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
@@ -53,11 +68,23 @@ const BodySchema = z.discriminatedUnion('action', [
     countryCode: z.string().trim().max(32).optional(),
     recipientName: z.string().trim().max(120).optional(),
     recipientPhone: z.string().trim().max(40).optional(),
+    cancellationPolicyAcknowledged: z.boolean().optional(),
   }),
 ])
 
 function buildReference() {
   return `DRP${Date.now().toString(36).toUpperCase().slice(-6)}`
+}
+
+function jsonResponse(payload: Record<string, unknown>, status: number, cors: HeadersInit) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { ...cors, 'Content-Type': 'application/json' },
+  })
+}
+
+function jsonError(cors: HeadersInit, status: number, message: string, extra: Record<string, unknown> = {}) {
+  return jsonResponse({ error: message, message, ...extra }, status, cors)
 }
 
 async function resolveCheckoutPricing(input: {
@@ -71,7 +98,7 @@ async function resolveCheckoutPricing(input: {
   region?: string | null
   postalCode?: string | null
   countryCode?: string | null
-  accountCurrency: AccountCurrencyCode
+  orderCurrency: AccountCurrencyCode
   accountRegionCode: string
   item: {
     id: string
@@ -83,16 +110,16 @@ async function resolveCheckoutPricing(input: {
   const sourceSubtotal = input.item.price_amount * input.quantity
   let fxQuote = null as Awaited<ReturnType<typeof fetchFxQuote>> | null
   let subtotal = sourceSubtotal
-  const itemCurrency = normalizeAccountCurrency(input.item.currency) ?? input.accountCurrency
+  const itemCurrency = normalizeAccountCurrency(input.item.currency) ?? input.orderCurrency
 
-  if (itemCurrency !== input.accountCurrency) {
-    fxQuote = await fetchFxQuote(itemCurrency, input.accountCurrency)
+  if (itemCurrency !== input.orderCurrency) {
+    fxQuote = await fetchFxQuote(itemCurrency, input.orderCurrency)
     subtotal = convertMinorUnitsWithFx(sourceSubtotal, fxQuote.rate)
   }
 
   const fulfillmentFee = resolveDrapeManagedFulfillmentFee({
     fulfillment: input.fulfillment,
-    orderCurrency: input.accountCurrency,
+    orderCurrency: input.orderCurrency,
     sellerLocation: input.sellerProfileLocation,
     destinationAddress: input.address,
   }).feeMinorUnits
@@ -100,7 +127,7 @@ async function resolveCheckoutPricing(input: {
   const tax = await resolveOrderTax({
     supabase: input.supabase,
     orderId: null,
-    currency: input.accountCurrency,
+    currency: input.orderCurrency,
     regionCode: input.accountRegionCode,
     countryCode: input.countryCode,
     address: input.address,
@@ -136,13 +163,13 @@ Deno.serve(async (req) => {
     const caller = await getAuthUser(req)
     if (!caller) {
       log('warn', FN, 'auth.unauthenticated')
-      return new Response('Unauthorized', { status: 401, headers: cors })
+      return jsonError(cors, 401, 'Please sign in again before starting this order.')
     }
 
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
     if (!parsed.ok) {
       log('warn', FN, 'validation.failed', { actor_id: caller.id, error: parsed.error })
-      return new Response(parsed.error, { status: 400, headers: cors })
+      return jsonError(cors, 400, 'Check the checkout details and try again.')
     }
 
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
@@ -155,7 +182,7 @@ Deno.serve(async (req) => {
 
     if (accountError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: accountError.message, surface: 'users.default_currency' })
-      return new Response('Could not resolve account currency.', { status: 500, headers: cors })
+      return jsonError(cors, 500, 'Could not resolve account currency.')
     }
 
     const accountCurrency = normalizeAccountCurrency((accountRow as any)?.default_currency) ?? 'USD'
@@ -173,7 +200,7 @@ Deno.serve(async (req) => {
         severity: 'warn',
         payload: { function: FN },
       })
-      return new Response('Too many requests', { status: 429, headers: cors })
+      return rateLimitExceededResponse(cors)
     }
 
     const body = parsed.data
@@ -191,7 +218,7 @@ Deno.serve(async (req) => {
         reason: message,
         ...detail,
       })
-      return new Response(message, { status, headers: cors })
+      return jsonError(cors, status, message, detail)
     }
 
     const { data: sellerItem, error: itemError } = await supabase
@@ -211,28 +238,86 @@ Deno.serve(async (req) => {
         delivery_available,
         shipping_available,
         tailor_profile_id,
-        tailor_profiles!tailor_profile_id(id, user_id, is_live, display_name, location, currency, payout_currency, paystack_recipient_code, stripe_connect_account_id)
+        tailor_profiles!tailor_profile_id(id, user_id, is_live, availability, display_name, location, currency, payout_currency, payout_provider, payout_account_type, paystack_recipient_code, paystack_account_id, stripe_connect_account_id, stripe_account_id)
       `)
       .eq('id', body.sellerItemId)
       .maybeSingle()
 
     if (itemError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: itemError.message })
-      return new Response('Database error', { status: 500, headers: cors })
+      return jsonError(cors, 500, 'We could not load this item right now. Please try again.')
     }
 
     const item = sellerItem as any
-    if (!item?.id) {
-      return new Response('Item not found', { status: 404, headers: cors })
-    }
+    const sellerProfile = item?.tailor_profiles ?? null
+    const sellerPreflight = runPreflight([
+      {
+        name: 'item_exists',
+        condition: !!item?.id,
+        errorCode: 'ITEM_NOT_FOUND',
+        message: 'This item is no longer available.',
+        field: 'sellerItemId',
+        severity: 'BLOCKING',
+        actual: { sellerItemId: body.sellerItemId },
+      },
+      {
+        name: 'seller_profile_exists',
+        condition: !!sellerProfile?.id && !!sellerProfile?.user_id,
+        errorCode: 'SELLER_UNAVAILABLE',
+        message: 'This seller is unavailable right now.',
+        field: 'tailor_profile_id',
+        severity: 'BLOCKING',
+        actual: { sellerProfileId: sellerProfile?.id ?? null, sellerUserId: sellerProfile?.user_id ?? null },
+      },
+      {
+        name: 'seller_not_self',
+        condition: sellerProfile?.user_id !== caller.id,
+        errorCode: 'CANNOT_ORDER_FROM_SELF',
+        message: 'You cannot buy your own ready-made item.',
+        field: 'sellerItemId',
+        severity: 'BLOCKING',
+        actual: { callerId: caller.id, sellerUserId: sellerProfile?.user_id ?? null },
+      },
+      {
+        name: 'item_live',
+        condition: item?.is_live === true,
+        errorCode: 'ITEM_NOT_LIVE',
+        message: 'This item is not available for checkout.',
+        field: 'is_live',
+        severity: 'BLOCKING',
+        actual: { itemLive: item?.is_live ?? null },
+      },
+      {
+        name: 'seller_live',
+        condition: sellerProfile?.is_live === true,
+        errorCode: 'SELLER_NOT_LIVE',
+        message: 'This seller is not accepting ready-made orders right now.',
+        field: 'tailor_profile.is_live',
+        severity: 'BLOCKING',
+        actual: { sellerLive: sellerProfile?.is_live ?? null },
+      },
+      {
+        name: 'seller_available',
+        condition: sellerProfile?.availability !== 'FULLY_BOOKED',
+        errorCode: 'SELLER_UNAVAILABLE',
+        message: 'This seller is on a break and is not accepting new orders right now.',
+        field: 'availability',
+        severity: 'BLOCKING',
+        actual: { availability: sellerProfile?.availability ?? null },
+      },
+    ])
 
-    const sellerProfile = item.tailor_profiles
-    if (!sellerProfile?.id || !sellerProfile?.user_id) {
-      return new Response('Seller unavailable', { status: 409, headers: cors })
-    }
-
-    if (!item.is_live || !sellerProfile.is_live) {
-      return new Response('Item is not live', { status: 409, headers: cors })
+    if (!sellerPreflight.passed) {
+      await logPreflightFailure(supabase, sellerPreflight, {
+        operation: 'ready_made_order_start',
+        entityType: 'seller_item',
+        entityId: body.sellerItemId,
+        actorId: caller.id,
+        actorRole: 'CUSTOMER',
+        source: FN,
+        metadata: { action: body.action },
+      })
+      return preflightFailureResponse(sellerPreflight, cors, item?.id ? 409 : 404)
     }
 
     const itemSizes = Array.isArray(item.sizes) ? item.sizes.filter((value: unknown): value is string => typeof value === 'string' && value.length > 0) : []
@@ -250,15 +335,90 @@ Deno.serve(async (req) => {
       inventoryQuantity: currentInventoryQuantity,
     })
 
-    if (['SOLD_OUT', 'HIDDEN'].includes(currentStockStatus)) {
-      return new Response('Item is unavailable', { status: 409, headers: cors })
+    const stockPreflight = runPreflight([
+      {
+        name: 'item_in_stock',
+        condition: !['SOLD_OUT', 'HIDDEN'].includes(currentStockStatus),
+        errorCode: 'ITEM_OUT_OF_STOCK',
+        message: 'This item just sold out. Please refresh the shop and try another piece.',
+        field: 'stock_status',
+        severity: 'BLOCKING',
+        actual: { stockStatus: currentStockStatus, inventoryQuantity: currentInventoryQuantity },
+      },
+    ])
+
+    if (!stockPreflight.passed) {
+      await logPreflightFailure(supabase, stockPreflight, {
+        operation: 'ready_made_order_stock',
+        entityType: 'seller_item',
+        entityId: item.id,
+        actorId: caller.id,
+        actorRole: 'CUSTOMER',
+        source: FN,
+        metadata: { action: body.action, requestedQuantity: 'quantity' in body ? body.quantity : null },
+      })
+      return preflightFailureResponse(stockPreflight, cors, 409)
     }
 
     const lockedTailorPayoutCurrency =
-      normalizeAccountCurrency(sellerProfile?.payout_currency)
-      ?? normalizeAccountCurrency(sellerProfile?.currency)
-      ?? accountCurrency
+      resolveSellerOrderCurrency({
+        tailorCurrency: sellerProfile?.currency,
+        payoutCurrency: sellerProfile?.payout_currency,
+        payoutProvider: sellerProfile?.payout_provider,
+        payoutAccountType: sellerProfile?.payout_account_type,
+        hasPaystackRecipient: !!(sellerProfile?.paystack_recipient_code ?? sellerProfile?.paystack_account_id),
+        hasStripeConnectAccount: !!(sellerProfile?.stripe_connect_account_id ?? sellerProfile?.stripe_account_id),
+        customerCurrency: accountCurrency,
+      })
     const lockedTailorPayoutProvider = resolvePaymentProviderForCurrency(lockedTailorPayoutCurrency)
+    const orderCurrency = resolveSellerOrderCurrency({
+      itemCurrency: item?.currency,
+      tailorCurrency: sellerProfile?.currency,
+      payoutCurrency: sellerProfile?.payout_currency,
+      payoutProvider: sellerProfile?.payout_provider,
+      payoutAccountType: sellerProfile?.payout_account_type,
+      hasPaystackRecipient: !!(sellerProfile?.paystack_recipient_code ?? sellerProfile?.paystack_account_id),
+      hasStripeConnectAccount: !!(sellerProfile?.stripe_connect_account_id ?? sellerProfile?.stripe_account_id),
+      customerCurrency: accountCurrency,
+    })
+
+    const payoutCurrencyPreflight = runPreflight([
+      {
+        name: 'seller_item_currency_matches_payout',
+        condition: !hasSellerPayoutCurrencyMismatch({
+          itemCurrency: item?.currency,
+          payoutCurrency: sellerProfile?.payout_currency,
+          payoutProvider: sellerProfile?.payout_provider,
+          payoutAccountType: sellerProfile?.payout_account_type,
+          hasPaystackRecipient: !!(sellerProfile?.paystack_recipient_code ?? sellerProfile?.paystack_account_id),
+          hasStripeConnectAccount: !!(sellerProfile?.stripe_connect_account_id ?? sellerProfile?.stripe_account_id),
+          fallbackCurrency: sellerProfile?.currency,
+        }),
+        errorCode: 'SELLER_PAYMENT_SETUP_NEEDS_REVIEW',
+        message: 'This item cannot be checked out until the seller updates its currency to match their payout account.',
+        field: 'currency',
+        severity: 'BLOCKING',
+        actual: {
+          itemCurrency: item?.currency ?? null,
+          sellerCurrency: sellerProfile?.currency ?? null,
+          payoutCurrency: sellerProfile?.payout_currency ?? null,
+          orderCurrency,
+        },
+      },
+    ])
+
+    if (!payoutCurrencyPreflight.passed) {
+      await logPreflightFailure(supabase, payoutCurrencyPreflight, {
+        operation: 'ready_made_order_currency',
+        entityType: 'seller_item',
+        entityId: body.sellerItemId,
+        actorId: caller.id,
+        actorRole: 'CUSTOMER',
+        source: FN,
+        metadata: { action: body.action },
+      })
+      return preflightFailureResponse(payoutCurrencyPreflight, cors, 409)
+    }
 
     if (body.action === 'start-inquiry') {
       const { data: existing } = await supabase
@@ -278,6 +438,7 @@ Deno.serve(async (req) => {
         })
       }
 
+      const orderReference = buildReference()
       const { data: created, error: createError } = await supabase
         .from('orders')
         .insert({
@@ -288,20 +449,20 @@ Deno.serve(async (req) => {
           tailor_payout_provider_locked: lockedTailorPayoutProvider,
           tailor_paystack_recipient_code_locked:
             lockedTailorPayoutProvider === 'PAYSTACK'
-              ? (sellerProfile.paystack_recipient_code ?? null)
+              ? (sellerProfile.paystack_recipient_code ?? sellerProfile.paystack_account_id ?? null)
               : null,
           tailor_stripe_connect_account_id_locked:
             lockedTailorPayoutProvider === 'STRIPE'
-              ? (sellerProfile.stripe_connect_account_id ?? null)
+              ? (sellerProfile.stripe_connect_account_id ?? sellerProfile.stripe_account_id ?? null)
               : null,
-          reference: buildReference(),
+          reference: orderReference,
           order_kind: 'READY_MADE',
           seller_item_id: item.id,
           garment_type: item.title,
           garment_description: item.description,
           item_title: item.title,
-          currency: accountCurrency,
-          quoted_currency: accountCurrency,
+          currency: orderCurrency,
+          quoted_currency: orderCurrency,
           stage: 'PENDING_QUOTE',
           stage_updated_at: new Date().toISOString(),
         })
@@ -310,7 +471,7 @@ Deno.serve(async (req) => {
 
       if (createError || !created?.id) {
         log('error', FN, 'db.error', { actor_id: caller.id, error: createError?.message ?? 'create inquiry failed' })
-        return new Response('Could not start inquiry', { status: 500, headers: cors })
+        return jsonError(cors, 500, 'We could not start this inquiry right now. Please try again.')
       }
 
       await audit(supabase, {
@@ -320,6 +481,41 @@ Deno.serve(async (req) => {
         order_id: created.id,
         payload: { function: FN, seller_item_id: item.id },
       })
+
+      const inquiryTitle = 'New ready-made inquiry'
+      const inquiryBody = `A customer asked about ${item.title}. Reply from Drape so the full order trail stays protected.`
+      const orderNotificationContext = {
+        id: created.id,
+        reference: orderReference,
+        order_kind: 'READY_MADE',
+        customer_id: caller.id,
+        tailor_id: sellerProfile.user_id,
+        garment_type: item.title,
+        item_title: item.title,
+        quoted_currency: orderCurrency,
+        currency: orderCurrency,
+      }
+
+      EdgeRuntime.waitUntil(
+        sendPushToUser(supabase, sellerProfile.user_id.toString(), {
+          title: inquiryTitle,
+          body: inquiryBody,
+          preferenceKey: 'newOrders',
+          data: { orderId: created.id, type: 'ready_made_inquiry_started' },
+        }),
+      )
+
+      EdgeRuntime.waitUntil(
+        sendOrderEventEmail(supabase, {
+          order: orderNotificationContext,
+          recipientUserId: sellerProfile.user_id.toString(),
+          audience: 'TAILOR',
+          subject: inquiryTitle,
+          headline: 'A customer asked about your ready-made item',
+          body: inquiryBody,
+          ctaLabel: 'Reply in Drape',
+        }),
+      )
 
       return new Response(JSON.stringify({ ok: true, orderId: created.id, existing: false }), {
         headers: { ...cors, 'Content-Type': 'application/json' },
@@ -359,7 +555,7 @@ Deno.serve(async (req) => {
       fallbackInventoryQuantity: currentInventoryQuantity,
     })
     if (nextSize && selectedSizeInventory <= 0) {
-      return new Response(`Size ${nextSize} just sold out. Choose another size and try again.`, { status: 409, headers: cors })
+      return jsonError(cors, 409, `Size ${nextSize} just sold out. Choose another size and try again.`)
     }
 
     const needsAddress = body.fulfillment !== 'PICKUP'
@@ -396,6 +592,12 @@ Deno.serve(async (req) => {
       }
     }
 
+    if (body.action === 'create-checkout' && body.cancellationPolicyAcknowledged !== true) {
+      return rejectRequest(400, 'Review and acknowledge the cancellation policy before starting checkout.', {
+        policy_version: ORDER_CANCELLATION_POLICY_VERSION,
+      })
+    }
+
     if (body.fulfillment === 'PICKUP') {
       const { data: pickupDetails, error: pickupDetailsError } = await supabase
         .from('tailor_pickup_details')
@@ -405,11 +607,11 @@ Deno.serve(async (req) => {
 
       if (pickupDetailsError) {
         log('error', FN, 'db.error', { actor_id: caller.id, error: pickupDetailsError.message })
-        return new Response('Database error', { status: 500, headers: cors })
+        return jsonError(cors, 500, 'We could not confirm pickup details right now. Please try again.')
       }
 
       if (!pickupDetails?.pickup_address?.trim()) {
-        return new Response('This seller has not finished pickup details yet. Please choose delivery or shipping, or try again later.', { status: 409, headers: cors })
+        return jsonError(cors, 409, 'This seller has not finished pickup details yet. Please choose delivery or shipping, or try again later.')
       }
     }
 
@@ -426,7 +628,7 @@ Deno.serve(async (req) => {
         region: needsAddress ? normalizedRegion : null,
         postalCode: needsAddress ? normalizedPostalCode : null,
         countryCode: needsAddress ? normalizedCountryCode || null : null,
-        accountCurrency,
+        orderCurrency,
         accountRegionCode,
         item,
         sellerProfileLocation: sellerProfile?.location ?? null,
@@ -437,17 +639,15 @@ Deno.serve(async (req) => {
         seller_item_id: item.id,
         error: error instanceof Error ? error.message : String(error),
       })
-      return new Response('We could not calculate taxes and totals for this checkout right now. Please try again in a moment.', {
-        status: 503,
-        headers: cors,
-      })
+      return jsonError(cors, 503, 'We could not calculate taxes and totals for this checkout right now. Please try again in a moment.')
     }
 
     if (body.action === 'preview-checkout') {
       return new Response(JSON.stringify({
         ok: true,
         pricing: {
-          currency: accountCurrency,
+          currency: orderCurrency,
+          displayCurrency: accountCurrency,
           sourceCurrency: pricing.itemCurrency,
           sourceSubtotal: pricing.sourceSubtotal,
           fxRate: pricing.fxQuote?.rate ?? 1,
@@ -481,7 +681,7 @@ Deno.serve(async (req) => {
 
     if (existingCheckoutError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: existingCheckoutError.message })
-      return new Response('Database error', { status: 500, headers: cors })
+      return jsonError(cors, 500, 'We could not check your current checkout right now. Please try again.')
     }
 
     if (existingCheckout?.id) {
@@ -510,17 +710,18 @@ Deno.serve(async (req) => {
     }
 
     if (currentInventoryQuantity <= 0) {
-      return new Response('This item just sold out. Please refresh the shop and try another piece.', { status: 409, headers: cors })
+      return jsonError(cors, 409, 'This item just sold out. Please refresh the shop and try another piece.')
     }
 
     const availableInventoryForCheckout = nextSize ? selectedSizeInventory : currentInventoryQuantity
 
     if (body.quantity > availableInventoryForCheckout) {
-      return new Response(
+      return jsonError(
+        cors,
+        409,
         nextSize
           ? `Only ${selectedSizeInventory} unit${selectedSizeInventory === 1 ? '' : 's'} left in size ${nextSize} right now. Adjust the quantity and try again.`
           : `Only ${currentInventoryQuantity} unit${currentInventoryQuantity === 1 ? '' : 's'} left for this item right now. Adjust the quantity and try again.`,
-        { status: 409, headers: cors },
       )
     }
 
@@ -532,7 +733,7 @@ Deno.serve(async (req) => {
 
     if (reserveError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: reserveError.message })
-      return new Response('Could not hold stock for this checkout.', { status: 500, headers: cors })
+      return jsonError(cors, 500, 'Could not hold stock for this checkout.')
     }
 
     const reservedRow = Array.isArray(reservedInventory) ? reservedInventory[0] : null
@@ -559,7 +760,9 @@ Deno.serve(async (req) => {
               ? latestItem.inventory_quantity
               : 0)
 
-      return new Response(
+      return jsonError(
+        cors,
+        409,
         latestRemaining > 0
           ? nextSize
             ? `Only ${latestRemaining} unit${latestRemaining === 1 ? '' : 's'} left in size ${nextSize} right now. Adjust the quantity and try again.`
@@ -567,7 +770,6 @@ Deno.serve(async (req) => {
           : nextSize
             ? `Size ${nextSize} just sold out. Please refresh the shop and try another size.`
             : 'This item just sold out. Please refresh the shop and try another piece.',
-        { status: 409, headers: cors },
       )
     }
 
@@ -581,11 +783,11 @@ Deno.serve(async (req) => {
         tailor_payout_provider_locked: lockedTailorPayoutProvider,
         tailor_paystack_recipient_code_locked:
           lockedTailorPayoutProvider === 'PAYSTACK'
-            ? (sellerProfile.paystack_recipient_code ?? null)
+            ? (sellerProfile.paystack_recipient_code ?? sellerProfile.paystack_account_id ?? null)
             : null,
         tailor_stripe_connect_account_id_locked:
           lockedTailorPayoutProvider === 'STRIPE'
-            ? (sellerProfile.stripe_connect_account_id ?? null)
+            ? (sellerProfile.stripe_connect_account_id ?? sellerProfile.stripe_account_id ?? null)
             : null,
         reference: buildReference(),
         order_kind: 'READY_MADE',
@@ -599,8 +801,8 @@ Deno.serve(async (req) => {
         item_subtotal: pricing.lockedAmounts.subtotalAmount,
         fulfillment_fee: pricing.fulfillmentFee,
         quoted_amount: pricing.lockedAmounts.totalAmount,
-        currency: accountCurrency,
-        quoted_currency: accountCurrency,
+        currency: orderCurrency,
+        quoted_currency: orderCurrency,
         source_currency: pricing.itemCurrency,
         source_amount: pricing.sourceSubtotal,
         fx_rate: pricing.fxQuote?.rate ?? 1,
@@ -628,6 +830,14 @@ Deno.serve(async (req) => {
         delivery_country_code: needsAddress ? normalizedCountryCode || null : null,
         recipient_name: needsAddress ? recipientName : null,
         recipient_phone: needsAddress ? recipientPhone : null,
+        special_note: serializeOrderSupportMeta({
+          checkoutPolicy: {
+            cancellationPolicyVersion: ORDER_CANCELLATION_POLICY_VERSION,
+            acknowledgedAt: new Date().toISOString(),
+            acknowledgedBy: caller.id,
+            policyName: 'order-cancellation-policy',
+          },
+        }),
         stage: 'PAYMENT_PENDING',
         stage_updated_at: new Date().toISOString(),
       })
@@ -642,7 +852,7 @@ Deno.serve(async (req) => {
       })
 
       log('error', FN, 'db.error', { actor_id: caller.id, error: checkoutError?.message ?? 'checkout failed' })
-      return new Response('Could not create checkout order', { status: 500, headers: cors })
+      return jsonError(cors, 500, 'We could not start checkout right now. Your payment has not been charged.')
     }
 
     const { data: openInquiries, error: openInquiriesError } = await supabase
@@ -705,6 +915,6 @@ Deno.serve(async (req) => {
     })
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return new Response('Internal server error', { status: 500, headers: cors })
+    return jsonError(cors, 500, 'Something went wrong starting this order. Please try again.')
   }
 })

@@ -18,6 +18,35 @@ function readErrorMessage(error: unknown): string | null {
   return typeof message === 'string' && message.trim().length > 0 ? message.trim() : null
 }
 
+export function isMachineErrorCodeMessage(value: string) {
+  const trimmed = value.trim()
+  return /^[A-Z0-9_:-]+$/.test(trimmed) && !trimmed.includes(' ')
+}
+
+const GENERIC_SERVER_ERROR_MESSAGES = new Set([
+  'database error',
+  'internal error',
+  'internal server error',
+  'unauthorized',
+  'forbidden',
+  'not found',
+])
+
+function isGenericServerErrorMessage(value: string) {
+  const normalized = value.trim().toLowerCase()
+  return GENERIC_SERVER_ERROR_MESSAGES.has(normalized)
+}
+
+function isValidationLeakMessage(value: string) {
+  const normalized = value.trim().toLowerCase()
+  return (
+    normalized.startsWith('validation error')
+    || normalized.includes('invalid discriminator')
+    || normalized.includes('expected ')
+    || normalized.includes('received ')
+  )
+}
+
 export async function readFunctionErrorPayload(error: unknown): Promise<Record<string, unknown> | null> {
   const response = getFunctionErrorContext(error)
   if (!response) return null
@@ -54,12 +83,28 @@ export async function readFunctionErrorMessage(
   fallback = 'Something went wrong.',
 ): Promise<string> {
   const payload = await readFunctionErrorPayload(error)
-  const payloadMessage = payload?.error
-  if (typeof payloadMessage === 'string' && payloadMessage.trim().length > 0) {
-    return payloadMessage.trim()
+  const payloadDetail = payload?.message
+  if (typeof payloadDetail === 'string' && payloadDetail.trim().length > 0) {
+    const trimmed = payloadDetail.trim()
+    return isMachineErrorCodeMessage(trimmed) || isGenericServerErrorMessage(trimmed) || isValidationLeakMessage(trimmed)
+      ? fallback
+      : trimmed
   }
 
-  return readErrorMessage(error) ?? fallback
+  const payloadMessage = payload?.error
+  if (typeof payloadMessage === 'string' && payloadMessage.trim().length > 0) {
+    const trimmed = payloadMessage.trim()
+    return isMachineErrorCodeMessage(trimmed) || isGenericServerErrorMessage(trimmed) || isValidationLeakMessage(trimmed)
+      ? fallback
+      : trimmed
+  }
+
+  const rawMessage = readErrorMessage(error)
+  if (!rawMessage || isMachineErrorCodeMessage(rawMessage) || isGenericServerErrorMessage(rawMessage) || isValidationLeakMessage(rawMessage)) {
+    return fallback
+  }
+
+  return rawMessage
 }
 
 const CONNECTIVITY_PATTERNS = [

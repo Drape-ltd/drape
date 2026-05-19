@@ -211,8 +211,8 @@ export default function NotificationsScreen() {
       ) : items.length === 0 ? (
         <FeatureStateCard
           eyebrow="Notifications"
-          title="All caught up"
-          body="Order updates will appear here as your tailor progresses your work."
+          title="You're all caught up"
+          body="We'll notify you about orders, messages, and important updates."
           accentColor={Colors.warning}
           icon="bell-off"
         >

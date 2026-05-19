@@ -1,4 +1,9 @@
 import { NextResponse } from 'next/server'
+import {
+  RATE_LIMIT_RETRY_AFTER_SECONDS,
+  RATE_LIMITS,
+  createRateLimitPayload,
+} from '@drape/shared/rate-limit'
 import { createServiceRoleClient } from '../../../lib/server-supabase'
 import { sendWaitlistSignupNotification } from '../../../lib/lead-notifications'
 import {
@@ -10,6 +15,19 @@ import {
 } from '../../../lib/request-security'
 
 type WaitlistRole = 'CUSTOMER' | 'TAILOR'
+
+function rateLimitResponse() {
+  return NextResponse.json(
+    createRateLimitPayload(RATE_LIMIT_RETRY_AFTER_SECONDS),
+    {
+      status: 429,
+      headers: {
+        'Retry-After': String(RATE_LIMIT_RETRY_AFTER_SECONDS),
+        'Content-Type': 'application/json',
+      },
+    },
+  )
+}
 
 function isEmail(value: unknown): value is string {
   return typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
@@ -52,7 +70,12 @@ export async function POST(request: Request) {
   }
 
   const ip = getClientIp(request)
-  const ipRateLimit = await checkPublicRateLimit(client, `web:waitlist:ip:${ip}`, 3600, 100)
+  const ipRateLimit = await checkPublicRateLimit(
+    client,
+    `web:waitlist:ip:${ip}`,
+    RATE_LIMITS.unauthenticated.windowMs / 1000,
+    RATE_LIMITS.unauthenticated.limit,
+  )
   if (!ipRateLimit.ok) {
     return NextResponse.json(
       { error: 'We are unable to accept waitlist signups right now. Please try again shortly.' },
@@ -60,7 +83,7 @@ export async function POST(request: Request) {
     )
   }
   if (!ipRateLimit.allowed) {
-    return NextResponse.json({ error: 'Too many requests. Please try again later.' }, { status: 429 })
+    return rateLimitResponse()
   }
 
   const parsed = await readJsonBody(request)
@@ -86,7 +109,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Please provide a valid name, role, and email.' }, { status: 400 })
   }
 
-  const emailRateLimit = await checkPublicRateLimit(client, `web:waitlist:email:${email}`, 3600, 5)
+  const emailRateLimit = await checkPublicRateLimit(
+    client,
+    `web:waitlist:email:${email}`,
+    RATE_LIMITS.unauthenticated.windowMs / 1000,
+    RATE_LIMITS.unauthenticated.limit,
+  )
   if (!emailRateLimit.ok) {
     return NextResponse.json(
       { error: 'We are unable to accept waitlist signups right now. Please try again shortly.' },
@@ -94,7 +122,7 @@ export async function POST(request: Request) {
     )
   }
   if (!emailRateLimit.allowed) {
-    return NextResponse.json({ error: 'Too many requests. Please try again later.' }, { status: 429 })
+    return rateLimitResponse()
   }
 
   const signup: {

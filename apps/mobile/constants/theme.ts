@@ -1,28 +1,114 @@
-// Drape design tokens — single source of truth for mobile
+// Mobile aliases for the locked shared Drape design system.
+import { Appearance } from 'react-native'
+import { colors, darkColors, shadows } from '@drape/shared/design-system'
 
-export const Colors = {
+const lightPalette = {
   // Brand
-  needleGreen: '#1D9E75',
-  needleGreenLight: '#E1F5EE',
-  needleGreenDark: '#167A5A',
-  kanteRust: '#D85A30',
-  kanteRustLight: '#F8E8E1',
+  needleGreen: colors.primary,
+  needleGreenLight: colors.primaryLight,
+  needleGreenDark: colors.primaryDark,
+  kanteRust: colors.accent,
+  kanteRustLight: colors.accentLight,
+  accentLight: colors.accentLight,
 
   // Neutrals
-  bone: '#F9F7F3',
-  boneDeep: '#F1ECE3',
-  ink: '#2C2C2A',
-  inkLight: '#5B5A55',
-  midGrey: '#888780',
-  lightGrey: '#DDD9D2',
-  white: '#FFFFFF',
+  bone: colors.background,
+  boneDeep: colors.statusMutedBg,
+  ink: colors.textPrimary,
+  inkLight: colors.textSecondary,
+  midGrey: colors.textMuted,
+  lightGrey: colors.border,
+  white: colors.surface,
+  surface: colors.surface,
+  surfaceElevated: colors.surface,
+  textInverse: colors.textInverse,
 
   // Semantic
-  success: '#1D9E75',
-  warning: '#D85A30',
-  error: '#D85A30',
-  errorLight: '#F8E8E1',
+  success: colors.statusSuccess,
+  warning: colors.statusBlocked,
+  error: colors.statusError,
+  errorLight: colors.statusErrorBg,
+  statusErrorBg: colors.statusErrorBg,
+  statusPending: colors.statusPending,
+  statusPendingBg: colors.statusPendingBg,
 } as const
+
+type ColorPalette = Record<keyof typeof lightPalette, string>
+
+const darkPalette: ColorPalette = {
+  // Brand
+  needleGreen: darkColors.primary,
+  needleGreenLight: darkColors.primaryLight,
+  needleGreenDark: darkColors.primaryDark,
+  kanteRust: darkColors.accent,
+  kanteRustLight: darkColors.accentLight,
+  accentLight: darkColors.accentLight,
+
+  // Neutrals
+  bone: darkColors.background,
+  boneDeep: darkColors.statusMutedBg,
+  ink: darkColors.textPrimary,
+  inkLight: darkColors.textSecondary,
+  midGrey: darkColors.textMuted,
+  lightGrey: darkColors.border,
+  // Legacy alias: most older screens use `white` as a card/sheet surface.
+  // Text and icons that must stay white should use `textInverse`.
+  white: darkColors.surface,
+  surface: darkColors.surface,
+  surfaceElevated: darkColors.surfaceElevated,
+  textInverse: darkColors.textInverse,
+
+  // Semantic
+  success: darkColors.statusSuccess,
+  warning: darkColors.statusBlocked,
+  error: darkColors.statusError,
+  errorLight: darkColors.statusErrorBg,
+  statusErrorBg: darkColors.statusErrorBg,
+  statusPending: darkColors.statusPending,
+  statusPendingBg: darkColors.statusPendingBg,
+}
+
+function isDarkMode() {
+  return Appearance.getColorScheme() === 'dark'
+}
+
+export function getDrapeColorScheme() {
+  return isDarkMode() ? 'dark' : 'light'
+}
+
+export function getDrapeColors() {
+  return isDarkMode() ? darkPalette : lightPalette
+}
+
+function color(name: keyof typeof lightPalette) {
+  return getDrapeColors()[name]
+}
+
+export const Colors = {
+  get needleGreen() { return color('needleGreen') },
+  get needleGreenLight() { return color('needleGreenLight') },
+  get needleGreenDark() { return color('needleGreenDark') },
+  get kanteRust() { return color('kanteRust') },
+  get kanteRustLight() { return color('kanteRustLight') },
+  get accentLight() { return color('accentLight') },
+  get bone() { return color('bone') },
+  get boneDeep() { return color('boneDeep') },
+  get ink() { return color('ink') },
+  get inkLight() { return color('inkLight') },
+  get midGrey() { return color('midGrey') },
+  get lightGrey() { return color('lightGrey') },
+  get white() { return color('white') },
+  get surface() { return color('surface') },
+  get surfaceElevated() { return color('surfaceElevated') },
+  get textInverse() { return color('textInverse') },
+  get success() { return color('success') },
+  get warning() { return color('warning') },
+  get error() { return color('error') },
+  get errorLight() { return color('errorLight') },
+  get statusErrorBg() { return color('statusErrorBg') },
+  get statusPending() { return color('statusPending') },
+  get statusPendingBg() { return color('statusPendingBg') },
+} satisfies ColorPalette
 
 export const Spacing = {
   xs: 4,
@@ -60,25 +146,7 @@ export const Radius = {
 } as const
 
 export const Shadow = {
-  sm: {
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  md: {
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  lg: {
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.08,
-    shadowRadius: 14,
-    elevation: 5,
-  },
+  sm: shadows.card,
+  md: shadows.elevated,
+  lg: shadows.elevated,
 } as const

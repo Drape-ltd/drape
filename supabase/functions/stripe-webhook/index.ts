@@ -1,12 +1,20 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getCorsHeaders } from '../_shared/cors.ts'
-import { getServiceRoleKey, getStripeWebhookSecret, getSupabaseUrl } from '../_shared/env.ts'
+import { getServiceRoleKey, getStripeWebhookSecrets, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
+import {
+  getClientIp,
+  RATE_LIMITS,
+  rateLimit,
+  rateLimitExceededResponse,
+} from '../_shared/rateLimit.ts'
 import { markInitialOrderPaymentFailed } from '../_shared/payment-failure.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
+import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { sendOrderConfirmationEmails } from '../_shared/order-email.ts'
 import { notifyTailorAboutReadyMadeStockChange } from '../_shared/ready-made-stock-alert.ts'
 import { sendSmsToUser } from '../_shared/sms.ts'
+import { parseOrderSupportMeta, serializeOrderSupportMeta } from '../_shared/order-support.ts'
 import {
   fulfillmentPaymentConfirmedStageNote,
   paymentConfirmedStageNote,
@@ -55,13 +63,15 @@ type OrderRow = {
   quoted_currency?: string | null
   currency?: string | null
   fulfillment_fee?: number | null
+  consultation_fee?: number | null
+  special_note?: string | null
   payment_intent_id?: string | null
   delivery_method?: string | null
   fulfillment_payment_paid_at?: string | null
   fulfillment_payment_intent_id?: string | null
 }
 
-type PaymentPhase = 'INITIAL_ORDER' | 'FULFILLMENT'
+type PaymentPhase = 'INITIAL_ORDER' | 'FULFILLMENT' | 'CONSULTATION'
 
 type StripeTransferObject = {
   id: string
@@ -108,6 +118,58 @@ async function findPayoutForStripeTransfer(supabase: any, transfer: StripeTransf
   return (data as { id: string; order_id: string | null; status: string; provider_payout_id: string | null } | null) ?? null
 }
 
+async function recordProviderPayoutFailure(
+  supabase: any,
+  input: {
+    payoutId: string
+    orderId: string | null
+    providerPayoutId: string
+    eventType: string
+  },
+) {
+  let tailorId: string | null = null
+  let orderReference: string | null = null
+
+  if (input.orderId) {
+    const { data } = await supabase
+      .from('orders')
+      .select('tailor_id, reference')
+      .eq('id', input.orderId)
+      .maybeSingle()
+
+    tailorId = typeof data?.tailor_id === 'string' ? data.tailor_id : null
+    orderReference = typeof data?.reference === 'string' ? data.reference : null
+  }
+
+  await createOrRefreshOpsIssue(supabase, {
+    issueType: 'PAYOUT_FAILED',
+    severity: 'CRITICAL',
+    source: FN,
+    actorRole: 'SYSTEM',
+    orderId: input.orderId,
+    userId: tailorId,
+    provider: 'STRIPE',
+    title: 'Stripe payout failed',
+    description: `Stripe reported a payout reversal for order ${orderReference ?? input.orderId ?? 'unknown'}.`,
+    recommendedAction: 'Review the Stripe transfer, verify the tailor payout destination, and retry manually only after the reversal reason is clear.',
+    dedupeKey: `payout-failed:${input.payoutId}`,
+    metadata: {
+      provider: 'STRIPE',
+      payout_id: input.payoutId,
+      provider_payout_id: input.providerPayoutId,
+      stripe_event_type: input.eventType,
+    },
+  })
+
+  if (tailorId && input.orderId) {
+    await sendPushToUser(supabase, tailorId, {
+      title: 'Payout needs review',
+      body: 'A payout release for this order needs Drape ops review before it can be retried.',
+      data: { orderId: input.orderId },
+    })
+  }
+}
+
 async function findOrderForPaymentIntent(supabase: any, paymentIntent: StripePaymentIntent) {
   const metadataOrderId =
     typeof paymentIntent.metadata?.order_id === 'string' && paymentIntent.metadata.order_id.trim().length > 0
@@ -117,7 +179,7 @@ async function findOrderForPaymentIntent(supabase: any, paymentIntent: StripePay
   if (metadataOrderId) {
     const { data, error } = await supabase
       .from('orders')
-      .select('id, reference, stage, order_kind, tailor_id, customer_id, seller_item_id, item_title, item_size, garment_type, quoted_amount, quoted_currency, currency, fulfillment_fee, payment_intent_id, delivery_method, fulfillment_payment_paid_at, fulfillment_payment_intent_id')
+      .select('id, reference, stage, order_kind, tailor_id, customer_id, seller_item_id, item_title, item_size, garment_type, quoted_amount, quoted_currency, currency, fulfillment_fee, consultation_fee, special_note, payment_intent_id, delivery_method, fulfillment_payment_paid_at, fulfillment_payment_intent_id')
       .eq('id', metadataOrderId)
       .maybeSingle()
 
@@ -130,7 +192,7 @@ async function findOrderForPaymentIntent(supabase: any, paymentIntent: StripePay
 
   const { data, error } = await supabase
     .from('orders')
-    .select('id, reference, stage, order_kind, tailor_id, customer_id, seller_item_id, item_title, item_size, garment_type, quoted_amount, quoted_currency, currency, fulfillment_fee, payment_intent_id, delivery_method, fulfillment_payment_paid_at, fulfillment_payment_intent_id')
+    .select('id, reference, stage, order_kind, tailor_id, customer_id, seller_item_id, item_title, item_size, garment_type, quoted_amount, quoted_currency, currency, fulfillment_fee, consultation_fee, special_note, payment_intent_id, delivery_method, fulfillment_payment_paid_at, fulfillment_payment_intent_id')
     .eq('payment_intent_id', paymentIntent.id)
     .maybeSingle()
 
@@ -142,7 +204,7 @@ async function findOrderForPaymentIntent(supabase: any, paymentIntent: StripePay
 
   const { data: fulfillmentData, error: fulfillmentError } = await supabase
     .from('orders')
-    .select('id, reference, stage, order_kind, tailor_id, customer_id, seller_item_id, item_title, item_size, garment_type, quoted_amount, quoted_currency, currency, fulfillment_fee, payment_intent_id, delivery_method, fulfillment_payment_paid_at, fulfillment_payment_intent_id')
+    .select('id, reference, stage, order_kind, tailor_id, customer_id, seller_item_id, item_title, item_size, garment_type, quoted_amount, quoted_currency, currency, fulfillment_fee, consultation_fee, special_note, payment_intent_id, delivery_method, fulfillment_payment_paid_at, fulfillment_payment_intent_id')
     .eq('fulfillment_payment_intent_id', paymentIntent.id)
     .maybeSingle()
 
@@ -155,13 +217,16 @@ async function findOrderForPaymentIntent(supabase: any, paymentIntent: StripePay
 
 function paymentPhaseForIntent(order: OrderRow, paymentIntent: StripePaymentIntent): PaymentPhase {
   const metadataPhase =
-    typeof paymentIntent.metadata?.payment_phase === 'string' && paymentIntent.metadata.payment_phase === 'FULFILLMENT'
+    typeof paymentIntent.metadata?.payment_phase === 'string' && paymentIntent.metadata.payment_phase === 'CONSULTATION'
+      ? 'CONSULTATION'
+      : typeof paymentIntent.metadata?.payment_phase === 'string' && paymentIntent.metadata.payment_phase === 'FULFILLMENT'
       ? 'FULFILLMENT'
       : typeof paymentIntent.metadata?.payment_phase === 'string' && paymentIntent.metadata.payment_phase === 'INITIAL_ORDER'
         ? 'INITIAL_ORDER'
         : null
 
   if (metadataPhase) return metadataPhase
+  if (parseOrderSupportMeta(order.special_note).consultation?.paymentIntentId === paymentIntent.id) return 'CONSULTATION'
   if (order.fulfillment_payment_intent_id === paymentIntent.id) return 'FULFILLMENT'
   return 'INITIAL_ORDER'
 }
@@ -169,6 +234,56 @@ function paymentPhaseForIntent(order: OrderRow, paymentIntent: StripePaymentInte
 async function markOrderConfirmed(supabase: any, order: OrderRow, paymentIntent: StripePaymentIntent, phase: PaymentPhase) {
   if (phase === 'INITIAL_ORDER' && order.stage === 'CONFIRMED') return false
   if (phase === 'FULFILLMENT' && order.fulfillment_payment_paid_at) return false
+
+  if (phase === 'CONSULTATION') {
+    const supportMeta = parseOrderSupportMeta(order.special_note)
+    const consultation = supportMeta.consultation
+    if (consultation?.paidAt) return false
+
+    const { data: updatedOrder, error: updateError } = await supabase
+      .from('orders')
+      .update({
+        special_note: serializeOrderSupportMeta({
+          ...supportMeta,
+          consultation: consultation
+            ? {
+                ...consultation,
+                paymentProvider: 'STRIPE',
+                paymentIntentId: paymentIntent.id,
+                paymentCheckoutUrl: null,
+                paidAt: new Date().toISOString(),
+              }
+            : consultation,
+        }),
+      })
+      .eq('id', order.id)
+      .select('id')
+      .maybeSingle()
+
+    if (updateError) throw new Error(updateError.message)
+    if (!updatedOrder?.id) return false
+
+    await supabase.from('order_stage_updates').insert({
+      order_id: order.id,
+      stage: order.stage,
+      note: 'Consultation fee paid. The consultation can start at the scheduled time.',
+    })
+
+    if (order.tailor_id) {
+      EdgeRuntime.waitUntil(
+        sendPushToUser(supabase, order.tailor_id.toString(), {
+          title: 'Consultation fee paid',
+          body: 'The customer paid the consultation fee. The call can start at the scheduled time.',
+          preferenceKey: 'newOrders',
+          data: { orderId: order.id },
+        }),
+      )
+    }
+
+    EdgeRuntime.waitUntil(sendOrderConfirmationEmails(supabase, order, phase))
+
+    return true
+  }
 
   if (phase === 'FULFILLMENT') {
     const { data: updatedOrder, error: updateError } = await supabase
@@ -200,6 +315,7 @@ async function markOrderConfirmed(supabase: any, order: OrderRow, paymentIntent:
       EdgeRuntime.waitUntil(
         sendPushToUser(supabase, order.tailor_id.toString(), {
           ...tailorFulfillmentPaymentConfirmedNotification(order.delivery_method),
+          preferenceKey: 'newOrders',
           data: { orderId: order.id },
         }),
       )
@@ -279,6 +395,7 @@ async function markOrderConfirmed(supabase: any, order: OrderRow, paymentIntent:
     EdgeRuntime.waitUntil(
       sendPushToUser(supabase, order.tailor_id.toString(), {
         ...tailorPaymentConfirmedNotification(order.order_kind),
+        preferenceKey: 'newOrders',
         data: { orderId: order.id },
       }),
     )
@@ -353,6 +470,17 @@ Deno.serve(async (req) => {
   }
 
   const supabase: any = createClient(getSupabaseUrl(), getServiceRoleKey())
+  const clientIp = getClientIp(req)
+  const limit = await rateLimit(
+    supabase,
+    clientIp,
+    FN,
+    RATE_LIMITS.webhook.limit,
+    RATE_LIMITS.webhook.windowMs,
+    { ip: clientIp, userAgent: req.headers.get('user-agent') },
+  )
+  if (!limit.allowed) return rateLimitExceededResponse(cors, limit.retryAfter)
+
   const signature = req.headers.get('Stripe-Signature')
   const payload = await req.text()
 
@@ -363,6 +491,9 @@ Deno.serve(async (req) => {
       rawPayload: payload,
       reason: 'missing_signature',
       signatureHeader: null,
+      sourceIp: clientIp,
+      userAgent: req.headers.get('user-agent'),
+      endpointPath: '/v1/webhooks/stripe',
     })
     return new Response('Missing Stripe-Signature header', { status: 401, headers: cors })
   }
@@ -371,7 +502,7 @@ Deno.serve(async (req) => {
     await verifyStripeWebhookSignature({
       payload,
       signatureHeader: signature,
-      webhookSecret: getStripeWebhookSecret(),
+      webhookSecret: getStripeWebhookSecrets(),
     })
   } catch (error) {
     await recordRejectedWebhook(supabase, {
@@ -381,6 +512,9 @@ Deno.serve(async (req) => {
       reason: 'invalid_signature',
       signatureHeader: signature,
       verificationError: error instanceof Error ? error.message : String(error),
+      sourceIp: clientIp,
+      userAgent: req.headers.get('user-agent'),
+      endpointPath: '/v1/webhooks/stripe',
     })
     return new Response('Invalid Stripe signature', { status: 401, headers: cors })
   }
@@ -473,7 +607,10 @@ Deno.serve(async (req) => {
         processed_at: nowIso,
       }
       if (nextStatus === 'PAID') payoutPatch.completed_at = nowIso
-      if (nextStatus === 'REVERSED') payoutPatch.failed_at = nowIso
+      if (nextStatus === 'REVERSED') {
+        payoutPatch.failed_at = nowIso
+        payoutPatch.blocked_reason = 'PROVIDER_TRANSFER_REVERSED'
+      }
 
       const { error: payoutError } = await supabase
         .from('payouts')
@@ -514,6 +651,15 @@ Deno.serve(async (req) => {
           payout_id: payout.id,
         },
       })
+
+      if (nextStatus === 'REVERSED') {
+        await recordProviderPayoutFailure(supabase, {
+          payoutId: payout.id,
+          orderId: payout.order_id ?? null,
+          providerPayoutId: transfer.id,
+          eventType: event.type,
+        })
+      }
 
       return new Response(JSON.stringify({ ok: true, recorded: true, type: event.type }), {
         headers: { ...cors, 'Content-Type': 'application/json' },

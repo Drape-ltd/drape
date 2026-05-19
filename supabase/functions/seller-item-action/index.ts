@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
@@ -22,7 +22,22 @@ const FIT_GUIDE_FIELDS = [
   'inseam',
   'sleeveLength',
   'neckCircumference',
+  'underBust',
   'height',
+  'backLength',
+  'outseam',
+  'thighCircumference',
+  'kneeCircumference',
+  'bicepCircumference',
+  'wristCircumference',
+  'headCircumference',
+  'hatBandLine',
+  'headLength',
+  'headWidth',
+  'earToEarOverCrown',
+  'frontToBackOverCrown',
+  'filaHeight',
+  'torsoLength',
 ] as const
 
 const FIT_GUIDE_FIELD_SET = new Set<string>(FIT_GUIDE_FIELDS)
@@ -69,7 +84,26 @@ const UpdateItemStateSchema = z.object({
   itemId: z.string().uuid(),
 })
 
-const BodySchema = z.union([CreateItemSchema, UpdateItemSchema, UpdateItemStateSchema])
+const SaveSizeGuideScanSchema = z.object({
+  action: z.literal('save-size-guide-scan'),
+  itemId: z.string().uuid(),
+  sizeGuide: z.unknown(),
+  note: z.string().trim().max(240).optional().nullable(),
+  captureVersion: z.string().trim().max(40).optional(),
+})
+
+const BodySchema = z.union([CreateItemSchema, UpdateItemSchema, UpdateItemStateSchema, SaveSizeGuideScanSchema])
+
+function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
+  if (typeof body.error === 'string' && typeof body.message !== 'string') {
+    body.message = body.error
+  }
+
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...headers, 'Content-Type': 'application/json' },
+  })
+}
 
 function liveListingPreflightIssues(input: {
   category: string | null | undefined
@@ -233,13 +267,13 @@ Deno.serve(async (req) => {
     const caller = await getAuthUser(req)
     if (!caller) {
       log('warn', FN, 'auth.unauthenticated')
-      return new Response('Unauthorized', { status: 401, headers: cors })
+      return jsonResponse({ error: 'Please sign in again before managing your shop items.' }, 401, cors)
     }
 
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
     if (!parsed.ok) {
       log('warn', FN, 'validation.failed', { actor_id: caller.id, error: parsed.error })
-      return new Response(parsed.error, { status: 400, headers: cors })
+      return jsonResponse({ error: parsed.error }, 400, cors)
     }
 
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
@@ -253,7 +287,7 @@ Deno.serve(async (req) => {
         severity: 'warn',
         payload: { function: FN },
       })
-      return new Response('Too many requests', { status: 429, headers: cors })
+      return rateLimitExceededResponse(cors)
     }
 
     const body = parsed.data
@@ -266,11 +300,11 @@ Deno.serve(async (req) => {
 
     if (profileError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: profileError.message })
-      return new Response('Database error', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not load your seller profile right now. Please try again.' }, 500, cors)
     }
 
     if (!profile?.id) {
-      return new Response('Seller profile not found.', { status: 404, headers: cors })
+      return jsonResponse({ error: 'Complete your seller profile before adding shop items.' }, 404, cors)
     }
 
     const { data: pickupDetails, error: pickupDetailsError } = await supabase
@@ -281,7 +315,7 @@ Deno.serve(async (req) => {
 
     if (pickupDetailsError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: pickupDetailsError.message })
-      return new Response('Database error', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not load your pickup details right now. Please try again.' }, 500, cors)
     }
 
     const hasPickupAddress = typeof pickupDetails?.pickup_address === 'string' && pickupDetails.pickup_address.trim().length > 0
@@ -302,7 +336,7 @@ Deno.serve(async (req) => {
 
       if (nextIsLive) {
         if (!(body.pickupAvailable || body.deliveryAvailable || body.shippingAvailable)) {
-          return new Response('Choose at least one fulfillment option before publishing this item live.', { status: 400, headers: cors })
+          return jsonResponse({ error: 'Choose at least one fulfillment option before publishing this item live.' }, 400, cors)
         }
 
         const issues = liveListingPreflightIssues({
@@ -316,12 +350,12 @@ Deno.serve(async (req) => {
         })
 
         if (issues.length > 0) {
-          return new Response(issues[0], { status: 400, headers: cors })
+          return jsonResponse({ error: issues[0] }, 400, cors)
         }
       }
 
       if (nextIsLive && !profile.supports_ready_made) {
-        return new Response('Enable Shop now on your seller profile before publishing items.', { status: 400, headers: cors })
+        return jsonResponse({ error: 'Enable Shop now on your seller profile before publishing items.' }, 400, cors)
       }
 
       if (nextIsLive && !readiness.canPublishPaidItems) {
@@ -332,7 +366,7 @@ Deno.serve(async (req) => {
           severity: 'warn',
           payload: { function: FN, reason: readiness.code, is_live_request: true },
         })
-        return new Response(readiness.message ?? 'Payout setup is still required before publishing paid items live.', { status: 409, headers: cors })
+        return jsonResponse({ error: readiness.message ?? 'Payout setup is still required before publishing paid items live.' }, 409, cors)
       }
 
       if (body.action === 'update-item') {
@@ -345,15 +379,15 @@ Deno.serve(async (req) => {
 
         if (editableItemError) {
           log('error', FN, 'db.error', { actor_id: caller.id, error: editableItemError.message })
-          return new Response('Database error', { status: 500, headers: cors })
+          return jsonResponse({ error: 'We could not load this item for editing right now. Please try again.' }, 500, cors)
         }
 
         if (!editableItem?.id) {
-          return new Response('Item not found.', { status: 404, headers: cors })
+          return jsonResponse({ error: 'That item was not found. Refresh your shop and try again.' }, 404, cors)
         }
 
         if (editableItem.is_live && editableItem.stock_status !== 'SOLD_OUT') {
-          return new Response('Live items cannot be edited until you move them back to draft.', { status: 409, headers: cors })
+          return jsonResponse({ error: 'Live items cannot be edited until you move them back to draft.' }, 409, cors)
         }
 
         const nextStockStatus =
@@ -389,7 +423,7 @@ Deno.serve(async (req) => {
 
         if (updateError) {
           log('error', FN, 'db.error', { actor_id: caller.id, error: updateError.message })
-          return new Response('Could not update item', { status: 500, headers: cors })
+          return jsonResponse({ error: 'We could not update this item right now. Please try again.' }, 500, cors)
         }
 
         await audit(supabase, {
@@ -406,16 +440,14 @@ Deno.serve(async (req) => {
           },
         })
 
-        return new Response(JSON.stringify({
+        return jsonResponse({
           ok: true,
           itemId: editableItem.id,
           isLive: nextIsLive,
           stockStatus: nextStockStatus,
           inventoryQuantity: nextInventoryQuantity,
           sizeInventory: nextSizeInventory,
-        }), {
-          headers: { ...cors, 'Content-Type': 'application/json' },
-        })
+        }, 200, cors)
       }
 
       const { data: created, error: createError } = await supabase
@@ -446,7 +478,7 @@ Deno.serve(async (req) => {
 
       if (createError || !created?.id) {
         log('error', FN, 'db.error', { actor_id: caller.id, error: createError?.message ?? 'create failed' })
-        return new Response('Could not create item', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not create this item right now. Please try again.' }, 500, cors)
       }
 
       await audit(supabase, {
@@ -462,7 +494,7 @@ Deno.serve(async (req) => {
         },
       })
 
-      return new Response(JSON.stringify({
+      return jsonResponse({
         ok: true,
         itemId: created.id,
         isLive: nextIsLive,
@@ -472,9 +504,77 @@ Deno.serve(async (req) => {
         }),
         inventoryQuantity: nextInventoryQuantity,
         sizeInventory: nextSizeInventory,
-      }), {
-        headers: { ...cors, 'Content-Type': 'application/json' },
+      }, 200, cors)
+    }
+
+    if (body.action === 'save-size-guide-scan') {
+      const { data: existing, error: existingError } = await supabase
+        .from('seller_items')
+        .select('id, title, sizes, size_guide')
+        .eq('id', body.itemId)
+        .eq('tailor_profile_id', profile.id)
+        .maybeSingle()
+
+      if (existingError) {
+        log('error', FN, 'db.error', { actor_id: caller.id, error: existingError.message })
+        return jsonResponse({ error: 'We could not load this item right now. Please try again.' }, 500, cors)
+      }
+
+      if (!existing?.id) {
+        return jsonResponse({ error: 'That item was not found. Refresh your shop and try again.' }, 404, cors)
+      }
+
+      const existingSizes = Array.isArray(existing.sizes)
+        ? existing.sizes.filter((size): size is string => typeof size === 'string' && size.trim().length > 0)
+        : []
+      if (existingSizes.length === 0) {
+        return jsonResponse({ error: 'Add at least one size to this item before saving a Drape Vision size guide.' }, 409, cors)
+      }
+
+      const nextSizeGuide = sanitizeSizeGuide(body.sizeGuide, existingSizes)
+      if (!hasSizeGuide(nextSizeGuide)) {
+        return jsonResponse({ error: 'Add at least one valid measurement range for one of this item’s sizes before saving the guide.' }, 400, cors)
+      }
+
+      const now = new Date().toISOString()
+      const { error: updateError } = await supabase
+        .from('seller_items')
+        .update({
+          size_guide: {
+            ...nextSizeGuide,
+            source: 'DRAPE_VISION_SIZE_GUIDE',
+            captureVersion: body.captureVersion ?? null,
+            capturedAt: now,
+            note: body.note?.trim() || null,
+          },
+          updated_at: now,
+        })
+        .eq('id', existing.id)
+        .eq('tailor_profile_id', profile.id)
+
+      if (updateError) {
+        log('error', FN, 'db.error', { actor_id: caller.id, error: updateError.message })
+        return jsonResponse({ error: 'We could not save this size guide right now. Please try again.' }, 500, cors)
+      }
+
+      await audit(supabase, {
+        event: 'seller_item.size_guide_saved',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        payload: {
+          function: FN,
+          seller_item_id: existing.id,
+          source: 'DRAPE_VISION_SIZE_GUIDE',
+          fields: nextSizeGuide.fields,
+          size_count: Object.keys(nextSizeGuide.sizeRanges ?? {}).length,
+        },
       })
+
+      return jsonResponse({
+        ok: true,
+        itemId: existing.id,
+        sizeGuide: nextSizeGuide,
+      }, 200, cors)
     }
 
     const { data: existing, error: existingError } = await supabase
@@ -486,11 +586,11 @@ Deno.serve(async (req) => {
 
     if (existingError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: existingError.message })
-      return new Response('Database error', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not load this item right now. Please try again.' }, 500, cors)
     }
 
     if (!existing?.id) {
-      return new Response('Item not found.', { status: 404, headers: cors })
+      return jsonResponse({ error: 'That item was not found. Refresh your shop and try again.' }, 404, cors)
     }
 
     let nextIsLive = existing.is_live ?? false
@@ -504,7 +604,7 @@ Deno.serve(async (req) => {
 
     if (body.action === 'delete-item') {
       if (existing.is_live || existing.stock_status !== 'HIDDEN') {
-        return new Response('Only hidden draft items can be deleted. Move live or sold items into the right state instead.', { status: 409, headers: cors })
+        return jsonResponse({ error: 'Only hidden draft items can be deleted. Move live or sold items into the right state instead.' }, 409, cors)
       }
 
       const { count: orderCount, error: orderCountError } = await supabase
@@ -514,11 +614,11 @@ Deno.serve(async (req) => {
 
       if (orderCountError) {
         log('error', FN, 'db.error', { actor_id: caller.id, error: orderCountError.message })
-        return new Response('Database error', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not check this item for order history right now. Please try again.' }, 500, cors)
       }
 
       if ((orderCount ?? 0) > 0) {
-        return new Response('This draft already has order history attached, so keep it in draft instead of deleting it.', { status: 409, headers: cors })
+        return jsonResponse({ error: 'This draft already has order history attached, so keep it in draft instead of deleting it.' }, 409, cors)
       }
 
       const { error: deleteError } = await supabase
@@ -529,7 +629,7 @@ Deno.serve(async (req) => {
 
       if (deleteError) {
         log('error', FN, 'db.error', { actor_id: caller.id, error: deleteError.message })
-        return new Response('Could not delete item', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not delete this item right now. Please try again.' }, 500, cors)
       }
 
       await audit(supabase, {
@@ -543,18 +643,16 @@ Deno.serve(async (req) => {
         },
       })
 
-      return new Response(JSON.stringify({
+      return jsonResponse({
         ok: true,
         itemId: existing.id,
         deleted: true,
-      }), {
-        headers: { ...cors, 'Content-Type': 'application/json' },
-      })
+      }, 200, cors)
     }
 
     if (body.action === 'publish-item' || body.action === 'relist-item') {
       if (!profile.supports_ready_made) {
-        return new Response('Enable Shop now on your seller profile before publishing items.', { status: 400, headers: cors })
+        return jsonResponse({ error: 'Enable Shop now on your seller profile before publishing items.' }, 400, cors)
       }
       if (!readiness.canPublishPaidItems) {
         await audit(supabase, {
@@ -564,11 +662,11 @@ Deno.serve(async (req) => {
           severity: 'warn',
           payload: { function: FN, seller_item_id: existing.id, action: body.action, reason: readiness.code },
         })
-        return new Response(readiness.message ?? 'Payout setup is still required before publishing paid items live.', { status: 409, headers: cors })
+        return jsonResponse({ error: readiness.message ?? 'Payout setup is still required before publishing paid items live.' }, 409, cors)
       }
 
       if (body.action === 'relist-item' && nextInventoryQuantity <= 0) {
-        return new Response('Edit this item and add stock to at least one size before relisting it.', { status: 409, headers: cors })
+        return jsonResponse({ error: 'Edit this item and add stock to at least one size before relisting it.' }, 409, cors)
       }
 
       const issues = liveListingPreflightIssues({
@@ -587,11 +685,11 @@ Deno.serve(async (req) => {
       })
 
       if (issues.length > 0) {
-        return new Response(issues[0], { status: 409, headers: cors })
+        return jsonResponse({ error: issues[0] }, 409, cors)
       }
 
       if (nextInventoryQuantity <= 0) {
-        return new Response('Add stock before publishing this item live.', { status: 409, headers: cors })
+        return jsonResponse({ error: 'Add stock before publishing this item live.' }, 409, cors)
       }
 
       nextIsLive = true
@@ -626,7 +724,7 @@ Deno.serve(async (req) => {
 
     if (updateError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: updateError.message })
-      return new Response('Could not update item', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not update this item right now. Please try again.' }, 500, cors)
     }
 
       await audit(supabase, {
@@ -644,18 +742,16 @@ Deno.serve(async (req) => {
       },
       })
 
-    return new Response(JSON.stringify({
+    return jsonResponse({
       ok: true,
       itemId: existing.id,
       isLive: nextIsLive,
       stockStatus: nextStockStatus,
       inventoryQuantity: nextInventoryQuantity,
       sizeInventory: nextSizeInventory,
-    }), {
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    })
+    }, 200, cors)
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return new Response('Internal server error', { status: 500, headers: cors })
+    return jsonResponse({ error: 'We could not update your shop item right now. Please try again.' }, 500, cors)
   }
 })

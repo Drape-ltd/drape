@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { View, Text, StyleSheet, Alert, TouchableOpacity } from 'react-native'
+import { KeyboardAvoidingView, Platform, ScrollView, View, Text, StyleSheet, Alert, TouchableOpacity } from 'react-native'
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { clearRecentReauth } from '@/lib/recent-reauth'
 import { Button, Input } from '@/components/ui'
@@ -64,7 +65,7 @@ export default function ResetPasswordScreen() {
       return
     }
     if (password !== confirm) {
-      Alert.alert("Passwords don't match", 'Please check both fields and try again.')
+      Alert.alert('Passwords do not match', 'Please check both fields and try again.')
       return
     }
 
@@ -73,7 +74,7 @@ export default function ResetPasswordScreen() {
     setSaving(false)
 
     if (error) {
-      Alert.alert('Error', error.message)
+      Alert.alert('Could not update password', mapResetPasswordError(error.message))
     } else {
       try {
         await supabase.auth.signOut({ scope: 'global' })
@@ -90,6 +91,20 @@ export default function ResetPasswordScreen() {
     }
   }
 
+  function mapResetPasswordError(message: string) {
+    const normalized = message.toLowerCase()
+    if (normalized.includes('weak') || normalized.includes('password')) {
+      return PASSWORD_POLICY_HINT
+    }
+    if (normalized.includes('expired') || normalized.includes('invalid') || normalized.includes('session')) {
+      return 'This reset link is no longer valid. Request a new link and try again.'
+    }
+    if (normalized.includes('rate') || normalized.includes('security purposes')) {
+      return 'Please wait before trying another password reset.'
+    }
+    return 'We could not save your new password right now. Please try again in a moment.'
+  }
+
   if (done) {
     return (
       <SafeAreaView style={styles.container}>
@@ -98,7 +113,9 @@ export default function ResetPasswordScreen() {
             <Text style={styles.heroBadgeText}>Password updated</Text>
           </View>
           <View style={styles.centred}>
-            <Text style={styles.successEmoji}>🔒</Text>
+            <View style={styles.successIcon}>
+              <Ionicons name="lock-closed" size={32} color={Colors.needleGreen} />
+            </View>
             <Text style={styles.heading}>You're all set</Text>
             <Text style={styles.sub}>You can now sign in with your new password.</Text>
           </View>
@@ -143,7 +160,8 @@ export default function ResetPasswordScreen() {
       <TouchableOpacity style={styles.back} onPress={goBack}>
         <Text style={styles.backText}>← Back</Text>
       </TouchableOpacity>
-      <View style={styles.content}>
+      <KeyboardAvoidingView style={styles.keyboardAvoider} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={styles.heroCard}>
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Choose a new password</Text>
@@ -180,7 +198,7 @@ export default function ResetPasswordScreen() {
               autoComplete="new-password"
               maxLength={MAX_PASSWORD_LENGTH}
               required
-              error={confirm && password !== confirm ? "Passwords don't match" : ''}
+              error={confirm && password !== confirm ? 'Passwords do not match' : ''}
             />
 
             <Button
@@ -191,16 +209,18 @@ export default function ResetPasswordScreen() {
             />
           </View>
         </View>
-      </View>
+      </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   )
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.bone },
+  keyboardAvoider: { flex: 1 },
   back: { paddingHorizontal: Spacing.xl, paddingTop: Spacing.md },
   backText: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
-  content: { flex: 1, padding: Spacing.xl, gap: Spacing.lg, paddingTop: Spacing.lg },
+  content: { padding: Spacing.xl, gap: Spacing.lg, paddingTop: Spacing.lg, paddingBottom: Spacing.xxl },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: 28,
@@ -221,7 +241,14 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
   },
   centred: { alignItems: 'center', justifyContent: 'center', gap: Spacing.lg, paddingVertical: Spacing.lg },
-  successEmoji: { fontSize: 56 },
+  successIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
   heading: { fontSize: 34, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 40, letterSpacing: -0.6, textAlign: 'center' },
   sub: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 24 },
   reassuranceCard: {

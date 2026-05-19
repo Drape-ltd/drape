@@ -3,6 +3,8 @@ export type MeasurementSource =
   | 'HELPER_GUIDED'
   | 'TAILOR_CAPTURED'
   | 'EXTERNAL_PRO_CAPTURED'
+  | 'DRAPE_VISION'
+  | 'TAILOR_ASSISTED_DRAPE_VISION'
 
 export type MeasurementFitConfidence = 'LOW' | 'MEDIUM' | 'HIGH'
 
@@ -10,6 +12,9 @@ export type MeasurementScanCaptureMethod =
   | 'GUIDED_MANUAL_BASELINE'
   | 'GUIDED_HELPER_BASELINE'
   | 'TAILOR_REVIEWED_BASELINE'
+  | 'DRAPE_VISION_ROTATION'
+  | 'TAILOR_ASSISTED_DRAPE_VISION_ROTATION'
+  | 'GARMENT_QC_VISION_FLAT_LAY'
 
 export type MeasurementScanStatus =
   | 'CAPTURED'
@@ -25,6 +30,11 @@ export type MeasurementFieldKey =
   | 'sleeveLength'
   | 'neckCircumference'
   | 'height'
+  | 'backLength'
+  | 'outseam'
+  | 'thighCircumference'
+  | 'kneeCircumference'
+  | 'torsoLength'
 
 export type FitIntent = 'FITTED' | 'BALANCED' | 'RELAXED'
 
@@ -77,6 +87,16 @@ export type ConsultationExpiryPolicy =
   | 'EXPIRES_IN_14_DAYS'
   | 'NO_EXPIRY'
 
+export type ConsultationRequestedBy = 'CUSTOMER' | 'TAILOR'
+
+export type ConsultationStatus =
+  | 'REQUESTED'
+  | 'APPROVED'
+  | 'SCHEDULED'
+  | 'COMPLETED'
+  | 'DECLINED'
+  | 'EXPIRED'
+
 export type QuoteBreakdownMeta = {
   laborAmount?: number | null
   sourcingAmount?: number | null
@@ -88,7 +108,8 @@ export type QuoteBreakdownMeta = {
 }
 
 export type ConsultationMeta = {
-  status?: 'REQUESTED' | 'COMPLETED' | null
+  status?: ConsultationStatus | null
+  requestedBy?: ConsultationRequestedBy | null
   feeMode?: ConsultationFeeMode | null
   feeAmount?: number | null
   feeCurrency?: string | null
@@ -105,6 +126,19 @@ export type ConsultationMeta = {
   reminderEnabled?: boolean | null
   requestNote?: string | null
   requestedAt?: string | null
+  proposedStartAt?: string | null
+  scheduledStartAt?: string | null
+  scheduledEndAt?: string | null
+  timezone?: string | null
+  approvedAt?: string | null
+  approvedBy?: string | null
+  declinedAt?: string | null
+  declinedBy?: string | null
+  declineReason?: string | null
+  reminder30SentAt?: string | null
+  reminder5SentAt?: string | null
+  followUpSentAt?: string | null
+  expiredAt?: string | null
 }
 
 export type FabricPolicyMeta = {
@@ -254,6 +288,12 @@ export type OrderSupportMeta = {
   fabricHandoffLabel?: string | null
   fabricReceivedAt?: string | null
   fabricReceivedNote?: string | null
+  checkoutPolicy?: {
+    cancellationPolicyVersion?: string | null
+    acknowledgedAt?: string | null
+    acknowledgedBy?: string | null
+    policyName?: string | null
+  } | null
   consultation?: ConsultationMeta | null
   quoteBreakdown?: QuoteBreakdownMeta | null
   fabricPolicy?: FabricPolicyMeta | null
@@ -270,12 +310,17 @@ export const MEASUREMENT_SOURCE_LABELS: Record<MeasurementSource, string> = {
   HELPER_GUIDED: 'Measured with a helper',
   TAILOR_CAPTURED: 'Measured by a tailor',
   EXTERNAL_PRO_CAPTURED: 'Measured by another professional',
+  DRAPE_VISION: 'Drape Vision',
+  TAILOR_ASSISTED_DRAPE_VISION: 'Drape Vision with tailor',
 }
 
 export const MEASUREMENT_SCAN_CAPTURE_METHOD_LABELS: Record<MeasurementScanCaptureMethod, string> = {
   GUIDED_MANUAL_BASELINE: 'Guided fit intake',
   GUIDED_HELPER_BASELINE: 'Guided fit intake with helper',
   TAILOR_REVIEWED_BASELINE: 'Tailor-reviewed fit intake',
+  DRAPE_VISION_ROTATION: 'Drape Vision scan',
+  TAILOR_ASSISTED_DRAPE_VISION_ROTATION: 'Tailor-assisted Drape Vision scan',
+  GARMENT_QC_VISION_FLAT_LAY: 'Drape Vision garment QC',
 }
 
 export const FABRIC_HANDOFF_LABELS: Record<FabricHandoffMode, string> = {

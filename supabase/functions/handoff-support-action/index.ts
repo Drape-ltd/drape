@@ -4,7 +4,7 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { parseBody, uuid, z } from '../_shared/validate.ts'
 import {
   HANDOFF_ISSUE_TYPES,
@@ -39,7 +39,11 @@ const ResolveIssueSchema = z.object({
 const BodySchema = z.union([ReportIssueSchema, ResolveIssueSchema])
 
 function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
-  return new Response(JSON.stringify(body), {
+  const payload =
+    typeof body.error === 'string' && typeof body.message !== 'string'
+      ? { ...body, message: body.error }
+      : body
+  return new Response(JSON.stringify(payload), {
     status,
     headers: { ...headers, 'Content-Type': 'application/json' },
   })
@@ -73,13 +77,13 @@ Deno.serve(async (req) => {
     const caller = await getAuthUser(req)
     if (!caller) {
       log('warn', FN, 'auth.unauthenticated')
-      return new Response('Unauthorized', { status: 401, headers: cors })
+      return jsonResponse({ error: 'Please sign in again before managing order handoff help.' }, 401, cors)
     }
 
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
     if (!parsed.ok) {
       log('warn', FN, 'validation.failed', { actor_id: caller.id, error: parsed.error })
-      return new Response(parsed.error, { status: 400, headers: cors })
+      return jsonResponse({ error: parsed.error }, 400, cors)
     }
 
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
@@ -92,7 +96,7 @@ Deno.serve(async (req) => {
         severity: 'warn',
         payload: { function: FN },
       })
-      return new Response('Too many requests', { status: 429, headers: cors })
+      return rateLimitExceededResponse(cors)
     }
 
     const body = parsed.data
@@ -106,16 +110,16 @@ Deno.serve(async (req) => {
 
       if (orderError) {
         log('error', FN, 'db.error', { actor_id: caller.id, error: orderError.message })
-        return new Response('Database error', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not load this order right now. Please try again.' }, 500, cors)
       }
 
       if (!order?.id) {
-        return new Response('Order not found.', { status: 404, headers: cors })
+        return jsonResponse({ error: 'This order could not be found.' }, 404, cors)
       }
 
       const actorRole = actorRoleForOrder(caller.id, order)
       if (!actorRole) {
-        return new Response('Forbidden', { status: 403, headers: cors })
+        return jsonResponse({ error: 'You do not have access to this order.' }, 403, cors)
       }
 
       if (!isHandoffStage(order.stage)) {
@@ -144,7 +148,7 @@ Deno.serve(async (req) => {
 
       if (existingIssueError) {
         log('error', FN, 'db.error', { actor_id: caller.id, error: existingIssueError.message })
-        return new Response('Database error', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not check existing handoff help right now. Please try again.' }, 500, cors)
       }
 
       if (existingIssue?.id) {
@@ -168,7 +172,7 @@ Deno.serve(async (req) => {
 
       if (createIssueError || !createdIssue?.id) {
         log('error', FN, 'db.error', { actor_id: caller.id, error: createIssueError?.message ?? 'create failed' })
-        return new Response('Could not save this handoff issue.', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not save this handoff issue right now. Please try again.' }, 500, cors)
       }
 
       await supabase.from('order_stage_updates').insert({
@@ -224,17 +228,17 @@ Deno.serve(async (req) => {
 
     if (issueError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: issueError.message })
-      return new Response('Database error', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not load this handoff help thread right now. Please try again.' }, 500, cors)
     }
 
     const linkedOrder = (issue as any)?.orders
     if (!(issue as any)?.id || !linkedOrder?.id) {
-      return new Response('Handoff issue not found.', { status: 404, headers: cors })
+      return jsonResponse({ error: 'This handoff help thread could not be found.' }, 404, cors)
     }
 
     const actorRole = actorRoleForOrder(caller.id, linkedOrder)
     if (!actorRole) {
-      return new Response('Forbidden', { status: 403, headers: cors })
+      return jsonResponse({ error: 'You do not have access to this handoff help thread.' }, 403, cors)
     }
 
     if ((issue as any).status === 'RESOLVED' || (issue as any).status === 'DISMISSED') {
@@ -252,7 +256,7 @@ Deno.serve(async (req) => {
 
     if (resolveError) {
       log('error', FN, 'db.error', { actor_id: caller.id, error: resolveError.message })
-      return new Response('Could not update this handoff issue.', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not update this handoff issue right now. Please try again.' }, 500, cors)
     }
 
     await supabase.from('order_stage_updates').insert({
@@ -287,6 +291,6 @@ Deno.serve(async (req) => {
     return jsonResponse({ ok: true }, 200, cors)
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return new Response('Internal server error', { status: 500, headers: cors })
+    return jsonResponse({ error: 'Something went wrong with handoff help. Please try again.' }, 500, cors)
   }
 })

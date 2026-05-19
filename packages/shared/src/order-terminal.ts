@@ -174,8 +174,8 @@ export function buildFailedPaymentAutoCancelTerminalRequest(
 ): FinalizeOrderTerminalRequest {
   const note =
     params.orderKind === 'CUSTOM'
-      ? 'Payment failed and was not retried within 30 minutes. This order was cancelled automatically.'
-      : 'Checkout failed and was not retried within 30 minutes. This order was cancelled automatically.'
+      ? 'Payment failed and was not retried within 2 hours. This order was cancelled automatically.'
+      : 'Checkout failed and was not retried within 2 hours. This order was cancelled automatically.'
 
   return {
     p_target_stage: 'CANCELLED',

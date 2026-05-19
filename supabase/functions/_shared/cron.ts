@@ -32,5 +32,14 @@ export async function authorizeCronRequest(
   if (authorized) return null
 
   log('warn', fn, 'auth.unauthorized')
-  return new Response('Unauthorized', { status: 401, headers: cors })
+  return new Response(
+    JSON.stringify({
+      error: 'This scheduled job requires a trusted service request.',
+      message: 'This scheduled job requires a trusted service request.',
+    }),
+    {
+      status: 401,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    },
+  )
 }

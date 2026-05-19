@@ -32,6 +32,9 @@ export function Button({
   style,
   textStyle,
   disabled,
+  accessibilityLabel,
+  accessibilityRole,
+  accessibilityState,
   ...props
 }: ButtonProps) {
   const isDisabled = disabled || loading
@@ -48,12 +51,15 @@ export function Button({
       ]}
       disabled={isDisabled}
       activeOpacity={0.75}
+      accessibilityRole={accessibilityRole ?? 'button'}
+      accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityState={{ ...accessibilityState, disabled: isDisabled, busy: loading }}
       {...props}
     >
       {loading ? (
         <ActivityIndicator
           size="small"
-          color={variant === 'primary' ? Colors.white : Colors.needleGreen}
+          color={variant === 'primary' ? Colors.textInverse : Colors.needleGreen}
         />
       ) : (
         <Text style={[styles.label, styles[`label_${variant}`], styles[`labelSize_${size}`], textStyle]}>
@@ -98,17 +104,17 @@ const styles = StyleSheet.create({
   // Sizes
   size_sm: { paddingVertical: 8, paddingHorizontal: Spacing.md },
   size_md: { paddingVertical: 10, paddingHorizontal: Spacing.lg },
-  size_lg: { paddingVertical: 12, paddingHorizontal: Spacing.xl },
+  size_lg: { minHeight: 52, paddingVertical: 12, paddingHorizontal: Spacing.xl },
 
   // Labels
   label: {
     fontWeight: FontWeight.semibold,
     letterSpacing: 0.1,
   },
-  label_primary: { color: Colors.white },
+  label_primary: { color: Colors.textInverse },
   label_secondary: { color: Colors.needleGreen },
   label_ghost: { color: Colors.needleGreen },
-  label_danger: { color: Colors.white },
+  label_danger: { color: Colors.textInverse },
 
   labelSize_sm: { fontSize: FontSize.sm },
   labelSize_md: { fontSize: FontSize.md, lineHeight: 20 },
