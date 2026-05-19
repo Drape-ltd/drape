@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Alert, KeyboardAvoidingView, Platform, Modal, TextInput,
@@ -8,8 +8,8 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as ImagePicker from 'expo-image-picker'
 import DateTimePicker from '@react-native-community/datetimepicker'
-import { Image as ExpoImage } from 'expo-image'
-import { isLikelyConnectivityIssue, readFunctionErrorPayload } from '@/lib/function-errors'
+import { isLikelyConnectivityIssue, isMachineErrorCodeMessage, readFunctionErrorMessage } from '@/lib/function-errors'
+import { Sentry } from '@/lib/sentry'
 import { goBackOrReturnTo } from '@/lib/navigation'
 import {
   buildOrderFitProfile,
@@ -18,9 +18,11 @@ import {
   FABRIC_HANDOFF_LABELS,
   FABRIC_STRETCH_LABELS,
   FIT_INTENT_LABELS,
+  getAdditionalMeasurementRows,
   MEASUREMENT_SOURCE_LABELS,
   MEASUREMENT_SCAN_STATUS_LABELS,
   WEAR_DAY_SUPPORT_LABELS,
+  labelFitContextFlag,
   type FabricHandoffMode,
 } from '@/lib/order-support'
 import { invokeFunction, supabase } from '@/lib/supabase'
@@ -28,11 +30,31 @@ import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
 import { composeStructuredAddress, parseNominatimSuggestion } from '@/lib/address'
 import { stripExif } from '@/lib/stripExif'
-import { Button, Input } from '@/components/ui'
-import { CUSTOM_ORDER_RESUMABLE_STAGES } from '@drape/shared'
-import { filterContactInfo, rejectPlaceholder, filterStyleReference } from '@drape/shared/contact-filter'
+import { uploadPublicStorageImage } from '@/lib/storage-upload'
+import { Button, Input, RemoteImage } from '@/components/ui'
+import {
+  CUSTOM_ORDER_FABRIC_SOURCING_DEADLINE_DAYS,
+  CUSTOM_ORDER_FABRIC_SOURCING_DEFAULT_BUSINESS_DAYS,
+  CUSTOM_ORDER_GARMENT_TAXONOMY,
+  CUSTOM_ORDER_GENDER_PRESENTATIONS,
+  CUSTOM_ORDER_MAX_REFERENCE_PHOTOS,
+  CUSTOM_ORDER_MAX_STYLE_LINKS,
+  CUSTOM_ORDER_OCCASIONS,
+  CUSTOM_ORDER_RESUMABLE_STAGES,
+  CUSTOM_ORDER_SHIPPING_PREFERENCES,
+  CUSTOM_ORDER_STYLE_ATTRIBUTES,
+  ORDER_CANCELLATION_ACK_COPY,
+  ORDER_CANCELLATION_POLICY_ROWS,
+  customOrderDefaultDeadline,
+  customOrderMinimumDeliveryDate,
+  isAllowedCustomStyleReference,
+  isCustomOrderBriefLongEnough,
+  normalizeAccountCurrency,
+} from '@drape/shared'
+import { filterContactInfo, rejectPlaceholder } from '@drape/shared/contact-filter'
 import { normalizePhoneForStorage, validatePhoneForProfile } from '@drape/shared/phone'
 import { phoneHintForContext } from '@/lib/phone-context'
+import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 const MEAS_PROMPT_KEY = 'drape_meas_prompt_shown'
@@ -42,6 +64,8 @@ const MEAS_PROMPT_KEY = 'drape_meas_prompt_shown'
 type FabricSource = 'CUSTOMER_SUPPLIES' | 'TAILOR_SOURCES'
 type DeliveryMethod = 'SHIPPING' | 'LOCAL_DELIVERY' | 'LOCAL_COLLECTION'
 type RecipientMode = 'SELF' | 'OTHER'
+type GenderPresentation = (typeof CUSTOM_ORDER_GENDER_PRESENTATIONS)[number]
+type ShippingPreference = (typeof CUSTOM_ORDER_SHIPPING_PREFERENCES)[number]
 
 const FABRIC_HANDOFF_OPTIONS: Array<{ value: FabricHandoffMode; title: string; hint: string }> = [
   {
@@ -66,11 +90,6 @@ const FABRIC_HANDOFF_OPTIONS: Array<{ value: FabricHandoffMode; title: string; h
   },
 ]
 
-const GARMENT_TYPES = [
-  'Agbada', 'Suit', 'Kaftan', 'Ankara Dress', 'Lehenga', 'Saree Blouse',
-  'Trousers', 'Shirt', 'Bespoke Dress', 'Wedding Gown', 'Blazer', 'Skirt', 'Other',
-]
-const OCCASION_PRESETS = ['Wedding', 'Birthday', 'Work', 'Casual', 'Travel', 'Event'] as const
 const FIT_NOTE_PRESETS = [
   'Relaxed fit preferred',
   'Fitted look preferred',
@@ -79,21 +98,20 @@ const FIT_NOTE_PRESETS = [
   'Please keep it modest',
 ] as const
 
-const STEP_TITLES = ['Garment details', 'Style references', 'Your measurements', 'Fabric & delivery']
+const STEP_TITLES = ['Garment details', 'Style references', 'Measurements', 'Fabric', 'Delivery', 'Review']
 const STEP_SUBS = [
   'Tell the seller exactly what you want to make, what it is for, and when you need it by.',
   'Show visual references so the seller can understand your taste, shape, and finishing direction faster.',
   'Share the fit context your maker needs to quote accurately and make the garment feel right on your body.',
-  'Clarify who handles fabric and how the finished garment gets to you, so the order can move cleanly once quoted.',
+  'Choose who provides fabric and set the approval checkpoint before cutting begins.',
+  'Choose how the finished garment gets to you and keep delivery details structured.',
+  'Check every detail before sending. You can jump back to edit any section.',
 ]
 
 const SUPPORTED_STYLE_LINK_LABELS = [
-  'Instagram posts',
-  'Instagram reels',
+  'Instagram posts / reels',
   'Pinterest pins',
   'TikTok videos',
-  'YouTube videos',
-  'X posts',
 ]
 
 function newBriefDraftSession() {
@@ -114,9 +132,7 @@ function buildBriefRoute(
 }
 
 function defaultDeadline() {
-  const next = new Date()
-  next.setDate(next.getDate() + 28)
-  return next
+  return customOrderDefaultDeadline()
 }
 
 function asStringList(value: unknown): string[] {
@@ -127,18 +143,20 @@ function asStringList(value: unknown): string[] {
 
 function hasCompleteMeasurementProfile(value: any): boolean {
   if (!value || typeof value !== 'object') return false
-  const hasCore = value.chest != null && value.waist != null && typeof value.fitStyle === 'string'
+  const hasCore = value.chest != null
+    && value.waist != null
+    && value.hips != null
+    && value.height != null
+    && typeof value.fitStyle === 'string'
   const hasContext = typeof value.garmentContext === 'string' && value.garmentContext.length > 0
   const bodyShapes = Array.isArray(value.bodyShape) ? value.bodyShape : value.bodyShape ? [value.bodyShape] : []
   return hasCore && hasContext && bodyShapes.length > 0
 }
 
 async function resolveOrderSubmitErrorMessage(error: Error | null) {
-  const payload = error ? await readFunctionErrorPayload(error) : null
-  const rawMessage =
-    (typeof payload?.error === 'string' && payload.error.trim().length > 0
-      ? payload.error.trim()
-      : error?.message?.trim()) || 'Could not submit your order. Please try again.'
+  const fallback = 'Could not submit your order. Please try again.'
+  const safeMessage = await readFunctionErrorMessage(error, fallback)
+  const rawMessage = safeMessage || fallback
   const normalized = rawMessage.toLowerCase()
 
   if (normalized.includes('delivery address is required')) {
@@ -177,7 +195,7 @@ async function resolveOrderSubmitErrorMessage(error: Error | null) {
     return "Remove phone numbers, social handles, or off-platform contact details from your brief before sending it. Fit measurements like bust, waist, and hips are still fine."
   }
 
-  return rawMessage
+  return isMachineErrorCodeMessage(rawMessage) ? fallback : rawMessage
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -200,16 +218,20 @@ export default function OrderBriefScreen() {
 
   const [step, setStep] = useState(0)
   const [submitting, setSubmitting] = useState(false)
+  const [cancellationPolicyAcknowledged, setCancellationPolicyAcknowledged] = useState(false)
   const [showMeasPrompt, setShowMeasPrompt] = useState(false)
   const [fetchError, setFetchError] = useState(false)
   const [initialLoading, setInitialLoading] = useState(true)
 
   // Step 1
   const [garmentType, setGarmentType] = useState('')
+  const [garmentTypeOther, setGarmentTypeOther] = useState('')
+  const [genderPresentation, setGenderPresentation] = useState<GenderPresentation | null>(null)
   const [description, setDescription] = useState('')
   const [descriptionError, setDescriptionError] = useState('')
   const [occasion, setOccasion] = useState('')
   const [deadline, setDeadline] = useState<Date | null>(() => defaultDeadline())
+  const [deadlineError, setDeadlineError] = useState('')
   const [showDatePicker, setShowDatePicker] = useState(false)
   const [isBulkOrder, setIsBulkOrder] = useState(false)
   const [bulkRecipientCount, setBulkRecipientCount] = useState('')
@@ -221,6 +243,8 @@ export default function OrderBriefScreen() {
   const [inspirationLinks, setInspirationLinks] = useState<string[]>([])
   const [inspirationInput, setInspirationInput] = useState('')
   const [linkError, setLinkError] = useState('')
+  const [styleNotes, setStyleNotes] = useState('')
+  const [styleAttributes, setStyleAttributes] = useState<string[]>([])
 
   // Step 3 — measurement profile summary
   const [measurements, setMeasurements] = useState<any>(null)
@@ -234,7 +258,12 @@ export default function OrderBriefScreen() {
   // Step 4
   const [fabricSource, setFabricSource] = useState<FabricSource | null>(null)
   const [fabricHandoffMode, setFabricHandoffMode] = useState<FabricHandoffMode | null>(null)
+  const [fabricDescription, setFabricDescription] = useState('')
+  const [fabricBudgetAmount, setFabricBudgetAmount] = useState('')
+  const [fabricSourcingDeadlineDays, setFabricSourcingDeadlineDays] = useState(CUSTOM_ORDER_FABRIC_SOURCING_DEFAULT_BUSINESS_DAYS)
   const [deliveryMethod, setDeliveryMethod] = useState<DeliveryMethod | null>(null)
+  const [shippingPreference, setShippingPreference] = useState<ShippingPreference>('STANDARD')
+  const [deliveryInstructions, setDeliveryInstructions] = useState('')
   const [deliveryAddressLine1, setDeliveryAddressLine1] = useState('')
   const [deliveryAddressLine2, setDeliveryAddressLine2] = useState('')
   const [deliveryCity, setDeliveryCity] = useState('')
@@ -249,6 +278,7 @@ export default function OrderBriefScreen() {
   const [deliveryAddressSearch, setDeliveryAddressSearch] = useState('')
   const [deliveryAddressSuggestions, setDeliveryAddressSuggestions] = useState<any[]>([])
   const [showDeliverySuggestions, setShowDeliverySuggestions] = useState(false)
+  const [accountCurrency, setAccountCurrency] = useState('USD')
   const suppressNextDeliveryLookup = useRef(false)
   const handledLaunchRef = useRef<string | null>(null)
   const guidedFitProfile = buildOrderFitProfile(measurements)
@@ -261,10 +291,13 @@ export default function OrderBriefScreen() {
     setFetchError(false)
     setInitialLoading(true)
     setGarmentType('')
+    setGarmentTypeOther('')
+    setGenderPresentation(null)
     setDescription('')
     setDescriptionError('')
     setOccasion('')
     setDeadline(defaultDeadline())
+    setDeadlineError('')
     setShowDatePicker(false)
     setIsBulkOrder(false)
     setBulkRecipientCount('')
@@ -274,6 +307,8 @@ export default function OrderBriefScreen() {
     setInspirationLinks([])
     setInspirationInput('')
     setLinkError('')
+    setStyleNotes('')
+    setStyleAttributes([])
     setMeasurements(null)
     setFitNote('')
     setFitNoteError('')
@@ -281,7 +316,12 @@ export default function OrderBriefScreen() {
     setEditValue('')
     setFabricSource(null)
     setFabricHandoffMode(null)
+    setFabricDescription('')
+    setFabricBudgetAmount('')
+    setFabricSourcingDeadlineDays(CUSTOM_ORDER_FABRIC_SOURCING_DEFAULT_BUSINESS_DAYS)
     setDeliveryMethod(null)
+    setShippingPreference('STANDARD')
+    setDeliveryInstructions('')
     setDeliveryAddressLine1('')
     setDeliveryAddressLine2('')
     setDeliveryCity('')
@@ -296,6 +336,7 @@ export default function OrderBriefScreen() {
     setDeliveryAddressSearch('')
     setDeliveryAddressSuggestions([])
     setShowDeliverySuggestions(false)
+    setAccountCurrency('USD')
   }
 
   useEffect(() => {
@@ -331,11 +372,15 @@ export default function OrderBriefScreen() {
       if (existingOrder?.id) {
         Alert.alert(
           'Continue your current custom order?',
-          `You already have a custom order with this tailor in progress (${existingOrder.reference ?? existingOrder.stage}). Continue it or start a new brief from scratch.`,
+          `You already have a custom order with this tailor in progress (${existingOrder.reference ?? existingOrder.stage}). Drape keeps one active custom order per customer-tailor pair so details, payments, and production updates stay clean.`,
           [
-            { text: 'Start new', style: 'destructive' },
             {
-              text: 'Continue order',
+              text: 'Browse others',
+              style: 'cancel',
+              onPress: () => router.replace('/(customer)' as never),
+            },
+            {
+              text: 'Open order',
               onPress: () =>
                 router.replace({
                   pathname: `/(customer)/orders/${existingOrder.id}` as any,
@@ -347,7 +392,7 @@ export default function OrderBriefScreen() {
       }
     }
 
-    const [tailorRes, measRes] = await Promise.allSettled([
+    const [tailorRes, measRes, accountRes] = await Promise.allSettled([
       supabase
         .from('tailor_profiles')
         .select('id')
@@ -357,6 +402,11 @@ export default function OrderBriefScreen() {
         .from('customer_profiles')
         .select('measurements')
         .eq('user_id', user?.id)
+        .maybeSingle(),
+      supabase
+        .from('users')
+        .select('default_currency')
+        .eq('id', user?.id)
         .maybeSingle(),
     ])
 
@@ -368,10 +418,16 @@ export default function OrderBriefScreen() {
       measRes.status === 'fulfilled' && !measRes.value.error
         ? measRes.value.data
         : null
+    const accountData =
+      accountRes.status === 'fulfilled' && !accountRes.value.error
+        ? accountRes.value.data
+        : null
 
     if (!tailorData?.id) {
       setFetchError(true)
     }
+
+    setAccountCurrency(normalizeAccountCurrency(accountData?.default_currency) ?? 'USD')
 
     const hasMeasurements = hasCompleteMeasurementProfile(measurementData?.measurements)
     if (hasMeasurements) {
@@ -398,8 +454,49 @@ export default function OrderBriefScreen() {
     if (placeholder) { setDescriptionError(placeholder); return false }
     const res = filterContactInfo(text)
     if (res.blocked) { setDescriptionError("Contact details can't be included here."); return false }
+    if (!isCustomOrderBriefLongEnough(text)) {
+      setDescriptionError('Use 3 short lines or one clear paragraph so the tailor can understand the shape, details, and finish.')
+      return false
+    }
     setDescriptionError('')
     return true
+  }
+
+  function validateDeadline(date: Date | null) {
+    if (!date) {
+      setDeadlineError('Choose a target delivery date.')
+      return false
+    }
+    const selected = new Date(date)
+    selected.setHours(0, 0, 0, 0)
+    if (selected.getTime() < customOrderMinimumDeliveryDate().getTime()) {
+      setDeadlineError('Target delivery date must be at least 2 weeks from today.')
+      return false
+    }
+    setDeadlineError('')
+    return true
+  }
+
+  function validateStyleReferences() {
+    if (photos.length + inspirationLinks.length < 1) {
+      setLinkError('Add at least one reference photo or supported style link.')
+      return false
+    }
+    const unsupported = inspirationLinks.find((link) => !isAllowedCustomStyleReference(link))
+    if (unsupported) {
+      setLinkError('Style links must be from Instagram, Pinterest, or TikTok.')
+      return false
+    }
+    setLinkError('')
+    return true
+  }
+
+  function validateFabricStep() {
+    if (!fabricSource) return false
+    if (fabricSource === 'CUSTOMER_SUPPLIES') return !!fabricHandoffMode
+    const budget = Number.parseInt(fabricBudgetAmount, 10)
+    const validBudget = !fabricBudgetAmount.trim() || (Number.isFinite(budget) && budget >= 0)
+    return fabricDescription.trim().length >= 8 && validBudget
   }
 
   function composeDeliveryAddress() {
@@ -499,7 +596,13 @@ export default function OrderBriefScreen() {
 
   async function pickPhoto() {
     if (submitting) return
-    if (photos.length >= 5) { Alert.alert('Maximum 5 reference photos'); return }
+    if (photos.length >= CUSTOM_ORDER_MAX_REFERENCE_PHOTOS) {
+      Alert.alert(
+        `Maximum ${CUSTOM_ORDER_MAX_REFERENCE_PHOTOS} reference photos`,
+        'Remove one of your current references before adding another.',
+      )
+      return
+    }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.8,
@@ -513,13 +616,22 @@ export default function OrderBriefScreen() {
     if (step === 0) {
       const bulkCount = Number.parseInt(bulkRecipientCount, 10)
       if (isBulkOrder && (!Number.isFinite(bulkCount) || bulkCount < 2)) return false
-      return !!garmentType && description.trim().length >= 1 && !descriptionError && !!deadline
+      const hasGarment = !!garmentType && (garmentType !== 'Other' || garmentTypeOther.trim().length >= 2)
+      return hasGarment
+        && !!genderPresentation
+        && isCustomOrderBriefLongEnough(description)
+        && !descriptionError
+        && !!deadline
+        && !deadlineError
+        && deadline.getTime() >= customOrderMinimumDeliveryDate().getTime()
     }
-    if (step === 1) return true // photos optional
+    if (step === 1) return photos.length + inspirationLinks.length >= 1 && !linkError
     if (step === 2) return !!measurements && fitNote.trim().length >= 20 && !fitNoteError
     if (step === 3) {
+      return validateFabricStep()
+    }
+    if (step === 4) {
       if (!fabricSource || !deliveryMethod) return false
-      if (fabricSource === 'CUSTOMER_SUPPLIES' && !fabricHandoffMode) return false
       if (deliveryMethod !== 'LOCAL_COLLECTION') {
         const normalizedRecipientPhone = normalizePhoneForStorage(recipientPhone)
         const hasCoreAddress = !!deliveryAddressLine1.trim() && !!deliveryCity.trim() && !!deliveryStateRegion.trim() && !!deliveryCountry.trim()
@@ -529,27 +641,82 @@ export default function OrderBriefScreen() {
       }
       return true
     }
+    if (step === 5) return canProceedReview()
     return false
+  }
+
+  function canProceedReview() {
+    const originalStep = step
+    return originalStep === 5
+      && (() => {
+        const hasGarment = !!garmentType && (garmentType !== 'Other' || garmentTypeOther.trim().length >= 2)
+        const hasDelivery = !!deliveryMethod
+          && (deliveryMethod === 'LOCAL_COLLECTION'
+            || (!!deliveryAddressLine1.trim() && !!deliveryCity.trim() && !!deliveryStateRegion.trim() && !!deliveryCountry.trim() && !!recipientName.trim() && !!normalizePhoneForStorage(recipientPhone)))
+        return hasGarment
+          && !!genderPresentation
+          && isCustomOrderBriefLongEnough(description)
+          && !!deadline
+          && deadline.getTime() >= customOrderMinimumDeliveryDate().getTime()
+          && photos.length + inspirationLinks.length >= 1
+          && !!measurements
+          && fitNote.trim().length >= 20
+          && validateFabricStep()
+          && hasDelivery
+          && cancellationPolicyAcknowledged
+      })()
+  }
+
+  function ctaGuideText() {
+    if (step === 0) {
+      const missing: string[] = []
+      const hasGarment = !!garmentType && (garmentType !== 'Other' || garmentTypeOther.trim().length >= 2)
+      const deadlineIsValid = !!deadline && !deadlineError && deadline.getTime() >= customOrderMinimumDeliveryDate().getTime()
+
+      if (!hasGarment) missing.push('garment type')
+      if (!genderPresentation) missing.push('fit category')
+      if (!isCustomOrderBriefLongEnough(description) || !!descriptionError) missing.push('clear brief')
+      if (!deadlineIsValid) missing.push('deadline')
+
+      return missing.length > 0
+        ? `Still needed: ${missing.join(', ')}.`
+        : 'Be clear about what you want made so the tailor can tell quickly whether they are the right fit.'
+    }
+
+    if (step === 1) {
+      return photos.length + inspirationLinks.length < 1
+        ? 'Add at least one photo or approved style link so the tailor can quote from a real reference.'
+        : 'Use references that show the outcome you want, not just the category you are shopping for.'
+    }
+
+    if (step === 2) {
+      if (!measurements) return 'Add or confirm measurements before asking the tailor to quote.'
+      if (fitNote.trim().length < 20 || !!fitNoteError) return 'Add a short fit note so the tailor knows what to watch for.'
+      return 'Accurate measurements help the tailor quote with much less guesswork.'
+    }
+
+    if (step === 3) return 'Fabric decisions control when cutting can safely begin.'
+    if (step === 4) return 'Structured delivery details keep dispatch and collection from becoming guesswork.'
+    return 'Send the brief once every section reflects what you want made.'
   }
 
   function addCustomInspirationLink() {
     const trimmed = inspirationInput.trim()
     if (!trimmed) return
-    if (inspirationLinks.length >= 5) {
-      setLinkError('Maximum 5 style references per order.')
+    if (inspirationLinks.length >= CUSTOM_ORDER_MAX_STYLE_LINKS) {
+      setLinkError(`Maximum ${CUSTOM_ORDER_MAX_STYLE_LINKS} style links per order.`)
       return
     }
     if (inspirationLinks.includes(trimmed)) {
       setLinkError("That link is already added.")
       return
     }
-    const result = filterStyleReference(trimmed)
-    if (!result.allowed) {
-      setLinkError(result.reason ?? 'This link isn\'t accepted.')
+    if (!isAllowedCustomStyleReference(trimmed)) {
+      setLinkError('Style links must be from Instagram, Pinterest, or TikTok.')
       return
     }
     setLinkError('')
-    setInspirationLinks((prev) => [...prev, result.cleaned!])
+    setInspirationLinks((prev) => [...prev, trimmed])
     setInspirationInput('')
   }
 
@@ -561,36 +728,21 @@ export default function OrderBriefScreen() {
     if (submitting) return
     // Final guard — catches any placeholder values that bypassed per-field validation
     if (!validateDescription(description)) return
+    if (!validateDeadline(deadline)) return
+    if (!validateStyleReferences()) return
     if (!validateFitNote(fitNote)) return
+    if (!validateFabricStep()) {
+      Alert.alert(
+        'Fabric details needed',
+        fabricSource === 'TAILOR_SOURCES'
+          ? 'Describe the fabric you want the tailor to source before submitting.'
+          : 'Choose how your fabric will reach the tailor before submitting.',
+      )
+      return
+    }
     if (deliveryMethod !== 'LOCAL_COLLECTION' && !validateDeliveryAddress()) return
     if (deliveryMethod !== 'LOCAL_COLLECTION' && !validateRecipientContact()) return
     setSubmitting(true)
-
-    // Upload reference photos to Supabase Storage (EXIF stripped before upload)
-    const uploadedUrls: string[] = []
-    for (const uri of photos) {
-      try {
-        const cleanUri = await stripExif(uri)
-        const ext = 'jpg' // stripExif always outputs JPEG
-        const filename = `briefs/${user?.id}/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`
-        const response = await fetch(cleanUri)
-        const blob = await response.blob()
-        const { data } = await supabase.storage.from('order-photos').upload(filename, blob, { contentType: `image/${ext}` })
-        if (data) {
-          const { data: urlData } = supabase.storage.from('order-photos').getPublicUrl(filename)
-          uploadedUrls.push(urlData.publicUrl)
-        }
-      } catch (error) {
-        setSubmitting(false)
-        Alert.alert(
-          'Upload failed',
-          isLikelyConnectivityIssue(error)
-            ? 'Connection looks weak. One of your reference photos could not be uploaded yet. Retry when the signal improves.'
-            : 'One of your reference photos could not be uploaded right now. Please try again in a moment.',
-        )
-        return
-      }
-    }
 
     const measurementSnapshot = enrichMeasurementSnapshot(measurements)
     const fitProfile = buildOrderFitProfile(measurementSnapshot)
@@ -646,6 +798,9 @@ export default function OrderBriefScreen() {
           bulkOrder,
           fitProfile,
           styleInspirationLinks: inspirationLinks,
+          styleAttributes,
+          styleNotes: styleNotes.trim() || null,
+          bodyNote: fitNote.trim() || null,
         }
       : {
           fabricHandoffMode: 'NO_CUSTOMER_HANDOFF_REQUIRED' as const,
@@ -654,38 +809,107 @@ export default function OrderBriefScreen() {
           bulkOrder,
           fitProfile,
           styleInspirationLinks: inspirationLinks,
+          styleAttributes,
+          styleNotes: styleNotes.trim() || null,
+          bodyNote: fitNote.trim() || null,
+          fabricSourcing: {
+            description: fabricDescription.trim() || null,
+            budgetAmount: fabricBudgetAmount.trim() ? Number.parseInt(fabricBudgetAmount, 10) : null,
+            budgetCurrency: fabricBudgetAmount.trim() ? accountCurrency : null,
+            deadlineBusinessDays: fabricSourcingDeadlineDays,
+          },
         }
 
     const composedFitNote = fitNote.trim() || null
 
+    const buildOrderPayload = (
+      action: 'preflight-create-order' | 'create-order',
+      uploadedReferencePhotos: string[],
+    ) => ({
+      action,
+      tailorProfileId: tailorId,
+      garmentType,
+      description: description.trim(),
+      occasion: occasion.trim() || null,
+      deadline: deadline?.toISOString() ?? null,
+      referencePhotos: uploadedReferencePhotos,
+      referencePhotoCount: photos.length,
+      customerMeasurementsSnapshot: measurementSnapshot,
+      fitNote: composedFitNote,
+      fabricSource,
+      supportMeta,
+      deliveryMethod,
+      garmentTypeOther: garmentType === 'Other' ? garmentTypeOther.trim() : null,
+      genderPresentation,
+      styleReferenceLinks: inspirationLinks,
+      styleNotes: styleNotes.trim() || null,
+      bodyNote: composedFitNote,
+      fabricDescription: fabricSource === 'TAILOR_SOURCES' ? fabricDescription.trim() : null,
+      fabricBudgetAmount: fabricBudgetAmount.trim() ? Number.parseInt(fabricBudgetAmount, 10) : null,
+      fabricBudgetCurrency: fabricBudgetAmount.trim() ? accountCurrency : null,
+      fabricSourcingDeadlineDays: fabricSource === 'TAILOR_SOURCES' ? fabricSourcingDeadlineDays : null,
+      shippingPreference: deliveryMethod === 'SHIPPING' ? shippingPreference : null,
+      deliveryInstructions: deliveryInstructions.trim() || null,
+      deliveryAddress: deliveryMethod !== 'LOCAL_COLLECTION' ? composeDeliveryAddress() : null,
+      deliveryCity: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryCity.trim() : null,
+      deliveryRegion: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryStateRegion.trim() : null,
+      deliveryPostalCode: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryPostalCode.trim() : null,
+      deliveryCountryCode: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryCountry.trim() : null,
+      recipientName: deliveryMethod !== 'LOCAL_COLLECTION' ? recipientName.trim() : null,
+      recipientPhone: deliveryMethod !== 'LOCAL_COLLECTION' ? normalizePhoneForStorage(recipientPhone) : null,
+      cancellationPolicyAcknowledged,
+    })
+
+    const { data: preflightData, error: preflightError } = await invokeFunction<{ ok: boolean; preflight?: boolean }>('custom-order-action', {
+      body: buildOrderPayload('preflight-create-order', []),
+    })
+
+    if (preflightError || !preflightData?.ok) {
+      setSubmitting(false)
+      if (preflightError) Sentry.captureException(preflightError, { extra: { context: 'custom_order_preflight', tailorId } })
+      const message = await resolveOrderSubmitErrorMessage(preflightError)
+      if (message.toLowerCase().includes('delivery address')) {
+        setDeliveryAddressError('Please enter your full delivery address before continuing.')
+      }
+      Alert.alert('Order not ready', message)
+      return
+    }
+
+    // Upload reference photos only after server-side preflight passes.
+    const uploadedUrls: string[] = []
+    for (const uri of photos) {
+      try {
+        const cleanUri = await stripExif(uri)
+        const ext = 'jpg' // stripExif always outputs JPEG
+        const filename = `briefs/${user?.id}/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`
+        const publicUrl = await uploadPublicStorageImage({
+          bucket: 'order-photos',
+          path: filename,
+          uri: cleanUri,
+          contentType: 'image/jpeg',
+          maxBytes: 10 * 1024 * 1024,
+        })
+        uploadedUrls.push(publicUrl)
+      } catch (error) {
+        setSubmitting(false)
+        Alert.alert(
+          'Upload failed',
+          isLikelyConnectivityIssue(error)
+            ? 'Connection looks weak. One of your reference photos could not be uploaded yet. Retry when the signal improves.'
+            : 'One of your reference photos could not be uploaded right now. Please try again in a moment.',
+        )
+        return
+      }
+    }
+
     const { data, error } = await invokeFunction<{ ok: boolean; orderId?: string }>('custom-order-action', {
-      body: {
-        action: 'create-order',
-        tailorProfileId: tailorId,
-        garmentType,
-        description: description.trim(),
-        occasion: occasion.trim() || null,
-        deadline: deadline?.toISOString() ?? null,
-        referencePhotos: uploadedUrls,
-        customerMeasurementsSnapshot: measurementSnapshot,
-        fitNote: composedFitNote,
-        fabricSource,
-        supportMeta,
-        deliveryMethod,
-        deliveryAddress: deliveryMethod !== 'LOCAL_COLLECTION' ? composeDeliveryAddress() : null,
-        deliveryCity: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryCity.trim() : null,
-        deliveryRegion: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryStateRegion.trim() : null,
-        deliveryPostalCode: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryPostalCode.trim() : null,
-        deliveryCountryCode: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryCountry.trim() : null,
-        recipientName: deliveryMethod !== 'LOCAL_COLLECTION' ? recipientName.trim() : null,
-        recipientPhone: deliveryMethod !== 'LOCAL_COLLECTION' ? normalizePhoneForStorage(recipientPhone) : null,
-      },
+      body: buildOrderPayload('create-order', uploadedUrls),
     })
 
     setSubmitting(false)
 
     if (error || !data?.orderId) {
-      console.error('Order create error:', JSON.stringify(error))
+      if (error) Sentry.captureException(error, { extra: { context: 'custom_order_create', tailorId } })
       const message = await resolveOrderSubmitErrorMessage(error)
       if (message.toLowerCase().includes('delivery address')) {
         setDeliveryAddressError('Please enter your full delivery address before continuing.')
@@ -735,8 +959,8 @@ export default function OrderBriefScreen() {
       )
       return
     }
-    if (!canProceed() && step !== 1) return
-    if (step < 3) { setStep(step + 1) }
+    if (!canProceed()) return
+    if (step < STEP_TITLES.length - 1) { setStep(step + 1) }
     else { submit() }
   }
 
@@ -754,6 +978,25 @@ export default function OrderBriefScreen() {
         params: { returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }) },
       })
     }
+  }
+
+  function formatDate(value: Date | null) {
+    return value
+      ? value.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+      : 'Not set'
+  }
+
+  function deliveryMethodLabel(value: DeliveryMethod | null) {
+    if (value === 'SHIPPING') return 'Ship to me'
+    if (value === 'LOCAL_DELIVERY') return 'Local delivery'
+    if (value === 'LOCAL_COLLECTION') return 'Local collection'
+    return 'Not set'
+  }
+
+  function fabricSourceLabel(value: FabricSource | null) {
+    if (value === 'CUSTOMER_SUPPLIES') return 'I will provide the fabric'
+    if (value === 'TAILOR_SOURCES') return 'Tailor sources the fabric'
+    return 'Not set'
   }
 
   if (fetchError) {
@@ -816,13 +1059,13 @@ export default function OrderBriefScreen() {
           <TouchableOpacity onPress={back}>
             <Text style={styles.backText}>← Back</Text>
           </TouchableOpacity>
-          <Text style={styles.stepLabel}>Step {step + 1} of 4</Text>
+          <Text style={styles.stepLabel}>Step {step + 1} of {STEP_TITLES.length}</Text>
           <View style={{ width: 60 }} />
         </View>
 
         {/* Progress bar */}
         <View style={styles.progressRow}>
-          {[0, 1, 2, 3].map((i) => (
+          {STEP_TITLES.map((_, i) => (
             <View key={i} style={[styles.progressSeg, i <= step && styles.progressSegDone]} />
           ))}
         </View>
@@ -840,34 +1083,69 @@ export default function OrderBriefScreen() {
                 {/* Garment type picker */}
                 <View>
                   <Text style={styles.fieldLabel}>Garment type <Text style={styles.required}>*</Text></Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                    <View style={styles.garmentRow}>
-                      {GARMENT_TYPES.map((g) => (
-                        <TouchableOpacity
-                          key={g}
-                          style={[styles.garmentChip, garmentType === g && styles.garmentChipActive]}
-                          onPress={() => setGarmentType(g)}
-                        >
-                          <Text style={[styles.garmentChipText, garmentType === g && styles.garmentChipTextActive]}>{g}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  </ScrollView>
+                  <View style={styles.taxonomyList}>
+                    {CUSTOM_ORDER_GARMENT_TAXONOMY.map((group) => (
+                      <View key={group.category} style={styles.taxonomyGroup}>
+                        <Text style={styles.taxonomyTitle}>{group.category}</Text>
+                        <View style={styles.garmentRow}>
+                          {group.items.map((g) => (
+                            <TouchableOpacity
+                              key={g}
+                              style={[styles.garmentChip, garmentType === g && styles.garmentChipActive]}
+                              onPress={() => setGarmentType(g)}
+                            >
+                              <Text style={[styles.garmentChipText, garmentType === g && styles.garmentChipTextActive]}>{g}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                  {garmentType === 'Other' ? (
+                    <Input
+                      label="What are you having made?"
+                      placeholder="e.g. Carnival costume, stage outfit, altar server robe"
+                      value={garmentTypeOther}
+                      onChangeText={setGarmentTypeOther}
+                      required
+                    />
+                  ) : null}
+                </View>
+
+                <View>
+                  <Text style={styles.fieldLabel}>Fit category <Text style={styles.required}>*</Text></Text>
+                  <View style={styles.optionCards}>
+                    {CUSTOM_ORDER_GENDER_PRESENTATIONS.map((value) => (
+                      <OptionCard
+                        key={value}
+                        title={value}
+                        hint={
+                          value === 'Menswear'
+                            ? 'Structured around menswear fit conventions.'
+                            : value === 'Womenswear'
+                              ? 'Structured around womenswear fit conventions.'
+                              : 'Use when the garment should not follow one fit convention.'
+                        }
+                        active={genderPresentation === value}
+                        onPress={() => setGenderPresentation(value)}
+                      />
+                    ))}
+                  </View>
                 </View>
 
                 <Input
-                  label="Description"
-                  placeholder="Describe your garment: style, details, fabric preferences..."
+                  label="Brief description"
+                  placeholder={'Line 1: what you want made\nLine 2: silhouette, details, or references\nLine 3: finish, fit, or anything important'}
                   value={description}
                   onChangeText={(v) => { setDescription(v); if (descriptionError) validateDescription(v) }}
                   onBlur={() => validateDescription(description)}
                   error={descriptionError}
                   multiline
-                  numberOfLines={4}
-                  maxLength={500}
+                  numberOfLines={5}
+                  maxLength={1200}
                   filterContact
                   required
-                  hint={`${description.length}/500`}
+                  hint={`${description.length}/1200 · 3 short lines or one clear paragraph`}
                   testID="description-input"
                 />
 
@@ -879,7 +1157,7 @@ export default function OrderBriefScreen() {
                   testID="occasion-input"
                 />
                 <View style={styles.inlineChipRow}>
-                  {OCCASION_PRESETS.map((value) => (
+                  {CUSTOM_ORDER_OCCASIONS.map((value) => (
                     <TouchableOpacity
                       key={value}
                       style={[styles.inlineChip, occasion === value && styles.inlineChipActive]}
@@ -942,7 +1220,7 @@ export default function OrderBriefScreen() {
 
                 <View>
                   <Text style={styles.fieldLabel}>Deadline <Text style={styles.required}>*</Text></Text>
-                  <Text style={styles.fieldHint}>When do you need this by? Default is 4 weeks from today.</Text>
+                  <Text style={styles.fieldHint}>When do you need this by? Minimum is 2 weeks from today.</Text>
                   <TouchableOpacity style={[styles.dateButton, !deadline && styles.dateButtonRequired]} onPress={() => setShowDatePicker(true)}>
                     <Text style={[styles.dateText, !deadline && styles.datePlaceholder]}>
                       {deadline
@@ -952,12 +1230,19 @@ export default function OrderBriefScreen() {
                   </TouchableOpacity>
                   {showDatePicker && (
                     <DateTimePicker
-                      value={deadline ?? (() => { const d = new Date(); d.setDate(d.getDate() + 28); return d })()}
+                      value={deadline ?? defaultDeadline()}
                       mode="date"
-                      minimumDate={new Date()}
-                      onChange={(_, date) => { setShowDatePicker(false); if (date) setDeadline(date) }}
+                      minimumDate={customOrderMinimumDeliveryDate()}
+                      onChange={(_, date) => {
+                        setShowDatePicker(false)
+                        if (date) {
+                          setDeadline(date)
+                          validateDeadline(date)
+                        }
+                      }}
                     />
                   )}
+                  {deadlineError ? <Text style={styles.linkError}>{deadlineError}</Text> : null}
                 </View>
               </View>
             )}
@@ -969,12 +1254,18 @@ export default function OrderBriefScreen() {
                 <View>
                   <Text style={styles.fieldLabel}>Reference photos</Text>
                   <Text style={styles.fieldHint}>
-                    Inspiration photos, sketches, or similar garments you love.
+                    Inspiration photos, sketches, or similar garments you love. Add at least one photo or link.
                   </Text>
                   <View style={[styles.photoGrid, { marginTop: Spacing.md }]}>
                     {photos.map((uri, i) => (
                       <View key={i} style={styles.photoThumb}>
-                        <ExpoImage source={{ uri }} style={styles.photoImage} contentFit="cover" transition={120} />
+                        <RemoteImage
+                          uri={uri}
+                          style={styles.photoImage}
+                          contentFit="cover"
+                          transition={120}
+                          surface="customer_brief_reference_preview"
+                        />
                         <TouchableOpacity
                           style={styles.photoRemove}
                           onPress={() => setPhotos((prev) => prev.filter((_, idx) => idx !== i))}
@@ -983,21 +1274,21 @@ export default function OrderBriefScreen() {
                         </TouchableOpacity>
                       </View>
                     ))}
-                    {photos.length < 5 && (
+                    {photos.length < CUSTOM_ORDER_MAX_REFERENCE_PHOTOS && (
                       <TouchableOpacity style={styles.photoAdd} onPress={pickPhoto}>
                         <Text style={styles.photoAddIcon}>+</Text>
                         <Text style={styles.photoAddLabel}>Add photo</Text>
                       </TouchableOpacity>
                     )}
                   </View>
-                  <Text style={styles.photoCount}>{photos.length}/5 photos</Text>
+                  <Text style={styles.photoCount}>{photos.length}/{CUSTOM_ORDER_MAX_REFERENCE_PHOTOS} photos</Text>
                 </View>
 
                 {/* Style inspiration */}
                 <View style={styles.inspirationSection}>
                   <Text style={styles.fieldLabel}>Style inspiration</Text>
                   <Text style={styles.fieldHint}>
-                    Add Instagram, Pinterest, or TikTok post links to styles you like — up to 5. We've suggested some accounts below.
+                    Add Instagram, Pinterest, or TikTok links to styles you like, up to {CUSTOM_ORDER_MAX_STYLE_LINKS}.
                   </Text>
 
                   {/* Supported link types */}
@@ -1044,6 +1335,41 @@ export default function OrderBriefScreen() {
                     </View>
                   )}
                 </View>
+
+                <View>
+                  <Text style={styles.fieldLabel}>Style details</Text>
+                  <Text style={styles.fieldHint}>Tap the areas your tailor should pay attention to, then add anything the references do not capture.</Text>
+                  <View style={styles.inlineChipRow}>
+                    {CUSTOM_ORDER_STYLE_ATTRIBUTES.map((value) => {
+                      const active = styleAttributes.includes(value)
+                      return (
+                        <TouchableOpacity
+                          key={value}
+                          style={[styles.inlineChip, active && styles.inlineChipActive]}
+                          onPress={() => setStyleAttributes((current) =>
+                            current.includes(value)
+                              ? current.filter((item) => item !== value)
+                              : [...current, value]
+                          )}
+                        >
+                          <Text style={[styles.inlineChipText, active && styles.inlineChipTextActive]}>{value}</Text>
+                        </TouchableOpacity>
+                      )
+                    })}
+                  </View>
+                </View>
+
+                <Input
+                  label="Style notes (optional)"
+                  placeholder="Colours, sleeve shape, neckline, modesty preference, embellishment, lining, pockets..."
+                  value={styleNotes}
+                  onChangeText={setStyleNotes}
+                  multiline
+                  numberOfLines={4}
+                  maxLength={1200}
+                  filterContact
+                  hint={`${styleNotes.length}/1200`}
+                />
               </View>
             )}
 
@@ -1056,7 +1382,7 @@ export default function OrderBriefScreen() {
                       <Text style={styles.measureSummaryTitle}>Your measurements</Text>
                       <Text style={styles.measureEditHint}>
                         {(() => {
-                          const FIELDS = ['chest','waist','hips','shoulderWidth','inseam','sleeveLength','neckCircumference','height']
+                          const FIELDS = ['chest','waist','hips','shoulderWidth','inseam','sleeveLength','neckCircumference','height','backLength','outseam','thighCircumference','kneeCircumference','torsoLength']
                           const filled = FIELDS.filter((k) => measurements[k] != null).length
                           return filled < FIELDS.length ? `${filled}/${FIELDS.length} · Tap to edit` : 'Tap any field to edit'
                         })()}
@@ -1080,6 +1406,21 @@ export default function OrderBriefScreen() {
                         { key: 'sleeveLength', label: 'Sleeve', value: measurements.sleeveLength },
                         { key: 'neckCircumference', label: 'Neck', value: measurements.neckCircumference },
                         { key: 'height', label: 'Height', value: measurements.height },
+                        { key: 'underBust', label: 'Under bust', value: measurements.underBust },
+                        { key: 'backLength', label: 'Back', value: measurements.backLength },
+                        { key: 'outseam', label: 'Outseam', value: measurements.outseam },
+                        { key: 'thighCircumference', label: 'Thigh', value: measurements.thighCircumference },
+                        { key: 'kneeCircumference', label: 'Knee', value: measurements.kneeCircumference },
+                        { key: 'bicepCircumference', label: 'Bicep', value: measurements.bicepCircumference },
+                        { key: 'wristCircumference', label: 'Wrist', value: measurements.wristCircumference },
+                        { key: 'headCircumference', label: 'Head', value: measurements.headCircumference },
+                        { key: 'hatBandLine', label: 'Hat band', value: measurements.hatBandLine },
+                        { key: 'headLength', label: 'Head length', value: measurements.headLength },
+                        { key: 'headWidth', label: 'Head width', value: measurements.headWidth },
+                        { key: 'earToEarOverCrown', label: 'Crown E-E', value: measurements.earToEarOverCrown },
+                        { key: 'frontToBackOverCrown', label: 'Crown F-B', value: measurements.frontToBackOverCrown },
+                        { key: 'filaHeight', label: 'Fila height', value: measurements.filaHeight },
+                        { key: 'torsoLength', label: 'Torso', value: measurements.torsoLength },
                       ].map(({ key, label, value }) => (
                         <TouchableOpacity
                           key={key}
@@ -1094,13 +1435,26 @@ export default function OrderBriefScreen() {
                             {value ? `${value} ${measurements.unit}` : 'Not added'}
                           </Text>
                         </TouchableOpacity>
-                      ))}
+                        ))}
                     </View>
+                    {getAdditionalMeasurementRows(measurements).length > 0 && (
+                      <View style={styles.additionalMeasurePreview}>
+                        <Text style={styles.additionalMeasurePreviewTitle}>Garment-specific measurements</Text>
+                        <View style={styles.measureSummaryGrid}>
+                          {getAdditionalMeasurementRows(measurements).map(({ label, value }) => (
+                            <View key={label} style={styles.measureSummaryItem}>
+                              <Text style={styles.measureSummaryLabel}>{label}</Text>
+                              <Text style={styles.measureSummaryValue}>{String(value)} {measurements.unit}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      </View>
+                    )}
                     {asStringList(measurements.fitFlags).length > 0 && (
                       <View style={styles.flagsRow}>
                         {asStringList(measurements.fitFlags).map((f) => (
                           <View key={f} style={styles.flagBadge}>
-                            <Text style={styles.flagBadgeText}>{f.replace(/_/g, ' ').toLowerCase()}</Text>
+                            <Text style={styles.flagBadgeText}>{labelFitContextFlag(f)}</Text>
                           </View>
                         ))}
                       </View>
@@ -1166,10 +1520,33 @@ export default function OrderBriefScreen() {
                   </View>
                 ) : (
                   <View style={styles.noMeasureCard}>
-                    <Text style={styles.noMeasureTitle}>Measurements required</Text>
+                    <Text style={styles.noMeasureTitle}>Choose how to add measurements</Text>
                     <Text style={styles.noMeasureHint}>
-                      Your tailor needs your full measurement profile to give an accurate quote. Set it up once and it carries into future orders.
+                      Your tailor needs your fit profile before they can quote accurately. Scan with Drape Vision or enter measurements manually, then return to this brief.
                     </Text>
+                    <View style={styles.optionCards}>
+                      <OptionCard
+                        title="Scan with Drape Vision"
+                        hint="Guided rotation scan. Your progress in this order will stay here when you come back."
+                        active
+                        onPress={() => router.push({
+                          pathname: DRAPE_VISION_ROUTE,
+                          params: {
+                            mode: 'customer_scan',
+                            returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }),
+                          },
+                        } as never)}
+                      />
+                      <OptionCard
+                        title="Enter measurements manually"
+                        hint="Guided manual profile. Your progress in this order will stay here when you come back."
+                        active
+                        onPress={() => router.push({
+                          pathname: '/(customer)/profile/measurements',
+                          params: { returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }) },
+                        })}
+                      />
+                    </View>
                     <TouchableOpacity
                       style={styles.noMeasureBtn}
                       onPress={() => router.push({
@@ -1183,8 +1560,8 @@ export default function OrderBriefScreen() {
                 )}
 
                 <Input
-                  label="Note to your tailor"
-                  placeholder="Tell your tailor anything they need to know. e.g. I'd like a relaxed fit, I have broad shoulders, and I need this for a wedding on 14 June."
+                  label="Body note"
+                  placeholder="e.g. I prefer extra room in the shoulders, I have a shorter torso, or I like trousers to sit high on the waist."
                   value={fitNote}
                   onChangeText={(v) => { setFitNote(v); if (fitNoteError) validateFitNote(v) }}
                   onBlur={() => validateFitNote(fitNote)}
@@ -1214,21 +1591,21 @@ export default function OrderBriefScreen() {
               </View>
             )}
 
-            {/* ── Step 3: Fabric & delivery ── */}
+            {/* ── Step 3: Fabric ── */}
             {step === 3 && (
               <View style={styles.fields}>
                 <View>
-                  <Text style={styles.fieldLabel}>Fabric <Text style={styles.required}>*</Text></Text>
+                  <Text style={styles.fieldLabel}>Who provides the fabric? <Text style={styles.required}>*</Text></Text>
                   <View style={styles.optionCards}>
                     <OptionCard
-                      title="I'll supply the fabric"
-                      hint="You can ship it, drop it off locally, let the tailor pick it up, or bring it to consultation."
+                      title="I will provide the fabric"
+                      hint="The tailor confirms receipt with a photo before cutting begins."
                       active={fabricSource === 'CUSTOMER_SUPPLIES'}
                       onPress={() => setFabricSource('CUSTOMER_SUPPLIES')}
                     />
                     <OptionCard
-                      title="Tailor to source"
-                      hint="Tailor buys the fabric. Cost is included in their quote."
+                      title="Tailor sources the fabric"
+                      hint="The tailor uploads fabric for your approval before cutting begins."
                       active={fabricSource === 'TAILOR_SOURCES'}
                       onPress={() => setFabricSource('TAILOR_SOURCES')}
                     />
@@ -1237,6 +1614,12 @@ export default function OrderBriefScreen() {
 
                 {fabricSource === 'CUSTOMER_SUPPLIES' && (
                   <View>
+                    <View style={styles.guideCard}>
+                      <Text style={styles.guideTitle}>Fabric handoff</Text>
+                      <Text style={styles.guideText}>
+                        Production stays paused until the tailor confirms the fabric has arrived. If the fabric is unsuitable, the order goes to customer and ops review before work continues.
+                      </Text>
+                    </View>
                     <Text style={styles.fieldLabel}>How will the fabric reach the tailor? <Text style={styles.required}>*</Text></Text>
                     <View style={styles.optionCards}>
                       {FABRIC_HANDOFF_OPTIONS.map((option) => (
@@ -1252,6 +1635,59 @@ export default function OrderBriefScreen() {
                   </View>
                 )}
 
+                {fabricSource === 'TAILOR_SOURCES' && (
+                  <View style={styles.fields}>
+                    <Input
+                      label="Fabric description"
+                      placeholder="Colour, fabric type, texture, weight, print size, stretch, lining needs..."
+                      value={fabricDescription}
+                      onChangeText={setFabricDescription}
+                      multiline
+                      numberOfLines={4}
+                      maxLength={1000}
+                      filterContact
+                      required
+                      hint={`${fabricDescription.length}/1000`}
+                    />
+                    <Input
+                      label={`Fabric budget (optional, ${accountCurrency})`}
+                      placeholder="e.g. 75000"
+                      value={fabricBudgetAmount}
+                      onChangeText={(value) => setFabricBudgetAmount(value.replace(/[^\d]/g, ''))}
+                      keyboardType="number-pad"
+                      hint="The tailor will still quote the final amount before you pay."
+                    />
+                    <View>
+                      <Text style={styles.fieldLabel}>Sourcing deadline <Text style={styles.required}>*</Text></Text>
+                      <Text style={styles.fieldHint}>How long should the tailor have to source fabric before you are updated?</Text>
+                      <View style={styles.inlineChipRow}>
+                        {CUSTOM_ORDER_FABRIC_SOURCING_DEADLINE_DAYS.map((days) => (
+                          <TouchableOpacity
+                            key={days}
+                            style={[styles.inlineChip, fabricSourcingDeadlineDays === days && styles.inlineChipActive]}
+                            onPress={() => setFabricSourcingDeadlineDays(days)}
+                          >
+                            <Text style={[styles.inlineChipText, fabricSourcingDeadlineDays === days && styles.inlineChipTextActive]}>
+                              {days} business days
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    </View>
+                    <View style={styles.guideCard}>
+                      <Text style={styles.guideTitle}>Approval required</Text>
+                      <Text style={styles.guideText}>
+                        The tailor cannot cut until you approve the sourced fabric inside Drape.
+                      </Text>
+                    </View>
+                  </View>
+                )}
+              </View>
+            )}
+
+            {/* ── Step 4: Delivery ── */}
+            {step === 4 && (
+              <View style={styles.fields}>
                 <View>
                   <Text style={styles.fieldLabel}>Delivery <Text style={styles.required}>*</Text></Text>
                   <View style={styles.optionCards}>
@@ -1276,7 +1712,26 @@ export default function OrderBriefScreen() {
                   </View>
                 </View>
 
-                {deliveryMethod !== 'LOCAL_COLLECTION' && (
+                {deliveryMethod === 'SHIPPING' ? (
+                  <View>
+                    <Text style={styles.fieldLabel}>Shipping preference <Text style={styles.required}>*</Text></Text>
+                    <View style={styles.inlineChipRow}>
+                      {CUSTOM_ORDER_SHIPPING_PREFERENCES.map((value) => (
+                        <TouchableOpacity
+                          key={value}
+                          style={[styles.inlineChip, shippingPreference === value && styles.inlineChipActive]}
+                          onPress={() => setShippingPreference(value)}
+                        >
+                          <Text style={[styles.inlineChipText, shippingPreference === value && styles.inlineChipTextActive]}>
+                            {value === 'EXPRESS' ? 'Express' : 'Standard'}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+                ) : null}
+
+                {deliveryMethod && deliveryMethod !== 'LOCAL_COLLECTION' && (
                   <View style={styles.addressFields}>
                     <View>
                       <Text style={styles.fieldLabel}>Who should receive this order? <Text style={styles.required}>*</Text></Text>
@@ -1412,58 +1867,132 @@ export default function OrderBriefScreen() {
                         ? 'Your tailor or a local rider will use these details to deliver the finished garment. If search misses your area, you can still enter the address manually in full.'
                         : 'Your tailor ships the finished garment here. If search misses your area, you can still enter the address manually in full.'}
                     </Text>
+                    <Text style={styles.fieldHint}>
+                      Drape includes a standard {deliveryMethod === 'LOCAL_DELIVERY' ? 'delivery' : 'shipping'} fee when you pay the quote. Carrier surcharges, customs, or import duties are never charged automatically; we will ask you to approve anything extra before dispatch.
+                    </Text>
                     {recipientContactError ? <Text style={styles.linkError}>{recipientContactError}</Text> : null}
                     {deliveryAddressError ? <Text style={styles.linkError}>{deliveryAddressError}</Text> : null}
                   </View>
                 )}
 
-                {/* Summary */}
-                {garmentType && (
-                  <View style={styles.summaryCard}>
-                    <Text style={styles.summaryTitle}>Order summary</Text>
-                    <SummaryRow label="Garment" value={garmentType} />
-                    <SummaryRow label="Photos" value={`${photos.length} reference photos`} />
-                    {deadline && (
-                      <SummaryRow
-                        label="Deadline"
-                        value={deadline.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
-                      />
-                    )}
-                    {fabricSource && (
-                      <SummaryRow label="Fabric" value={fabricSource === 'CUSTOMER_SUPPLIES' ? 'You supply' : 'Tailor sources'} />
-                    )}
-                    {measurements?.measurementSource ? (
-                      <SummaryRow
-                        label="Measurement source"
-                        value={MEASUREMENT_SOURCE_LABELS[measurements.measurementSource as keyof typeof MEASUREMENT_SOURCE_LABELS] ?? measurements.measurementSource}
-                      />
-                    ) : null}
-                    {fabricSource === 'CUSTOMER_SUPPLIES' && fabricHandoffMode ? (
-                      <SummaryRow label="Fabric handoff" value={FABRIC_HANDOFF_LABELS[fabricHandoffMode]} />
-                    ) : null}
-                    {deliveryMethod && (
-                      <SummaryRow
-                        label="Delivery"
-                        value={
-                          deliveryMethod === 'SHIPPING'
-                            ? 'Shipping'
-                            : deliveryMethod === 'LOCAL_DELIVERY'
-                              ? 'Local delivery'
-                              : 'Local collection'
-                        }
-                      />
-                    )}
-                    {deliveryMethod !== 'LOCAL_COLLECTION' && recipientName.trim() && (
-                      <SummaryRow label={recipientMode === 'SELF' ? 'Receiving contact' : 'Recipient'} value={recipientName.trim()} />
-                    )}
-                    {deliveryMethod !== 'LOCAL_COLLECTION' && recipientPhone.trim() && (
-                      <SummaryRow label="Recipient phone" value={normalizePhoneForStorage(recipientPhone)} />
-                    )}
-                    {deliveryMethod !== 'LOCAL_COLLECTION' && composeDeliveryAddress().trim() && (
-                      <SummaryRow label={deliveryMethod === 'SHIPPING' ? 'Ship to' : 'Deliver to'} value={composeDeliveryAddress()} />
-                    )}
+                {deliveryMethod === 'LOCAL_COLLECTION' ? (
+                  <View style={styles.guideCard}>
+                    <Text style={styles.guideTitle}>Collection code</Text>
+                    <Text style={styles.guideText}>
+                      When the garment is ready, Drape creates a collection code. Share it only when you have collected the order.
+                    </Text>
                   </View>
-                )}
+                ) : null}
+
+                <Input
+                  label="Special delivery instructions (optional)"
+                  placeholder="Gate code, landmark, office hours, leave-with-reception details..."
+                  value={deliveryInstructions}
+                  onChangeText={setDeliveryInstructions}
+                  multiline
+                  numberOfLines={3}
+                  maxLength={500}
+                  filterContact
+                />
+              </View>
+            )}
+
+            {/* ── Step 5: Review ── */}
+            {step === 5 && (
+              <View style={styles.fields}>
+                <ReviewSection title="Garment details" onEdit={() => setStep(0)}>
+                  <SummaryRow label="Garment" value={garmentType === 'Other' ? garmentTypeOther.trim() : garmentType} />
+                  <SummaryRow label="Fit category" value={genderPresentation ?? 'Not set'} />
+                  <SummaryRow label="Occasion" value={occasion.trim() || 'Not set'} />
+                  <SummaryRow label="Target date" value={formatDate(deadline)} />
+                  <SummaryRow label="Brief" value={description.trim()} />
+                </ReviewSection>
+
+                <ReviewSection title="Style references" onEdit={() => setStep(1)}>
+                  <SummaryRow label="Photos" value={`${photos.length} reference photo${photos.length === 1 ? '' : 's'}`} />
+                  <SummaryRow label="Links" value={`${inspirationLinks.length} style link${inspirationLinks.length === 1 ? '' : 's'}`} />
+                  {styleAttributes.length > 0 ? <SummaryRow label="Focus areas" value={styleAttributes.join(', ')} /> : null}
+                  {styleNotes.trim() ? <SummaryRow label="Style notes" value={styleNotes.trim()} /> : null}
+                </ReviewSection>
+
+                <ReviewSection title="Measurements" onEdit={() => setStep(2)}>
+                  {measurements?.measurementSource ? (
+                    <SummaryRow
+                      label="Source"
+                      value={MEASUREMENT_SOURCE_LABELS[measurements.measurementSource as keyof typeof MEASUREMENT_SOURCE_LABELS] ?? measurements.measurementSource}
+                    />
+                  ) : null}
+                  <SummaryRow label="Body note" value={fitNote.trim()} />
+                </ReviewSection>
+
+                <ReviewSection title="Fabric" onEdit={() => setStep(3)}>
+                  <SummaryRow label="Fabric" value={fabricSourceLabel(fabricSource)} />
+                  {fabricSource === 'CUSTOMER_SUPPLIES' && fabricHandoffMode ? (
+                    <SummaryRow label="Handoff" value={FABRIC_HANDOFF_LABELS[fabricHandoffMode]} />
+                  ) : null}
+                  {fabricSource === 'TAILOR_SOURCES' ? (
+                    <>
+                      <SummaryRow label="Description" value={fabricDescription.trim()} />
+                      <SummaryRow label="Budget" value={fabricBudgetAmount.trim() ? `${accountCurrency} ${fabricBudgetAmount.trim()}` : 'Not set'} />
+                      <SummaryRow label="Sourcing update" value={`${fabricSourcingDeadlineDays} business days`} />
+                    </>
+                  ) : null}
+                </ReviewSection>
+
+                <ReviewSection title="Delivery" onEdit={() => setStep(4)}>
+                  <SummaryRow label="Method" value={deliveryMethodLabel(deliveryMethod)} />
+                  {deliveryMethod === 'SHIPPING' ? <SummaryRow label="Shipping" value={shippingPreference === 'EXPRESS' ? 'Express' : 'Standard'} /> : null}
+                  {deliveryMethod !== 'LOCAL_COLLECTION' && recipientName.trim() ? (
+                    <SummaryRow label={recipientMode === 'SELF' ? 'Receiving contact' : 'Recipient'} value={recipientName.trim()} />
+                  ) : null}
+                  {deliveryMethod !== 'LOCAL_COLLECTION' && recipientPhone.trim() ? (
+                    <SummaryRow label="Recipient phone" value={normalizePhoneForStorage(recipientPhone)} />
+                  ) : null}
+                  {deliveryMethod !== 'LOCAL_COLLECTION' && composeDeliveryAddress().trim() ? (
+                    <SummaryRow label={deliveryMethod === 'SHIPPING' ? 'Ship to' : 'Deliver to'} value={composeDeliveryAddress()} />
+                  ) : null}
+                  {deliveryInstructions.trim() ? <SummaryRow label="Instructions" value={deliveryInstructions.trim()} /> : null}
+                </ReviewSection>
+
+                <View style={styles.summaryCard}>
+                  <Text style={styles.summaryTitle}>Checkout preview</Text>
+                  <SummaryRow label="Estimated timeline" value={`Target delivery: ${formatDate(deadline)}`} />
+                  <SummaryRow label="Quote" value="Set by tailor after review" />
+                  <SummaryRow label="Delivery" value="Calculated after quote" />
+                  <SummaryRow label="Tax" value="Calculated at checkout" />
+                  <SummaryRow label="Total" value="Shown before payment" />
+                  <Text style={styles.fieldHint}>
+                    You will see the full checkout breakdown before any payment is confirmed.
+                  </Text>
+                </View>
+
+                <View style={styles.policyCard}>
+                  <Text style={styles.summaryTitle}>Cancellation policy</Text>
+                  <View style={styles.policyList}>
+                    {ORDER_CANCELLATION_POLICY_ROWS.map((row) => (
+                      <View key={row.title} style={styles.policyRow}>
+                        <Text style={styles.policyRowTitle}>{row.title}</Text>
+                        <Text style={styles.policyRowBody}>{row.body}</Text>
+                      </View>
+                    ))}
+                  </View>
+                  <TouchableOpacity
+                    style={[
+                      styles.policyAckRow,
+                      cancellationPolicyAcknowledged && styles.policyAckRowActive,
+                    ]}
+                    onPress={() => setCancellationPolicyAcknowledged((value) => !value)}
+                    activeOpacity={0.75}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: cancellationPolicyAcknowledged }}
+                    accessibilityLabel="Acknowledge cancellation policy"
+                  >
+                    <View style={[styles.policyCheck, cancellationPolicyAcknowledged && styles.policyCheckActive]}>
+                      <Text style={styles.policyCheckText}>{cancellationPolicyAcknowledged ? '✓' : ''}</Text>
+                    </View>
+                    <Text style={styles.policyAckText}>{ORDER_CANCELLATION_ACK_COPY}</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             )}
           </View>
@@ -1473,22 +2002,14 @@ export default function OrderBriefScreen() {
         <View style={styles.cta}>
           <View style={styles.ctaGuideCard}>
             <Text style={styles.ctaGuideTitle}>Best next move</Text>
-            <Text style={styles.ctaGuideText}>
-              {step === 0
-                ? 'Be clear about what you want made so the tailor can tell quickly whether they are the right fit.'
-                : step === 1
-                  ? 'Use references that show the outcome you want, not just the category you are shopping for.'
-                  : step === 2
-                    ? 'Accurate measurements and delivery details help the tailor quote with much less guesswork.'
-                    : 'Send the brief once it feels complete enough that a tailor could price and plan the work confidently.'}
-            </Text>
+            <Text style={styles.ctaGuideText}>{ctaGuideText()}</Text>
           </View>
           <Button
-            label={step < 3 ? 'Continue' : 'Send order'}
+            label={step < STEP_TITLES.length - 1 ? 'Continue' : 'Submit order'}
             onPress={next}
             loading={submitting}
-            disabled={submitting || (!canProceed() && step !== 1)}
-            testID={step < 3 ? 'brief-continue-btn' : 'brief-send-btn'}
+            disabled={submitting || !canProceed()}
+            testID={step < STEP_TITLES.length - 1 ? 'brief-continue-btn' : 'brief-send-btn'}
           />
         </View>
       </KeyboardAvoidingView>
@@ -1609,6 +2130,20 @@ function OptionCard({ title, hint, active, onPress }: { title: string; hint: str
   )
 }
 
+function ReviewSection({ title, onEdit, children }: { title: string; onEdit: () => void; children: ReactNode }) {
+  return (
+    <View style={styles.summaryCard}>
+      <View style={styles.reviewHeader}>
+        <Text style={styles.summaryTitle}>{title}</Text>
+        <TouchableOpacity onPress={onEdit} style={styles.reviewEditBtn}>
+          <Text style={styles.reviewEditText}>Edit</Text>
+        </TouchableOpacity>
+      </View>
+      {children}
+    </View>
+  )
+}
+
 function SummaryRow({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.summaryRow}>
@@ -1674,7 +2209,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.lightGrey,
   },
-  errorBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  errorBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   errorBtnTextSecondary: { color: Colors.ink },
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
@@ -1766,7 +2301,10 @@ const styles = StyleSheet.create({
   addressHalf: { flex: 1 },
 
   // Garment type chips
-  garmentRow: { flexDirection: 'row', gap: 8, paddingBottom: Spacing.xs },
+  taxonomyList: { gap: Spacing.md },
+  taxonomyGroup: { gap: Spacing.xs },
+  taxonomyTitle: { fontSize: FontSize.xs, color: Colors.midGrey, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.8 },
+  garmentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingBottom: Spacing.xs },
   garmentChip: {
     minHeight: 38,
     paddingHorizontal: 14, paddingVertical: 8,
@@ -1796,7 +2334,7 @@ const styles = StyleSheet.create({
     width: 22, height: 22, borderRadius: 11,
     backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center',
   },
-  photoRemoveText: { color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold },
+  photoRemoveText: { color: Colors.textInverse, fontSize: 11, fontWeight: FontWeight.bold },
   photoAdd: {
     width: 84, height: 84, borderRadius: Radius.md,
     borderWidth: 1.5, borderColor: Colors.lightGrey, borderStyle: 'dashed',
@@ -1825,6 +2363,8 @@ const styles = StyleSheet.create({
   measureSummaryItem: { width: '47%', gap: 2 },
   measureSummaryLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
   measureSummaryValue: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  additionalMeasurePreview: { gap: Spacing.sm, paddingTop: Spacing.xs },
+  additionalMeasurePreviewTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   flagsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   flagBadge: { paddingHorizontal: Spacing.sm, paddingVertical: 3, backgroundColor: Colors.kanteRustLight, borderRadius: Radius.full },
   flagBadgeText: { fontSize: FontSize.xs, color: Colors.kanteRust, fontWeight: FontWeight.medium },
@@ -1851,7 +2391,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   measureActionBtnText: {
-    color: Colors.white,
+    color: Colors.textInverse,
     fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
   },
@@ -1881,7 +2421,7 @@ const styles = StyleSheet.create({
     marginTop: Spacing.sm, backgroundColor: Colors.needleGreen,
     borderRadius: Radius.md, minHeight: 44, paddingVertical: 10, paddingHorizontal: Spacing.xl,
   },
-  noMeasureBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
+  noMeasureBtnText: { color: Colors.textInverse, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
 
   // Style inspiration
   inspirationSection: { gap: Spacing.sm },
@@ -1902,7 +2442,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen, borderRadius: Radius.md,
     minHeight: 44, paddingVertical: 10, paddingHorizontal: Spacing.lg, justifyContent: 'center',
   },
-  inspirationAddText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
+  inspirationAddText: { color: Colors.textInverse, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
   selectedLinks: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   selectedLinkBadge: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.xs,
@@ -1937,7 +2477,47 @@ const styles = StyleSheet.create({
   summaryTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   summaryLabel: { fontSize: FontSize.sm, color: Colors.inkLight },
-  summaryValue: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink },
+  summaryValue: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink, flex: 1, textAlign: 'right', marginLeft: Spacing.md },
+  policyCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: Spacing.sm, ...Shadow.sm },
+  policyList: { gap: Spacing.sm },
+  policyRow: { gap: 3 },
+  policyRowTitle: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
+  policyRowBody: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  policyAckRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+    marginTop: Spacing.xs,
+    padding: Spacing.md,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.bone,
+    minHeight: 52,
+  },
+  policyAckRowActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
+  policyCheck: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: Colors.midGrey,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.white,
+  },
+  policyCheckActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreen },
+  policyCheckText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.bold },
+  policyAckText: { flex: 1, fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  reviewHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: Spacing.md },
+  reviewEditBtn: {
+    minHeight: 34,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.md,
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  reviewEditText: { color: Colors.needleGreen, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
 
   // CTA
   cta: {
@@ -1984,6 +2564,6 @@ const styles = StyleSheet.create({
     minHeight: 44,
     paddingVertical: 10, paddingHorizontal: Spacing.xxl, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center',
   },
-  promptPrimaryText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.md },
+  promptPrimaryText: { color: Colors.textInverse, fontWeight: FontWeight.semibold, fontSize: FontSize.md },
   promptSecondary: { fontSize: FontSize.sm, color: Colors.midGrey, textDecorationLine: 'underline' },
 })

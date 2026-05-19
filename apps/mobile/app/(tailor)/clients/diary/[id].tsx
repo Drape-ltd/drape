@@ -18,7 +18,10 @@ import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { goBackOrFallback } from '@/lib/navigation'
 import { sharePassportInvite } from '@/lib/invite'
+import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
+import { Sentry } from '@/lib/sentry'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -96,6 +99,23 @@ export default function DiaryEntryScreen() {
 
   function goBack() {
     goBackOrFallback(router, navigation, '/(tailor)/clients')
+  }
+
+  function openDrapeVisionClientScan() {
+    if (isNew) {
+      Alert.alert('Save client first', 'Save this diary entry once, then use Drape Vision so the scan has a client record to update.')
+      return
+    }
+
+    const diaryId = id || 'new'
+    router.push({
+      pathname: DRAPE_VISION_ROUTE,
+      params: {
+        mode: 'tailor_client_scan',
+        diaryId,
+        returnTo: `/(tailor)/clients/diary/${diaryId}`,
+      },
+    } as never)
   }
 
   async function loadEntry() {
@@ -264,7 +284,17 @@ export default function DiaryEntryScreen() {
 
     setSaving(false)
     if (error) {
-      Alert.alert('Save failed', error.message)
+      Sentry.captureException(error, {
+        extra: {
+          context: isNew ? 'tailor_diary_create' : 'tailor_diary_update',
+          diaryId: isNew ? null : id,
+          userId: user?.id,
+        },
+      })
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. Your diary details are still here, so retry when the signal improves.'
+        : await readFunctionErrorMessage(error, 'We could not save this diary entry right now. Please try again in a moment.')
+      Alert.alert('Diary not saved', message)
     } else {
       if (isNew) goBack()
     }
@@ -283,7 +313,20 @@ export default function DiaryEntryScreen() {
         body: { action: 'mark-invite-sent', entryId: id },
       })
       if (!error) setInviteStatus('INVITE_SENT')
-      else Alert.alert('Invite not marked', error.message)
+      else {
+        Sentry.captureException(error, {
+          extra: {
+            context: 'tailor_diary_mark_invite_sent',
+            diaryId: id,
+            userId: user?.id,
+          },
+        })
+        const message = await readFunctionErrorMessage(
+          error,
+          'The invite was shared, but we could not update the diary status yet. Reopen this entry and try again.',
+        )
+        Alert.alert('Invite status not updated', message)
+      }
     } finally {
       setInviting(false)
     }
@@ -306,7 +349,17 @@ export default function DiaryEntryScreen() {
             })
             if (error) {
               setDeleting(false)
-              Alert.alert('Delete failed', error.message)
+              Sentry.captureException(error, {
+                extra: {
+                  context: 'tailor_diary_delete',
+                  diaryId: id,
+                  userId: user?.id,
+                },
+              })
+              const message = isLikelyConnectivityIssue(error)
+                ? 'Connection looks weak. We could not delete this entry yet. Retry when the signal improves.'
+                : await readFunctionErrorMessage(error, 'We could not delete this diary entry right now. Please try again in a moment.')
+              Alert.alert('Diary not deleted', message)
               return
             }
             goBack()
@@ -383,7 +436,7 @@ export default function DiaryEntryScreen() {
             )}
             <TouchableOpacity onPress={handleSave} disabled={saving || deleting} hitSlop={8} style={styles.saveBtn}>
               {saving
-                ? <ActivityIndicator size="small" color={Colors.white} />
+                ? <ActivityIndicator size="small" color={Colors.textInverse} />
                 : <Text style={styles.saveBtnText}>Save</Text>
               }
             </TouchableOpacity>
@@ -469,6 +522,23 @@ export default function DiaryEntryScreen() {
           {/* ── Measurements ────────────────────────────────────────────── */}
           <View onLayout={(e) => { measurementsY.current = e.nativeEvent.layout.y }}>
           <Section title="Measurements">
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Open Drape Vision client scan"
+              onPress={openDrapeVisionClientScan}
+              style={styles.visionDiaryCard}
+            >
+              <View style={styles.visionDiaryIcon}>
+                <Feather name="user-check" size={18} color={Colors.needleGreen} />
+              </View>
+              <View style={styles.visionDiaryCopy}>
+                <Text style={styles.visionDiaryTitle}>Drape Vision client scan</Text>
+                <Text style={styles.visionDiaryText}>
+                  Measure in person with consent, then keep every value editable before sending a passport invite.
+                </Text>
+              </View>
+              <Feather name="chevron-right" size={18} color={Colors.midGrey} />
+            </TouchableOpacity>
             <Field label="Unit">
               <SegmentPicker
                 options={[{ label: 'cm', value: 'cm' }, { label: 'inches', value: 'in' }]}
@@ -605,9 +675,9 @@ export default function DiaryEntryScreen() {
                     disabled={inviting}
                   >
                     {inviting ? (
-                      <ActivityIndicator size="small" color={Colors.white} />
+                      <ActivityIndicator size="small" color={Colors.textInverse} />
                     ) : (
-                      <Feather name="send" size={15} color={Colors.white} />
+                      <Feather name="send" size={15} color={Colors.textInverse} />
                     )}
                     <Text style={styles.inviteBtnText}>
                       {inviting ? 'Sending…' : inviteStatus === 'INVITE_SENT' ? 'Resend invite' : 'Send invite'}
@@ -754,7 +824,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
     paddingHorizontal: Spacing.xl, paddingVertical: Spacing.sm,
   },
-  errorBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  errorBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   errorLink: { fontSize: FontSize.sm, color: Colors.midGrey, fontWeight: FontWeight.medium },
 
   header: {
@@ -769,7 +839,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
     minWidth: 60, alignItems: 'center',
   },
-  saveBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  saveBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
 
   scroll: { padding: Spacing.xl, gap: Spacing.xl, paddingBottom: Spacing.xxxl },
   heroCard: {
@@ -831,6 +901,28 @@ const styles = StyleSheet.create({
   topErrorText: { flex: 1, fontSize: FontSize.sm, color: Colors.error },
 
   measureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  visionDiaryCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '35',
+    ...Shadow.sm,
+  },
+  visionDiaryIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  visionDiaryCopy: { flex: 1, gap: 2 },
+  visionDiaryTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  visionDiaryText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 17 },
   errorText: { fontSize: FontSize.xs, color: Colors.error, marginTop: 4 },
   inputError: { borderWidth: 1.5, borderColor: Colors.error },
 
@@ -874,7 +966,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   inviteBtnDisabled: { opacity: 0.7 },
-  inviteBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  inviteBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
 })
 
 const sectionStyles = StyleSheet.create({

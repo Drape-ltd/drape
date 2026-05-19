@@ -17,20 +17,20 @@ import { useAuth } from '@/lib/auth'
 import {
   fetchCustomerPaymentHistory,
   type CustomerPaymentHistoryData,
-  type CustomerPaymentRecord,
   type CustomerPaymentStatus,
   type CustomerRefundRecord,
 } from '@/lib/money-history'
 import { formatAmount, useCurrency, type CurrencyCode } from '@/lib/currency'
 import { useRefreshOnFocus } from '@/lib/queries'
+import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 
 type StatusFilter = 'ALL' | CustomerPaymentStatus
 type RangeFilter = 'ALL' | '30D' | '90D' | '365D'
 
 const STATUS_FILTERS: Array<{ key: StatusFilter; label: string }> = [
   { key: 'ALL', label: 'All' },
-  { key: 'IN_ESCROW', label: 'In escrow' },
-  { key: 'RELEASED', label: 'Released' },
+  { key: 'IN_ESCROW', label: 'Protected' },
+  { key: 'RELEASED', label: 'Closed out' },
   { key: 'PARTIALLY_REFUNDED', label: 'Partial refund' },
   { key: 'REFUNDED', label: 'Refunded' },
 ]
@@ -67,9 +67,9 @@ function withinRange(date: string, range: RangeFilter) {
 function statusLabel(status: CustomerPaymentStatus) {
   switch (status) {
     case 'IN_ESCROW':
-      return 'In escrow'
+      return 'Protected'
     case 'RELEASED':
-      return 'Released'
+      return 'Closed out'
     case 'PARTIALLY_REFUNDED':
       return 'Partially refunded'
     case 'REFUNDED':
@@ -147,7 +147,11 @@ export default function CustomerPaymentHistoryScreen() {
       setData(result)
       setError(null)
     } catch (fetchError) {
-      setError(fetchError instanceof Error ? fetchError.message : 'Could not load payment history.')
+      setError(
+        isLikelyConnectivityIssue(fetchError)
+          ? 'Connection looks weak. We could not refresh your payment history yet.'
+          : 'We could not load your payment history right now. Your orders are still protected, so try again in a moment.',
+      )
     }
   }
 
@@ -159,7 +163,7 @@ export default function CustomerPaymentHistoryScreen() {
 
   useRefreshOnFocus(() => {
     if (!currencyLoading) void load()
-  }, 20_000)
+  }, 0)
 
   async function onRefresh() {
     setRefreshing(true)
@@ -216,7 +220,7 @@ export default function CustomerPaymentHistoryScreen() {
             <ActivityIndicator color={Colors.needleGreen} size="large" />
             <Text style={styles.stateTitle}>Loading your payment timeline…</Text>
             <Text style={styles.stateHint}>
-              We’re gathering settled payments, escrow releases, and refunds so your order money stays transparent.
+              We’re gathering payments, order status, and refunds so your money history stays clear.
             </Text>
           </View>
         </View>
@@ -244,13 +248,13 @@ export default function CustomerPaymentHistoryScreen() {
           <Text style={styles.summaryEyebrow}>Summary</Text>
           <Text style={styles.summaryValue}>{summary.totalSpentDisplay}</Text>
           <Text style={styles.summaryHint}>
-            Totals are shown in your current account currency. Each order below stays locked to the currency it was placed in.
+            Totals are shown in your current account currency. Each order below keeps the exact currency you paid with.
           </Text>
         </View>
 
         <View style={styles.statsGrid}>
-          <StatCard label="Funds in escrow" value={String(data?.activeEscrowOrders ?? 0)} hint="Orders still waiting on release" />
-          <StatCard label="Completed orders" value={String(data?.completedOrders ?? 0)} hint="Delivered or fully closed out" />
+          <StatCard label="Protected orders" value={String(data?.activeEscrowOrders ?? 0)} hint="Paid orders still in progress" />
+          <StatCard label="Closed orders" value={String(data?.completedOrders ?? 0)} hint="Delivered or fully wrapped up" />
         </View>
 
         <View style={styles.controlsCard}>
@@ -296,7 +300,7 @@ export default function CustomerPaymentHistoryScreen() {
             <View style={styles.emptyCard}>
               <Text style={styles.emptyTitle}>No matching payments yet.</Text>
               <Text style={styles.emptyText}>
-                When you pay for an order, its status and any later refund will show here with the locked amount and timeline.
+                When you pay for an order, the amount, status, and any later refund will show here.
               </Text>
             </View>
           ) : (
@@ -328,7 +332,6 @@ export default function CustomerPaymentHistoryScreen() {
                   <View style={styles.moneyBreakdown}>
                     <MoneyLine label={row.phase === 'CONSULTATION' ? 'Consultation payment' : row.phase === 'FULFILLMENT' ? 'Fulfillment payment' : 'Amount paid'} value={money(row.amount, row.currency)} strong />
                     <MoneyLine label="Tax" value={money(row.taxAmount, row.currency)} />
-                    <MoneyLine label="Platform fee" value={money(row.platformFeeAmount, row.currency)} />
                     {row.refundedAmount > 0 ? (
                       <MoneyLine label="Refunded so far" value={money(row.refundedAmount, row.currency)} />
                     ) : null}
@@ -455,7 +458,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.7,
     fontWeight: FontWeight.semibold,
   },
-  summaryValue: { fontSize: 34, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: -0.8 },
+  summaryValue: { fontSize: 34, fontWeight: FontWeight.bold, color: Colors.textInverse, letterSpacing: -0.8 },
   summaryHint: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.84)', lineHeight: 20 },
   statsGrid: {
     marginHorizontal: Spacing.lg,

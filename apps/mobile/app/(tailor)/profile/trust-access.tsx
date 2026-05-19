@@ -56,14 +56,14 @@ export default function TailorTrustAccessScreen() {
     try {
       const { data, error } = await supabase
         .from('tailor_profiles')
-        .select('profile_completed, id_verification_status, is_live, stripe_account_id, paystack_account_id, ships_internationally, currency')
+        .select('profile_completed, id_verification_status, is_live, ships_internationally, currency, payout_currency, payout_provider, payout_reverification_required, payout_account_verified, payout_account_type')
         .eq('user_id', user.id)
         .maybeSingle()
 
       if (error) throw error
       if (!data) {
         setInput(null)
-        setLoadError('We could not find your seller access state yet. Finish setup first, then retry here.')
+        setLoadError('We could not find your tailor access state yet. Finish setup first, then retry here.')
         setLoading(false)
         return
       }
@@ -72,16 +72,21 @@ export default function TailorTrustAccessScreen() {
         profileCompleted: (data as any).profile_completed ?? false,
         idVerificationStatus: (data as any).id_verification_status ?? 'NOT_SUBMITTED',
         isLive: (data as any).is_live ?? false,
-        stripeAccountId: (data as any).stripe_account_id ?? null,
-        paystackAccountId: (data as any).paystack_account_id ?? null,
+        stripeAccountId: null,
+        paystackAccountId: null,
+        payoutCurrency: (data as any).payout_currency ?? null,
+        payoutProvider: (data as any).payout_provider ?? null,
+        payoutReverificationRequired: (data as any).payout_reverification_required ?? null,
+        payoutAccountVerified: (data as any).payout_account_verified ?? null,
+        payoutAccountType: (data as any).payout_account_type ?? null,
         shipsInternationally: (data as any).ships_internationally ?? false,
       })
       setWorkingCurrency((data as any).currency ?? null)
     } catch (error) {
       setLoadError(
         isLikelyConnectivityIssue(error)
-          ? 'Connection looks weak. Retry when the signal improves to reload your seller access details.'
-          : 'We could not load your seller access details right now.'
+          ? 'Connection looks weak. Retry when the signal improves to reload your tailor access details.'
+          : 'We could not load your tailor access details right now.'
       )
     } finally {
       setLoading(false)
@@ -251,7 +256,7 @@ export default function TailorTrustAccessScreen() {
             {guidance.supportEmail ? (
               <TouchableOpacity
                 style={styles.contactRow}
-                onPress={() => { void openEmail(guidance.supportEmail!, guidance.supportSubject ?? 'Drape seller access question') }}
+                onPress={() => { void openEmail(guidance.supportEmail!, guidance.supportSubject ?? 'Drape tailor access question') }}
               >
                 <View style={styles.contactIcon}>
                   <Feather name="mail" size={16} color={Colors.needleGreen} />
@@ -310,7 +315,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   badgeClear: { backgroundColor: Colors.needleGreenLight },
-  badgeReview: { backgroundColor: '#FFFBEB' },
+  badgeReview: { backgroundColor: Colors.statusPendingBg },
   badgeFix: { backgroundColor: Colors.errorLight },
   badgeText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   badgeTextClear: { color: Colors.needleGreen },
@@ -347,7 +352,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   reviewBtnText: {
-    color: Colors.white,
+    color: Colors.textInverse,
     fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
   },
@@ -404,7 +409,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: Radius.full,
   },
-  primaryBtnText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  primaryBtnText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   secondaryBtn: {
     backgroundColor: Colors.white,
     borderColor: Colors.lightGrey,

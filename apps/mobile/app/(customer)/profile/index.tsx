@@ -7,14 +7,16 @@ import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Feather } from '@expo/vector-icons'
-import * as ImagePicker from 'expo-image-picker'
 import * as ImageManipulator from 'expo-image-manipulator'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { useCustomerProfile } from '@/lib/customerProfile'
+import { pickAvatarImageUri, type AvatarImageSource } from '@/lib/avatar-picker'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { useCustomerProfileOverview, useRefreshOnFocus } from '@/lib/queries'
+import { uploadPublicStorageImage } from '@/lib/storage-upload'
 import { shareCustomerReferral, shareDiscoverTailors } from '@/lib/invite'
+import { Sentry } from '@/lib/sentry'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
 import { AvatarImage } from '@/components/ui/AvatarImage'
@@ -31,7 +33,22 @@ type MeasurementProfile = {
   inseam: number | null
   sleeveLength: number | null
   neckCircumference: number | null
+  underBust?: number | null
   height: number | null
+  backLength?: number | null
+  outseam?: number | null
+  thighCircumference?: number | null
+  kneeCircumference?: number | null
+  bicepCircumference?: number | null
+  wristCircumference?: number | null
+  headCircumference?: number | null
+  hatBandLine?: number | null
+  headLength?: number | null
+  headWidth?: number | null
+  earToEarOverCrown?: number | null
+  frontToBackOverCrown?: number | null
+  filaHeight?: number | null
+  torsoLength?: number | null
   unit: 'in' | 'cm'
 }
 
@@ -46,6 +63,9 @@ type RecentOrder = {
 
 const MEASUREMENT_KEYS: Array<keyof MeasurementProfile> = [
   'chest', 'waist', 'hips', 'shoulderWidth', 'inseam', 'sleeveLength', 'neckCircumference', 'height',
+  'underBust', 'backLength', 'outseam', 'thighCircumference', 'kneeCircumference', 'bicepCircumference',
+  'wristCircumference', 'headCircumference', 'hatBandLine', 'headLength', 'headWidth', 'earToEarOverCrown',
+  'frontToBackOverCrown', 'filaHeight', 'torsoLength',
 ]
 
 const STAGE_COLOR: Partial<Record<OrderStage, string>> = {
@@ -164,7 +184,10 @@ export default function CustomerProfileScreen() {
     } catch {}
   }
 
-  const displayName = user?.user_metadata?.display_name ?? ''
+  const displayName =
+    String(user?.user_metadata?.display_name ?? '').trim()
+    || user?.email?.split('@')[0]?.replace(/[._-]+/gu, ' ').trim()
+    || 'Drape customer'
   const initials = displayName
     .split(' ')
     .map((p: string) => p[0])
@@ -175,6 +198,9 @@ export default function CustomerProfileScreen() {
   const filledCount = measurements
     ? MEASUREMENT_KEYS.filter((k) => measurements[k] !== null && measurements[k] !== undefined).length
     : 0
+  const measurementProgressLabel = filledCount > 0
+    ? `${filledCount} saved`
+    : 'Set up'
   const guidedFitStatus =
     measurementMeta?.latestMeasurementScanStatus === 'TAILOR_REVIEW_REQUIRED'
       ? 'Tailor review pending'
@@ -193,51 +219,36 @@ export default function CustomerProfileScreen() {
 
   // ── Photo upload ────────────────────────────────────────────────────────────
 
-  async function handleAvatarPress() {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Allow photo access to set a profile picture.')
-      return
-    }
+  function handleAvatarPress() {
+    Alert.alert('Profile photo', 'Take a new photo or choose one from your library.', [
+      { text: 'Take photo', onPress: () => void updateAvatarFromSource('camera') },
+      { text: 'Choose from library', onPress: () => void updateAvatarFromSource('library') },
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'images',
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.9,
-    })
-
-    if (result.canceled || !result.assets[0]) return
+  async function updateAvatarFromSource(source: AvatarImageSource) {
+    const imageUri = await pickAvatarImageUri(source)
+    if (!imageUri) return
 
     setUploadingAvatar(true)
     try {
       // Compress to 800×800 JPEG — keeps avatars small
       const compressed = await ImageManipulator.manipulateAsync(
-        result.assets[0].uri,
+        imageUri,
         [{ resize: { width: 800, height: 800 } }],
         { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
       )
 
       const fileName = `${user!.id}/avatar.jpg`
-
-      // Fetch blob from local URI
-      const response = await fetch(compressed.uri)
-      const blob = await response.blob()
-
-      if (blob.size > 5 * 1024 * 1024) {
-        Alert.alert('Image too large', 'Please choose a photo under 5 MB.')
-        return
-      }
-
-      const { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(fileName, blob, { contentType: 'image/jpeg', upsert: true })
-
-      if (uploadError) throw uploadError
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('avatars')
-        .getPublicUrl(fileName)
+      const publicUrl = await uploadPublicStorageImage({
+        bucket: 'avatars',
+        path: fileName,
+        uri: compressed.uri,
+        contentType: 'image/jpeg',
+        maxBytes: 5 * 1024 * 1024,
+        upsert: true,
+      })
 
       // Cache-bust so the new image replaces the old one immediately
       const bustUrl = `${publicUrl}?t=${Date.now()}`
@@ -250,7 +261,7 @@ export default function CustomerProfileScreen() {
 
       setAvatarUrl(bustUrl)
     } catch (err) {
-      console.error('[avatar upload]', err)
+      Sentry.captureException(err, { extra: { context: 'customer_avatar_upload', userId: user?.id } })
       Alert.alert(
         'Upload failed',
         isLikelyConnectivityIssue(err)
@@ -264,15 +275,15 @@ export default function CustomerProfileScreen() {
 
   // ── Sign out ────────────────────────────────────────────────────────────────
 
-  async function handleLogOut() {
-    Alert.alert('Log out', 'Are you sure you want to log out?', [
+  async function handleSignOut() {
+    Alert.alert('Sign out', 'Are you sure you want to sign out?', [
       { text: 'Cancel', style: 'cancel' },
       {
-        text: 'Log out',
+        text: 'Sign out',
         style: 'destructive',
         onPress: () => {
           void signOut().catch(() => {
-            Alert.alert('Unable to log out', 'Please try again in a moment. You can keep using your profile and come back to log out later.')
+            Alert.alert('Unable to sign out', 'Please try again in a moment. You can keep using your profile and come back to sign out later.')
           })
         },
       },
@@ -317,7 +328,7 @@ export default function CustomerProfileScreen() {
             onPress={() => router.push('/(customer)/profile/notifications')}
             activeOpacity={0.7}
           >
-            <Feather name="bell" size={20} color={Colors.white} />
+            <Feather name="bell" size={20} color={Colors.textInverse} />
             {notifCount > 0 && (
               <View style={styles.bellBadge}>
                 <Text style={styles.bellBadgeText}>{notifCount > 9 ? '9+' : String(notifCount)}</Text>
@@ -336,7 +347,7 @@ export default function CustomerProfileScreen() {
           >
             {uploadingAvatar ? (
               <View style={[styles.avatar, styles.avatarLoading]}>
-                <ActivityIndicator color={Colors.white} />
+                <ActivityIndicator color={Colors.textInverse} />
               </View>
             ) : (
               <AvatarImage
@@ -349,7 +360,7 @@ export default function CustomerProfileScreen() {
             )}
             {/* Camera badge */}
             <View style={styles.cameraBadge}>
-              <Feather name="camera" size={11} color={Colors.white} />
+              <Feather name="camera" size={11} color={Colors.textInverse} />
             </View>
           </TouchableOpacity>
 
@@ -378,7 +389,7 @@ export default function CustomerProfileScreen() {
               onPress={() => router.push('/(customer)/profile/measurements')}
               activeOpacity={0.75}
             >
-              <Text style={styles.quickLinkValue}>{filledCount > 0 ? `${filledCount}/8` : 'Set up'}</Text>
+              <Text style={styles.quickLinkValue}>{measurementProgressLabel}</Text>
               <Text style={styles.quickLinkLabel}>Fit profile</Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -424,10 +435,12 @@ export default function CustomerProfileScreen() {
             onPress={() => { void openExternalUrl('https://drapeon.co/tailors', 'Please visit https://drapeon.co/tailors manually.') }}
             activeOpacity={0.8}
           >
-            <Text style={styles.becomeEmoji}>✂️</Text>
+            <View style={styles.becomeIcon}>
+              <Feather name="scissors" size={20} color={Colors.needleGreen} />
+            </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.becomeTitle}>Are you a seller?</Text>
-              <Text style={styles.becomeSub}>Join Drape and start selling custom work or ready-made pieces.</Text>
+              <Text style={styles.becomeTitle}>Are you a tailor?</Text>
+              <Text style={styles.becomeSub}>Join Drape to offer custom work, consultations, or ready-made pieces.</Text>
             </View>
             <Feather name="chevron-right" size={18} color={Colors.inkLight} />
           </TouchableOpacity>
@@ -462,10 +475,10 @@ export default function CustomerProfileScreen() {
             />
           </View>
 
-          {/* ── Log out ── */}
-          <TouchableOpacity style={styles.logOutRow} onPress={handleLogOut} activeOpacity={0.6}>
+          {/* ── Sign out ── */}
+          <TouchableOpacity style={styles.logOutRow} onPress={handleSignOut} activeOpacity={0.6} accessibilityRole="button" accessibilityLabel="Sign out">
             <Feather name="log-out" size={18} color={Colors.error} />
-            <Text style={styles.logOutText}>Log out</Text>
+            <Text style={styles.logOutText}>Sign out</Text>
           </TouchableOpacity>
 
         </View>
@@ -489,6 +502,8 @@ function FlatRow({
       style={[styles.flatRow, last && styles.rowLast]}
       onPress={onPress}
       activeOpacity={0.6}
+      accessibilityRole="button"
+      accessibilityLabel={label}
     >
       <Feather name={icon} size={20} color={Colors.inkLight} style={{ width: 24 }} />
       <Text style={styles.flatRowLabel}>{label}</Text>
@@ -539,7 +554,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.xxxl,
   },
-  statePrimaryBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
+  statePrimaryBtnText: { color: Colors.textInverse, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
   stateSecondaryBtn: {
     borderRadius: Radius.full,
     borderWidth: 1,
@@ -558,7 +573,7 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.xs,
     backgroundColor: Colors.needleGreen,
   },
-  profileHeaderTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.white, fontFamily: 'Georgia' },
+  profileHeaderTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textInverse, fontFamily: 'Georgia' },
   bellBtn: {
     width: 38, height: 38, borderRadius: Radius.full,
     backgroundColor: 'rgba(255,255,255,0.2)',
@@ -573,7 +588,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     borderWidth: 2, borderColor: Colors.needleGreen,
   },
-  bellBadgeText: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white },
+  bellBadgeText: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.textInverse },
 
   // Hero
   hero: {
@@ -597,7 +612,7 @@ const styles = StyleSheet.create({
     borderWidth: 3, borderColor: 'rgba(255,255,255,0.45)',
     overflow: 'hidden',
   },
-  avatarText: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.white },
+  avatarText: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.textInverse },
   cameraBadge: {
     position: 'absolute', bottom: 0, right: 0,
     width: 26, height: 26, borderRadius: Radius.full,
@@ -605,7 +620,7 @@ const styles = StyleSheet.create({
     borderWidth: 2, borderColor: Colors.needleGreen,
     alignItems: 'center', justifyContent: 'center',
   },
-  heroName: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.white, fontFamily: 'Georgia' },
+  heroName: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textInverse, fontFamily: 'Georgia' },
   heroMeta: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.75)' },
 
   body: {
@@ -729,7 +744,14 @@ const styles = StyleSheet.create({
     padding: Spacing.md, flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
     ...Shadow.sm,
   },
-  becomeEmoji: { fontSize: 32 },
+  becomeIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   becomeTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   becomeSub: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2, lineHeight: 16 },
 

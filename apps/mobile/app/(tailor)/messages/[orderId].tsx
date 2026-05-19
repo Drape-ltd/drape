@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native'
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { Feather } from '@expo/vector-icons'
 import {
   blockConversation,
   getConversationAccessStatus,
@@ -217,8 +218,8 @@ export default function TailorMessagesScreen() {
         'Rejoin your consultation call.',
         [
           { text: 'Cancel', style: 'cancel' },
-          { text: '📹 Video', onPress: () => { void openCallUrl(url) } },
-          { text: '🎙 Audio only', onPress: () => { void openCallUrl(url) } },
+          { text: 'Video', onPress: () => { void openCallUrl(url) } },
+          { text: 'Audio only', onPress: () => { void openCallUrl(url) } },
         ]
       )
     } else {
@@ -227,8 +228,8 @@ export default function TailorMessagesScreen() {
         'Start a call with this customer.',
         [
           { text: 'Cancel', style: 'cancel' },
-          { text: '📹 Video call', onPress: () => { void startCall('video') } },
-          { text: '🎙 Audio call', onPress: () => { void startCall('audio') } },
+          { text: 'Video call', onPress: () => { void startCall('video') } },
+          { text: 'Audio call', onPress: () => { void startCall('audio') } },
         ]
       )
     }
@@ -332,8 +333,14 @@ export default function TailorMessagesScreen() {
         </View>
         <View style={styles.headerActions}>
           {isConsultation && (
-            <TouchableOpacity style={styles.callBtn} onPress={showCallOptions} disabled={startingCall}>
-              <Text style={styles.callBtnText}>📞</Text>
+            <TouchableOpacity
+              style={styles.callBtn}
+              onPress={showCallOptions}
+              disabled={startingCall}
+              accessibilityRole="button"
+              accessibilityLabel="Open consultation call options"
+            >
+              <Feather name="phone-call" size={18} color={Colors.textInverse} />
             </TouchableOpacity>
           )}
           <TouchableOpacity
@@ -494,7 +501,6 @@ const styles = StyleSheet.create({
     width: 40, height: 40, borderRadius: 20,
     backgroundColor: Colors.needleGreen, alignItems: 'center', justifyContent: 'center',
   },
-  callBtnText: { fontSize: 18 },
   orderBtn: {
     backgroundColor: Colors.white,
     borderWidth: 1,
@@ -512,7 +518,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     borderRadius: 999,
   },
-  retryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  retryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   secondaryBtn: {
     backgroundColor: Colors.white,
     borderColor: Colors.lightGrey,

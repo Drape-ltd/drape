@@ -1,12 +1,20 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { parseBody, z } from '../_shared/validate.ts'
 import { normalizeAccountCurrency, resolvePaymentProviderForCurrency } from '../../../packages/shared/src/currency-config.ts'
+import {
+  getTailorPriceLimitMessage,
+  getTailorPriceMaxMajor,
+  getTailorPriceMinimumMessage,
+  getTailorPriceMinMajor,
+  TAILOR_SETUP_VALIDATION,
+  validateTailorSetupIdDocumentUrl,
+} from '../../../packages/shared/src/tailor-setup.ts'
 
 const FN = 'tailor-profile-action'
 
@@ -25,10 +33,10 @@ const BaseProfileSchema = z.object({
   displayName: z.string().trim().min(2).max(80),
   bio: z.string().trim().max(1200).optional().nullable(),
   location: z.string().trim().min(2).max(120),
-  languages: z.array(z.string().trim().min(1).max(40)).max(12).default([]),
-  specialties: z.array(z.string().trim().min(1).max(60)).max(20).default([]),
-  priceRangeMin: z.number().int().nonnegative().max(100_000_00).optional().nullable(),
-  priceRangeMax: z.number().int().nonnegative().max(100_000_00).optional().nullable(),
+  languages: z.array(z.string().trim().min(1).max(40)).max(12, TAILOR_SETUP_VALIDATION.LANGUAGE_LIMIT_MESSAGE).default([]),
+  specialties: z.array(z.string().trim().min(1).max(60)).max(20, TAILOR_SETUP_VALIDATION.SPECIALTY_LIMIT_MESSAGE).default([]),
+  priceRangeMin: z.number().int().nonnegative().optional().nullable(),
+  priceRangeMax: z.number().int().nonnegative().optional().nullable(),
   currency: CURRENCY.default('USD'),
   availability: AVAILABILITY.default('OPEN'),
   sellerType: SELLER_TYPE.default('TAILOR'),
@@ -49,7 +57,7 @@ const BodySchema = z.discriminatedUnion('action', [
     profile: BaseProfileSchema.extend({
       portfolioPhotoUrls: z.array(z.string().url()).max(12).default([]),
       portfolioVideoUrls: z.array(z.string().url()).max(4).default([]),
-      idDocumentUrl: z.string().url().optional().nullable(),
+      idDocumentUrl: z.string().trim().optional().nullable(),
     }),
   }),
   z.object({
@@ -62,23 +70,34 @@ const BodySchema = z.discriminatedUnion('action', [
   }),
 ])
 
+function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
+  if (typeof body.error === 'string' && typeof body.message !== 'string') {
+    body.message = body.error
+  }
+
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...headers, 'Content-Type': 'application/json' },
+  })
+}
+
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
 
   try {
     const caller = await getAuthUser(req)
-    if (!caller) return new Response('Unauthorized', { status: 401, headers: cors })
+    if (!caller) return jsonResponse({ error: 'Please sign in again before updating your tailor profile.' }, 401, cors)
 
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
     if (!parsed.ok) {
       log('warn', FN, 'validation.failed', { actor_id: caller.id, error: parsed.error })
-      return new Response(parsed.error, { status: 400, headers: cors })
+      return jsonResponse({ error: parsed.error }, 400, cors)
     }
 
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
     const allowed = await checkRateLimit(supabase, `${FN}:${caller.id}`, 3600, 60)
-    if (!allowed) return new Response('Too many requests', { status: 429, headers: cors })
+    if (!allowed) return rateLimitExceededResponse(cors)
 
     const body = parsed.data
 
@@ -90,7 +109,7 @@ Deno.serve(async (req) => {
 
     if (profileLookupError) {
       log('error', FN, 'profile.lookup_failed', { actor_id: caller.id, error: profileLookupError.message })
-      return new Response('Database error', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not load your tailor profile right now. Please try again.' }, 500, cors)
     }
 
     if (body.action === 'update-avatar') {
@@ -101,7 +120,7 @@ Deno.serve(async (req) => {
 
       if (error) {
         log('error', FN, 'avatar.update_failed', { actor_id: caller.id, error: error.message })
-        return new Response('Could not update avatar', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not update your profile photo right now. Please try again.' }, 500, cors)
       }
 
       await audit(supabase, {
@@ -111,38 +130,83 @@ Deno.serve(async (req) => {
         payload: { function: FN },
       })
 
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { ...cors, 'Content-Type': 'application/json' },
-      })
+      return jsonResponse({ ok: true }, 200, cors)
     }
 
     const profile = body.profile
     const languages = profile.languages ?? []
     const specialties = profile.specialties ?? []
+    const minPriceMinor = getTailorPriceMinMajor(profile.currency) * 100
+    const maxPriceMinor = getTailorPriceMaxMajor(profile.currency) * 100
     if (profile.priceRangeMin != null && profile.priceRangeMax != null && profile.priceRangeMax < profile.priceRangeMin) {
-      return new Response('Maximum price must be greater than or equal to minimum price.', { status: 400, headers: cors })
+      return jsonResponse({ error: 'Maximum price must be greater than or equal to minimum price.' }, 400, cors)
+    }
+    if (
+      (profile.priceRangeMin != null && profile.priceRangeMin < minPriceMinor)
+      || (profile.priceRangeMax != null && profile.priceRangeMax < minPriceMinor)
+    ) {
+      return jsonResponse({ error: getTailorPriceMinimumMessage(profile.currency) }, 400, cors)
+    }
+    if (
+      (profile.priceRangeMin != null && profile.priceRangeMin > maxPriceMinor)
+      || (profile.priceRangeMax != null && profile.priceRangeMax > maxPriceMinor)
+    ) {
+      return jsonResponse({ error: getTailorPriceLimitMessage(profile.currency) }, 400, cors)
     }
     if (!(profile.pickupAvailable || profile.deliveryAvailable || profile.shippingAvailable)) {
-      return new Response('Choose at least one fulfillment option.', { status: 400, headers: cors })
+      return jsonResponse({ error: 'Choose at least one fulfillment option.' }, 400, cors)
     }
     if (profile.pickupAvailable && !profile.pickupAddress?.trim()) {
-      return new Response('Add your private pickup address before offering pickup.', { status: 400, headers: cors })
+      return jsonResponse({ error: 'Add your private pickup address before offering pickup.' }, 400, cors)
     }
 
     const existingValues = existingProfile?.id
       ? await supabase
           .from('tailor_profiles')
-          .select('languages, price_range_min, price_range_max')
+          .select('languages, price_range_min, price_range_max, id_document_url, id_verification_status')
           .eq('user_id', caller.id)
           .maybeSingle()
       : { data: null, error: null }
 
     if (existingValues.error) {
       log('error', FN, 'profile.values_lookup_failed', { actor_id: caller.id, error: existingValues.error.message })
-      return new Response('Database error', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not load your saved setup details right now. Please try again.' }, 500, cors)
     }
 
-    const existingRow = (existingValues.data ?? {}) as { languages?: string[] | null; price_range_min?: number | null; price_range_max?: number | null }
+    const existingRow = (existingValues.data ?? {}) as {
+      languages?: string[] | null
+      price_range_min?: number | null
+      price_range_max?: number | null
+      id_document_url?: string | null
+      id_verification_status?: string | null
+    }
+
+    const submittedIdDocumentUrl =
+      body.action === 'upsert-setup' && typeof body.profile.idDocumentUrl === 'string'
+        ? body.profile.idDocumentUrl.trim()
+        : ''
+    const existingIdDocumentUrl =
+      typeof existingRow.id_document_url === 'string' ? existingRow.id_document_url.trim() : ''
+    const mayReuseExistingIdDocument =
+      body.action === 'upsert-setup'
+      && existingRow.id_verification_status !== 'REJECTED'
+      && existingIdDocumentUrl.length > 0
+    const setupIdDocumentUrl =
+      body.action === 'upsert-setup'
+        ? (submittedIdDocumentUrl || (mayReuseExistingIdDocument ? existingIdDocumentUrl : null))
+        : null
+    const idDocumentError = body.action === 'upsert-setup'
+      ? validateTailorSetupIdDocumentUrl(setupIdDocumentUrl)
+      : null
+
+    if (idDocumentError) {
+      log('warn', FN, 'validation.id_document_missing', {
+        actor_id: caller.id,
+        has_existing_document: existingIdDocumentUrl.length > 0,
+        existing_status: existingRow.id_verification_status ?? null,
+      })
+      return jsonResponse({ error: idDocumentError }, 400, cors)
+    }
 
     const payload: Record<string, unknown> = {
       user_id: caller.id,
@@ -170,8 +234,10 @@ Deno.serve(async (req) => {
       const setupProfile = body.profile
       payload.portfolio_photo_urls = setupProfile.portfolioPhotoUrls
       payload.portfolio_video_urls = setupProfile.portfolioVideoUrls
-      payload.id_document_url = setupProfile.idDocumentUrl ?? null
-      payload.id_verification_status = setupProfile.idDocumentUrl ? 'PENDING' : 'NOT_SUBMITTED'
+      payload.id_document_url = setupIdDocumentUrl
+      if (submittedIdDocumentUrl) {
+        payload.id_verification_status = 'PENDING'
+      }
     }
 
     const query = body.action === 'upsert-setup'
@@ -181,7 +247,7 @@ Deno.serve(async (req) => {
     const { error } = await query
     if (error) {
       log('error', FN, 'profile.write_failed', { actor_id: caller.id, action: body.action, error: error.message })
-      return new Response('Could not save profile', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not save your tailor profile right now. Please try again.' }, 500, cors)
     }
 
     const { data: savedProfile, error: savedProfileError } = await supabase
@@ -192,7 +258,7 @@ Deno.serve(async (req) => {
 
     if (savedProfileError) {
       log('error', FN, 'profile.saved_lookup_failed', { actor_id: caller.id, action: body.action, error: savedProfileError.message })
-      return new Response('Could not load saved profile', { status: 500, headers: cors })
+      return jsonResponse({ error: 'Your profile saved, but we could not reload it yet. Pull to refresh in a moment.' }, 500, cors)
     }
 
     const pickupAddress = profile.pickupAddress?.trim() || null
@@ -208,7 +274,7 @@ Deno.serve(async (req) => {
 
     if (pickupDetailsError) {
       log('error', FN, 'pickup_details.write_failed', { actor_id: caller.id, action: body.action, error: pickupDetailsError.message })
-      return new Response('Could not save private pickup details', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not save your private pickup details right now. Please try again.' }, 500, cors)
     }
 
     await audit(supabase, {
@@ -255,11 +321,9 @@ Deno.serve(async (req) => {
       })
     }
 
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    })
+    return jsonResponse({ ok: true }, 200, cors)
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return new Response('Internal server error', { status: 500, headers: cors })
+    return jsonResponse({ error: 'We could not save your tailor profile right now. Please try again.' }, 500, cors)
   }
 })

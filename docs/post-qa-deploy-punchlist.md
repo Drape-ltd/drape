@@ -13,6 +13,13 @@ This is the handoff from build mode into environment wiring and deployment.
 
 ## 1. Confirm Environments
 
+### QA Reminder: 72-Hour Payout Window
+
+- Test order: `DRPC5DQWO` (`e3e410c4-0b94-4353-8208-62bee3ba9d10`)
+- Current expected state: tailor earnings shows the NGN payout as pending release while the 72-hour customer review window is open.
+- Follow-up test: after the 72-hour window closes, run the payout release path and verify the order moves from pending release to the correct payout state only after all gates pass: delivery/collection confirmed, no open dispute, verified payout account, settled payment, and no currency mismatch.
+- Do not manually release this payout before testing that the time gate blocks early release.
+
 ### Web
 
 Confirm these are set in the real web environment:
@@ -47,9 +54,15 @@ Confirm server-side env is present:
 - `RESEND_FROM`
 - `OPS_EMAIL`
 - `VERIFICATION_SECRET`
+- `REAUTH_PROOF_SECRET` for dedicated five-minute password-confirmation proofs
+- `DRAPE_HEALTHCHECK_SECRET` for protected service readiness checks
+- `TWILIO_ACCOUNT_SID` for critical SMS order/security messages
+- `TWILIO_AUTH_TOKEN` for critical SMS order/security messages
+- `TWILIO_FROM_NUMBER` for critical SMS order/security messages
 - `DECISION_FUNCTION_URL` if you do not want the default same-project verification URL
 - `STRIPE_SECRET_KEY` or `STRIPE_SECRET_KEY_SANDBOX`
 - `STRIPE_WEBHOOK_SECRET`
+- `STRIPE_WEBHOOK_SECRETS` only during webhook endpoint rotation, as a comma-separated overlap list
 - `PAYSTACK_SECRET_KEY` or `PAYSTACK_SECRET_KEY_TEST`
 - `PAYSTACK_CALLBACK_URL` if you do not want the default callback path
 - `DAILY_API_KEY`

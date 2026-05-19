@@ -6,11 +6,12 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "drape",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
+    "jsEngine": "hermes",
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#F5F0E8"
+      "backgroundColor": "#1A1A18"
     },
     "assetBundlePatterns": [
       "**/*"
@@ -41,16 +42,18 @@
         ]
       },
       "infoPlist": {
-        "NSCameraUsageDescription": "Drape uses your camera to upload reference photos and progress updates.",
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "Drape uses your camera to upload reference photos, progress updates, and Drape Vision scans.",
         "NSPhotoLibraryUsageDescription": "Drape accesses your photo library for order references and portfolio photos.",
         "NSMicrophoneUsageDescription": "Drape uses your microphone for voice note messages.",
+        "NSMotionUsageDescription": "Drape uses device motion to keep Drape Vision scans calibrated while you turn.",
         "NSFaceIDUsageDescription": "Drape uses Face ID to quickly and securely verify your identity when you return to the app."
       }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#2D6A4F"
+        "backgroundColor": "#1D9E75"
       },
       "package": "com.drape.app",
       "permissions": [
@@ -58,7 +61,8 @@
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.RECORD_AUDIO",
         "android.permission.USE_BIOMETRIC",
-        "android.permission.USE_FINGERPRINT"
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
     },
     "web": {
@@ -83,10 +87,16 @@
         }
       ],
       [
+        "expo-sensors",
+        {
+          "motionPermission": "Drape uses device motion to keep Drape Vision scans calibrated while you turn."
+        }
+      ],
+      [
         "expo-notifications",
         {
           "icon": "./assets/notification-icon.png",
-          "color": "#2D6A4F",
+          "color": "#1D9E75",
           "sounds": []
         }
       ],
@@ -105,8 +115,16 @@
       "expo-font"
     ],
     "experiments": {
-      "typedRoutes": true
+      "typedRoutes": true,
+      "reactCompiler": true
     },
-    "newArchEnabled": true
+    "newArchEnabled": true,
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "4729d6f8-273a-43a9-abdf-6e4ca31ce83d"
+      }
+    },
+    "owner": "dimowoope"
   }
 }

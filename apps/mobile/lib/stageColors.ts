@@ -4,33 +4,35 @@
  * whether they appear on the dashboard, orders list, order detail,
  * or client history.
  */
+import { colors } from '@drape/shared/design-system'
+
 export const STAGE_COLORS: Record<string, { bg: string; text: string }> = {
-  PENDING_QUOTE:        { bg: '#FFF3CD', text: '#856404' },
-  CONSULTATION:         { bg: '#FFF3CD', text: '#856404' },
-  QUOTE_SENT:           { bg: '#D1ECF1', text: '#0C5460' },
-  PAYMENT_PENDING:      { bg: '#D1ECF1', text: '#0C5460' },
-  PAYMENT_FAILED:       { bg: '#F8D7DA', text: '#721C24' },
-  CONFIRMED:            { bg: '#D4EDDA', text: '#155724' },
-  DESIGNING:            { bg: '#D4EDDA', text: '#155724' },
-  SOURCING:             { bg: '#D4EDDA', text: '#155724' },
-  CUTTING:              { bg: '#FDE8C8', text: '#7C4A03' },
-  SEWING:               { bg: '#FDE8C8', text: '#7C4A03' },
-  FINISHING:            { bg: '#FDE8C8', text: '#7C4A03' },
-  OUT_FOR_DELIVERY:     { bg: '#C7EFCF', text: '#1A5C2A' },
-  SHIPPED:              { bg: '#C7EFCF', text: '#1A5C2A' },
-  READY_FOR_COLLECTION: { bg: '#C7EFCF', text: '#1A5C2A' },
-  DELIVERED:            { bg: '#C7EFCF', text: '#1A5C2A' },
-  COLLECTED:            { bg: '#C7EFCF', text: '#1A5C2A' },
-  COMPLETE:             { bg: '#C7EFCF', text: '#1A5C2A' },
-  PARTIALLY_REFUNDED:   { bg: '#FDE8C8', text: '#7C4A03' },
-  IN_DISPUTE:           { bg: '#F8D7DA', text: '#721C24' },
-  DECLINED:             { bg: '#E2E3E5', text: '#383D41' },
-  EXPIRED:              { bg: '#E2E3E5', text: '#383D41' },
-  CANCELLED:            { bg: '#E2E3E5', text: '#383D41' },
-  REFUNDED:             { bg: '#E2E3E5', text: '#383D41' },
+  PENDING_QUOTE:        { bg: colors.statusPendingBg, text: colors.statusPending },
+  CONSULTATION:         { bg: colors.statusPendingBg, text: colors.statusPending },
+  QUOTE_SENT:           { bg: colors.primaryLight, text: colors.primaryDark },
+  PAYMENT_PENDING:      { bg: colors.primaryLight, text: colors.primaryDark },
+  PAYMENT_FAILED:       { bg: colors.statusErrorBg, text: colors.statusError },
+  CONFIRMED:            { bg: colors.statusSuccessBg, text: colors.statusSuccess },
+  DESIGNING:            { bg: colors.statusSuccessBg, text: colors.statusSuccess },
+  SOURCING:             { bg: colors.statusSuccessBg, text: colors.statusSuccess },
+  CUTTING:              { bg: colors.accentLight, text: colors.accent },
+  SEWING:               { bg: colors.accentLight, text: colors.accent },
+  FINISHING:            { bg: colors.accentLight, text: colors.accent },
+  OUT_FOR_DELIVERY:     { bg: colors.statusSuccessBg, text: colors.statusSuccess },
+  SHIPPED:              { bg: colors.statusSuccessBg, text: colors.statusSuccess },
+  READY_FOR_COLLECTION: { bg: colors.statusSuccessBg, text: colors.statusSuccess },
+  DELIVERED:            { bg: colors.statusSuccessBg, text: colors.statusSuccess },
+  COLLECTED:            { bg: colors.statusSuccessBg, text: colors.statusSuccess },
+  COMPLETE:             { bg: colors.statusSuccessBg, text: colors.statusSuccess },
+  PARTIALLY_REFUNDED:   { bg: colors.accentLight, text: colors.accent },
+  IN_DISPUTE:           { bg: colors.statusErrorBg, text: colors.statusError },
+  DECLINED:             { bg: colors.statusMutedBg, text: colors.textSecondary },
+  EXPIRED:              { bg: colors.statusMutedBg, text: colors.textSecondary },
+  CANCELLED:            { bg: colors.statusMutedBg, text: colors.textSecondary },
+  REFUNDED:             { bg: colors.statusMutedBg, text: colors.textSecondary },
 }
 
-const FALLBACK = { bg: '#E2E3E5', text: '#383D41' }
+const FALLBACK = { bg: colors.statusMutedBg, text: colors.textSecondary }
 
 export function stageColor(stage: string) {
   return STAGE_COLORS[stage] ?? FALLBACK

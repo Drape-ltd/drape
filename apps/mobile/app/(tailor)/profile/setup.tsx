@@ -1,8 +1,8 @@
 /**
  * Seller profile setup wizard — 4 steps
- * Step 0: Identity (display name, location, bio, languages)
+ * Step 0: Identity (display name, phone, location, bio, languages)
  * Step 1: Specialties + pricing
- * Step 2: Portfolio (min 4 photos)
+ * Step 2: Portfolio (at least one work sample)
  * Step 3: Availability + ID verification upload
  */
 import { useState, useRef, useEffect, useMemo } from 'react'
@@ -13,26 +13,47 @@ import {
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
-import { Image as ExpoImage } from 'expo-image'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { detectDeviceCurrencyPreference, fetchCurrencyPreferenceContext } from '@/lib/currency'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { syncUserRow } from '@/lib/syncUserRow'
 import { stripExif } from '@/lib/stripExif'
-import { AddressAutocompleteInput, Button, Input, TagSelector, ProgressStepper } from '@/components/ui'
+import { createValidatedUploadPayload, uploadPublicStorageImage } from '@/lib/storage-upload'
+import { Sentry } from '@/lib/sentry'
+import { AddressAutocompleteInput, Button, Input, RemoteImage, TagSelector, ProgressStepper } from '@/components/ui'
 import type { TagGroup } from '@/components/ui'
 import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-filter'
+import { normalizePhoneForStorage, PHONE_STORAGE_HINT, validatePhoneForProfile } from '@drape/shared/phone'
+import {
+  deriveTailorSetupProgress,
+  getTailorPriceMaxMajor,
+  getTailorPriceMinMajor,
+  parseTailorPriceMajor,
+  TAILOR_SETUP_VALIDATION,
+  type TailorSetupField,
+  type TailorSetupFieldErrors,
+  type TailorSetupStep,
+} from '@drape/shared/tailor-setup'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { Availability } from '@/lib/shared-types'
 
 type SellerType = 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP'
+type PortfolioMediaSource = 'camera-photo' | 'camera-video' | 'library'
+type IdDocumentSource = 'camera' | 'library'
+type PortfolioItem = { type: 'photo' | 'video'; url: string }
+
+const MAX_PORTFOLIO_ITEMS = 12
+const MIN_PORTFOLIO_ITEMS = 1
+const MAX_PORTFOLIO_VIDEOS = 2
+const MAX_LANGUAGE_TAGS = 12
+const MAX_SPECIALTY_TAGS = 20
 
 const STEP_TITLES = ['Your identity', 'What you make', 'Portfolio', 'Selling setup']
 const STEP_SUBS = [
-  'This is your public seller profile. No contact details here. Buyers find you through Drape.',
+  'This is your public tailor profile. No contact details here. Buyers find you through Drape.',
   'Tell people what you make and what to expect on price.',
-  'Upload at least 4 photos of your work. This is what buyers notice first.',
+  'Add at least one real work sample. More photos help buyers trust your profile faster.',
   'Choose what you sell, how people receive orders, and verify your identity to go live.',
 ]
 const STEP_LABELS = ['Identity', 'Specialties', 'Portfolio', 'Selling']
@@ -102,15 +123,15 @@ const SPECIALTY_GROUPS: TagGroup[] = [
     items: ['Two-piece Set', 'Loungewear', 'Beachwear', 'Ready-made'],
   },
 ]
-const BIO_TEMPLATES = [
-  'I make custom native wear and occasion outfits with clean finishing and reliable delivery.',
-  'I run a boutique and tailor studio, offering custom work and ready-made pieces.',
-  'I focus on crochet and handmade pieces made to order with careful finishing and fit.',
+const BIO_PROMPTS = [
+  'What you make best',
+  'Who you usually sew for',
+  'How fittings and timelines work',
 ] as const
 const PRICE_PRESETS: Array<{ label: string; currency: 'GBP' | 'USD' | 'EUR' | 'NGN' | 'GHS' | 'KES' | 'CAD'; min: string; max: string }> = [
-  { label: 'Budget', currency: 'NGN', min: '50', max: '120' },
-  { label: 'Mid-range', currency: 'NGN', min: '120', max: '300' },
-  { label: 'Premium', currency: 'NGN', min: '300', max: '800' },
+  { label: 'Budget', currency: 'NGN', min: '50000', max: '120000' },
+  { label: 'Mid-range', currency: 'NGN', min: '120000', max: '300000' },
+  { label: 'Premium', currency: 'NGN', min: '300000', max: '800000' },
 ] as const
 
 export default function TailorSetupScreen() {
@@ -164,12 +185,18 @@ export default function TailorSetupScreen() {
     ])
   }
 
-  const [step, setStep] = useState(0)
+  const [step, setStep] = useState<TailorSetupStep>(0)
   const [saving, setSaving] = useState(false)
+  const [visibleErrors, setVisibleErrors] = useState<TailorSetupFieldErrors>({})
+  const [profileHydrated, setProfileHydrated] = useState(false)
+  const [pickupHydrated, setPickupHydrated] = useState(false)
+  const initialStepResolved = useRef(false)
 
   // Step 0
   const [displayName, setDisplayName] = useState(oauthName)
   const [nameError, setNameError] = useState('')
+  const [phone, setPhone] = useState(user?.user_metadata?.phone ?? '')
+  const [phoneError, setPhoneError] = useState('')
   const [bio, setBio] = useState('')
   const [bioError, setBioError] = useState('')
   const [location, setLocation] = useState('')
@@ -185,9 +212,11 @@ export default function TailorSetupScreen() {
   const [currency, setCurrency] = useState<'GBP' | 'USD' | 'EUR' | 'NGN' | 'GHS' | 'KES' | 'CAD'>(detectedCurrency.currency)
   const [currencySource, setCurrencySource] = useState(detectedCurrency.source)
   const [regionCode, setRegionCode] = useState(detectedCurrency.regionCode)
+  const priceMinGuide = useMemo(() => getTailorPriceMinMajor(currency).toLocaleString('en'), [currency])
+  const priceMaxGuide = useMemo(() => getTailorPriceMaxMajor(currency).toLocaleString('en'), [currency])
 
   // Step 2
-  const [portfolioItems, setPortfolioItems] = useState<Array<{ type: 'photo' | 'video'; url: string }>>([])
+  const [portfolioItems, setPortfolioItems] = useState<PortfolioItem[]>([])
   const [uploadingMedia, setUploadingMedia] = useState(false)
   const pickedUris = useRef<Set<string>>(new Set())
 
@@ -202,6 +231,9 @@ export default function TailorSetupScreen() {
   const [deliveryAvailable, setDeliveryAvailable] = useState(false)
   const [shippingAvailable, setShippingAvailable] = useState(false)
   const [idPhotoUri, setIdPhotoUri] = useState<string | null>(null)
+  const [existingIdDocumentUrl, setExistingIdDocumentUrl] = useState<string | null>(null)
+  const [idVerificationStatus, setIdVerificationStatus] = useState<'NOT_SUBMITTED' | 'PENDING' | 'VERIFIED' | 'REJECTED'>('NOT_SUBMITTED')
+  const [idError, setIdError] = useState('')
   const [uploadingId, setUploadingId] = useState(false)
 
   useEffect(() => {
@@ -220,6 +252,7 @@ export default function TailorSetupScreen() {
       .select(`
         display_name, bio, location, languages, specialty_tags,
         price_range_min, price_range_max, currency, seller_type,
+        id_verification_status,
         supports_custom_orders, supports_ready_made,
         pickup_available, delivery_available, shipping_available,
         delivery_fee, shipping_fee,
@@ -229,7 +262,10 @@ export default function TailorSetupScreen() {
       .maybeSingle()
       .then(({ data, error }) => {
         if (cancelled) return
-        if (error || !data) return
+        if (error || !data) {
+          setProfileHydrated(true)
+          return
+        }
 
         const row = data as any
         const nextDisplayName = row.display_name ?? oauthName
@@ -254,10 +290,10 @@ export default function TailorSetupScreen() {
           setLocation(nextLocation)
         }
         if (nextLanguages.length > 0) {
-          setLanguages(nextLanguages)
+          setLanguages(nextLanguages.slice(0, MAX_LANGUAGE_TAGS))
         }
         if (nextSpecialties.length > 0) {
-          setSpecialties(nextSpecialties)
+          setSpecialties(nextSpecialties.slice(0, MAX_SPECIALTY_TAGS))
         }
         if (typeof row.price_range_min === 'number' && row.price_range_min > 0) {
           setPriceMin(String(row.price_range_min / 100))
@@ -282,11 +318,20 @@ export default function TailorSetupScreen() {
         if (typeof row.pickup_available === 'boolean') setPickupAvailable(row.pickup_available)
         if (typeof row.delivery_available === 'boolean') setDeliveryAvailable(row.delivery_available)
         if (typeof row.shipping_available === 'boolean') setShippingAvailable(row.shipping_available)
+        if (typeof row.id_verification_status === 'string' && ['NOT_SUBMITTED', 'PENDING', 'VERIFIED', 'APPROVED', 'REJECTED'].includes(row.id_verification_status)) {
+          setIdVerificationStatus(row.id_verification_status)
+          setExistingIdDocumentUrl(
+            row.id_verification_status !== 'NOT_SUBMITTED' && row.id_verification_status !== 'REJECTED'
+              ? 'existing-id-document'
+              : null,
+          )
+        }
+        setProfileHydrated(true)
       })
 
     supabase
       .from('users')
-      .select('default_currency, currency_source, region_code')
+      .select('default_currency, currency_source, region_code, phone')
       .eq('id', user.id)
       .maybeSingle()
       .then(({ data, error }) => {
@@ -307,6 +352,14 @@ export default function TailorSetupScreen() {
         if (typeof (data as any).region_code === 'string' && (data as any).region_code.trim().length > 0) {
           setRegionCode((data as any).region_code.trim().toUpperCase())
         }
+        const nextPhone = typeof (data as any).phone === 'string' && (data as any).phone.trim().length > 0
+          ? (data as any).phone.trim()
+          : typeof user.user_metadata?.phone === 'string'
+            ? user.user_metadata.phone
+            : ''
+        if (nextPhone.trim().length > 0) {
+          setPhone(nextPhone)
+        }
       })
 
     supabase
@@ -316,11 +369,15 @@ export default function TailorSetupScreen() {
       .maybeSingle()
       .then(({ data, error }) => {
         if (cancelled) return
-        if (error || !data) return
+        if (error || !data) {
+          setPickupHydrated(true)
+          return
+        }
 
         const row = data as any
         if (typeof row.pickup_address === 'string') setPickupAddress(row.pickup_address)
         if (typeof row.pickup_instructions === 'string') setPickupInstructions(row.pickup_instructions)
+        setPickupHydrated(true)
       })
 
     return () => {
@@ -332,6 +389,7 @@ export default function TailorSetupScreen() {
 
   function onLocationChange(text: string) {
     setLocation(text)
+    clearVisibleError('location')
     setShowSuggestions(false)
     if (locationDebounce.current) clearTimeout(locationDebounce.current)
     if (text.trim().length < 3) { setLocationSuggestions([]); return }
@@ -362,6 +420,7 @@ export default function TailorSetupScreen() {
 
   function selectLocation(suggestion: string) {
     setLocation(suggestion)
+    clearVisibleError('location')
     setLocationSuggestions([])
     setShowSuggestions(false)
   }
@@ -393,6 +452,20 @@ export default function TailorSetupScreen() {
     return !error
   }
 
+  function validatePhone(value: string) {
+    if (!value.trim()) {
+      setPhoneError(TAILOR_SETUP_VALIDATION.PHONE_REQUIRED_MESSAGE)
+      return false
+    }
+    const error = validatePhoneForProfile(value)
+    if (error) {
+      setPhoneError(error)
+      return false
+    }
+    setPhoneError('')
+    return true
+  }
+
   function validateBio(text: string) {
     const res = filterContactInfo(text)
     if (res.blocked) { setBioError("Contact details aren't allowed in your bio."); return false }
@@ -401,105 +474,310 @@ export default function TailorSetupScreen() {
     setBioError(''); return true
   }
 
-  async function pickPortfolioMedia() {
-    if (portfolioItems.length >= 12) { Alert.alert('Maximum reached', 'You can add up to 12 photos or videos.'); return }
-    const videoCount = portfolioItems.filter((i) => i.type === 'video').length
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images', 'videos'],
-      quality: 0.85,
-      videoMaxDuration: 30,
+  function hasIdDocumentForSetup() {
+    if (idPhotoUri) return true
+    return idVerificationStatus !== 'NOT_SUBMITTED' && idVerificationStatus !== 'REJECTED'
+  }
+
+  function getSetupProgress(overrides?: {
+    nameError?: string
+    phoneError?: string
+    bioError?: string
+    idDocumentPresent?: boolean
+  }) {
+    return deriveTailorSetupProgress({
+      displayName,
+      nameError: overrides?.nameError ?? nameError,
+      phone,
+      phoneError: overrides?.phoneError ?? phoneError,
+      location,
+      bio,
+      bioError: overrides?.bioError ?? bioError,
+      bioLooksInvalid: bio.trim().length > 0 && isBioGibberish(bio),
+      languages,
+      specialties,
+      priceMin,
+      priceMax,
+      currency,
+      portfolioItemCount: portfolioItems.length,
+      supportsCustomOrders,
+      supportsReadyMade,
+      pickupAvailable,
+      deliveryAvailable,
+      shippingAvailable,
+      pickupAddress,
+      idDocumentPresent: overrides?.idDocumentPresent ?? hasIdDocumentForSetup(),
     })
-    if (res.canceled || !res.assets[0]) return
+  }
 
-    const asset = res.assets[0]
+  function clearVisibleError(field: TailorSetupField) {
+    setVisibleErrors((current) => {
+      if (!current[field]) return current
+      const next = { ...current }
+      delete next[field]
+      return next
+    })
+  }
+
+  useEffect(() => {
+    if (initialStepResolved.current || !profileHydrated || !pickupHydrated) return
+    const progress = getSetupProgress()
+    setStep(progress.firstIncompleteStep)
+    initialStepResolved.current = true
+  }, [
+    profileHydrated,
+    pickupHydrated,
+    displayName,
+    phone,
+    phoneError,
+    location,
+    bio,
+    languages,
+    specialties,
+    priceMin,
+    priceMax,
+    currency,
+    portfolioItems.length,
+    supportsCustomOrders,
+    supportsReadyMade,
+    pickupAvailable,
+    deliveryAvailable,
+    shippingAvailable,
+    pickupAddress,
+    existingIdDocumentUrl,
+    idVerificationStatus,
+  ])
+
+  function openPortfolioMediaPicker() {
+    Alert.alert('Add portfolio media', 'Show your work with a fresh capture or choose something you already saved.', [
+      { text: 'Take photo', onPress: () => void pickPortfolioMedia('camera-photo') },
+      { text: 'Record video', onPress: () => void pickPortfolioMedia('camera-video') },
+      { text: 'Choose from library', onPress: () => void pickPortfolioMedia('library') },
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }
+
+  async function uploadPortfolioAsset(asset: ImagePicker.ImagePickerAsset, index: number): Promise<PortfolioItem> {
+    if (!user?.id) {
+      throw new Error('Session expired. Please sign in again.')
+    }
+
     const isVideo = asset.type === 'video'
+    const stamp = `${Date.now()}-${index}`
 
-    if (isVideo && videoCount >= 2) {
-      Alert.alert('Video limit', 'You can include up to 2 videos in your portfolio.')
+    if (isVideo) {
+      const extension = asset.fileName?.split('.').pop()?.toLowerCase() || 'mp4'
+      const filename = `portfolio/${user.id}/${stamp}.${extension}`
+      const payload = await createValidatedUploadPayload(asset.uri, 50 * 1024 * 1024)
+      const contentType = asset.mimeType ?? payload.contentType ?? 'video/mp4'
+      const { error: videoError } = await supabase.storage
+        .from('portfolio-photos')
+        .upload(filename, payload.data, { contentType })
+      if (videoError) throw videoError
+      const { data } = supabase.storage.from('portfolio-photos').getPublicUrl(filename)
+      return { type: 'video', url: data.publicUrl }
+    }
+
+    const uri = await stripExif(asset.uri, { maxWidth: 1400 })
+    const filename = `portfolio/${user.id}/${stamp}.jpg`
+    const publicUrl = await uploadPublicStorageImage({
+      bucket: 'portfolio-photos',
+      path: filename,
+      uri,
+      contentType: 'image/jpeg',
+      maxBytes: 10 * 1024 * 1024,
+    })
+    return { type: 'photo', url: publicUrl }
+  }
+
+  async function pickPortfolioMedia(source: PortfolioMediaSource) {
+    if (portfolioItems.length >= MAX_PORTFOLIO_ITEMS) {
+      Alert.alert('Maximum reached', `You can add up to ${MAX_PORTFOLIO_ITEMS} photos or videos.`)
       return
     }
-    if (pickedUris.current.has(asset.uri)) {
-      Alert.alert('Duplicate', 'That file is already in your portfolio.')
+    const videoCount = portfolioItems.filter((i) => i.type === 'video').length
+    if (source === 'camera-video' && videoCount >= MAX_PORTFOLIO_VIDEOS) {
+      Alert.alert('Video limit', `You can include up to ${MAX_PORTFOLIO_VIDEOS} videos in your portfolio.`)
+      return
+    }
+
+    const permission =
+      source === 'library'
+        ? await ImagePicker.requestMediaLibraryPermissionsAsync()
+        : await ImagePicker.requestCameraPermissionsAsync()
+    if (!permission.granted) {
+      Alert.alert(
+        'Permission needed',
+        source === 'library'
+          ? 'Allow photo access to choose portfolio media.'
+          : 'Allow camera access to capture portfolio media.',
+      )
+      return
+    }
+
+    const res =
+      source === 'library'
+        ? await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images', 'videos'],
+          allowsMultipleSelection: true,
+          orderedSelection: true,
+          selectionLimit: Math.min(MAX_PORTFOLIO_ITEMS - portfolioItems.length, MAX_PORTFOLIO_ITEMS),
+          quality: 0.85,
+          videoMaxDuration: 30,
+        })
+        : source === 'camera-video'
+          ? await ImagePicker.launchCameraAsync({
+            mediaTypes: 'videos',
+            quality: 0.8,
+            videoMaxDuration: 30,
+          })
+          : await ImagePicker.launchCameraAsync({
+            mediaTypes: 'images',
+            quality: 0.85,
+          })
+    if (res.canceled || !res.assets[0]) return
+
+    const remainingSlots = MAX_PORTFOLIO_ITEMS - portfolioItems.length
+    const candidates = res.assets.slice(0, remainingSlots)
+    const acceptedAssets: ImagePicker.ImagePickerAsset[] = []
+    let skippedDuplicates = 0
+    let skippedVideos = 0
+    let nextVideoCount = videoCount
+
+    for (const asset of candidates) {
+      if (pickedUris.current.has(asset.uri)) {
+        skippedDuplicates += 1
+        continue
+      }
+      if (asset.type === 'video' && nextVideoCount >= MAX_PORTFOLIO_VIDEOS) {
+        skippedVideos += 1
+        continue
+      }
+      if (asset.type === 'video') nextVideoCount += 1
+      acceptedAssets.push(asset)
+    }
+
+    if (acceptedAssets.length === 0) {
+      const reason = skippedDuplicates > 0
+        ? 'Those files are already in your portfolio.'
+        : `You can include up to ${MAX_PORTFOLIO_VIDEOS} videos in your portfolio.`
+      Alert.alert('Nothing added', reason)
       return
     }
 
     setUploadingMedia(true)
-    pickedUris.current.add(asset.uri)
+    acceptedAssets.forEach((asset) => pickedUris.current.add(asset.uri))
 
+    const uploadedItems: PortfolioItem[] = []
+    const failedAssets: ImagePicker.ImagePickerAsset[] = []
     try {
-      if (isVideo) {
-        const filename = `portfolio/${user?.id}/${Date.now()}.mp4`
-        const blob = await (await fetch(asset.uri)).blob()
-        if (blob.size > 50 * 1024 * 1024) {
-          pickedUris.current.delete(asset.uri)
-          Alert.alert('File too large', 'Videos must be under 50 MB.')
-          setUploadingMedia(false)
-          return
+      for (let i = 0; i < acceptedAssets.length; i += 1) {
+        try {
+          uploadedItems.push(await uploadPortfolioAsset(acceptedAssets[i], i))
+        } catch (assetError) {
+          failedAssets.push(acceptedAssets[i])
+          pickedUris.current.delete(acceptedAssets[i].uri)
+          Sentry.captureException(assetError, {
+            extra: { context: 'tailor_setup_media_asset_upload', userId: user?.id },
+          })
         }
-        const { error: videoError } = await supabase.storage.from('portfolio-photos').upload(filename, blob, { contentType: 'video/mp4' })
-        if (videoError) throw videoError
-        const { data } = supabase.storage.from('portfolio-photos').getPublicUrl(filename)
-        setPortfolioItems((prev) => [...prev, { type: 'video', url: data.publicUrl }])
-      } else {
-        const uri = await stripExif(asset.uri)
-        const filename = `portfolio/${user?.id}/${Date.now()}.jpg`
-        const blob = await (await fetch(uri)).blob()
-        if (blob.size > 10 * 1024 * 1024) {
-          pickedUris.current.delete(asset.uri)
-          Alert.alert('File too large', 'Photos must be under 10 MB.')
-          setUploadingMedia(false)
-          return
-        }
-        const { error: photoError } = await supabase.storage.from('portfolio-photos').upload(filename, blob, { contentType: 'image/jpeg' })
-        if (photoError) throw photoError
-        const { data } = supabase.storage.from('portfolio-photos').getPublicUrl(filename)
-        setPortfolioItems((prev) => [...prev, { type: 'photo', url: data.publicUrl }])
+      }
+
+      if (uploadedItems.length > 0) {
+        setPortfolioItems((prev) => [...prev, ...uploadedItems].slice(0, MAX_PORTFOLIO_ITEMS))
+        clearVisibleError('portfolio')
+      }
+
+      if (failedAssets.length > 0 || skippedDuplicates > 0 || skippedVideos > 0 || res.assets.length > candidates.length) {
+        const notes = [
+          uploadedItems.length > 0 ? `${uploadedItems.length} added` : null,
+          failedAssets.length > 0 ? `${failedAssets.length} failed` : null,
+          skippedDuplicates > 0 ? `${skippedDuplicates} duplicate` : null,
+          skippedVideos > 0 ? `${skippedVideos} over video limit` : null,
+          res.assets.length > candidates.length ? `${res.assets.length - candidates.length} over portfolio limit` : null,
+        ].filter(Boolean)
+        Alert.alert('Portfolio update', notes.join(' · '))
       }
     } catch (error: any) {
-      pickedUris.current.delete(asset.uri)
+      acceptedAssets.forEach((asset) => pickedUris.current.delete(asset.uri))
       const details = isLikelyConnectivityIssue(error)
         ? 'Connection looks weak. We could not upload this media yet. Retry from this setup step when the signal improves.'
-        : error?.message ?? 'Please try again.'
-      console.error('tailor setup media upload failed', {
-        message: error?.message,
-        details: error?.details,
-        hint: error?.hint,
-        statusCode: error?.statusCode,
-        name: error?.name,
+        : 'We could not upload this media right now. Please try again in a moment.'
+      Sentry.captureException(error, {
+        extra: {
+          context: 'tailor_setup_media_upload',
+          userId: user?.id,
+          statusCode: error?.statusCode,
+          name: error?.name,
+        },
       })
-      Alert.alert('Error', `Could not upload media. ${details}`)
+      Alert.alert('Could not upload media', details)
+    } finally {
+      setUploadingMedia(false)
     }
-    setUploadingMedia(false)
   }
 
-  async function pickIdPhoto() {
-    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', quality: 0.9 })
+  function openIdPhotoPicker() {
+    Alert.alert('ID document', 'Take a clear photo now or choose an existing image.', [
+      { text: 'Take photo', onPress: () => void pickIdPhoto('camera') },
+      { text: 'Choose from library', onPress: () => void pickIdPhoto('library') },
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }
+
+  async function pickIdPhoto(source: IdDocumentSource) {
+    const permission =
+      source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (!permission.granted) {
+      Alert.alert(
+        'Permission needed',
+        source === 'camera'
+          ? 'Allow camera access to take your ID document photo.'
+          : 'Allow photo access to choose your ID document.',
+      )
+      return
+    }
+
+    const res =
+      source === 'camera'
+        ? await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.9 })
+        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', quality: 0.9 })
     if (res.canceled || !res.assets[0]) return
     setIdPhotoUri(res.assets[0].uri)
+    clearVisibleError('idDocument')
+    setIdError('')
   }
 
   async function uploadIdAndSave(): Promise<string | null> {
     if (!idPhotoUri) return null
     setUploadingId(true)
-    const ext = idPhotoUri.split('.').pop() ?? 'jpg'
-    const filename = `id-verification/${user?.id}/${Date.now()}.${ext}`
+    const filename = `id-verification/${user?.id}/${Date.now()}.jpg`
     try {
-      const blob = await (await fetch(idPhotoUri)).blob()
-      if (blob.size > 20 * 1024 * 1024) throw new Error('ID photo exceeds 20 MB limit.')
-      const { error } = await supabase.storage.from('id-documents').upload(filename, blob, { contentType: `image/${ext}` })
+      const cleanUri = await stripExif(idPhotoUri)
+      const payload = await createValidatedUploadPayload(cleanUri, 20 * 1024 * 1024)
+      const { error } = await supabase.storage.from('id-documents').upload(filename, payload.data, { contentType: 'image/jpeg' })
       if (error) throw error
-      const { data } = supabase.storage.from('id-documents').getPublicUrl(filename)
       setUploadingId(false)
-      return data.publicUrl
+      return filename
     } catch (error) {
-      console.error('tailor setup id upload failed', error)
+      Sentry.captureException(error, { extra: { context: 'tailor_setup_id_upload', userId: user?.id } })
       setUploadingId(false)
       return null
     }
   }
 
   async function finish() {
-    if (saving || uploadingId) return
+    if (saving || uploadingId || uploadingMedia) return
+
+    if (!hasIdDocumentForSetup()) {
+      setStep(3)
+      setIdError(TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE)
+      setVisibleErrors({ idDocument: TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE })
+      return
+    }
+
     setSaving(true)
 
     if (!user?.id) {
@@ -508,13 +786,18 @@ export default function TailorSetupScreen() {
       return
     }
 
-    const idUrl = await uploadIdAndSave()
+    const idUrl = idPhotoUri ? await uploadIdAndSave() : null
 
     if (idPhotoUri && !idUrl) {
       setSaving(false)
+      setStep(3)
+      setIdError(TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE)
+      setVisibleErrors({ idDocument: TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE })
       Alert.alert('ID upload failed', 'We could not upload your ID document yet. Retry from this setup step before submitting.')
       return
     }
+
+    const normalizedPhone = normalizePhoneForStorage(phone)
 
     const { error } = await invokeFunction('tailor-profile-action', {
       body: {
@@ -523,10 +806,10 @@ export default function TailorSetupScreen() {
           displayName: displayName.trim(),
           bio: bio.trim() || null,
           location: location.trim(),
-          languages,
-          specialties,
-          priceRangeMin: priceMin ? Math.round(parseFloat(priceMin) * 100) : null,
-          priceRangeMax: priceMax ? Math.round(parseFloat(priceMax) * 100) : null,
+          languages: languages.slice(0, MAX_LANGUAGE_TAGS),
+          specialties: specialties.slice(0, MAX_SPECIALTY_TAGS),
+          priceRangeMin: priceMin ? Math.round(parseTailorPriceMajor(priceMin) * 100) : null,
+          priceRangeMax: priceMax ? Math.round(parseTailorPriceMajor(priceMax) * 100) : null,
           currency,
           portfolioPhotoUrls: portfolioItems.filter((i) => i.type === 'photo').map((i) => i.url),
           portfolioVideoUrls: portfolioItems.filter((i) => i.type === 'video').map((i) => i.url),
@@ -552,29 +835,36 @@ export default function TailorSetupScreen() {
       const message = isLikelyConnectivityIssue(error)
         ? 'Connection looks weak. We could not save your setup yet. Your details are still here, so retry when the signal improves.'
         : await readFunctionErrorMessage(error, 'Could not save your profile right now. Please try again in a moment.')
-      console.error('tailor setup submit failed', {
-        message: error.message,
-        step,
-        userId: user.id,
-        pickupAvailable,
-        deliveryAvailable,
-        shippingAvailable,
-        supportsCustomOrders,
-        supportsReadyMade,
+      if (message.includes(TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE)) {
+        setStep(3)
+        setIdError(TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE)
+        setVisibleErrors({ idDocument: TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE })
+      }
+      Sentry.captureException(error, {
+        extra: {
+          context: 'tailor_setup_submit',
+          step,
+          userId: user.id,
+          pickupAvailable,
+          deliveryAvailable,
+          shippingAvailable,
+          supportsCustomOrders,
+          supportsReadyMade,
+        },
       })
       Alert.alert(
-        'Error',
+        'Setup not saved',
         message,
       )
       return
     }
 
     const { error: authError } = await supabase.auth.updateUser({
-      data: { display_name: displayName.trim() },
+      data: { display_name: displayName.trim(), phone: normalizedPhone },
     })
 
     if (authError) {
-      Alert.alert('Profile saved', 'Your profile was saved, but we could not finish updating your account name. Please reopen setup and try again.')
+      Alert.alert('Profile saved', 'Your profile was saved, but we could not finish updating your account contact details. Please reopen setup and try again.')
       return
     }
 
@@ -583,6 +873,7 @@ export default function TailorSetupScreen() {
         userId: user.id,
         displayName: displayName.trim(),
         role: 'TAILOR',
+        phone: normalizedPhone,
         defaultCurrency: currency,
         currencySource,
         regionCode,
@@ -593,8 +884,8 @@ export default function TailorSetupScreen() {
       Alert.alert(
         'Profile saved',
         isLikelyConnectivityIssue(syncError)
-          ? 'Your seller profile was saved, but we could not finish locking your account currency because the connection looks weak. Please reopen setup and retry.'
-          : 'Your seller profile was saved, but we could not finish locking your account currency right now. Please reopen setup and try again.',
+          ? 'Your tailor profile was saved, but we could not finish locking your account currency because the connection looks weak. Please reopen setup and retry.'
+          : 'Your tailor profile was saved, but we could not finish locking your account currency right now. Please reopen setup and try again.',
       )
       return
     }
@@ -614,52 +905,52 @@ export default function TailorSetupScreen() {
     )
   }
 
-  function canProceed(): boolean {
-    if (step === 0) return (
-      !!displayName.trim() &&
-      !nameError &&
-      !!location.trim() &&
-      bio.trim().length >= 80 &&
-      !bioError &&
-      !isBioGibberish(bio) &&
-      languages.length >= 1
-    )
-    if (step === 1) {
-      const min = parseFloat(priceMin)
-      const max = parseFloat(priceMax)
-      return (
-        specialties.length >= 1 &&
-        !!priceMin && !!priceMax &&
-        !isNaN(min) && !isNaN(max) &&
-        min > 0 && max >= min && max <= 100_000
-      )
-    }
-    if (step === 2) return portfolioItems.length >= 4
-    if (step === 3) {
-      const hasOrderMode = supportsCustomOrders || supportsReadyMade
-      const hasFulfillment = pickupAvailable || deliveryAvailable || shippingAvailable
-      const pickupReady = !pickupAvailable || pickupAddress.trim().length >= 8
-      return hasOrderMode && hasFulfillment && pickupReady
-    }
-    return false
-  }
-
   function next() {
-    if (saving || uploadingId) return
-    if (step === 0 && !validateName(displayName)) return
-    if (!canProceed()) return
-    if (step < 3) setStep(step + 1)
+    if (saving || uploadingId || uploadingMedia) return
+    const nextNameError = step === 0 ? validateDisplayName(displayName) ?? '' : nameError
+    const nextPhoneError = step === 0
+      ? (!phone.trim() ? TAILOR_SETUP_VALIDATION.PHONE_REQUIRED_MESSAGE : validatePhoneForProfile(phone) ?? '')
+      : phoneError
+    const bioValid = step === 0 ? validateBio(bio) : true
+
+    if (step === 0) {
+      setNameError(nextNameError)
+      setPhoneError(nextPhoneError)
+    }
+
+    const progress = getSetupProgress({
+      nameError: nextNameError,
+      phoneError: nextPhoneError,
+      bioError: bioValid ? '' : bioError || TAILOR_SETUP_VALIDATION.BIO_REQUIRED_MESSAGE,
+    })
+
+    if (!progress.stepValid[step]) {
+      const currentErrors = progress.stepErrors[step]
+      setVisibleErrors(currentErrors)
+      if (currentErrors.idDocument) {
+        setIdError(currentErrors.idDocument)
+      }
+      return
+    }
+
+    setVisibleErrors({})
+    if (step === 3 && !hasIdDocumentForSetup()) {
+      setIdError(TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE)
+      setVisibleErrors({ idDocument: TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE })
+      return
+    }
+    if (step < 3) setStep((step + 1) as TailorSetupStep)
     else finish()
   }
 
   function goBack() {
     if (step > 0) {
-      setStep(step - 1)
+      setStep((step - 1) as TailorSetupStep)
       return
     }
     Alert.alert(
       'Leave setup?',
-      'Your seller profile is not finished yet. You can stay here and continue, or sign out and come back later.',
+      'Your tailor profile is not finished yet. You can stay here and continue, or sign out and come back later.',
       [
         { text: 'Stay', style: 'cancel' },
         { text: 'Sign out', style: 'destructive', onPress: handleSignOut },
@@ -705,14 +996,32 @@ export default function TailorSetupScreen() {
                   value={displayName}
                   onChangeText={(value) => {
                     setDisplayName(value)
+                    clearVisibleError('displayName')
                     if (nameError) validateName(value)
                   }}
                   onBlur={() => validateName(displayName)}
-                  error={nameError}
+                  error={nameError || visibleErrors.displayName}
                   required
                   autoCapitalize="words"
                   hint="No @, URLs, or phone numbers. This is your public name."
                   testID="display-name-input"
+                />
+                <Input
+                  label="Phone number"
+                  placeholder="For order updates and account recovery"
+                  value={phone}
+                  onChangeText={(value) => {
+                    setPhone(value)
+                    clearVisibleError('phone')
+                    if (phoneError) validatePhone(value)
+                  }}
+                  onBlur={() => validatePhone(phone)}
+                  error={phoneError || visibleErrors.phone}
+                  required
+                  keyboardType="phone-pad"
+                  autoCapitalize="none"
+                  hint={PHONE_STORAGE_HINT}
+                  testID="phone-input"
                 />
                 <View>
                   <Input
@@ -721,6 +1030,7 @@ export default function TailorSetupScreen() {
                     value={location}
                     onChangeText={onLocationChange}
                     onBlur={() => setShowSuggestions(false)}
+                    error={visibleErrors.location}
                     required
                     testID="location-input"
                     autoCorrect={false}
@@ -744,9 +1054,13 @@ export default function TailorSetupScreen() {
                   label="About you"
                   placeholder="Tell people who you are, what you make, and your experience. Min 80 characters."
                   value={bio}
-                  onChangeText={(v) => { setBio(v); validateBio(v) }}
+                  onChangeText={(v) => {
+                    setBio(v)
+                    clearVisibleError('bio')
+                    validateBio(v)
+                  }}
                   onBlur={() => validateBio(bio)}
-                  error={bioError}
+                  error={bioError || visibleErrors.bio}
                   required
                   multiline
                   numberOfLines={5}
@@ -755,18 +1069,12 @@ export default function TailorSetupScreen() {
                   hint={`Min 80 characters · ${bio.trim().length}/500. No social handles, phone numbers, or URLs.`}
                   testID="bio-input"
                 />
+                <Text style={styles.fieldHint}>Try covering:</Text>
                 <View style={styles.templateRow}>
-                  {BIO_TEMPLATES.map((template) => (
-                    <TouchableOpacity
-                      key={template}
-                      style={styles.helperChip}
-                      onPress={() => {
-                        setBio(template)
-                        validateBio(template)
-                      }}
-                    >
-                      <Text style={styles.helperChipText}>Use template</Text>
-                    </TouchableOpacity>
+                  {BIO_PROMPTS.map((prompt) => (
+                    <View key={prompt} style={styles.helperChip}>
+                      <Text style={styles.helperChipText}>{prompt}</Text>
+                    </View>
                   ))}
                 </View>
 
@@ -774,9 +1082,15 @@ export default function TailorSetupScreen() {
                   label="Languages you speak"
                   options={LANGUAGE_GROUPS}
                   selected={languages}
-                  onChange={setLanguages}
+                  maxSelected={MAX_LANGUAGE_TAGS}
+                  maxSelectedMessage={TAILOR_SETUP_VALIDATION.LANGUAGE_LIMIT_MESSAGE}
+                  onChange={(nextLanguages) => {
+                    setLanguages(nextLanguages.slice(0, MAX_LANGUAGE_TAGS))
+                    clearVisibleError('languages')
+                  }}
                   searchable
                 />
+                {!!visibleErrors.languages && <Text style={styles.helperError}>{visibleErrors.languages}</Text>}
               </View>
               </View>
             )}
@@ -791,13 +1105,21 @@ export default function TailorSetupScreen() {
                   hint="Select all that apply. These appear on your public profile."
                   options={SPECIALTY_GROUPS}
                   selected={specialties}
-                  onChange={setSpecialties}
+                  maxSelected={MAX_SPECIALTY_TAGS}
+                  maxSelectedMessage={TAILOR_SETUP_VALIDATION.SPECIALTY_LIMIT_MESSAGE}
+                  onChange={(nextSpecialties) => {
+                    setSpecialties(nextSpecialties.slice(0, MAX_SPECIALTY_TAGS))
+                    clearVisibleError('specialties')
+                  }}
                   searchable
                 />
+                {!!visibleErrors.specialties && <Text style={styles.helperError}>{visibleErrors.specialties}</Text>}
 
                 <View>
                   <Text style={styles.fieldLabel}>Typical price range <Text style={styles.required}>*</Text></Text>
-                  <Text style={styles.fieldHint}>This shows on your profile as a guide, not a fixed price.</Text>
+                  <Text style={styles.fieldHint}>
+                    This shows on your profile as a guide, not a fixed price. For {currency}, use at least {priceMinGuide} and keep the high end at {priceMaxGuide} or less.
+                  </Text>
                   <Text style={styles.fieldHint}>
                     {currencySource === 'UNSUPPORTED_FALLBACK'
                       ? 'Your region is not mapped to a supported local currency yet, so we preselected USD. Change it here if another supported currency fits your business better.'
@@ -812,6 +1134,7 @@ export default function TailorSetupScreen() {
                           setCurrency(preset.currency)
                           setPriceMin(preset.min)
                           setPriceMax(preset.max)
+                          clearVisibleError('priceRange')
                         }}
                       >
                         <Text style={styles.helperChipText}>{preset.label}</Text>
@@ -827,6 +1150,7 @@ export default function TailorSetupScreen() {
                           setCurrency(c)
                           setCurrencySource('USER_SELECTED')
                           setRegionCode(regionCode || detectedCurrency.regionCode)
+                          clearVisibleError('priceRange')
                         }}
                       >
                         <Text style={[styles.currencyChipText, currency === c && styles.currencyChipTextActive]}>{c}</Text>
@@ -838,7 +1162,10 @@ export default function TailorSetupScreen() {
                       label="From"
                       placeholder="50"
                       value={priceMin}
-                      onChangeText={setPriceMin}
+                      onChangeText={(value) => {
+                        setPriceMin(value)
+                        clearVisibleError('priceRange')
+                      }}
                       keyboardType="decimal-pad"
                       required
                       containerStyle={styles.priceInput}
@@ -847,15 +1174,19 @@ export default function TailorSetupScreen() {
                       label="To"
                       placeholder="500"
                       value={priceMax}
-                      onChangeText={setPriceMax}
+                      onChangeText={(value) => {
+                        setPriceMax(value)
+                        clearVisibleError('priceRange')
+                      }}
                       keyboardType="decimal-pad"
                       required
                       containerStyle={styles.priceInput}
                     />
                   </View>
-                  {!!priceMin && !!priceMax && parseFloat(priceMax) < parseFloat(priceMin) && (
+                  {!!priceMin && !!priceMax && parseTailorPriceMajor(priceMax) < parseTailorPriceMajor(priceMin) && (
                     <Text style={styles.priceError}>"To" must be greater than "From"</Text>
                   )}
+                  {!!visibleErrors.priceRange && <Text style={styles.helperError}>{visibleErrors.priceRange}</Text>}
                 </View>
               </View>
               </View>
@@ -867,22 +1198,29 @@ export default function TailorSetupScreen() {
                 <View style={styles.fields}>
                 <View style={styles.portfolioStatus}>
                   <View style={styles.portfolioBar}>
-                    <View style={[styles.portfolioBarFill, { width: `${(portfolioItems.length / 12) * 100}%` }]} />
+                    <View style={[styles.portfolioBarFill, { width: `${(portfolioItems.length / MAX_PORTFOLIO_ITEMS) * 100}%` }]} />
                     <View style={styles.portfolioBarMinMarker} />
                   </View>
                   <Text style={styles.portfolioCount}>
-                    {portfolioItems.length >= 4
-                      ? `${portfolioItems.length}/12 ✓ minimum met`
-                      : `${portfolioItems.length}/4 needed. ${4 - portfolioItems.length} more to continue`}
-                    {' · '}{portfolioItems.filter((i) => i.type === 'video').length}/2 videos
+                    {portfolioItems.length >= MIN_PORTFOLIO_ITEMS
+                      ? `${portfolioItems.length}/${MAX_PORTFOLIO_ITEMS} added · add more to build trust`
+                      : 'Add 1 work sample to continue'}
+                    {' · '}{portfolioItems.filter((i) => i.type === 'video').length}/{MAX_PORTFOLIO_VIDEOS} videos
                   </Text>
+                  {!!visibleErrors.portfolio && <Text style={styles.helperError}>{visibleErrors.portfolio}</Text>}
                 </View>
 
                 <View style={styles.portfolioGrid}>
                   {portfolioItems.map((item, i) => (
                     <View key={i} style={styles.portfolioThumb}>
                       {item.type === 'photo' ? (
-                        <ExpoImage source={{ uri: item.url }} style={styles.portfolioImg} contentFit="cover" transition={120} />
+                        <RemoteImage
+                          uri={item.url}
+                          style={styles.portfolioImg}
+                          contentFit="cover"
+                          transition={120}
+                          surface="tailor_setup_portfolio_preview"
+                        />
                       ) : (
                         <View style={[styles.portfolioImg, styles.videoThumb]}>
                           <Text style={styles.videoIcon}>▶</Text>
@@ -891,16 +1229,20 @@ export default function TailorSetupScreen() {
                       )}
                       <TouchableOpacity
                         style={styles.portfolioRemove}
-                        onPress={() => setPortfolioItems((prev) => prev.filter((_, idx) => idx !== i))}
+                        onPress={() => {
+                          setPortfolioItems((prev) => prev.filter((_, idx) => idx !== i))
+                          clearVisibleError('portfolio')
+                        }}
                       >
                         <Text style={styles.portfolioRemoveText}>✕</Text>
                       </TouchableOpacity>
                     </View>
                   ))}
-                  {portfolioItems.length < 12 && (
-                    <TouchableOpacity style={styles.portfolioAdd} onPress={pickPortfolioMedia} disabled={uploadingMedia}>
+                  {portfolioItems.length < MAX_PORTFOLIO_ITEMS && (
+                    <TouchableOpacity style={styles.portfolioAdd} onPress={openPortfolioMediaPicker} disabled={uploadingMedia}>
                       <Text style={styles.portfolioAddIcon}>{uploadingMedia ? '…' : '+'}</Text>
-                      <Text style={styles.portfolioAddLabel}>Photo or video</Text>
+                      <Text style={styles.portfolioAddLabel}>Add media</Text>
+                      <Text style={styles.portfolioAddHint}>Multi-select from library</Text>
                     </TouchableOpacity>
                   )}
                 </View>
@@ -923,7 +1265,9 @@ export default function TailorSetupScreen() {
                     <TouchableOpacity
                       key={opt.value}
                       style={[styles.availCard, availability === opt.value && styles.availCardActive]}
-                      onPress={() => setAvailability(opt.value)}
+                      onPress={() => {
+                        setAvailability(opt.value)
+                      }}
                     >
                       <View style={[styles.availRadio, availability === opt.value && styles.availRadioActive]} />
                       <View style={{ flex: 1 }}>
@@ -952,6 +1296,7 @@ export default function TailorSetupScreen() {
                       </TouchableOpacity>
                     ))}
                   </View>
+                  {!!visibleErrors.orderMode && <Text style={styles.helperError}>{visibleErrors.orderMode}</Text>}
                 </View>
 
                 <View>
@@ -959,14 +1304,20 @@ export default function TailorSetupScreen() {
                   <View style={styles.choiceGroup}>
                     <TouchableOpacity
                       style={[styles.choiceCard, supportsCustomOrders && styles.choiceCardActive]}
-                      onPress={() => setSupportsCustomOrders((value) => !value)}
+                      onPress={() => {
+                        setSupportsCustomOrders((value) => !value)
+                        clearVisibleError('orderMode')
+                      }}
                     >
                       <Text style={[styles.choiceTitle, supportsCustomOrders && styles.choiceTitleActive]}>Custom order</Text>
                       <Text style={styles.choiceHint}>Customers send details and you quote the work.</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={[styles.choiceCard, supportsReadyMade && styles.choiceCardActive]}
-                      onPress={() => setSupportsReadyMade((value) => !value)}
+                      onPress={() => {
+                        setSupportsReadyMade((value) => !value)
+                        clearVisibleError('orderMode')
+                      }}
                     >
                       <Text style={[styles.choiceTitle, supportsReadyMade && styles.choiceTitleActive]}>Shop now</Text>
                       <Text style={styles.choiceHint}>Customers buy ready-made pieces you already have.</Text>
@@ -979,26 +1330,37 @@ export default function TailorSetupScreen() {
                   <View style={styles.choiceGroup}>
                     <TouchableOpacity
                       style={[styles.choiceCard, pickupAvailable && styles.choiceCardActive]}
-                      onPress={() => setPickupAvailable((value) => !value)}
+                      onPress={() => {
+                        setPickupAvailable((value) => !value)
+                        clearVisibleError('fulfillment')
+                        clearVisibleError('pickupAddress')
+                      }}
                     >
                       <Text style={[styles.choiceTitle, pickupAvailable && styles.choiceTitleActive]}>Pickup</Text>
                       <Text style={styles.choiceHint}>Customer collects from you or your shop.</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={[styles.choiceCard, deliveryAvailable && styles.choiceCardActive]}
-                      onPress={() => setDeliveryAvailable((value) => !value)}
+                      onPress={() => {
+                        setDeliveryAvailable((value) => !value)
+                        clearVisibleError('fulfillment')
+                      }}
                     >
                       <Text style={[styles.choiceTitle, deliveryAvailable && styles.choiceTitleActive]}>Delivery</Text>
                       <Text style={styles.choiceHint}>You or your team deliver nearby orders.</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={[styles.choiceCard, shippingAvailable && styles.choiceCardActive]}
-                      onPress={() => setShippingAvailable((value) => !value)}
+                      onPress={() => {
+                        setShippingAvailable((value) => !value)
+                        clearVisibleError('fulfillment')
+                      }}
                     >
                       <Text style={[styles.choiceTitle, shippingAvailable && styles.choiceTitleActive]}>Shipping</Text>
                       <Text style={styles.choiceHint}>Courier or shipping partner handles it.</Text>
                     </TouchableOpacity>
                   </View>
+                  {!!visibleErrors.fulfillment && <Text style={styles.helperError}>{visibleErrors.fulfillment}</Text>}
                   {pickupAvailable ? (
                     <View style={styles.fulfillmentFeeBlock}>
                       <Text style={styles.fieldLabel}>Private pickup details</Text>
@@ -1009,7 +1371,10 @@ export default function TailorSetupScreen() {
                         label="Pickup address"
                         placeholder="e.g. 12 Marina Road, Victoria Island"
                         value={pickupAddress}
-                        onChangeText={setPickupAddress}
+                        onChangeText={(value) => {
+                          setPickupAddress(value)
+                          clearVisibleError('pickupAddress')
+                        }}
                         hint="Search and tap a suggestion to autofill, or type the full address manually. Include street or building, district or city, state or region, postal code if used, and country."
                         multiline
                       />
@@ -1023,6 +1388,8 @@ export default function TailorSetupScreen() {
                         <Text style={styles.helperError}>Add your exact pickup address to keep pickup turned on.</Text>
                       ) : pickupAddress.trim().length < 8 ? (
                         <Text style={styles.helperError}>Add a fuller pickup address before offering pickup.</Text>
+                      ) : visibleErrors.pickupAddress ? (
+                        <Text style={styles.helperError}>{visibleErrors.pickupAddress}</Text>
                       ) : null}
                     </View>
                   ) : null}
@@ -1039,21 +1406,41 @@ export default function TailorSetupScreen() {
                 <View>
                   <Text style={styles.fieldLabel}>Identity verification</Text>
                   <Text style={styles.fieldHint}>
-                    Upload a government-issued photo ID (passport, national ID, or driver's licence). You can submit your profile now. Your profile goes live once we've reviewed your ID within 24 hours. You can also add this later from your profile.
+                    Upload a government-issued photo ID (passport, national ID, or driver's licence) before submitting. Your profile goes live once we've reviewed your ID within 24 hours.
                   </Text>
                   {idPhotoUri ? (
                     <View style={styles.idPreviewWrap}>
-                      <ExpoImage source={{ uri: idPhotoUri }} style={styles.idPreview} contentFit="cover" transition={120} />
-                      <TouchableOpacity onPress={() => setIdPhotoUri(null)}>
+                      <RemoteImage
+                        uri={idPhotoUri}
+                        style={styles.idPreview}
+                        contentFit="cover"
+                        transition={120}
+                        surface="tailor_setup_id_preview"
+                      />
+                      <TouchableOpacity onPress={() => {
+                        setIdPhotoUri(null)
+                        setIdError(TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE)
+                      }}>
                         <Text style={styles.idRemove}>Remove and re-upload</Text>
                       </TouchableOpacity>
                     </View>
+                  ) : hasIdDocumentForSetup() ? (
+                    <View style={styles.idExistingCard}>
+                      <Text style={styles.idExistingTitle}>ID document uploaded</Text>
+                      <Text style={styles.idExistingHint}>You can submit with this document or replace it before continuing.</Text>
+                      <TouchableOpacity onPress={openIdPhotoPicker}>
+                        <Text style={styles.idRemove}>Replace ID document</Text>
+                      </TouchableOpacity>
+                    </View>
                   ) : (
-                    <TouchableOpacity style={styles.idPickBtn} onPress={pickIdPhoto}>
+                    <TouchableOpacity style={[styles.idPickBtn, !!idError && styles.idPickBtnError]} onPress={openIdPhotoPicker}>
                       <Text style={styles.idPickIcon}>🪪</Text>
                       <Text style={styles.idPickLabel}>Upload ID document</Text>
                       <Text style={styles.idPickHint}>Passport · National ID · Driver's licence</Text>
                     </TouchableOpacity>
+                  )}
+                  {!!(idError || visibleErrors.idDocument) && (
+                    <Text style={styles.helperError}>{idError || visibleErrors.idDocument}</Text>
                   )}
                 </View>
 
@@ -1066,27 +1453,30 @@ export default function TailorSetupScreen() {
         {/* CTA */}
         <View style={styles.cta}>
           <Button
-            label={step < 3 ? 'Continue' : (saving || uploadingId ? 'Submitting…' : 'Submit profile')}
+            label={uploadingMedia ? 'Uploading…' : step < 3 ? 'Continue' : (saving || uploadingId ? 'Submitting…' : 'Submit profile')}
             onPress={next}
-            loading={saving || uploadingId}
-            disabled={!canProceed() || saving || uploadingId}
+            loading={saving || uploadingId || uploadingMedia}
+            disabled={saving || uploadingId || uploadingMedia}
           />
           {step === 0 && (
-            <TouchableOpacity onPress={handleSignOut} style={styles.signOutLink} disabled={saving || uploadingId}>
+            <TouchableOpacity onPress={handleSignOut} style={styles.signOutLink} disabled={saving || uploadingId || uploadingMedia}>
               <Text style={styles.signOutText}>Sign out</Text>
             </TouchableOpacity>
           )}
           {step === 1 && (!priceMin || !priceMax) && (
             <Text style={styles.minNote}>Set a price range to continue</Text>
           )}
-          {step === 2 && portfolioItems.length < 4 && (
-            <Text style={styles.minNote}>Upload at least 4 photos or videos to continue</Text>
+          {step === 2 && portfolioItems.length < MIN_PORTFOLIO_ITEMS && (
+            <Text style={styles.minNote}>Add at least 1 photo or video of your work to continue</Text>
           )}
           {step === 3 && !(supportsCustomOrders || supportsReadyMade) && (
             <Text style={styles.minNote}>Choose at least one way customers can order from you</Text>
           )}
           {step === 3 && !(pickupAvailable || deliveryAvailable || shippingAvailable) && (
             <Text style={styles.minNote}>Choose at least one way customers receive orders</Text>
+          )}
+          {step === 3 && !hasIdDocumentForSetup() && (
+            <Text style={styles.minNote}>{TAILOR_SETUP_VALIDATION.ID_DOCUMENT_REQUIRED_MESSAGE}</Text>
           )}
         </View>
       </KeyboardAvoidingView>
@@ -1194,7 +1584,7 @@ const styles = StyleSheet.create({
   portfolioBar: { height: 4, backgroundColor: Colors.lightGrey, borderRadius: 2, position: 'relative' },
   portfolioBarFill: { height: '100%', backgroundColor: Colors.needleGreen, borderRadius: 2 },
   portfolioBarMinMarker: {
-    position: 'absolute', left: `${(4 / 12) * 100}%` as any,
+    position: 'absolute', left: `${(MIN_PORTFOLIO_ITEMS / MAX_PORTFOLIO_ITEMS) * 100}%` as any,
     top: -2, width: 2, height: 8, backgroundColor: Colors.needleGreen, borderRadius: 1,
   },
   portfolioCount: { fontSize: FontSize.xs, color: Colors.midGrey },
@@ -1202,14 +1592,14 @@ const styles = StyleSheet.create({
   portfolioThumb: { width: 100, height: 100, borderRadius: Radius.md, position: 'relative', overflow: 'hidden' },
   portfolioImg: { width: '100%', height: '100%' },
   videoThumb: { backgroundColor: Colors.ink, alignItems: 'center', justifyContent: 'center', gap: 4 },
-  videoIcon: { fontSize: 24, color: Colors.white },
+  videoIcon: { fontSize: 24, color: Colors.textInverse },
   videoLabel: { fontSize: FontSize.xs, color: 'rgba(255,255,255,0.7)' },
   portfolioRemove: {
     position: 'absolute', top: 4, right: 4,
     width: 22, height: 22, borderRadius: 11,
     backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center',
   },
-  portfolioRemoveText: { color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold },
+  portfolioRemoveText: { color: Colors.textInverse, fontSize: 11, fontWeight: FontWeight.bold },
   portfolioAdd: {
     width: 100, height: 100, borderRadius: Radius.md,
     borderWidth: 1.5, borderStyle: 'dashed', borderColor: Colors.lightGrey,
@@ -1217,6 +1607,7 @@ const styles = StyleSheet.create({
   },
   portfolioAddIcon: { fontSize: 24, color: Colors.midGrey },
   portfolioAddLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
+  portfolioAddHint: { fontSize: 9, color: Colors.midGrey, textAlign: 'center' },
 
   // Availability
   availCard: {
@@ -1254,12 +1645,26 @@ const styles = StyleSheet.create({
     alignItems: 'center', gap: Spacing.sm, borderWidth: 1.5, borderStyle: 'dashed',
     borderColor: Colors.lightGrey,
   },
+  idPickBtnError: {
+    borderColor: Colors.error,
+    backgroundColor: Colors.errorLight,
+  },
   idPickIcon: { fontSize: 40 },
   idPickLabel: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   idPickHint: { fontSize: FontSize.xs, color: Colors.midGrey },
   idPreviewWrap: { gap: Spacing.md },
   idPreview: { width: '100%', height: 200, borderRadius: Radius.md, backgroundColor: Colors.boneDeep },
   idRemove: { fontSize: FontSize.sm, color: Colors.error },
+  idExistingCard: {
+    backgroundColor: Colors.needleGreenLight,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen,
+    padding: Spacing.lg,
+    gap: Spacing.sm,
+  },
+  idExistingTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
+  idExistingHint: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
 
   infoBox: {
     backgroundColor: Colors.boneDeep, borderRadius: Radius.md, padding: Spacing.md,

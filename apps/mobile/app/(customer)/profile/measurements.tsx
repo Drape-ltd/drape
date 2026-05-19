@@ -4,6 +4,7 @@ import {
 } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { Feather } from '@expo/vector-icons'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
@@ -11,18 +12,20 @@ import { capture } from '@/lib/analytics'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { goBackOrReturnToIfNeeded } from '@/lib/navigation'
 import {
+  isMeasurementSource,
   deriveMeasurementFitConfidence,
   MEASUREMENT_SOURCE_LABELS,
   type MeasurementSource,
 } from '@/lib/order-support'
 import { Button, Input } from '@/components/ui'
+import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
-const HOME_BG = '#F9F7F3'
-const PRIMARY_GREEN = '#1D9E75'
-const CHARCOAL = '#2C2C2A'
-const MUTED_GREY = '#8F8D88'
+const HOME_BG = Colors.bone
+const PRIMARY_GREEN = Colors.needleGreen
+const CHARCOAL = Colors.ink
+const MUTED_GREY = Colors.midGrey
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -33,7 +36,10 @@ type BodyShape = 'RECTANGLE' | 'BROAD_SHOULDERS' | 'FULL_HIPS' | 'DEFINED_WAIST'
 type FitFlag =
   | 'LARGE_THIGHS' | 'BROAD_SHOULDERS' | 'SHORT_TORSO' | 'FULL_SEAT'
   | 'SLOPING_SHOULDERS' | 'LONG_ARMS' | 'FULL_BELLY' | 'LONG_RISE'
-  | 'NARROW_SHOULDERS' | 'FULL_CHEST'
+  | 'NARROW_SHOULDERS' | 'FULL_CHEST' | 'FULL_UPPER_ARM' | 'WIDE_CALVES'
+  | 'ONE_SHOULDER_LOWER' | 'HIP_TILT' | 'FORWARD_NECK' | 'USES_SHAPEWEAR'
+  | 'CORSETED_FIT' | 'NURSING_OR_POSTPARTUM' | 'MODEST_COVERAGE'
+  | 'HEADWEAR_FIT_NEEDED' | 'BRAIDS_LOCS_OR_WIG'
 
 interface CustomMeasurement {
   id: string
@@ -71,27 +77,107 @@ const FIT_FLAG_OPTIONS: Array<{ value: FitFlag; label: string; hint: string }> =
   { value: 'LONG_RISE', label: 'Long rise needed', hint: 'Raised back waistband' },
   { value: 'NARROW_SHOULDERS', label: 'Narrow shoulders', hint: 'Reduced armhole, brought-in seam' },
   { value: 'FULL_CHEST', label: 'Full chest', hint: 'Extra ease across chest panel' },
+  { value: 'FULL_UPPER_ARM', label: 'Full upper arm', hint: 'More comfort through sleeve and armhole' },
+  { value: 'WIDE_CALVES', label: 'Wide calves', hint: 'More room through fitted trousers or narrow hems' },
+  { value: 'ONE_SHOULDER_LOWER', label: 'One shoulder sits lower', hint: 'Helps avoid uneven hems and necklines' },
+  { value: 'HIP_TILT', label: 'Hip tilt or uneven waist', hint: 'Useful for skirts, trousers, and gowns' },
+  { value: 'FORWARD_NECK', label: 'Forward neck / rounded back', hint: 'Helps collars and back length sit better' },
+  { value: 'USES_SHAPEWEAR', label: 'Uses shapewear', hint: 'Measurements may need to match the support worn with the garment' },
+  { value: 'CORSETED_FIT', label: 'Corseted or snatched fit', hint: 'Tailor should verify bust, waist, and comfort before cutting' },
+  { value: 'NURSING_OR_POSTPARTUM', label: 'Nursing or postpartum fit', hint: 'Useful for bust ease, access, and comfort changes' },
+  { value: 'MODEST_COVERAGE', label: 'Modest coverage preferred', hint: 'Neckline, sleeve, and length choices should respect coverage' },
+  { value: 'HEADWEAR_FIT_NEEDED', label: 'Matching headwear needed', hint: 'Fila, kufi, cap, gele prep, or formal headpiece context' },
+  { value: 'BRAIDS_LOCS_OR_WIG', label: 'Braids, locs, wig, or volume', hint: 'Important for headwear, collars, and neckline comfort' },
 ]
 
 const STEP_TITLES = [
   'Body measurements',
   'Garment cuts',
   'Body shape',
-  'Fit challenges',
+  'Fit challenges & context',
 ]
 
 const STEP_SUBTITLES = [
   'Add as many measurements as you can. The more detail you share, the better your tailor can quote and cut.',
   'This helps your tailor understand which cuts and shapes to use. This is a fit question, not a personal one.',
   'Pick all that apply. This helps your tailor visualise how a garment will fall before they start cutting.',
-  'Where do clothes usually fit you badly off the rack? Select all that apply.',
+  'Where do clothes usually fit badly, and what context should your tailor know before cutting?',
 ]
 
 const MEASUREMENT_SOURCE_OPTIONS: Array<{ value: MeasurementSource; label: string; hint: string }> = [
+  { value: 'DRAPE_VISION', label: 'Drape Vision scan', hint: 'AI-assisted starting point. Tailors can still verify high-risk fields.' },
+  { value: 'TAILOR_ASSISTED_DRAPE_VISION', label: 'Tailor-assisted Drape Vision', hint: 'A tailor helped capture or verify the scan.' },
   { value: 'SELF_GUIDED', label: 'I measured myself', hint: 'Best when you used a tape carefully and double-checked the numbers.' },
   { value: 'HELPER_GUIDED', label: 'A helper measured me', hint: 'Useful when a friend or family member helped with the tape.' },
   { value: 'TAILOR_CAPTURED', label: 'A tailor measured me', hint: 'Usually stronger for fit-critical garments.' },
   { value: 'EXTERNAL_PRO_CAPTURED', label: 'Another professional measured me', hint: 'For showroom, bridal, or alteration-desk measurements.' },
+]
+const CM_PER_INCH = 2.54
+
+const CUSTOM_MEASUREMENT_SUGGESTION_GROUPS = [
+  {
+    title: 'Bodice',
+    items: [
+      'Round bust',
+      'High bust',
+      'Under bust',
+      'Front bust',
+      'Back bust',
+      'Bust point spacing',
+      'Bust point to waist',
+      'Bust radius',
+      'Across chest',
+      'Across back',
+      'Armhole depth',
+      'Front waist length',
+      'Back waist length',
+    ],
+  },
+  {
+    title: 'Length & posture',
+    items: [
+      'Nape',
+      'Front shoulder',
+      'Back shoulder',
+      'Full front length',
+      'Waist to hip',
+      'Waist to knee',
+      'Waist to floor',
+    ],
+  },
+  {
+    title: 'Sleeves',
+    items: [
+      'Bicep',
+      'Forearm',
+      'Wrist',
+      'Shoulder to elbow',
+      'Round elbow',
+    ],
+  },
+  {
+    title: 'Trousers',
+    items: [
+      'Front rise',
+      'Back rise',
+      'Crotch depth',
+      'Seat depth',
+      'Calf',
+      'Ankle',
+    ],
+  },
+  {
+    title: 'Headwear',
+    items: [
+      'Head circumference',
+      'Hat band line',
+      'Head length',
+      'Head width',
+      'Ear to ear over crown',
+      'Front to back over crown',
+      'Fila height',
+    ],
+  },
 ]
 
 const MEASUREMENTS_GUIDE_KEY = 'drape_customer_measurements_best_use_dismissed'
@@ -126,6 +212,12 @@ export default function MeasurementsScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { returnTo } = useLocalSearchParams<{ returnTo?: string }>()
+  const safeReturnTo =
+    typeof returnTo === 'string' &&
+    returnTo.trim().length > 0 &&
+    returnTo !== '/(customer)/profile/measurements'
+      ? returnTo
+      : undefined
   const { user } = useAuth()
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -141,7 +233,22 @@ export default function MeasurementsScreen() {
   const [inseam, setInseam] = useState('')
   const [sleeveLength, setSleeveLength] = useState('')
   const [neckCircumference, setNeckCircumference] = useState('')
+  const [underBust, setUnderBust] = useState('')
   const [height, setHeight] = useState('')
+  const [backLength, setBackLength] = useState('')
+  const [outseam, setOutseam] = useState('')
+  const [thighCircumference, setThighCircumference] = useState('')
+  const [kneeCircumference, setKneeCircumference] = useState('')
+  const [bicepCircumference, setBicepCircumference] = useState('')
+  const [wristCircumference, setWristCircumference] = useState('')
+  const [headCircumference, setHeadCircumference] = useState('')
+  const [hatBandLine, setHatBandLine] = useState('')
+  const [headLength, setHeadLength] = useState('')
+  const [headWidth, setHeadWidth] = useState('')
+  const [earToEarOverCrown, setEarToEarOverCrown] = useState('')
+  const [frontToBackOverCrown, setFrontToBackOverCrown] = useState('')
+  const [filaHeight, setFilaHeight] = useState('')
+  const [torsoLength, setTorsoLength] = useState('')
   const [fitStyle, setFitStyle] = useState<FitStyle | null>(null)
   const [measurementSource, setMeasurementSource] = useState<MeasurementSource>('SELF_GUIDED')
   const [customMeasurements, setCustomMeasurements] = useState<CustomMeasurement[]>([])
@@ -167,7 +274,22 @@ export default function MeasurementsScreen() {
     setInseam('')
     setSleeveLength('')
     setNeckCircumference('')
+    setUnderBust('')
     setHeight('')
+    setBackLength('')
+    setOutseam('')
+    setThighCircumference('')
+    setKneeCircumference('')
+    setBicepCircumference('')
+    setWristCircumference('')
+    setHeadCircumference('')
+    setHatBandLine('')
+    setHeadLength('')
+    setHeadWidth('')
+    setEarToEarOverCrown('')
+    setFrontToBackOverCrown('')
+    setFilaHeight('')
+    setTorsoLength('')
     setFitStyle(null)
     setMeasurementSource('SELF_GUIDED')
     setGarmentContext(null)
@@ -186,14 +308,24 @@ export default function MeasurementsScreen() {
     if (typeof m.inseam === 'number') setInseam(String(m.inseam))
     if (typeof m.sleeveLength === 'number') setSleeveLength(String(m.sleeveLength))
     if (typeof m.neckCircumference === 'number') setNeckCircumference(String(m.neckCircumference))
+    if (typeof m.underBust === 'number') setUnderBust(String(m.underBust))
     if (typeof m.height === 'number') setHeight(String(m.height))
+    if (typeof m.backLength === 'number') setBackLength(String(m.backLength))
+    if (typeof m.outseam === 'number') setOutseam(String(m.outseam))
+    if (typeof m.thighCircumference === 'number') setThighCircumference(String(m.thighCircumference))
+    if (typeof m.kneeCircumference === 'number') setKneeCircumference(String(m.kneeCircumference))
+    if (typeof m.bicepCircumference === 'number') setBicepCircumference(String(m.bicepCircumference))
+    if (typeof m.wristCircumference === 'number') setWristCircumference(String(m.wristCircumference))
+    if (typeof m.headCircumference === 'number') setHeadCircumference(String(m.headCircumference))
+    if (typeof m.hatBandLine === 'number') setHatBandLine(String(m.hatBandLine))
+    if (typeof m.headLength === 'number') setHeadLength(String(m.headLength))
+    if (typeof m.headWidth === 'number') setHeadWidth(String(m.headWidth))
+    if (typeof m.earToEarOverCrown === 'number') setEarToEarOverCrown(String(m.earToEarOverCrown))
+    if (typeof m.frontToBackOverCrown === 'number') setFrontToBackOverCrown(String(m.frontToBackOverCrown))
+    if (typeof m.filaHeight === 'number') setFilaHeight(String(m.filaHeight))
+    if (typeof m.torsoLength === 'number') setTorsoLength(String(m.torsoLength))
     if (m.fitStyle === 'Slim' || m.fitStyle === 'Regular' || m.fitStyle === 'Relaxed') setFitStyle(m.fitStyle)
-    if (
-      m.measurementSource === 'SELF_GUIDED' ||
-      m.measurementSource === 'HELPER_GUIDED' ||
-      m.measurementSource === 'TAILOR_CAPTURED' ||
-      m.measurementSource === 'EXTERNAL_PRO_CAPTURED'
-    ) {
+    if (isMeasurementSource(m.measurementSource)) {
       setMeasurementSource(m.measurementSource)
     }
     const nextGarmentContext = normalizeGarmentContext(m.garmentContext)
@@ -207,8 +339,11 @@ export default function MeasurementsScreen() {
     if (Array.isArray(m.fitFlags)) setFitFlags(m.fitFlags as FitFlag[])
     if (typeof m.bodyNote === 'string') setBodyNote(m.bodyNote)
     const standardKeys = new Set([
-      'chest', 'waist', 'hips', 'shoulderWidth', 'inseam', 'sleeveLength', 'neckCircumference', 'height',
-      'unit', 'fitStyle', 'measurementSource', 'measurementSourceLabel', 'fitConfidence',
+      'chest', 'waist', 'hips', 'shoulderWidth', 'inseam', 'sleeveLength', 'neckCircumference', 'underBust', 'height',
+      'backLength', 'outseam', 'thighCircumference', 'kneeCircumference', 'bicepCircumference', 'wristCircumference',
+      'headCircumference', 'hatBandLine', 'headLength', 'headWidth', 'earToEarOverCrown', 'frontToBackOverCrown',
+      'filaHeight', 'torsoLength',
+      'unit', 'fitStyle', 'fitPassportVersion', 'measurementSource', 'measurementSourceLabel', 'fitConfidence',
       'needsConfirmation', 'confirmationReason', 'confirmationRequestedAt', 'confirmedAt', 'confirmedBy',
       'garmentContext', 'bodyShape', 'fitFlags', 'bodyNote',
       'captureMethod', 'captureVersion', 'capturedAt', 'confidenceOverall', 'confidenceByField', 'sourceDevice',
@@ -304,11 +439,23 @@ async function loadMeasurements() {
     }
   }
 
-  function addCustomMeasurement() {
+  function addCustomMeasurement(name = '', value = '') {
     setCustomMeasurements((prev) => [
       ...prev,
-      { id: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`, name: '', value: '' },
+      { id: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`, name, value },
     ])
+  }
+
+  function addSuggestedMeasurement(name: string) {
+    setCustomMeasurements((prev) => {
+      if (prev.some((measurement) => measurement.name.trim().toLowerCase() === name.toLowerCase())) {
+        return prev
+      }
+      return [
+        ...prev,
+        { id: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`, name, value: '' },
+      ]
+    })
   }
 
   function updateCustomMeasurement(id: string, field: 'name' | 'value', text: string) {
@@ -353,6 +500,47 @@ async function loadMeasurements() {
     return isNaN(n) ? null : n
   }
 
+  function formatMeasurementInput(value: number) {
+    return value.toFixed(2).replace(/\.?0+$/, '')
+  }
+
+  function convertMeasurementText(value: string, fromUnit: Unit, toUnit: Unit) {
+    if (fromUnit === toUnit || !value.trim()) return value
+    const parsed = safeParse(value)
+    if (parsed == null) return value
+    return formatMeasurementInput(fromUnit === 'in' ? parsed * CM_PER_INCH : parsed / CM_PER_INCH)
+  }
+
+  function changeUnit(nextUnit: Unit) {
+    if (nextUnit === unit) return
+
+    setChest((value) => convertMeasurementText(value, unit, nextUnit))
+    setWaist((value) => convertMeasurementText(value, unit, nextUnit))
+    setHips((value) => convertMeasurementText(value, unit, nextUnit))
+    setShoulderWidth((value) => convertMeasurementText(value, unit, nextUnit))
+    setInseam((value) => convertMeasurementText(value, unit, nextUnit))
+    setSleeveLength((value) => convertMeasurementText(value, unit, nextUnit))
+    setNeckCircumference((value) => convertMeasurementText(value, unit, nextUnit))
+    setHeight((value) => convertMeasurementText(value, unit, nextUnit))
+    setBackLength((value) => convertMeasurementText(value, unit, nextUnit))
+    setOutseam((value) => convertMeasurementText(value, unit, nextUnit))
+    setThighCircumference((value) => convertMeasurementText(value, unit, nextUnit))
+    setKneeCircumference((value) => convertMeasurementText(value, unit, nextUnit))
+    setTorsoLength((value) => convertMeasurementText(value, unit, nextUnit))
+    setCustomMeasurements((previous) => previous.map((measurement) => ({
+      ...measurement,
+      value: convertMeasurementText(measurement.value, unit, nextUnit),
+    })))
+    setUnit(nextUnit)
+  }
+
+  function openDrapeVision() {
+    router.push({
+      pathname: DRAPE_VISION_ROUTE,
+      params: { mode: 'customer_scan', returnTo: safeReturnTo ?? '/(customer)/profile/measurements' },
+    } as never)
+  }
+
   async function save() {
     if (saving) return
     if (!validateBodyNote(bodyNote)) return
@@ -374,7 +562,22 @@ async function loadMeasurements() {
       inseam: safeParse(inseam),
       sleeveLength: safeParse(sleeveLength),
       neckCircumference: safeParse(neckCircumference),
+      underBust: safeParse(underBust),
       height: safeParse(height),
+      backLength: safeParse(backLength),
+      outseam: safeParse(outseam),
+      thighCircumference: safeParse(thighCircumference),
+      kneeCircumference: safeParse(kneeCircumference),
+      bicepCircumference: safeParse(bicepCircumference),
+      wristCircumference: safeParse(wristCircumference),
+      headCircumference: safeParse(headCircumference),
+      hatBandLine: safeParse(hatBandLine),
+      headLength: safeParse(headLength),
+      headWidth: safeParse(headWidth),
+      earToEarOverCrown: safeParse(earToEarOverCrown),
+      frontToBackOverCrown: safeParse(frontToBackOverCrown),
+      filaHeight: safeParse(filaHeight),
+      torsoLength: safeParse(torsoLength),
       unit,
       fitStyle,
       measurementSource,
@@ -412,7 +615,7 @@ async function loadMeasurements() {
       )
     } else {
       capture('measurements_saved', { unit, measurement_source: measurementSource })
-      goBackOrReturnToIfNeeded(router, navigation, returnTo, '/(customer)/profile')
+      goBackOrReturnToIfNeeded(router, navigation, safeReturnTo, '/(customer)/profile')
     }
   }
 
@@ -428,7 +631,7 @@ async function loadMeasurements() {
 
   function back() {
     if (step > 0) setStep(step - 1)
-    else goBackOrReturnToIfNeeded(router, navigation, returnTo, '/(customer)/profile')
+    else goBackOrReturnToIfNeeded(router, navigation, safeReturnTo, '/(customer)/profile')
   }
 
   if (fetchError) {
@@ -502,13 +705,31 @@ async function loadMeasurements() {
             {/* ── Step 0: Body measurements ── */}
             {step === 0 && (
               <View style={styles.fields}>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Open Drape Vision"
+                  onPress={openDrapeVision}
+                  style={styles.visionPassportCard}
+                >
+                  <View style={styles.visionPassportIcon}>
+                    <Feather name="aperture" size={20} color={PRIMARY_GREEN} />
+                  </View>
+                  <View style={styles.visionPassportCopy}>
+                    <Text style={styles.visionPassportTitle}>Drape Vision</Text>
+                    <Text style={styles.visionPassportText}>
+                      Scan flow, manual entry, and tailor-assisted measurements all save into this Fit Passport.
+                    </Text>
+                  </View>
+                  <Feather name="chevron-right" size={18} color={Colors.midGrey} />
+                </TouchableOpacity>
+
                 {/* Unit toggle */}
                 <View style={styles.unitToggle}>
                   {(['in', 'cm'] as Unit[]).map((u) => (
                     <TouchableOpacity
                       key={u}
                       style={[styles.unitBtn, unit === u && styles.unitBtnActive]}
-                      onPress={() => setUnit(u)}
+                      onPress={() => changeUnit(u)}
                     >
                       <Text style={[styles.unitLabel, unit === u && styles.unitLabelActive]}>{u}</Text>
                     </TouchableOpacity>
@@ -524,7 +745,22 @@ async function loadMeasurements() {
                     { label: 'Inseam', value: inseam, set: setInseam },
                     { label: 'Sleeve length', value: sleeveLength, set: setSleeveLength },
                     { label: 'Neck', value: neckCircumference, set: setNeckCircumference },
+                    { label: 'Under bust', value: underBust, set: setUnderBust },
                     { label: 'Height', value: height, set: setHeight },
+                    { label: 'Back length', value: backLength, set: setBackLength },
+                    { label: 'Outseam', value: outseam, set: setOutseam },
+                    { label: 'Thigh', value: thighCircumference, set: setThighCircumference },
+                    { label: 'Knee', value: kneeCircumference, set: setKneeCircumference },
+                    { label: 'Bicep', value: bicepCircumference, set: setBicepCircumference },
+                    { label: 'Wrist', value: wristCircumference, set: setWristCircumference },
+                    { label: 'Head circumference', value: headCircumference, set: setHeadCircumference },
+                    { label: 'Hat band line', value: hatBandLine, set: setHatBandLine },
+                    { label: 'Head length', value: headLength, set: setHeadLength },
+                    { label: 'Head width', value: headWidth, set: setHeadWidth },
+                    { label: 'Ear to ear over crown', value: earToEarOverCrown, set: setEarToEarOverCrown },
+                    { label: 'Front to back over crown', value: frontToBackOverCrown, set: setFrontToBackOverCrown },
+                    { label: 'Fila height', value: filaHeight, set: setFilaHeight },
+                    { label: 'Torso length', value: torsoLength, set: setTorsoLength },
                   ].map(({ label, value, set }) => (
                     <View key={label} style={styles.measureField}>
                       <Input
@@ -576,7 +812,25 @@ async function loadMeasurements() {
                 {/* Custom measurements */}
                 <View style={styles.customSection}>
                   <Text style={styles.fieldLabel}>Additional measurements</Text>
-                  <Text style={styles.customHint}>Add any measurement your tailor may need, like ankle, wrist, rise, or more.</Text>
+                  <Text style={styles.customHint}>
+                    Add garment-specific details your tailor may need, especially bust, balance, sleeve, and length points.
+                  </Text>
+                  {CUSTOM_MEASUREMENT_SUGGESTION_GROUPS.map((group) => (
+                    <View key={group.title} style={styles.customSuggestionGroup}>
+                      <Text style={styles.customSuggestionGroupTitle}>{group.title}</Text>
+                      <View style={styles.customSuggestionWrap}>
+                        {group.items.map((name) => (
+                          <TouchableOpacity
+                            key={name}
+                            style={styles.customSuggestionChip}
+                            onPress={() => addSuggestedMeasurement(name)}
+                          >
+                            <Text style={styles.customSuggestionText}>{name}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    </View>
+                  ))}
 
                   {customMeasurements.map((m) => (
                     <View key={m.id} style={styles.customRow}>
@@ -605,7 +859,7 @@ async function loadMeasurements() {
                     </View>
                   ))}
 
-                  <TouchableOpacity style={styles.addCustomBtn} onPress={addCustomMeasurement}>
+                  <TouchableOpacity style={styles.addCustomBtn} onPress={() => addCustomMeasurement()}>
                     <Text style={styles.addCustomText}>+ Add measurement</Text>
                   </TouchableOpacity>
                 </View>
@@ -685,7 +939,7 @@ async function loadMeasurements() {
 
                 <Input
                   label="Anything else your tailor needs to know?"
-                  placeholder='e.g. "My family has naturally large thighs, so tailors usually need to account for that."'
+                  placeholder='e.g. "I will wear braids for this event, and I prefer modest necklines with a little sleeve ease."'
                   value={bodyNote}
                   onChangeText={(v) => {
                     setBodyNote(v)
@@ -693,8 +947,8 @@ async function loadMeasurements() {
                   }}
                   onBlur={() => validateBodyNote(bodyNote)}
                   error={bodyNoteError}
-                  hint="Max 150 characters. No contact details."
-                  maxLength={150}
+                  hint="Max 280 characters. No contact details."
+                  maxLength={280}
                   multiline
                   numberOfLines={3}
                   filterContact
@@ -764,7 +1018,7 @@ const styles = StyleSheet.create({
     minHeight: 44,
     justifyContent: 'center',
   },
-  errorRetryText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  errorRetryText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   errorSecondary: {
     backgroundColor: Colors.white,
     borderColor: Colors.lightGrey,
@@ -830,6 +1084,40 @@ const styles = StyleSheet.create({
   measureField: { width: '48%' },
   measureInput: { marginBottom: 0 },
   fieldLabel: { fontSize: 13, fontWeight: FontWeight.semibold, color: CHARCOAL, marginBottom: 6, fontFamily: 'Georgia' },
+  visionPassportCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '35',
+    ...Shadow.sm,
+  },
+  visionPassportIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  visionPassportCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  visionPassportTitle: {
+    fontSize: 14,
+    fontWeight: FontWeight.semibold,
+    color: CHARCOAL,
+    fontFamily: 'Georgia',
+  },
+  visionPassportText: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: Colors.inkLight,
+  },
 
   fitStyleSection: { gap: 6 },
   fitStyleRow: { flexDirection: 'row', gap: 8 },
@@ -846,6 +1134,36 @@ const styles = StyleSheet.create({
   // Custom measurements
   customSection: { gap: 8 },
   customHint: { fontSize: 12, color: MUTED_GREY, lineHeight: 16, marginTop: -2 },
+  customSuggestionGroup: {
+    gap: 6,
+    marginTop: 4,
+  },
+  customSuggestionGroupTitle: {
+    fontSize: 12,
+    fontWeight: FontWeight.semibold,
+    color: CHARCOAL,
+  },
+  customSuggestionWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 2,
+  },
+  customSuggestionChip: {
+    minHeight: 34,
+    paddingHorizontal: 12,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  customSuggestionText: {
+    fontSize: 12,
+    color: Colors.inkLight,
+    fontWeight: FontWeight.medium,
+  },
   customRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   customNameField: { flex: 2 },
   customValueField: { flex: 1 },
@@ -883,7 +1201,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   optionCheckActive: { borderColor: PRIMARY_GREEN, backgroundColor: PRIMARY_GREEN },
-  optionCheckMark: { color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold },
+  optionCheckMark: { color: Colors.textInverse, fontSize: 12, fontWeight: FontWeight.bold },
   optionLabel: { fontSize: 14, fontWeight: FontWeight.semibold, color: Colors.inkLight, fontFamily: 'Georgia' },
   optionLabelActive: { color: PRIMARY_GREEN },
   optionHint: { fontSize: 12, color: MUTED_GREY, marginTop: 2, lineHeight: 16 },
@@ -902,7 +1220,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   flagCheckActive: { borderColor: Colors.kanteRust, backgroundColor: Colors.kanteRust },
-  flagCheckMark: { color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold },
+  flagCheckMark: { color: Colors.textInverse, fontSize: 12, fontWeight: FontWeight.bold },
   flagLabel: { fontSize: 13, fontWeight: FontWeight.semibold, color: Colors.inkLight, fontFamily: 'Georgia' },
   flagLabelActive: { color: Colors.kanteRust },
   flagHint: { fontSize: 12, color: MUTED_GREY, marginTop: 2, lineHeight: 16 },

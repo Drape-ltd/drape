@@ -49,7 +49,17 @@ export const MEASUREMENT_FIELDS = [
   { key: 'inseamCm', label: 'Inseam' },
   { key: 'sleeveLengthCm', label: 'Sleeve length' },
   { key: 'neckCircumferenceCm', label: 'Neck circumference' },
+  { key: 'underBustCm', label: 'Under bust' },
   { key: 'heightCm', label: 'Height' },
+  { key: 'bicepCircumferenceCm', label: 'Bicep' },
+  { key: 'wristCircumferenceCm', label: 'Wrist' },
+  { key: 'headCircumferenceCm', label: 'Head circumference' },
+  { key: 'hatBandLineCm', label: 'Hat band line' },
+  { key: 'headLengthCm', label: 'Head length' },
+  { key: 'headWidthCm', label: 'Head width' },
+  { key: 'earToEarOverCrownCm', label: 'Ear to ear over crown' },
+  { key: 'frontToBackOverCrownCm', label: 'Front to back over crown' },
+  { key: 'filaHeightCm', label: 'Fila height' },
 ] as const
 
 // ─── Fit challenge flags ─────────────────────────────────────────────────────
@@ -99,3 +109,15 @@ export const LIMITS = {
   REVIEW_MAX: 300,
   VOICE_NOTE_MAX_SECONDS: 90,
 } as const
+
+// ─── Tailor setup validation ─────────────────────────────────────────────────
+export { TAILOR_SETUP_VALIDATION } from './tailor-setup'
+
+// ─── Payout setup validation ─────────────────────────────────────────────────
+export {
+  MANUAL_BANK_COUNTRIES,
+  MANUAL_BANK_ENTRY_NOTE,
+  MANUAL_BANK_ENTRY_OPTION_LABEL,
+  MANUAL_BANK_VALIDATION,
+  PAYOUT_BANK_LOGO_DOMAINS,
+} from './payout-setup'

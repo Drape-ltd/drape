@@ -1,5 +1,6 @@
 import { invokeFunction } from './supabase'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorStatus } from './function-errors'
+import type { ManualBankVerificationStatus } from '@drape/shared/payout-setup'
 
 export type PayoutSetupProvider = 'STRIPE' | 'PAYSTACK'
 export type PayoutSetupCurrency = 'NGN' | 'GHS' | 'KES' | 'USD' | 'GBP' | 'EUR' | 'CAD'
@@ -17,8 +18,20 @@ export type TailorPayoutStatus = {
   payoutAccountName: string | null
   payoutAccountMasked: string | null
   payoutCountryCode: string | null
+  manualBankEntry: boolean
+  manualBankName: string | null
+  manualBankCountryCode: string | null
+  manualBankCountryName: string | null
+  manualBankSwiftBic: string | null
+  manualBankAccountName: string | null
+  manualBankVerificationStatus: ManualBankVerificationStatus | null
+  manualBankSubmittedAt: string | null
   paystackRecipientCode: string | null
   stripeConnectAccountId: string | null
+  payoutAccountChangeCount: number
+  payoutAccountLastChangedAt: string | null
+  payoutAccountChangeLockedUntil: string | null
+  payoutDestinationHoldUntil: string | null
 }
 
 export type PaystackBank = {
@@ -26,6 +39,7 @@ export type PaystackBank = {
   name: string
   country: string | null
   currency: string | null
+  logoUrl: string | null
 }
 
 export type PaystackBankDirectory = {
@@ -167,6 +181,39 @@ export async function confirmPaystackPayoutAccount(input: {
     return {
       account: null,
       error: await edgeError(error, 'We could not save this payout account right now.'),
+    }
+  }
+
+  return {
+    account: data.account,
+    error: null,
+  }
+}
+
+export async function submitManualBankEntry(input: {
+  payoutCurrency: PayoutSetupCurrency
+  bankName: string
+  bankCountryCode: string
+  swiftBic: string
+  accountNumber: string
+  accountName: string
+}) {
+  const { data, error } = await invokeFunction<{ ok?: boolean; account?: TailorPayoutStatus }>('payout-account-action', {
+    body: {
+      action: 'submit-manual-bank-entry',
+      payoutCurrency: input.payoutCurrency,
+      bankName: input.bankName.trim(),
+      bankCountryCode: input.bankCountryCode.trim().toUpperCase(),
+      swiftBic: input.swiftBic.trim(),
+      accountNumber: input.accountNumber.trim(),
+      accountName: input.accountName.trim(),
+    },
+  })
+
+  if (error || !data?.account) {
+    return {
+      account: null,
+      error: await edgeError(error, 'We could not submit these manual bank details right now.'),
     }
   }
 

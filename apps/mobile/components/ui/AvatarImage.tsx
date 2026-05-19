@@ -3,6 +3,7 @@ import { StyleProp, StyleSheet, Text, View, ViewStyle } from 'react-native'
 import { Image as ExpoImage } from 'expo-image'
 import { Feather } from '@expo/vector-icons'
 import { Colors, FontWeight, Shadow } from '@/constants/theme'
+import { captureImageLoadFailure, PROFILE_IMAGE_PLACEHOLDER, resolveStorageImageUrl } from '@/lib/image-url'
 
 type AvatarImageProps = {
   uri?: string | null
@@ -27,13 +28,14 @@ function AvatarImageComponent({
 }: AvatarImageProps) {
   const [loaded, setLoaded] = useState(false)
   const [failed, setFailed] = useState(false)
+  const resolvedUri = resolveStorageImageUrl(uri, 'avatars')
 
   useEffect(() => {
     setLoaded(false)
     setFailed(false)
-  }, [uri])
+  }, [resolvedUri])
 
-  const hasRemoteImage = !!uri && !failed
+  const hasRemoteImage = !!resolvedUri && !failed
   const cleanedInitials = initials
     ?.trim()
     .split(/\s+/)
@@ -60,13 +62,22 @@ function AvatarImageComponent({
     >
       {hasRemoteImage ? (
         <ExpoImage
-          source={{ uri }}
+          source={{ uri: resolvedUri }}
           style={StyleSheet.absoluteFillObject}
           contentFit="cover"
           cachePolicy="memory-disk"
           transition={120}
+          placeholder={PROFILE_IMAGE_PLACEHOLDER}
           onLoad={() => setLoaded(true)}
-          onError={() => setFailed(true)}
+          onError={(error) => {
+            setFailed(true)
+            captureImageLoadFailure({
+              url: resolvedUri,
+              bucket: 'avatars',
+              surface: 'avatar_image',
+              error,
+            })
+          }}
         />
       ) : null}
 

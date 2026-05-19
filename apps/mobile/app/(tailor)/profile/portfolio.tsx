@@ -10,14 +10,17 @@ import {
 } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { Image as ExpoImage } from 'expo-image'
 import { Feather } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import * as ImageManipulator from 'expo-image-manipulator'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { uploadPublicStorageImage } from '@/lib/storage-upload'
+import { RemoteImage } from '@/components/ui'
+import { Sentry } from '@/lib/sentry'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { goBackOrReturnTo } from '@/lib/navigation'
+import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
 const GRID_ITEM_SIZE = (SCREEN_WIDTH - Spacing.xl * 2 - Spacing.md) / 2
@@ -45,6 +48,8 @@ type EditForm = {
   category: string
 }
 
+type PortfolioImageSource = 'camera' | 'library'
+
 function asStringList(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
   if (typeof value === 'string' && value.length > 0) return [value]
@@ -68,6 +73,7 @@ export default function PortfolioScreen() {
   const [editModal, setEditModal] = useState<EditForm | null>(null)
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [coverSavingId, setCoverSavingId] = useState<string | null>(null)
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null)
   const [expandedViewerIndex, setExpandedViewerIndex] = useState(0)
 
@@ -142,18 +148,39 @@ export default function PortfolioScreen() {
     }
   }
 
-  async function pickImage(onPicked: (uri: string) => void) {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Allow photo access to upload portfolio images.')
+  function openImageSourcePicker(onPicked: (uri: string) => void) {
+    Alert.alert('Portfolio photo', 'Take a photo now or choose one from your library.', [
+      { text: 'Take photo', onPress: () => void pickImage('camera', onPicked) },
+      { text: 'Choose from library', onPress: () => void pickImage('library', onPicked) },
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }
+
+  async function pickImage(source: PortfolioImageSource, onPicked: (uri: string) => void) {
+    const permission =
+      source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (!permission.granted) {
+      Alert.alert(
+        'Permission needed',
+        source === 'camera'
+          ? 'Allow camera access to take portfolio photos.'
+          : 'Allow photo access to upload portfolio images.',
+      )
       return
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'images',
+
+    const pickerOptions = {
+      mediaTypes: 'images' as const,
       allowsEditing: true,
-      aspect: [4, 5],
+      aspect: [4, 5] as [number, number],
       quality: 0.85,
-    })
+    }
+    const result =
+      source === 'camera'
+        ? await ImagePicker.launchCameraAsync(pickerOptions)
+        : await ImagePicker.launchImageLibraryAsync(pickerOptions)
     if (!result.canceled && result.assets[0]) {
       onPicked(result.assets[0].uri)
     }
@@ -167,16 +194,15 @@ export default function PortfolioScreen() {
         { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
       )
       const fileName = `portfolio/${user!.id}/${Date.now()}.jpg`
-      const response = await fetch(compressed.uri)
-      const blob = await response.blob()
-      const { error } = await supabase.storage
-        .from('portfolio-photos')
-        .upload(fileName, blob, { contentType: 'image/jpeg', upsert: false })
-      if (error) throw error
-      const { data: { publicUrl } } = supabase.storage.from('portfolio-photos').getPublicUrl(fileName)
-      return publicUrl
+      return await uploadPublicStorageImage({
+        bucket: 'portfolio-photos',
+        path: fileName,
+        uri: compressed.uri,
+        contentType: 'image/jpeg',
+        maxBytes: 10 * 1024 * 1024,
+      })
     } catch (err) {
-      console.error('[portfolio upload]', err)
+      Sentry.captureException(err, { extra: { context: 'tailor_portfolio_upload', userId: user?.id } })
       return null
     }
   }
@@ -259,11 +285,35 @@ export default function PortfolioScreen() {
 
     setSaving(false)
     if (error) {
-      Alert.alert('Save failed', error.message)
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. We could not save this portfolio item yet. Your details are still here, so retry when the signal improves.'
+        : await readFunctionErrorMessage(error, 'We could not save this portfolio item right now. Please try again.')
+      Alert.alert('Save failed', message)
       return
     }
     setEditModal(null)
     loadData()
+  }
+
+  async function makeExploreCover(item: PortfolioItem) {
+    if (coverSavingId || items[0]?.id === item.id) return
+    setCoverSavingId(item.id)
+    const { error } = await invokeFunction('portfolio-item-action', {
+      body: { action: 'set-cover', itemId: item.id },
+    })
+    if (error) {
+      setCoverSavingId(null)
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. We could not update your Explore cover yet. Try again when the signal improves.'
+        : await readFunctionErrorMessage(error, 'Could not update your Explore cover right now.')
+      Alert.alert('Cover not updated', message)
+      return
+    }
+
+    const nextItems = [item, ...items.filter((candidate) => candidate.id !== item.id)]
+      .map((candidate, index) => ({ ...candidate, sortOrder: index }))
+    setItems(nextItems)
+    setCoverSavingId(null)
   }
 
   async function handleDelete(item: PortfolioItem) {
@@ -283,7 +333,10 @@ export default function PortfolioScreen() {
             })
             if (error) {
               setDeletingId(null)
-              Alert.alert('Delete failed', error.message)
+              const message = isLikelyConnectivityIssue(error)
+                ? 'Connection looks weak. We could not delete this portfolio item yet. Try again when the signal improves.'
+                : await readFunctionErrorMessage(error, 'We could not delete this portfolio item right now.')
+              Alert.alert('Delete failed', message)
               return
             }
             const nextItems = items.filter((i) => i.id !== item.id)
@@ -352,7 +405,7 @@ export default function PortfolioScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Portfolio</Text>
         <TouchableOpacity style={styles.addBtn} onPress={openNew} hitSlop={8}>
-          <Feather name="plus" size={20} color={Colors.white} />
+          <Feather name="plus" size={20} color={Colors.textInverse} />
         </TouchableOpacity>
       </View>
 
@@ -393,12 +446,12 @@ export default function PortfolioScreen() {
               Showcase your best work so future customers can judge your craft, style, and fit before they book.
             </Text>
             <TouchableOpacity style={styles.emptyAddBtn} onPress={openNew}>
-              <Feather name="plus" size={16} color={Colors.white} />
+              <Feather name="plus" size={16} color={Colors.textInverse} />
               <Text style={styles.emptyAddBtnText}>Add first item</Text>
             </TouchableOpacity>
           </View>
         }
-        renderItem={({ item }) => (
+        renderItem={({ item, index }) => (
           <TouchableOpacity
             style={styles.gridItem}
             onPress={() => {
@@ -409,7 +462,20 @@ export default function PortfolioScreen() {
             onLongPress={() => openEdit(item)}
             activeOpacity={0.85}
           >
-            <ExpoImage source={item.imageUrl} style={styles.gridImage} contentFit="cover" transition={120} />
+            <RemoteImage
+              uri={item.imageUrl}
+              bucket="portfolio-photos"
+              style={styles.gridImage}
+              contentFit="cover"
+              transition={120}
+              surface="tailor_portfolio_grid"
+            />
+            {index === 0 ? (
+              <View style={styles.coverBadge}>
+                <Feather name="star" size={11} color={Colors.textInverse} />
+                <Text style={styles.coverBadgeText}>Explore cover</Text>
+              </View>
+            ) : null}
             <View style={styles.gridOverlay}>
               {item.category && (
                 <View style={styles.categoryPill}>
@@ -423,7 +489,7 @@ export default function PortfolioScreen() {
               onPress={() => openEdit(item)}
               hitSlop={8}
             >
-              <Feather name="edit-2" size={12} color={Colors.white} />
+              <Feather name="edit-2" size={12} color={Colors.textInverse} />
             </TouchableOpacity>
           </TouchableOpacity>
         )}
@@ -444,7 +510,7 @@ export default function PortfolioScreen() {
                 disabled={saving}
               >
                 {saving
-                  ? <ActivityIndicator size="small" color={Colors.white} />
+                  ? <ActivityIndicator size="small" color={Colors.textInverse} />
                   : <Text style={styles.saveBtnText}>Save</Text>
                 }
               </TouchableOpacity>
@@ -453,15 +519,17 @@ export default function PortfolioScreen() {
               {/* Image picker */}
               <TouchableOpacity
                 style={styles.imagePicker}
-                onPress={() => pickImage((uri) => setEditModal((m) => m ? { ...m, imageUri: uri, imageUrl: uri } : m))}
+                onPress={() => openImageSourcePicker((uri) => setEditModal((m) => m ? { ...m, imageUri: uri, imageUrl: uri } : m))}
                 activeOpacity={0.8}
               >
                 {(editModal.imageUri || editModal.imageUrl) ? (
-                  <ExpoImage
-                    source={editModal.imageUri || editModal.imageUrl}
+                  <RemoteImage
+                    uri={editModal.imageUri || editModal.imageUrl}
+                    bucket={editModal.imageUri ? undefined : 'portfolio-photos'}
                     style={styles.imagePickerImg}
                     contentFit="cover"
                     transition={120}
+                    surface="tailor_portfolio_editor_preview"
                   />
                 ) : (
                   <View style={styles.imagePickerEmpty}>
@@ -470,7 +538,7 @@ export default function PortfolioScreen() {
                   </View>
                 )}
                 <View style={styles.imagePickerBadge}>
-                  <Feather name="camera" size={14} color={Colors.white} />
+                  <Feather name="camera" size={14} color={Colors.textInverse} />
                 </View>
               </TouchableOpacity>
 
@@ -522,23 +590,49 @@ export default function PortfolioScreen() {
 
               {/* Delete button (edit mode only) */}
               {editModal.id && (
-                <TouchableOpacity
-                  style={[styles.deleteBtn, deletingId === editModal.id && { opacity: 0.6 }]}
-                  disabled={saving || deletingId === editModal.id}
-                  onPress={() => {
-                    const item = items.find((i) => i.id === editModal.id)
-                    if (item) { setEditModal(null); handleDelete(item) }
-                  }}
-                >
-                  {deletingId === editModal.id ? (
-                    <ActivityIndicator size="small" color={Colors.error} />
+                <>
+                  {items[0]?.id === editModal.id ? (
+                    <View style={styles.coverLockedBtn}>
+                      <Feather name="star" size={16} color={Colors.needleGreen} />
+                      <Text style={styles.coverLockedText}>Current Explore cover</Text>
+                    </View>
                   ) : (
-                    <>
-                      <Feather name="trash-2" size={16} color={Colors.error} />
-                      <Text style={styles.deleteBtnText}>Delete item</Text>
-                    </>
+                    <TouchableOpacity
+                      style={[styles.coverBtn, coverSavingId === editModal.id && { opacity: 0.6 }]}
+                      disabled={saving || coverSavingId === editModal.id}
+                      onPress={() => {
+                        const item = items.find((i) => i.id === editModal.id)
+                        if (item) void makeExploreCover(item)
+                      }}
+                    >
+                      {coverSavingId === editModal.id ? (
+                        <ActivityIndicator size="small" color={Colors.needleGreen} />
+                      ) : (
+                        <>
+                          <Feather name="star" size={16} color={Colors.needleGreen} />
+                          <Text style={styles.coverBtnText}>Make Explore cover</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
                   )}
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.deleteBtn, deletingId === editModal.id && { opacity: 0.6 }]}
+                    disabled={saving || deletingId === editModal.id}
+                    onPress={() => {
+                      const item = items.find((i) => i.id === editModal.id)
+                      if (item) { setEditModal(null); handleDelete(item) }
+                    }}
+                  >
+                    {deletingId === editModal.id ? (
+                      <ActivityIndicator size="small" color={Colors.error} />
+                    ) : (
+                      <>
+                        <Feather name="trash-2" size={16} color={Colors.error} />
+                        <Text style={styles.deleteBtnText}>Delete item</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </>
               )}
             </ScrollView>
           </SafeAreaView>
@@ -563,7 +657,14 @@ export default function PortfolioScreen() {
               }}
               renderItem={({ item }) => (
                 <View style={styles.expandedSlide}>
-                  <ExpoImage source={item.imageUrl} style={styles.expandedImage} contentFit="contain" transition={150} />
+                  <RemoteImage
+                    uri={item.imageUrl}
+                    bucket="portfolio-photos"
+                    style={styles.expandedImage}
+                    contentFit="contain"
+                    transition={150}
+                    surface="tailor_portfolio_expanded"
+                  />
                 </View>
               )}
             />
@@ -575,7 +676,7 @@ export default function PortfolioScreen() {
               </View>
             ) : null}
             <TouchableOpacity style={styles.expandClose} onPress={() => setExpandedIndex(null)}>
-              <Feather name="x" size={20} color={Colors.white} />
+              <Feather name="x" size={20} color={Colors.textInverse} />
             </TouchableOpacity>
           </View>
         </Modal>
@@ -695,8 +796,26 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start', backgroundColor: Colors.needleGreen,
     borderRadius: Radius.full, paddingHorizontal: 6, paddingVertical: 2,
   },
-  categoryPillText: { fontSize: 10, color: Colors.white, fontWeight: FontWeight.semibold },
-  gridTitle: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.white },
+  categoryPillText: { fontSize: 10, color: Colors.textInverse, fontWeight: FontWeight.semibold },
+  gridTitle: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.textInverse },
+  coverBadge: {
+    position: 'absolute',
+    top: Spacing.sm,
+    left: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    maxWidth: GRID_ITEM_SIZE - 52,
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.full,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  coverBadgeText: {
+    fontSize: 10,
+    color: Colors.textInverse,
+    fontWeight: FontWeight.semibold,
+  },
   editBadge: {
     position: 'absolute', top: Spacing.sm, right: Spacing.sm,
     width: 26, height: 26, borderRadius: Radius.full,
@@ -723,12 +842,12 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
     paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md, marginTop: Spacing.md,
   },
-  emptyAddBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  emptyAddBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   retryBtn: {
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
     paddingHorizontal: Spacing.xl, paddingVertical: Spacing.sm, marginTop: Spacing.md,
   },
-  retryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  retryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   secondaryBtn: {
     backgroundColor: Colors.white,
     borderColor: Colors.lightGrey,
@@ -750,7 +869,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
     paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm, minWidth: 60, alignItems: 'center',
   },
-  saveBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  saveBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   modalScroll: { padding: Spacing.lg, gap: Spacing.lg, paddingBottom: Spacing.xxxl },
   imagePicker: {
     height: 220, borderRadius: Radius.lg, overflow: 'hidden',
@@ -781,6 +900,28 @@ const styles = StyleSheet.create({
   catBtnActive: { backgroundColor: Colors.needleGreenLight, borderColor: Colors.needleGreen },
   catLabel: { fontSize: FontSize.sm, color: Colors.midGrey, fontWeight: FontWeight.medium },
   catLabelActive: { color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+  coverBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    borderRadius: Radius.full,
+    borderWidth: 1.5,
+    borderColor: Colors.needleGreen,
+    backgroundColor: Colors.needleGreenLight,
+    paddingVertical: Spacing.md,
+  },
+  coverBtnText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+  coverLockedBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    paddingVertical: Spacing.md,
+  },
+  coverLockedText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   deleteBtn: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
     alignSelf: 'center', marginTop: Spacing.md, paddingVertical: Spacing.sm,
@@ -812,5 +953,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
-  expandedCountText: { fontSize: FontSize.xs, color: Colors.white, fontWeight: FontWeight.semibold },
+  expandedCountText: { fontSize: FontSize.xs, color: Colors.textInverse, fontWeight: FontWeight.semibold },
 })

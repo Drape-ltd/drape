@@ -6,6 +6,7 @@
  */
 import React, { useState, useMemo } from 'react'
 import { View, Text, TouchableOpacity, TextInput, StyleSheet } from 'react-native'
+import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 
 export type TagGroup = { label: string; items: string[] }
@@ -14,6 +15,8 @@ interface TagSelectorProps {
   options: string[] | TagGroup[]
   selected: string[]
   onChange: (selected: string[]) => void
+  maxSelected?: number
+  maxSelectedMessage?: string
   /** Show a search/filter input at the top */
   searchable?: boolean
   label?: string
@@ -29,14 +32,22 @@ export function TagSelector({
   options,
   selected,
   onChange,
+  maxSelected,
+  maxSelectedMessage,
   searchable = false,
   label,
   required,
   hint,
 }: TagSelectorProps) {
   const [query, setQuery] = useState('')
+  const [limitMessage, setLimitMessage] = useState('')
 
   function toggle(item: string) {
+    if (!selected.includes(item) && maxSelected && selected.length >= maxSelected) {
+      setLimitMessage(maxSelectedMessage ?? `Choose up to ${maxSelected}.`)
+      return
+    }
+    setLimitMessage('')
     onChange(
       selected.includes(item)
         ? selected.filter((s) => s !== item)
@@ -80,11 +91,12 @@ export function TagSelector({
 
       {searchable && (
         <View style={styles.searchRow}>
-          <Text style={styles.searchIcon}>🔍</Text>
+          <Feather name="search" size={14} color={Colors.midGrey} />
           <TextInput
             style={styles.searchInput}
             placeholder="Search…"
             placeholderTextColor={Colors.midGrey}
+            accessibilityLabel={label ? `Search ${label}` : 'Search options'}
             value={query}
             onChangeText={setQuery}
             autoCorrect={false}
@@ -92,8 +104,13 @@ export function TagSelector({
             returnKeyType="done"
           />
           {query.length > 0 && (
-            <TouchableOpacity onPress={() => setQuery('')} style={styles.clearBtn}>
-              <Text style={styles.clearText}>✕</Text>
+            <TouchableOpacity
+              onPress={() => setQuery('')}
+              style={styles.clearBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Clear search"
+            >
+              <Feather name="x" size={14} color={Colors.midGrey} />
             </TouchableOpacity>
           )}
         </View>
@@ -125,7 +142,12 @@ export function TagSelector({
       )}
 
       {selected.length > 0 && (
-        <Text style={styles.selectionCount}>{selected.length} selected</Text>
+        <Text style={styles.selectionCount}>
+          {selected.length}{maxSelected ? `/${maxSelected}` : ''} selected
+        </Text>
+      )}
+      {!!limitMessage && (
+        <Text style={styles.limitMessage}>{limitMessage}</Text>
       )}
     </View>
   )
@@ -158,7 +180,6 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.md,
     gap: Spacing.sm,
   },
-  searchIcon: { fontSize: 14 },
   searchInput: {
     flex: 1,
     fontSize: FontSize.sm,
@@ -166,7 +187,6 @@ const styles = StyleSheet.create({
     padding: 0,
   },
   clearBtn: { padding: Spacing.xs },
-  clearText: { fontSize: FontSize.xs, color: Colors.midGrey },
 
   noResults: {
     fontSize: FontSize.sm,
@@ -206,7 +226,7 @@ const styles = StyleSheet.create({
   },
   checkmark: {
     fontSize: FontSize.xs,
-    color: Colors.white,
+    color: Colors.textInverse,
     fontWeight: FontWeight.bold,
   },
   chipText: {
@@ -215,7 +235,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.medium,
   },
   chipTextActive: {
-    color: Colors.white,
+    color: Colors.textInverse,
     fontWeight: FontWeight.semibold,
   },
 
@@ -224,5 +244,11 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.medium,
     marginTop: Spacing.sm,
+  },
+  limitMessage: {
+    fontSize: FontSize.xs,
+    color: Colors.kanteRust,
+    lineHeight: 18,
+    marginTop: Spacing.xs,
   },
 })

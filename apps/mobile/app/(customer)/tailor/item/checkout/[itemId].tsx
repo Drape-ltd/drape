@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert, TextInput } from 'react-native'
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert, TextInput, KeyboardAvoidingView, Platform } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { qk, useCustomerMeasurements, useRefreshOnFocus, useSellerItem } from '@/lib/queries'
 import { quantityForSize } from '@/lib/ready-made-stock'
-import { readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
+import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import { composeStructuredAddress, parseNominatimSuggestion } from '@/lib/address'
 import { invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { Button } from '@/components/ui'
 import { goBackOrReturnToIfNeeded } from '@/lib/navigation'
 import { normalizePhoneForStorage, validatePhoneForProfile } from '@drape/shared/phone'
+import { ORDER_CANCELLATION_ACK_COPY, ORDER_CANCELLATION_POLICY_ROWS } from '@drape/shared/checkout-policy'
 import { phoneHintForContext } from '@/lib/phone-context'
 import { READY_MADE_CHECKOUT_REMINDER, READY_MADE_POLICY_ROWS } from '@/lib/ready-made-policy'
 import {
@@ -19,8 +20,9 @@ import {
   recommendReadyMadeSize,
 } from '@/lib/ready-made-fit'
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
-import { useOrderPaymentFlow } from '@/lib/payments'
+import { paymentRouteCopyForCurrency, useOrderPaymentFlow } from '@/lib/payments'
 import { queryClient } from '@/lib/queryClient'
+import { Sentry } from '@/lib/sentry'
 import type { SellerItemDetail as ItemDetail } from '@/lib/queries'
 import { formatAmount, useCurrency, type CurrencyCode } from '@/lib/currency'
 
@@ -28,6 +30,7 @@ type FulfillmentOption = 'PICKUP' | 'DELIVERY' | 'SHIPPING'
 type RecipientMode = 'SELF' | 'OTHER'
 type CheckoutPricingPreview = {
   currency: CurrencyCode
+  displayCurrency?: CurrencyCode
   sourceCurrency: CurrencyCode
   sourceSubtotal: number
   fxRate: number
@@ -45,10 +48,10 @@ type CheckoutPricingPreview = {
 }
 
 const MAX_READY_MADE_CHECKOUT_QUANTITY = 3
-const HOME_BG = '#F9F7F3'
-const PRIMARY_GREEN = '#1D9E75'
-const CHARCOAL = '#2C2C2A'
-const MUTED_GREY = '#8F8D88'
+const HOME_BG = Colors.bone
+const PRIMARY_GREEN = Colors.needleGreen
+const CHARCOAL = Colors.ink
+const MUTED_GREY = Colors.midGrey
 
 function stockHelperText(inventoryQuantity: number) {
   if (inventoryQuantity <= 0) return 'This item is sold out right now.'
@@ -83,6 +86,7 @@ export default function ReadyMadeCheckoutScreen() {
   const navigation = useNavigation()
   const { user } = useAuth()
   const [saving, setSaving] = useState(false)
+  const [cancellationPolicyAcknowledged, setCancellationPolicyAcknowledged] = useState(false)
   const [checkoutInFlight, setCheckoutInFlight] = useState(false)
   const [checkoutItemSnapshot, setCheckoutItemSnapshot] = useState<ItemDetail | null>(null)
   const [selectedSize, setSelectedSize] = useState('')
@@ -261,6 +265,7 @@ export default function ReadyMadeCheckoutScreen() {
   const selectedSizeInventory = activeItem
     ? quantityForSize(activeItem.sizeInventory, selectedSize || null, activeItem.inventoryQuantity)
     : 0
+  const sellerUnavailable = activeItem ? activeItem.sellerAvailability === 'FULLY_BOOKED' || !activeItem.sellerLive : false
   const maxCheckoutQuantity = activeItem
     ? Math.min(MAX_READY_MADE_CHECKOUT_QUANTITY, activeItem.sizes.length > 0 ? selectedSizeInventory : activeItem.inventoryQuantity)
     : MAX_READY_MADE_CHECKOUT_QUANTITY
@@ -290,6 +295,13 @@ export default function ReadyMadeCheckoutScreen() {
       if (!activeItem || !fulfillment) {
         setCheckoutPricing(null)
         setPricingError('')
+        setPricingLoading(false)
+        return
+      }
+
+      if (sellerUnavailable) {
+        setCheckoutPricing(null)
+        setPricingError('This seller is not accepting new ready-made orders right now. Save the item and check back later.')
         setPricingLoading(false)
         return
       }
@@ -373,6 +385,7 @@ export default function ReadyMadeCheckoutScreen() {
     }
   }, [
     activeItem,
+    sellerUnavailable,
     fulfillment,
     selectedSize,
     quantity,
@@ -386,6 +399,10 @@ export default function ReadyMadeCheckoutScreen() {
 
   async function createOrder() {
     if (!user?.id || !activeItem || !fulfillment || saving) return
+    if (sellerUnavailable) {
+      Alert.alert('Seller unavailable', 'This seller is not accepting new ready-made orders right now. Save the item and check back later.')
+      return
+    }
     if (!validate()) return
 
     setCheckoutInFlight(true)
@@ -406,6 +423,7 @@ export default function ReadyMadeCheckoutScreen() {
           countryCode: fulfillment === 'PICKUP' ? undefined : country.trim(),
           recipientName: fulfillment === 'PICKUP' ? undefined : recipientName.trim(),
           recipientPhone: fulfillment === 'PICKUP' ? undefined : normalizePhoneForStorage(recipientPhone),
+          cancellationPolicyAcknowledged,
         },
       })
 
@@ -415,10 +433,7 @@ export default function ReadyMadeCheckoutScreen() {
           typeof errorPayload?.orderId === 'string' && errorPayload.orderId.length > 0
             ? errorPayload.orderId
             : null
-        const errorMessage =
-          typeof errorPayload?.error === 'string' && errorPayload.error.length > 0
-            ? errorPayload.error
-            : error?.message ?? 'Could not create this order right now.'
+        const errorMessage = await readFunctionErrorMessage(error, 'Could not create this order right now.')
 
         if (existingOrderId) {
           Alert.alert('Checkout already saved', errorMessage)
@@ -447,6 +462,8 @@ export default function ReadyMadeCheckoutScreen() {
       if (!paymentResult.ok) {
         if (paymentResult.reason === 'cancelled') {
           Alert.alert('Payment not finished', 'Your checkout is still saved. Finish payment from the order screen any time.')
+        } else if (paymentResult.stage === 'PAYMENT_FAILED') {
+          Alert.alert('Checkout failed', `${paymentResult.message}\n\nRetry from the order screen within 2 hours to keep this checkout alive.`)
         } else {
           Alert.alert('Payment unavailable', paymentResult.message)
         }
@@ -462,6 +479,15 @@ export default function ReadyMadeCheckoutScreen() {
         pathname: '/(customer)/orders/[id]',
         params: { id: data.orderId, tab: 'active', placed: '1' },
       })
+    } catch (error) {
+      setCheckoutInFlight(false)
+      Sentry.captureException(error, { extra: { context: 'ready_made_checkout_create', itemId: activeItem.id } })
+      Alert.alert(
+        'Checkout unavailable',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. Your card has not been charged. Retry checkout when the signal improves.'
+          : 'Something went wrong before payment could finish. Your card has not been charged. Please try again.',
+      )
     } finally {
       setSaving(false)
     }
@@ -469,7 +495,17 @@ export default function ReadyMadeCheckoutScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoider}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
+      >
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.header}>
           <TouchableOpacity onPress={goBack} style={styles.headerBackButton}>
             <Feather name="arrow-left" size={20} color={CHARCOAL} />
@@ -499,10 +535,10 @@ export default function ReadyMadeCheckoutScreen() {
                   ? sizeStockHelperText(selectedSize, selectedSizeInventory)
                   : stockHelperText(activeItem.inventoryQuantity)}
               </Text>
-              <Text style={styles.itemPrice}>{formatAmount(activeItem.priceAmount, activeItem.currency as CurrencyCode, accountCurrency, rates)}</Text>
+              <Text style={styles.itemPrice}>{formatAmount(activeItem.priceAmount, activeItem.currency as CurrencyCode, activeItem.currency as CurrencyCode, rates)}</Text>
               {activeItem.currency !== accountCurrency ? (
                 <Text style={styles.stockSummary}>
-                  Original price: {formatAmount(activeItem.priceAmount, activeItem.currency as CurrencyCode, activeItem.currency as CurrencyCode, rates)}
+                  Approx. {formatAmount(activeItem.priceAmount, activeItem.currency as CurrencyCode, accountCurrency, rates)} in your display currency. Checkout uses the seller's currency.
                 </Text>
               ) : null}
             </View>
@@ -511,6 +547,15 @@ export default function ReadyMadeCheckoutScreen() {
               <Text style={styles.infoTitle}>Before you pay</Text>
               <Text style={styles.infoBody}>{READY_MADE_CHECKOUT_REMINDER}</Text>
             </View>
+
+            {sellerUnavailable ? (
+              <View style={styles.blockerCard}>
+                <Text style={styles.blockerTitle}>Seller unavailable</Text>
+                <Text style={styles.blockerBody}>
+                  {activeItem.sellerName} is not accepting new ready-made orders right now. Save this item and check back later.
+                </Text>
+              </View>
+            ) : null}
 
             {activeItem.sizes.length > 0 ? (
               <View style={styles.sectionCard}>
@@ -715,7 +760,7 @@ export default function ReadyMadeCheckoutScreen() {
                     value={formatAmount(checkoutPricing.subtotalAmount, checkoutPricing.currency, checkoutPricing.currency, rates)}
                   />
                   <SummaryRow
-                    label={fulfillment === 'DELIVERY' ? 'Delivery fee' : fulfillment === 'SHIPPING' ? 'Shipping fee' : 'Fulfillment fee'}
+                    label={fulfillment === 'DELIVERY' ? 'Standard delivery fee' : fulfillment === 'SHIPPING' ? 'Standard shipping fee' : 'Pickup fee'}
                     value={checkoutPricing.shippingAmount > 0
                       ? formatAmount(checkoutPricing.shippingAmount, checkoutPricing.currency, checkoutPricing.currency, rates)
                       : 'Free'}
@@ -735,6 +780,11 @@ export default function ReadyMadeCheckoutScreen() {
                       Tax was estimated because live tax lookup was unavailable for this address.
                     </Text>
                   ) : null}
+                  {paymentRouteCopyForCurrency(checkoutPricing.currency) ? (
+                    <Text style={styles.helperText}>
+                      {paymentRouteCopyForCurrency(checkoutPricing.currency)}
+                    </Text>
+                  ) : null}
                 </>
               ) : (
                 <Text style={styles.helperText}>
@@ -746,7 +796,9 @@ export default function ReadyMadeCheckoutScreen() {
             <View style={styles.bestUseCard}>
               <Text style={styles.bestUseEyebrow}>Best use</Text>
               <Text style={styles.bestUseText}>
-                Drape collects the standard delivery or shipping fee in this checkout, then handles dispatch after the seller marks the order ready.
+                {fulfillment === 'PICKUP'
+                  ? 'Pickup has no delivery fee, but tax can still apply based on the order location. Pickup details stay private until the seller marks the order ready. Bring your collection code and inspect the item before closing the order.'
+                  : 'Drape collects the standard delivery or shipping fee in this checkout. Carrier surcharges, customs, or import duties are not charged automatically; if anything extra is needed, Drape will ask you to approve it before dispatch.'}
               </Text>
             </View>
 
@@ -760,6 +812,34 @@ export default function ReadyMadeCheckoutScreen() {
                   </View>
                 ))}
               </View>
+            </View>
+
+            <View style={styles.policyCard}>
+              <Text style={styles.policyTitle}>Cancellation policy</Text>
+              <View style={styles.policyList}>
+                {ORDER_CANCELLATION_POLICY_ROWS.map((row) => (
+                  <View key={row.title} style={styles.policyRow}>
+                    <Text style={styles.policyRowTitle}>{row.title}</Text>
+                    <Text style={styles.policyRowBody}>{row.body}</Text>
+                  </View>
+                ))}
+              </View>
+              <TouchableOpacity
+                style={[
+                  styles.policyAckRow,
+                  cancellationPolicyAcknowledged && styles.policyAckRowActive,
+                ]}
+                onPress={() => setCancellationPolicyAcknowledged((value) => !value)}
+                activeOpacity={0.75}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: cancellationPolicyAcknowledged }}
+                accessibilityLabel="Acknowledge cancellation policy"
+              >
+                <View style={[styles.policyCheck, cancellationPolicyAcknowledged && styles.policyCheckActive]}>
+                  <Text style={styles.policyCheckText}>{cancellationPolicyAcknowledged ? '✓' : ''}</Text>
+                </View>
+                <Text style={styles.policyAckText}>{ORDER_CANCELLATION_ACK_COPY}</Text>
+              </TouchableOpacity>
             </View>
           </>
         )}
@@ -777,11 +857,14 @@ export default function ReadyMadeCheckoutScreen() {
               || !checkoutPricing
               || !!pricingError
               || !fulfillment
+              || sellerUnavailable
+              || !cancellationPolicyAcknowledged
               || (activeItem.sizes.length > 0 && selectedSizeInventory <= 0)
             }
           />
         </View>
       ) : null}
+      </KeyboardAvoidingView>
     </SafeAreaView>
   )
 }
@@ -806,6 +889,7 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: HOME_BG },
+  keyboardAvoider: { flex: 1 },
   scroll: { flex: 1 },
   content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, gap: Spacing.sm, paddingBottom: Spacing.lg },
   header: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, minHeight: 44 },
@@ -828,6 +912,9 @@ const styles = StyleSheet.create({
   infoCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: 4, ...Shadow.sm },
   infoTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   infoBody: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
+  blockerCard: { backgroundColor: Colors.errorLight, borderRadius: Radius.md, padding: 12, gap: 4, ...Shadow.sm },
+  blockerTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.error, fontFamily: 'Georgia' },
+  blockerBody: { fontSize: 13, color: Colors.error, lineHeight: 18 },
   sectionCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: 8, ...Shadow.sm },
   sectionTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   recommendationCard: {
@@ -898,6 +985,32 @@ const styles = StyleSheet.create({
   policyRow: { gap: 4 },
   policyRowTitle: { fontSize: 13, fontWeight: FontWeight.semibold, color: CHARCOAL },
   policyRowBody: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
+  policyAckRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginTop: 4,
+    padding: 12,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: HOME_BG,
+    minHeight: 52,
+  },
+  policyAckRowActive: { borderColor: PRIMARY_GREEN, backgroundColor: Colors.needleGreenLight },
+  policyCheck: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: MUTED_GREY,
+    backgroundColor: Colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  policyCheckActive: { borderColor: PRIMARY_GREEN, backgroundColor: PRIMARY_GREEN },
+  policyCheckText: { fontSize: 13, color: Colors.textInverse, fontWeight: FontWeight.bold },
+  policyAckText: { flex: 1, fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
   footer: {
     paddingHorizontal: Spacing.lg,
     paddingTop: 8,

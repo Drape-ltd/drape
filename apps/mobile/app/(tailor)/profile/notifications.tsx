@@ -277,8 +277,8 @@ export default function TailorNotificationsScreen() {
       ) : items.length === 0 ? (
         <FeatureStateCard
           eyebrow="Notifications"
-          title="All caught up"
-          body="New bookings and order updates will appear here."
+          title="You're all caught up"
+          body="We'll notify you about new bookings, messages, and order updates."
           accentColor={Colors.warning}
           icon="bell-off"
         >

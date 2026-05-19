@@ -20,10 +20,11 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
 import { hasBlockedContact, rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
+import { sendOrderEventEmail } from '../_shared/order-email.ts'
 import {
   buildCustomerOrderCancellationTerminalRequest,
   buildCustomerQuoteDeclineTerminalRequest,
@@ -44,9 +45,11 @@ import { deriveCancellationPolicy } from '../../../packages/shared/src/cancellat
 import { finalizeOrderTerminal } from '../_shared/order-terminal.ts'
 import { refundSettledOrderPayments } from '../_shared/payment-refunds.ts'
 import { validateRecipientPhone } from '../_shared/phone.ts'
-import { z, parseBody, uuid, optionalNote } from '../_shared/validate.ts'
+import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
+import { z, parseBody, uuid, optionalNote, isoDate } from '../_shared/validate.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
+import { assertConsultationSlotAvailable } from '../_shared/consultation-bookings.ts'
 
 const BodySchema = z.object({
   orderId:     uuid,
@@ -57,12 +60,15 @@ const BodySchema = z.object({
     'decline-quote',
     'complete-order',
     'save-fabric-tracking',
+    'approve-sourced-fabric',
+    'request-sourced-fabric-change',
     'confirm-measurements',
     'respond-material-issue',
     'cancel-order',
     'request-cancellation-review',
     'request-delivery-review',
     'request-aftercare-support',
+    'request-consultation',
   ]),
   reason:      z.string().trim().min(1).max(200).optional(),
   description: z.string().trim().min(10).max(1000).optional(),
@@ -89,6 +95,8 @@ const BodySchema = z.object({
     'ALTERATION_FOLLOW_UP',
     'OTHER',
   ]).optional(),
+  scheduledStartAt: isoDate.optional(),
+  timezone: z.string().trim().max(80).optional(),
 })
 
 const FN = 'customer-order-action'
@@ -104,21 +112,30 @@ type Action =
   | 'decline-quote'
   | 'complete-order'
   | 'save-fabric-tracking'
+  | 'approve-sourced-fabric'
+  | 'request-sourced-fabric-change'
   | 'confirm-measurements'
   | 'respond-material-issue'
   | 'cancel-order'
   | 'request-cancellation-review'
   | 'request-delivery-review'
   | 'request-aftercare-support'
+  | 'request-consultation'
 
 type OrderRow = {
   id: string
+  reference?: string | null
   stage: string
   order_kind?: string | null
   customer_id?: string | null
   tailor_id?: string | null
+  garment_type?: string | null
+  item_title?: string | null
+  item_size?: string | null
   fabric_source?: string | null
   quoted_amount?: number | null
+  quoted_currency?: string | null
+  currency?: string | null
   consultation_fee?: number | null
   quote_expires_at?: string | null
   delivery_method?: string | null
@@ -149,12 +166,15 @@ const VALID_FROM: Record<Action, string[]> = {
   'decline-quote':   ['QUOTE_SENT'],
   'complete-order':  ['DELIVERED', 'COLLECTED'],
   'save-fabric-tracking': ['PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING', 'CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING'],
+  'approve-sourced-fabric': PRE_CUTTING_STAGES,
+  'request-sourced-fabric-change': PRE_CUTTING_STAGES,
   'confirm-measurements': PRE_CUTTING_STAGES,
   'respond-material-issue': PRE_CUTTING_STAGES,
   'cancel-order': ['PENDING_QUOTE', 'CONSULTATION', 'PAYMENT_PENDING', 'PAYMENT_FAILED'],
   'request-cancellation-review': ['CONFIRMED', 'DESIGNING', 'SOURCING', 'FINISHING'],
   'request-delivery-review': ['READY_FOR_DRAPE_DISPATCH', 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED'],
   'request-aftercare-support': ['DELIVERED', 'COLLECTED', 'COMPLETE'],
+  'request-consultation': ['PENDING_QUOTE'],
 }
 
 // The stage each action transitions TO (dispute handled separately)
@@ -172,11 +192,14 @@ const TAILOR_NOTIFICATION: Partial<Record<Action, { title: string; body: string 
   'open-dispute':    { title: 'Concern raised ⚠️',       body: 'A customer raised a concern about their order.' },
   'complete-order':  { title: 'Order complete ⭐',       body: 'The customer marked the order complete!' },
   'confirm-measurements': { title: 'Measurements confirmed', body: 'The customer confirmed their measurements for this order.' },
+  'approve-sourced-fabric': { title: 'Fabric approved', body: 'The customer approved the sourced fabric. Cutting can continue when the pattern is ready.' },
+  'request-sourced-fabric-change': { title: 'Fabric changes requested', body: 'The customer asked for a sourced fabric change before cutting.' },
   'respond-material-issue': { title: 'Customer responded to fabric issue', body: 'The customer chose how they want to handle the material issue.' },
   'cancel-order': { title: 'Order cancelled', body: 'The customer cancelled this order before live production started.' },
   'request-cancellation-review': { title: 'Cancellation review requested', body: 'The customer asked Drape to review cancellation before handoff.' },
   'request-delivery-review': { title: 'Delivery review requested', body: 'The customer asked Drape to review a dispatch or delivery issue.' },
   'request-aftercare-support': { title: 'Aftercare support requested', body: 'The customer asked Drape to review a post-delivery fit or finish issue.' },
+  'request-consultation': { title: 'Consultation requested', body: 'A customer asked for a consultation. Approve, price, reschedule, or decline from the order.' },
 }
 
 const AFTERCARE_TYPE_LABELS: Record<
@@ -189,6 +212,8 @@ const AFTERCARE_TYPE_LABELS: Record<
   ALTERATION_FOLLOW_UP: 'Alteration follow-up',
   OTHER: 'Other aftercare issue',
 }
+const AFTERCARE_WINDOW_DAYS = 14
+const AFTERCARE_WINDOW_MS = AFTERCARE_WINDOW_DAYS * 24 * 60 * 60 * 1000
 
 const STAGE_NOTE: Partial<Record<Action, string>> = {
   'confirm-receipt': 'Customer confirmed receipt of their order.',
@@ -197,7 +222,29 @@ const STAGE_NOTE: Partial<Record<Action, string>> = {
   'complete-order':  'Order marked complete.',
 }
 
+function queueTailorOrderEmail(
+  supabase: any,
+  order: OrderRow,
+  subject: string,
+  body: string,
+) {
+  if (!order.tailor_id) return
+  EdgeRuntime.waitUntil(
+    sendOrderEventEmail(supabase, {
+      order,
+      recipientUserId: order.tailor_id.toString(),
+      audience: 'TAILOR',
+      subject,
+      body,
+    }),
+  )
+}
+
 function jsonResponse(body: Record<string, unknown>, status: number, cors: HeadersInit) {
+  if (typeof body.error === 'string' && typeof body.message !== 'string') {
+    body.message = body.error
+  }
+
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...cors, 'Content-Type': 'application/json' },
@@ -212,6 +259,25 @@ function hasThreateningLanguage(text: string) {
   return THREATENING_LANGUAGE_PATTERNS.some((pattern) => pattern.test(text))
 }
 
+function validateScheduledStartAt(value: string | undefined, minLeadMinutes: number) {
+  if (!value) return 'Choose a consultation time before sending the request.'
+  const timestamp = new Date(value).getTime()
+  if (!Number.isFinite(timestamp)) return 'Choose a valid consultation time.'
+  const min = Date.now() + minLeadMinutes * 60 * 1000
+  if (timestamp < min) return `Choose a time at least ${minLeadMinutes} minutes from now.`
+  const max = Date.now() + 30 * 24 * 60 * 60 * 1000
+  if (timestamp > max) return 'Choose a consultation time within the next 30 days.'
+  return null
+}
+
+function aftercareWindowClosesAt(order: OrderRow) {
+  const anchor = order.customer_handoff_confirmed_at ?? order.handoff_completed_at
+  if (!anchor) return null
+  const parsed = Date.parse(anchor)
+  if (!Number.isFinite(parsed)) return null
+  return new Date(parsed + AFTERCARE_WINDOW_MS).toISOString()
+}
+
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
@@ -221,13 +287,13 @@ Deno.serve(async (req) => {
     const caller = await getAuthUser(req)
     if (!caller) {
       log('warn', FN, 'auth.unauthenticated')
-      return new Response('Unauthorized', { status: 401, headers: cors })
+      return jsonResponse({ error: 'Please sign in again before updating this order.' }, 401, cors)
     }
 
     const parsed = parseBody(BodySchema, await req.json())
     if (!parsed.ok) {
       log('warn', FN, 'validation.failed', { actor_id: caller.id, error: parsed.error })
-      return new Response(parsed.error, { status: 400, headers: cors })
+      return jsonResponse({ error: parsed.error }, 400, cors)
     }
 
     const { orderId, action, reason, description, fabricTracking } = parsed.data
@@ -248,49 +314,72 @@ Deno.serve(async (req) => {
         severity: 'warn',
         payload: { function: FN },
       })
-      return new Response('Too many requests', { status: 429, headers: cors })
+      return rateLimitExceededResponse(cors)
     }
 
     const orderSelect =
-      'id, stage, order_kind, customer_id, tailor_id, fabric_source, quoted_amount, consultation_fee, quote_expires_at, delivery_method, delivery_address, recipient_name, recipient_phone, fulfillment_fee, fulfillment_payment_requested_at, fulfillment_payment_paid_at, special_note, customer_measurements_snapshot, handoff_completed_at, customer_handoff_confirmed_at, handoff_confirmation_source'
+      'id, reference, stage, order_kind, customer_id, tailor_id, garment_type, item_title, item_size, fabric_source, quoted_amount, quoted_currency, currency, consultation_fee, quote_expires_at, delivery_method, delivery_address, recipient_name, recipient_phone, fulfillment_fee, fulfillment_payment_requested_at, fulfillment_payment_paid_at, special_note, customer_measurements_snapshot, handoff_completed_at, customer_handoff_confirmed_at, handoff_confirmation_source'
 
     // Fetch order — verify ownership and current stage
     const { data: orderData, error: orderError } = await supabase
       .from('orders')
       .select(orderSelect)
       .eq('id', orderId)
-      .single()
+      .maybeSingle()
 
     if (orderError) {
       log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: orderError.message })
-      return new Response('Database error', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not load this order right now. Please try again.' }, 500, cors)
     }
 
     const order = orderData as unknown as OrderRow | null
-    if (!order) return new Response('Order not found', { status: 404, headers: cors })
+    const actionPreflight = runPreflight([
+      {
+        name: 'order_exists',
+        condition: !!order,
+        errorCode: 'ORDER_NOT_FOUND',
+        message: 'This order could not be found anymore.',
+        field: 'orderId',
+        severity: 'BLOCKING',
+        actual: { orderId },
+      },
+      {
+        name: 'customer_owns_order',
+        condition: order?.customer_id?.toString() === caller.id,
+        errorCode: 'ORDER_FORBIDDEN',
+        message: 'This order is not available from your account.',
+        field: 'orderId',
+        severity: 'BLOCKING',
+        actual: { callerId: caller.id, customerId: order?.customer_id ?? null },
+      },
+      {
+        name: 'action_allowed_from_stage',
+        condition: !!order?.stage && VALID_FROM[action].includes(order.stage),
+        errorCode: 'INVALID_ORDER_STAGE',
+        message: 'This order changed while you were away. Refresh the order before continuing.',
+        field: 'stage',
+        severity: 'BLOCKING',
+        actual: { stage: order?.stage ?? null, action },
+      },
+    ])
 
-    // Verify caller is the customer on this order
-    if (order.customer_id?.toString() !== caller.id) {
-      log('warn', FN, 'auth.forbidden', { actor_id: caller.id, order_id: orderId, action })
-      await audit(supabase, {
-        event: 'auth.forbidden',
-        actor_id: caller.id,
-        actor_role: 'CUSTOMER',
-        order_id: orderId,
-        severity: 'warn',
-        payload: { function: FN, action },
+    if (!actionPreflight.passed) {
+      await logPreflightFailure(supabase, actionPreflight, {
+        operation: `customer_order_${action.replaceAll('-', '_')}`,
+        entityType: 'order',
+        entityId: orderId,
+        actorId: caller.id,
+        actorRole: 'CUSTOMER',
+        orderId,
+        source: FN,
       })
-      return new Response('Forbidden', { status: 403, headers: cors })
-    }
-
-    // Verify the current stage allows this transition
-    if (!VALID_FROM[action].includes(order.stage)) {
-      log('warn', FN, 'order.invalid_transition', { actor_id: caller.id, order_id: orderId, action, from_stage: order.stage })
-      return new Response(
-        JSON.stringify({ error: `Cannot ${action} from stage ${order.stage}` }),
-        { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+      return preflightFailureResponse(
+        actionPreflight,
+        cors,
+        !order ? 404 : order.customer_id?.toString() !== caller.id ? 403 : 409,
       )
     }
+    if (!order) return jsonError(cors, 404, 'ORDER_NOT_FOUND', 'This order could not be found anymore.')
 
     const supportMeta = parseOrderSupportMeta(order.special_note)
     const consultationMeta = supportMeta.consultation ?? null
@@ -444,11 +533,207 @@ Deno.serve(async (req) => {
     })
     if (blockedNote) return blockedNote
 
+    if (action === 'request-consultation') {
+      if (order.order_kind && order.order_kind !== 'CUSTOM') {
+        return jsonError(cors, 409, 'CONSULTATION_NOT_AVAILABLE', 'Consultations are only available before custom quotes.')
+      }
+
+      if (consultationMeta && consultationMeta.status !== 'DECLINED') {
+        return jsonError(cors, 409, 'CONSULTATION_ALREADY_OPEN', 'A consultation request is already attached to this order.')
+      }
+
+      const scheduledError = validateScheduledStartAt(parsed.data.scheduledStartAt, 120)
+      if (scheduledError) {
+        return jsonError(cors, 400, 'CONSULTATION_TIME_REQUIRED', scheduledError)
+      }
+
+      const now = new Date().toISOString()
+      const slotAvailability = await assertConsultationSlotAvailable(supabase, {
+        orderId,
+        tailorId: order.tailor_id!.toString(),
+        scheduledStartAt: parsed.data.scheduledStartAt!,
+      })
+      if (!slotAvailability.ok) {
+        return jsonError(cors, slotAvailability.status, slotAvailability.code, slotAvailability.error)
+      }
+
+      const nextSupportMeta = {
+        ...supportMeta,
+        consultation: {
+          status: 'REQUESTED' as const,
+          requestedBy: 'CUSTOMER' as const,
+          feeMode: null,
+          feeAmount: null,
+          feeCurrency: null,
+          feeCreditable: null,
+          feeCreditedTowardQuote: false,
+          paymentProvider: null,
+          paymentIntentId: null,
+          paymentCheckoutUrl: null,
+          paymentTiming: 'BEFORE_CALL_STARTS' as const,
+          paidAt: null,
+          reschedulePolicy: 'ONE_FREE_RESCHEDULE' as const,
+          noShowPolicy: 'CASE_BY_CASE' as const,
+          expiryPolicy: 'EXPIRES_IN_14_DAYS' as const,
+          reminderEnabled: true,
+          requestNote: parsed.data.note?.trim() || null,
+          requestedAt: now,
+          proposedStartAt: parsed.data.scheduledStartAt!,
+          scheduledStartAt: null,
+          scheduledEndAt: null,
+          timezone: parsed.data.timezone?.trim() || null,
+          approvedAt: null,
+          approvedBy: null,
+          declinedAt: null,
+          declinedBy: null,
+          declineReason: null,
+          reminder30SentAt: null,
+          reminder5SentAt: null,
+        },
+      }
+
+      const { data: updatedOrder, error } = await supabase
+        .from('orders')
+        .update({
+          stage: 'CONSULTATION',
+          special_note: serializeOrderSupportMeta(nextSupportMeta),
+          stage_updated_at: now,
+        })
+        .eq('id', orderId)
+        .eq('stage', 'PENDING_QUOTE')
+        .select('id')
+        .maybeSingle()
+
+      if (error) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
+        return jsonError(cors, 500, 'CONSULTATION_REQUEST_FAILED', 'Could not request a consultation right now.')
+      }
+
+      if (!updatedOrder?.id) {
+        return jsonError(
+          cors,
+          409,
+          'ORDER_STATE_CHANGED',
+          'This order changed while you were requesting the consultation. Refresh the order and try again if a consultation is still needed.',
+        )
+      }
+
+      await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: 'CONSULTATION',
+        note: parsed.data.note?.trim()
+          || `Customer requested a consultation before quote for ${parsed.data.scheduledStartAt}. Tailor approval is required before it is booked.`,
+      })
+
+      await audit(supabase, {
+        event: 'consultation.requested',
+        actor_id: caller.id,
+        actor_role: 'CUSTOMER',
+        order_id: orderId,
+        payload: {
+          requested_by: 'CUSTOMER',
+          proposed_start_at: parsed.data.scheduledStartAt,
+          timezone: parsed.data.timezone ?? null,
+        },
+      })
+
+      if (order.tailor_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.tailor_id.toString(), {
+            ...TAILOR_NOTIFICATION['request-consultation']!,
+            preferenceKey: 'newOrders',
+            data: { orderId },
+          }),
+        )
+        queueTailorOrderEmail(
+          supabase,
+          order,
+          'Consultation requested',
+          'A customer requested a consultation before quote. Approve, price, reschedule, or decline from the order so they are not left waiting.',
+        )
+      }
+
+      return jsonResponse({ ok: true }, 200, cors)
+    }
+
+    if (action === 'approve-sourced-fabric' || action === 'request-sourced-fabric-change') {
+      if (order.order_kind !== 'CUSTOM' || order.fabric_source !== 'TAILOR_SOURCES') {
+        return jsonError(cors, 409, 'FABRIC_APPROVAL_NOT_ALLOWED', 'Fabric approval only applies when the tailor is sourcing fabric for a custom order.')
+      }
+
+      if (action === 'request-sourced-fabric-change' && (parsed.data.note?.trim().length ?? 0) < 5) {
+        return jsonError(cors, 400, 'FABRIC_CHANGE_NOTE_REQUIRED', 'Tell the tailor what should change about the sourced fabric.')
+      }
+
+      const { data: customDetail, error: detailReadError } = await supabase
+        .from('custom_order_details')
+        .select('fabric_approval_required, fabric_approval_status')
+        .eq('order_id', orderId)
+        .maybeSingle()
+
+      if (detailReadError) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: detailReadError.message, surface: 'custom_order_details' })
+        return jsonError(cors, 500, 'FABRIC_APPROVAL_READ_FAILED', 'Could not check fabric approval right now.')
+      }
+
+      if (!customDetail?.fabric_approval_required || customDetail.fabric_approval_status !== 'PENDING_CUSTOMER_APPROVAL') {
+        return jsonError(cors, 409, 'FABRIC_APPROVAL_NOT_PENDING', 'There is no sourced fabric waiting for approval right now.')
+      }
+
+      const nowIso = new Date().toISOString()
+      const approvalStatus = action === 'approve-sourced-fabric' ? 'APPROVED' : 'CHANGES_REQUESTED'
+      const { error: detailError } = await supabase
+        .from('custom_order_details')
+        .update({
+          fabric_approval_status: approvalStatus,
+          fabric_approved_at: action === 'approve-sourced-fabric' ? nowIso : null,
+          fabric_changes_requested_at: action === 'request-sourced-fabric-change' ? nowIso : null,
+        })
+        .eq('order_id', orderId)
+
+      if (detailError) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: detailError.message, surface: 'custom_order_details' })
+        return jsonError(cors, 500, 'FABRIC_APPROVAL_SAVE_FAILED', 'Could not save your fabric decision right now.')
+      }
+
+      await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: order.stage,
+        note: action === 'approve-sourced-fabric'
+          ? 'Customer approved the tailor-sourced fabric.'
+          : `Customer requested sourced fabric changes: ${parsed.data.note?.trim()}`,
+      })
+
+      await audit(supabase, {
+        event: action === 'approve-sourced-fabric' ? 'fabric.approved' : 'fabric.change_requested',
+        actor_id: caller.id,
+        actor_role: 'CUSTOMER',
+        order_id: orderId,
+        payload: {
+          stage: order.stage,
+          status: approvalStatus,
+          note_length: parsed.data.note?.trim().length ?? 0,
+        },
+      })
+
+      if (order.tailor_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.tailor_id.toString(), {
+            ...TAILOR_NOTIFICATION[action]!,
+            preferenceKey: 'newOrders',
+            data: { orderId },
+          })
+        )
+      }
+
+      return jsonResponse({ ok: true, fabricApprovalStatus: approvalStatus }, 200, cors)
+    }
+
     if (action === 'save-fabric-tracking') {
       const value = fabricTracking?.trim() ?? ''
-      if (!value) return new Response('fabricTracking is required', { status: 400, headers: cors })
+      if (!value) return jsonResponse({ error: 'Add the fabric tracking number before saving.' }, 400, cors)
       if (hasBlockedContact(value)) {
-        return new Response("Contact details can't be included in tracking numbers.", { status: 400, headers: cors })
+        return jsonResponse({ error: "Contact details can't be included in tracking numbers." }, 400, cors)
       }
 
       if (order.fabric_source !== 'CUSTOMER_SUPPLIES') {
@@ -477,7 +762,7 @@ Deno.serve(async (req) => {
 
       if (error) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
-        return new Response('Database error', { status: 500, headers: cors })
+        return jsonResponse({ error: 'We could not save fabric tracking right now. Please try again.' }, 500, cors)
       }
 
       await audit(supabase, {
@@ -488,9 +773,7 @@ Deno.serve(async (req) => {
         payload: { length: value.length },
       })
 
-      return new Response(JSON.stringify({ ok: true, fabricTracking: value }), {
-        headers: { ...cors, 'Content-Type': 'application/json' },
-      })
+      return jsonResponse({ ok: true, fabricTracking: value }, 200, cors)
     }
 
     if (action === 'confirm-measurements') {
@@ -504,6 +787,7 @@ Deno.serve(async (req) => {
         needsConfirmation: false,
         confirmedAt: new Date().toISOString(),
         confirmedBy: 'CUSTOMER',
+        confirmedFields: Array.isArray(snapshot.confirmationFields) ? snapshot.confirmationFields : null,
       }
 
       const { error } = await supabase
@@ -527,13 +811,14 @@ Deno.serve(async (req) => {
         actor_id: caller.id,
         actor_role: 'CUSTOMER',
         order_id: orderId,
-        payload: { stage: order.stage },
+        payload: { stage: order.stage, fields: Array.isArray(snapshot.confirmationFields) ? snapshot.confirmationFields : [] },
       })
 
       if (order.tailor_id) {
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.tailor_id.toString(), {
             ...TAILOR_NOTIFICATION['confirm-measurements']!,
+            preferenceKey: 'newOrders',
             data: { orderId },
           })
         )
@@ -596,6 +881,7 @@ Deno.serve(async (req) => {
         EdgeRuntime.waitUntil(
           sendPushToUser(supabase, order.tailor_id.toString(), {
             ...TAILOR_NOTIFICATION['respond-material-issue']!,
+            preferenceKey: 'newOrders',
             data: { orderId },
           })
         )
@@ -798,6 +1084,24 @@ Deno.serve(async (req) => {
         return jsonError(cors, 400, 'AFTERCARE_NOTE_REQUIRED', 'Add a short note so Drape knows what happened and how to help.')
       }
 
+      const aftercareClosesAt = aftercareWindowClosesAt(order)
+      if (!aftercareClosesAt) {
+        return jsonError(
+          cors,
+          400,
+          'AFTERCARE_NOT_OPEN',
+          'Confirm delivery or collection before opening aftercare in Drape.',
+        )
+      }
+      if (Date.parse(aftercareClosesAt) < Date.now()) {
+        return jsonError(
+          cors,
+          400,
+          'AFTERCARE_WINDOW_CLOSED',
+          'The 14-day aftercare window has closed. Email support@drapeon.co if this is a serious safety, fraud, or workmanship concern.',
+        )
+      }
+
       const issueLabel = AFTERCARE_TYPE_LABELS[aftercareType]
 
       await supabase.from('order_stage_updates').insert({
@@ -817,6 +1121,7 @@ Deno.serve(async (req) => {
           aftercare_label: issueLabel,
           from_stage: order.stage,
           note_length: aftercareNote.length,
+          aftercare_closes_at: aftercareClosesAt,
         },
       })
 
@@ -838,6 +1143,7 @@ Deno.serve(async (req) => {
           aftercare_label: issueLabel,
           from_stage: order.stage,
           note_length: aftercareNote.length,
+          aftercare_closes_at: aftercareClosesAt,
         },
       })
 
@@ -899,6 +1205,51 @@ Deno.serve(async (req) => {
         extra: { action },
       })
       if (blockedDispute) return blockedDispute
+
+      const { data: existingDispute, error: existingDisputeError } = await supabase
+        .from('disputes')
+        .select('id, status')
+        .eq('order_id', orderId)
+        .maybeSingle()
+
+      if (existingDisputeError) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: existingDisputeError.message, surface: 'disputes.existing' })
+        return jsonError(cors, 500, 'DISPUTE_READ_FAILED', 'Could not check existing concerns for this order right now.')
+      }
+
+      const disputePreflight = runPreflight([
+        {
+          name: 'no_existing_dispute',
+          condition: !existingDispute?.id,
+          errorCode: 'DISPUTE_ALREADY_EXISTS',
+          message: 'A concern is already open for this order. Drape support is reviewing it.',
+          field: 'orderId',
+          severity: 'BLOCKING',
+          actual: { disputeId: existingDispute?.id ?? null, status: existingDispute?.status ?? null },
+        },
+        {
+          name: 'dispute_has_evidence',
+          condition: description.trim().length >= 10,
+          errorCode: 'DISPUTE_EVIDENCE_REQUIRED',
+          message: 'Add a short description so Drape can understand what happened.',
+          field: 'description',
+          severity: 'BLOCKING',
+          actual: { descriptionLength: description.trim().length },
+        },
+      ])
+
+      if (!disputePreflight.passed) {
+        await logPreflightFailure(supabase, disputePreflight, {
+          operation: 'customer_order_open_dispute',
+          entityType: 'order',
+          entityId: orderId,
+          actorId: caller.id,
+          actorRole: 'CUSTOMER',
+          orderId,
+          source: FN,
+        })
+        return preflightFailureResponse(disputePreflight, cors, 409)
+      }
 
       const { error: stageError } = await supabase
         .from('orders')
@@ -970,7 +1321,7 @@ Deno.serve(async (req) => {
             action,
             error: error instanceof Error ? error.message : String(error),
           })
-          return new Response('Database error', { status: 500, headers: cors })
+          return jsonResponse({ error: 'We could not decline this quote right now. Please try again.' }, 500, cors)
         }
       } else {
         const nowIso = new Date().toISOString()
@@ -1001,7 +1352,7 @@ Deno.serve(async (req) => {
 
         if (error) {
           log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
-          return new Response('Database error', { status: 500, headers: cors })
+          return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
         }
 
         await supabase.from('order_stage_updates').insert({
@@ -1024,17 +1375,16 @@ Deno.serve(async (req) => {
       const notif = TAILOR_NOTIFICATION[action]
       if (notif && order.tailor_id) {
         EdgeRuntime.waitUntil(
-          sendPushToUser(supabase, order.tailor_id.toString(), { ...notif, data: { orderId } })
+          sendPushToUser(supabase, order.tailor_id.toString(), { ...notif, preferenceKey: 'newOrders', data: { orderId } })
         )
+        queueTailorOrderEmail(supabase, order, notif.title, notif.body)
       }
     }
 
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    })
+    return jsonResponse({ ok: true }, 200, cors)
 
   } catch (err) {
     log('error', FN, 'unhandled_exception', { error: String(err) })
-    return new Response('Internal error', { status: 500, headers: cors })
+    return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
   }
 })

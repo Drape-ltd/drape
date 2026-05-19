@@ -12,26 +12,27 @@
 import { useCallback, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, Alert, ActivityIndicator, Switch, Platform,
+  Alert, ActivityIndicator, Switch, Platform,
 } from 'react-native'
 import { useFocusEffect, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import { supabase } from '@/lib/supabase'
-import { signInWithPasswordResilient, useAuth } from '@/lib/auth'
-import { requestAccountDeletion } from '@/lib/account-deletion'
+import { changePasswordWithReauthProof, startEmailChangeWithReauthProof } from '@/lib/account-security-actions'
+import { useAuth } from '@/lib/auth'
 import { goBackOrFallback } from '@/lib/navigation'
 import {
   isBiometricAvailable, getBiometricLabel,
   isBiometricEnabled, setBiometricEnabled, authenticate,
 } from '@/lib/biometric'
-import { markRecentReauth } from '@/lib/recent-reauth'
+import { issueReauthProof } from '@/lib/reauth-proof'
+import { Input } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import {
   MAX_PASSWORD_LENGTH,
   PASSWORD_POLICY_HINT,
   validatePasswordStrength,
 } from '@drape/shared/auth-security'
+import { validateEmail } from '@drape/shared'
 
 type Step = 'reauth' | 'change'
 
@@ -44,13 +45,18 @@ export default function LoginSecurityScreen() {
   const [step, setStep] = useState<Step>('reauth')
   const [reauthPassword, setReauthPassword] = useState('')
   const [reauthLoading, setReauthLoading] = useState(false)
-  const [biometricAvailableForReauth, setBiometricAvailableForReauth] = useState(false)
+  const [passwordReauthProof, setPasswordReauthProof] = useState<string | null>(null)
+  const [passwordProofExpiresAt, setPasswordProofExpiresAt] = useState<string | null>(null)
 
   // ── Password change ──────────────────────────────────────────────────────
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [savingPassword, setSavingPassword] = useState(false)
-  const [deletingAccount, setDeletingAccount] = useState(false)
+
+  // ── Email change ────────────────────────────────────────────────────────
+  const [newEmail, setNewEmail] = useState('')
+  const [emailPassword, setEmailPassword] = useState('')
+  const [savingEmail, setSavingEmail] = useState(false)
 
   // ── Biometric toggle ─────────────────────────────────────────────────────
   const [biometricAvailable, setBiometricAvailable] = useState(false)
@@ -60,11 +66,22 @@ export default function LoginSecurityScreen() {
   const newPasswordError = newPassword
     ? (validatePasswordStrength(newPassword, { forbiddenValues: [user?.email] }) ?? '')
     : ''
+  const currentEmail = user?.email?.trim().toLowerCase() ?? ''
+  const normalizedNewEmail = newEmail.trim().toLowerCase()
+  const newEmailError = newEmail.trim().length === 0
+    ? ''
+    : !validateEmail(normalizedNewEmail)
+      ? 'Please enter a valid email address.'
+      : normalizedNewEmail === currentEmail
+        ? 'Enter a different email address.'
+        : ''
 
   useFocusEffect(
     useCallback(() => {
       setStep('reauth')
       setReauthPassword('')
+      setPasswordReauthProof(null)
+      setPasswordProofExpiresAt(null)
       async function checkBiometric() {
         const available = await isBiometricAvailable()
         setBiometricAvailable(available)
@@ -72,30 +89,11 @@ export default function LoginSecurityScreen() {
           setBiometricLabel(await getBiometricLabel())
           const enabled = await isBiometricEnabled()
           setBiometricEnabledState(enabled)
-          setBiometricAvailableForReauth(enabled) // only offer biometric re-auth if it's already enabled
         }
       }
       checkBiometric()
     }, [])
   )
-
-  // ── Re-auth via biometric ────────────────────────────────────────────────
-  async function reauthWithBiometric() {
-    try {
-      setReauthLoading(true)
-      const ok = await authenticate('Verify your identity to change your password')
-      if (ok) {
-        await markRecentReauth(user?.id)
-        setStep('change')
-      } else {
-        Alert.alert('Verification failed', 'Could not verify your identity. Enter your current password instead.')
-      }
-    } catch {
-      Alert.alert('Verification failed', 'Biometric verification is unavailable right now. Enter your current password instead.')
-    } finally {
-      setReauthLoading(false)
-    }
-  }
 
   // ── Re-auth via current password ─────────────────────────────────────────
   async function reauthWithPassword() {
@@ -105,12 +103,19 @@ export default function LoginSecurityScreen() {
       return
     }
     setReauthLoading(true)
-    const { error } = await signInWithPasswordResilient(user?.email ?? '', reauthPassword)
+    const result = await issueReauthProof({
+      password: reauthPassword,
+      purpose: 'PASSWORD_CHANGE',
+    })
     setReauthLoading(false)
-    if (error) {
-      Alert.alert('Incorrect password', 'The password you entered is wrong.')
+    if (result.error) {
+      Alert.alert(
+        result.error.toLowerCase().includes('incorrect') ? 'Incorrect password' : 'Could not confirm password',
+        result.error,
+      )
     } else {
-      await markRecentReauth(user?.id)
+      setPasswordReauthProof(result.proof ?? null)
+      setPasswordProofExpiresAt(result.expiresAt ?? null)
       setReauthPassword('')
       setStep('change')
     }
@@ -127,17 +132,91 @@ export default function LoginSecurityScreen() {
       Alert.alert('Mismatch', 'Passwords do not match.')
       return
     }
+    if (!passwordReauthProof) {
+      setStep('reauth')
+      Alert.alert('Confirm current password', 'Confirm your current password again before changing it.')
+      return
+    }
     setSavingPassword(true)
-    const { error } = await supabase.auth.updateUser({ password: newPassword })
+    const result = await changePasswordWithReauthProof({
+      reauthProof: passwordReauthProof,
+      newPassword,
+    })
     setSavingPassword(false)
-    if (error) {
-      Alert.alert('Error', error.message)
+    if (result.error) {
+      if (result.error.toLowerCase().includes('expired')) {
+        setStep('reauth')
+        setPasswordReauthProof(null)
+        setPasswordProofExpiresAt(null)
+      }
+      Alert.alert('Could not change password', result.error)
     } else {
-      Alert.alert('Password changed', 'Your password has been updated successfully.')
+      Alert.alert(
+        'Password changed',
+        result.emailQueued
+          ? 'Your password has been updated successfully. We also sent a security receipt to your email.'
+          : 'Your password has been updated successfully.',
+      )
       setNewPassword('')
       setConfirmPassword('')
+      setPasswordReauthProof(null)
+      setPasswordProofExpiresAt(null)
       setStep('reauth') // reset gate after success
     }
+  }
+
+  async function changeEmail() {
+    if (savingEmail) return
+    if (!currentEmail) {
+      Alert.alert('Email unavailable', 'We could not find the current email for this session. Sign out and sign back in, then try again.')
+      return
+    }
+    if (!normalizedNewEmail || newEmailError) {
+      Alert.alert('Invalid email', newEmailError || 'Please enter a valid email address.')
+      return
+    }
+    if (!emailPassword) {
+      Alert.alert('Current password required', 'Enter your current password before changing your email.')
+      return
+    }
+
+    setSavingEmail(true)
+    const proofResult = await issueReauthProof({
+      password: emailPassword,
+      purpose: 'EMAIL_CHANGE',
+    })
+    if (proofResult.error) {
+      setSavingEmail(false)
+      Alert.alert(
+        proofResult.error.toLowerCase().includes('incorrect') ? 'Incorrect password' : 'Could not confirm password',
+        proofResult.error,
+      )
+      return
+    }
+
+    if (!proofResult.proof) {
+      setSavingEmail(false)
+      Alert.alert('Could not confirm password', 'Confirm your password again before changing your email.')
+      return
+    }
+
+    const emailResult = await startEmailChangeWithReauthProof({
+      reauthProof: proofResult.proof,
+      newEmail: normalizedNewEmail,
+    })
+    setSavingEmail(false)
+
+    if (emailResult.error) {
+      Alert.alert('Could not change email', emailResult.error)
+      return
+    }
+
+    Alert.alert(
+      'Check both inboxes',
+      'We sent confirmation links to your current and new email addresses. Your Drape email changes only after the confirmation step is complete.',
+    )
+    setNewEmail('')
+    setEmailPassword('')
   }
 
   // ── Biometric toggle ─────────────────────────────────────────────────────
@@ -160,37 +239,13 @@ export default function LoginSecurityScreen() {
   function handleDeleteAccount() {
     Alert.alert(
       'Delete account',
-      'This starts a permanent account deletion request inside Drape. We may retain transaction records where legally required, but your account will be closed and queued for removal.',
+      'This opens the deletion request flow. You will need to type DELETE and confirm your current password before Drape queues the request.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Request deletion',
+          text: 'Continue',
           style: 'destructive',
-          onPress: () => {
-            void (async () => {
-              setDeletingAccount(true)
-              const result = await requestAccountDeletion()
-              setDeletingAccount(false)
-
-              if (result.error) {
-                Alert.alert('Error', result.error)
-                return
-              }
-
-              if (result.alreadyPending) {
-                Alert.alert(
-                  'Already requested',
-                  'You already have a pending deletion request. Our team will continue processing it.'
-                )
-                return
-              }
-
-              Alert.alert(
-                'Request received',
-                'Your deletion request has been submitted inside Drape. We will process it and contact you if anything requires confirmation.'
-              )
-            })()
-          },
+          onPress: () => router.push('/(tailor)/profile/delete-account' as never),
         },
       ],
     )
@@ -213,7 +268,7 @@ export default function LoginSecurityScreen() {
         <View style={styles.guideCard}>
           <Text style={styles.guideEyebrow}>Account protection</Text>
           <Text style={styles.guideTitle}>Protect your payout and client work with a cleaner security routine.</Text>
-          <Text style={styles.guideCopy}>Use biometric unlock if it fits your device, then re-verify your identity before changing your password or requesting deletion.</Text>
+          <Text style={styles.guideCopy}>Use biometric unlock if it fits your device. Email, password, and deletion requests still require your current password so an unlocked phone cannot change the account.</Text>
         </View>
 
         {/* ── Biometric toggle (always visible) ── */}
@@ -237,7 +292,7 @@ export default function LoginSecurityScreen() {
                       value={biometricEnabled}
                       onValueChange={toggleBiometric}
                       trackColor={{ false: Colors.lightGrey, true: Colors.needleGreen }}
-                      thumbColor={Colors.white}
+                      thumbColor={Colors.textInverse}
                     />
                   )
                 }
@@ -245,6 +300,64 @@ export default function LoginSecurityScreen() {
             </View>
           </View>
         )}
+
+        {/* ── Change email ── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Email address</Text>
+          <View style={styles.card}>
+            <View style={styles.currentEmailBox}>
+              <Text style={styles.currentEmailLabel}>Current email</Text>
+              <Text style={styles.currentEmailText}>{currentEmail || 'Unavailable'}</Text>
+            </View>
+            <View style={styles.divider} />
+            <View style={styles.field}>
+              <Text style={styles.label}>New email address</Text>
+              <Input
+                value={newEmail}
+                onChangeText={setNewEmail}
+                placeholder="name@example.com"
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                textContentType="emailAddress"
+                autoComplete="email"
+                returnKeyType="next"
+                error={newEmailError}
+              />
+            </View>
+            <View style={styles.divider} />
+            <View style={styles.field}>
+              <Text style={styles.label}>Current password</Text>
+              <Input
+                value={emailPassword}
+                onChangeText={setEmailPassword}
+                placeholder="Confirm current password"
+                secureTextEntry
+                textContentType="password"
+                autoComplete="current-password"
+                maxLength={MAX_PASSWORD_LENGTH}
+                returnKeyType="done"
+                onSubmitEditing={changeEmail}
+              />
+            </View>
+            <View style={styles.emailNotice}>
+              <Feather name="mail" size={16} color={Colors.needleGreen} />
+              <Text style={styles.emailNoticeText}>
+                Drape uses secure email change. Confirmation is required before the account email updates.
+              </Text>
+            </View>
+          </View>
+          <TouchableOpacity
+            style={[styles.saveBtn, (savingEmail || !normalizedNewEmail || !!newEmailError || !emailPassword) && { opacity: 0.6 }]}
+            onPress={changeEmail}
+            disabled={savingEmail || !normalizedNewEmail || !!newEmailError || !emailPassword}
+          >
+            {savingEmail
+              ? <ActivityIndicator color={Colors.textInverse} size="small" />
+              : <Text style={styles.saveBtnText}>Send confirmation emails</Text>
+            }
+          </TouchableOpacity>
+        </View>
 
         {/* ── Change password ── */}
         <View style={styles.section}>
@@ -260,33 +373,12 @@ export default function LoginSecurityScreen() {
                   To protect your account, confirm who you are before changing your password.
                 </Text>
 
-                {biometricAvailableForReauth && (
-                  <TouchableOpacity
-                    style={[styles.biometricBtn, reauthLoading && { opacity: 0.6 }]}
-                    onPress={reauthWithBiometric}
-                    disabled={reauthLoading}
-                  >
-                    <Feather
-                      name={Platform.OS === 'ios' ? 'eye' : 'cpu'}
-                      size={18}
-                      color={Colors.needleGreen}
-                    />
-                    <Text style={styles.biometricBtnText}>
-                      Use {biometricLabel}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-
-                <View style={styles.divider} />
-
                 <View style={styles.field}>
                   <Text style={styles.label}>Current password</Text>
-                  <TextInput
-                    style={styles.input}
+                  <Input
                     value={reauthPassword}
                     onChangeText={setReauthPassword}
                     placeholder="Enter current password"
-                    placeholderTextColor={Colors.midGrey}
                     secureTextEntry
                     textContentType="password"
                     autoComplete="current-password"
@@ -302,7 +394,7 @@ export default function LoginSecurityScreen() {
                   disabled={reauthLoading}
                 >
                   {reauthLoading
-                    ? <ActivityIndicator color={Colors.white} size="small" />
+                    ? <ActivityIndicator color={Colors.textInverse} size="small" />
                     : <Text style={styles.saveBtnText}>Continue</Text>
                   }
                 </TouchableOpacity>
@@ -314,19 +406,19 @@ export default function LoginSecurityScreen() {
               <View style={styles.card}>
                 <View style={styles.verifiedBanner}>
                   <Feather name="check-circle" size={16} color={Colors.success} />
-                  <Text style={styles.verifiedText}>Identity verified</Text>
+                  <Text style={styles.verifiedText}>
+                    {passwordProofExpiresAt ? 'Password confirmed for 5 minutes' : 'Identity verified'}
+                  </Text>
                 </View>
 
                 <View style={styles.divider} />
 
                 <View style={styles.field}>
                   <Text style={styles.label}>New password</Text>
-                  <TextInput
-                    style={styles.input}
+                  <Input
                     value={newPassword}
                     onChangeText={setNewPassword}
-                    placeholder="10+ characters"
-                    placeholderTextColor={Colors.midGrey}
+                    placeholder="8+ characters"
                     secureTextEntry
                     textContentType="newPassword"
                     autoComplete="new-password"
@@ -340,12 +432,10 @@ export default function LoginSecurityScreen() {
                 <View style={styles.divider} />
                 <View style={styles.field}>
                   <Text style={styles.label}>Confirm new password</Text>
-                  <TextInput
-                    style={styles.input}
+                  <Input
                     value={confirmPassword}
                     onChangeText={setConfirmPassword}
                     placeholder="Repeat new password"
-                    placeholderTextColor={Colors.midGrey}
                     secureTextEntry
                     textContentType="newPassword"
                     autoComplete="new-password"
@@ -363,7 +453,7 @@ export default function LoginSecurityScreen() {
                 disabled={savingPassword || !newPassword || !confirmPassword || !!newPasswordError || newPassword !== confirmPassword}
               >
                 {savingPassword
-                  ? <ActivityIndicator color={Colors.white} size="small" />
+                  ? <ActivityIndicator color={Colors.textInverse} size="small" />
                   : <Text style={styles.saveBtnText}>Change password</Text>
                 }
               </TouchableOpacity>
@@ -384,14 +474,10 @@ export default function LoginSecurityScreen() {
                 Start a permanent deletion request for your Drape account if you no longer want to operate on the platform.
               </Text>
               <TouchableOpacity
-                style={[styles.deleteBtn, deletingAccount && { opacity: 0.6 }]}
+                style={styles.deleteBtn}
                 onPress={handleDeleteAccount}
-                disabled={deletingAccount}
               >
-                {deletingAccount
-                  ? <ActivityIndicator color={Colors.white} size="small" />
-                  : <Text style={styles.deleteBtnText}>Request account deletion</Text>
-                }
+                <Text style={styles.deleteBtnText}>Request account deletion</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -450,13 +536,28 @@ const styles = StyleSheet.create({
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.md },
   field: { padding: Spacing.md, gap: 6 },
   label: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.inkLight },
-  input: {
-    backgroundColor: Colors.bone, borderRadius: Radius.md,
-    padding: Spacing.md, fontSize: FontSize.md, color: Colors.ink,
-    borderWidth: 1, borderColor: Colors.lightGrey,
-  },
   fieldHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   fieldError: { fontSize: FontSize.xs, color: Colors.error, lineHeight: 18 },
+  currentEmailBox: { padding: Spacing.md, gap: 4 },
+  currentEmailLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  currentEmailText: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.medium },
+  emailNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+    margin: Spacing.md,
+    marginTop: 0,
+    padding: Spacing.md,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.needleGreen + '10',
+  },
+  emailNoticeText: { flex: 1, fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
 
   // Re-auth gate
   gateWrap: { padding: Spacing.lg, alignItems: 'center', gap: Spacing.sm },
@@ -480,7 +581,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen, borderRadius: Radius.lg,
     padding: 12, alignItems: 'center',
   },
-  saveBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.white },
+  saveBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
 
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, padding: Spacing.md },
   toggleTitle: { fontSize: FontSize.md, fontWeight: FontWeight.medium, color: Colors.ink, marginBottom: 4 },
@@ -498,5 +599,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  deleteBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.white },
+  deleteBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
 })

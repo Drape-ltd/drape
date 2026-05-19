@@ -1,6 +1,6 @@
 import { Alert, Linking } from 'react-native'
 import { invokeFunction } from './supabase'
-import { isLikelyConnectivityIssue, readFunctionErrorPayload } from './function-errors'
+import { isLikelyConnectivityIssue, isMachineErrorCodeMessage, readFunctionErrorPayload } from './function-errors'
 
 type OrderCallType = 'audio' | 'video'
 
@@ -11,7 +11,9 @@ type OrderCallRoomResponse = {
 
 function readPayloadString(payload: Record<string, unknown> | null, key: string) {
   const value = payload?.[key]
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+  if (typeof value !== 'string' || value.trim().length === 0) return null
+  const trimmed = value.trim()
+  return key === 'code' || !isMachineErrorCodeMessage(trimmed) ? trimmed : null
 }
 
 export async function openDrapeCallUrl(url: string) {
@@ -44,7 +46,7 @@ export async function createOrderCallRoom(orderId: string, callType: OrderCallTy
 
   const payload = error ? await readFunctionErrorPayload(error) : null
   const code = readPayloadString(payload, 'code')
-  const payloadMessage = readPayloadString(payload, 'error')
+  const payloadMessage = readPayloadString(payload, 'message') ?? readPayloadString(payload, 'error')
 
   if (isLikelyConnectivityIssue(error)) {
     Alert.alert('Call unavailable', 'Connection looks weak. Keep using messages and retry the Drape call when the signal improves.')

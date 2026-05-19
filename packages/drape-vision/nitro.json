@@ -1,0 +1,24 @@
+{
+  "$schema": "https://nitro.margelo.com/nitro.schema.json",
+  "cxxNamespace": ["drape", "vision"],
+  "ios": {
+    "iosModuleName": "DrapeVision"
+  },
+  "android": {
+    "androidNamespace": ["drape", "vision"],
+    "androidCxxLibName": "DrapeVision"
+  },
+  "autolinking": {
+    "DrapePoseLandmarker": {
+      "ios": {
+        "language": "swift",
+        "implementationClassName": "HybridDrapePoseLandmarker"
+      },
+      "android": {
+        "language": "kotlin",
+        "implementationClassName": "HybridDrapePoseLandmarker"
+      }
+    }
+  },
+  "ignorePaths": ["**/node_modules"]
+}

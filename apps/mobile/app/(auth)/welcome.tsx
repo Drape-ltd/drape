@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, TouchableOpacity, Alert, Linking } from 'react-native'
+import { View, Text, StyleSheet, Alert, Linking } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Button, Divider } from '@/components/ui'
@@ -27,7 +27,7 @@ export default function WelcomeScreen() {
         <View style={styles.brandCard}>
           <Text style={styles.wordmark}>drape</Text>
           <Text style={styles.tagline}>Custom and ready-made fashion, handled clearly.</Text>
-          <Text style={styles.sub}>Find a trusted tailor, boutique, or maker, place an order, and track it in one place.</Text>
+          <Text style={styles.sub}>Find trusted tailors and boutiques, pay securely, and track every order in one place.</Text>
         </View>
       </View>
 

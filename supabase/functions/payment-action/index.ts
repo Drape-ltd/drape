@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getPaystackCallbackUrl, getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
@@ -25,6 +25,7 @@ import {
 import { initializePaystackTransaction, verifyPaystackTransaction } from '../_shared/paystack.ts'
 import { createStripePaymentIntent, retrieveStripePaymentIntent } from '../_shared/stripe.ts'
 import { parseBody, uuid, z } from '../_shared/validate.ts'
+import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
 import {
   parseOrderSupportMeta,
   serializeOrderSupportMeta,
@@ -110,10 +111,39 @@ function resolveStoredProvider(value: string | null | undefined, currency: Order
   return value === paymentProviderForCurrency(currency) ? value : null
 }
 
+function paymentIdempotencyAction(phase: PaymentPhase) {
+  if (phase === 'FULFILLMENT') return 'PAY-FULFILLMENT'
+  if (phase === 'CONSULTATION') return 'PAY-CONSULTATION'
+  return 'PAY'
+}
+
+function buildPaymentIdempotencyKey(orderId: string, phase: PaymentPhase) {
+  return `DRAPE-${paymentIdempotencyAction(phase)}-${orderId}`
+}
+
 function buildPaystackReference(order: OrderRow, phase: PaymentPhase) {
-  const seed = (order.reference ?? order.id).replace(/[^A-Za-z0-9._=-]/gu, '').slice(0, 60) || order.id
-  const phaseCode = phase === 'FULFILLMENT' ? 'F' : phase === 'CONSULTATION' ? 'C' : 'P'
-  return `DRP-${phaseCode}-${seed}-${Date.now()}`
+  return buildPaymentIdempotencyKey(order.id, phase)
+}
+
+async function buildPaystackReferenceForNewAttempt(
+  supabase: any,
+  order: OrderRow,
+  phase: PaymentPhase,
+) {
+  const baseReference = buildPaystackReference(order, phase)
+  const { count, error } = await supabase
+    .from('order_payments')
+    .select('id', { count: 'exact', head: true })
+    .eq('order_id', order.id)
+    .eq('phase', phase)
+    .eq('provider', 'PAYSTACK')
+
+  if (error) throw error
+
+  const attemptNumber = (count ?? 0) + 1
+  return attemptNumber <= 1
+    ? baseReference
+    : `${baseReference}-R${attemptNumber}`
 }
 
 function jsonResponse(body: Record<string, unknown>, status: number, cors: HeadersInit) {
@@ -124,7 +154,7 @@ function jsonResponse(body: Record<string, unknown>, status: number, cors: Heade
 }
 
 function jsonError(cors: HeadersInit, status: number, error: string, extra?: Record<string, unknown>) {
-  return jsonResponse({ error, ...(extra ?? {}) }, status, cors)
+  return jsonResponse({ error, message: error, ...(extra ?? {}) }, status, cors)
 }
 
 function isPayableStage(stage: string) {
@@ -316,6 +346,20 @@ function isInitialPaymentPayable(order: OrderRow) {
   return false
 }
 
+function isPaymentPhasePayable(order: OrderRow, phase: PaymentPhase) {
+  if (phase === 'CONSULTATION') return isConsultationPaymentPending(order)
+  if (phase === 'FULFILLMENT') return isFulfillmentPaymentPending(order)
+  return isInitialPaymentPayable(order)
+}
+
+function paymentPhaseNotPayableMessage(order: OrderRow, phase: PaymentPhase) {
+  if (phase === 'CONSULTATION') return 'This order is not awaiting a consultation payment right now.'
+  if (phase === 'FULFILLMENT') return 'This order is not awaiting a delivery or shipping payment right now.'
+  return order.order_kind === 'CUSTOM'
+    ? 'This custom order is not ready for payment yet.'
+    : 'This ready-made order is not in a payable state.'
+}
+
 function paymentIntentForPhase(order: OrderRow, phase: PaymentPhase) {
   if (phase === 'CONSULTATION') {
     return consultationMetaForOrder(order)?.paymentIntentId?.trim() || null
@@ -384,6 +428,7 @@ async function finalizeSuccessfulPayment(
             paymentIntentId,
             paymentCheckoutUrl: null,
             paidAt: new Date().toISOString(),
+            status: consultation.scheduledStartAt ? 'SCHEDULED' : consultation.status,
           }
         : consultation,
     }
@@ -439,11 +484,14 @@ async function finalizeSuccessfulPayment(
       EdgeRuntime.waitUntil(
         sendPushToUser(supabase, order.tailor_id.toString(), {
           title: 'Consultation fee paid',
-          body: 'The customer paid the consultation fee. You can start the consultation when ready.',
+          body: 'The customer paid the consultation fee. The call can start at the scheduled time.',
+          preferenceKey: 'newOrders',
           data: { orderId: order.id },
         }),
       )
     }
+
+    EdgeRuntime.waitUntil(sendOrderConfirmationEmails(supabase, order, phase))
 
     return { alreadyConfirmed: false as const, stage: order.stage }
   }
@@ -513,6 +561,7 @@ async function finalizeSuccessfulPayment(
       EdgeRuntime.waitUntil(
         sendPushToUser(supabase, order.tailor_id.toString(), {
           ...tailorFulfillmentPaymentConfirmedNotification(order.delivery_method),
+          preferenceKey: 'newOrders',
           data: { orderId: order.id },
         }),
       )
@@ -624,6 +673,7 @@ async function finalizeSuccessfulPayment(
       EdgeRuntime.waitUntil(
         sendPushToUser(supabase, order.tailor_id.toString(), {
           ...tailorPaymentConfirmedNotification(order.order_kind),
+          preferenceKey: 'newOrders',
           data: { orderId: order.id },
         }),
       )
@@ -690,13 +740,13 @@ Deno.serve(async (req) => {
     const caller = await getAuthUser(req)
     if (!caller) {
       log('warn', FN, 'auth.unauthenticated')
-      return new Response('Unauthorized', { status: 401, headers: cors })
+      return jsonError(cors, 401, 'Please sign in again before starting payment.')
     }
 
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
     if (!parsed.ok) {
       log('warn', FN, 'validation.failed', { actor_id: caller.id, error: parsed.error })
-      return new Response(parsed.error, { status: 400, headers: cors })
+      return jsonError(cors, 400, 'Check the payment details and try again.')
     }
 
     const supabase: any = createClient(getSupabaseUrl(), getServiceRoleKey())
@@ -710,7 +760,7 @@ Deno.serve(async (req) => {
         severity: 'warn',
         payload: { function: FN },
       })
-      return new Response('Too many requests', { status: 429, headers: cors })
+      return rateLimitExceededResponse(cors)
     }
 
     const { orderId } = parsed.data
@@ -751,12 +801,12 @@ Deno.serve(async (req) => {
 
     if (orderError) {
       log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, error: orderError.message })
-      return new Response('Database error', { status: 500, headers: cors })
+      return jsonError(cors, 500, 'We could not load this order for payment right now. Please refresh and try again.')
     }
 
     const row = order as OrderRow
-    if (!row?.id) return new Response('Order not found', { status: 404, headers: cors })
-    if (row.customer_id?.toString() !== caller.id) return new Response('Forbidden', { status: 403, headers: cors })
+    if (!row?.id) return jsonError(cors, 404, 'This order could not be found. Reopen it from your Orders tab.')
+    if (row.customer_id?.toString() !== caller.id) return jsonError(cors, 403, 'This order is not available from this account.')
 
     const orderKind = row.order_kind ?? 'CUSTOM'
     const orderCurrency = normalizeOrderCurrency(row.currency ?? row.quoted_currency)
@@ -765,7 +815,7 @@ Deno.serve(async (req) => {
         order_currency: row.currency ?? null,
         quoted_currency: row.quoted_currency ?? null,
       })
-      return new Response('This order currency is not supported for payment right now.', { status: 409, headers: cors })
+      return jsonError(cors, 409, 'This order currency is not supported for payment right now.')
     }
     const phase = parsed.data.action === 'confirm-payment'
       ? resolveConfirmPhase(row, parsed.data.paymentIntentId)
@@ -791,7 +841,7 @@ Deno.serve(async (req) => {
 
     if (storedProviderForPhase && !isPaymentProvider(storedProviderForPhase)) {
       await auditPaymentBlocked(supabase, caller.id, row, 'provider_not_supported')
-      return new Response('This order is tied to an unsupported payment provider.', { status: 409, headers: cors })
+      return jsonError(cors, 409, 'This order is tied to an unsupported payment provider.')
     }
 
     if (
@@ -804,7 +854,7 @@ Deno.serve(async (req) => {
         currency: orderCurrency,
         payment_phase: phase,
       })
-      return new Response('This order has a payment-provider mismatch. Refresh the order and try again.', { status: 409, headers: cors })
+      return jsonError(cors, 409, 'This order has a payment-provider mismatch. Refresh the order and try again.')
     }
 
     if (latestAttempt?.provider && latestAttempt.provider !== provider) {
@@ -813,7 +863,153 @@ Deno.serve(async (req) => {
         recovered_provider: latestAttempt.provider,
         payment_phase: phase,
       })
-      return new Response('This order has a payment-provider mismatch. Refresh the order and try again.', { status: 409, headers: cors })
+      return jsonError(cors, 409, 'This order has a payment-provider mismatch. Refresh the order and try again.')
+    }
+
+    if (latestAttempt?.currency && normalizeOrderCurrency(latestAttempt.currency) !== orderCurrency) {
+      await auditPaymentBlocked(supabase, caller.id, row, 'ledger_currency_mismatch', {
+        expected_currency: orderCurrency,
+        recovered_currency: latestAttempt.currency,
+        payment_phase: phase,
+        latest_attempt_id: latestAttempt.id,
+      })
+      return jsonError(cors, 409, 'This order has a payment-currency mismatch. Refresh the order and try again.')
+    }
+
+    if (typeof latestAttempt?.amount === 'number' && latestAttempt.amount !== amount) {
+      await auditPaymentBlocked(supabase, caller.id, row, 'ledger_amount_mismatch', {
+        expected_amount: amount,
+        recovered_amount: latestAttempt.amount,
+        currency: orderCurrency,
+        payment_phase: phase,
+        latest_attempt_id: latestAttempt.id,
+      })
+      return jsonError(cors, 409, 'This order total changed after payment was prepared. Contact support so we can refresh the payment safely.')
+    }
+
+    if (parsed.data.action === 'prepare-payment') {
+      const quoteExpired =
+        phase === 'INITIAL_ORDER'
+        && orderKind === 'CUSTOM'
+        && !!row.quote_expires_at
+        && new Date(row.quote_expires_at).getTime() <= Date.now()
+      const preflight = runPreflight([
+        {
+          name: 'order_belongs_to_customer',
+          condition: row.customer_id?.toString() === caller.id,
+          errorCode: 'ORDER_FORBIDDEN',
+          message: 'This order is not available from this account.',
+          field: 'customer_id',
+          severity: 'BLOCKING',
+          actual: { orderCustomerId: row.customer_id ?? null, callerId: caller.id },
+        },
+        {
+          name: 'payment_phase_payable',
+          condition: isPaymentPhasePayable(row, phase),
+          errorCode: phase === 'CONSULTATION'
+            ? 'CONSULTATION_NOT_PAYABLE'
+            : phase === 'FULFILLMENT'
+              ? 'FULFILLMENT_NOT_PAYABLE'
+              : 'ORDER_NOT_PAYABLE',
+          message: paymentPhaseNotPayableMessage(row, phase),
+          field: 'stage',
+          severity: 'BLOCKING',
+          actual: { stage: row.stage, phase, orderKind },
+        },
+        {
+          name: 'quote_not_expired',
+          condition: !quoteExpired,
+          errorCode: 'QUOTE_EXPIRED',
+          message: 'This quote has expired. Ask the tailor to send a fresh quote.',
+          field: 'quote_expires_at',
+          severity: 'BLOCKING',
+          actual: { quote_expires_at: row.quote_expires_at ?? null },
+        },
+        {
+          name: 'payment_not_already_succeeded',
+          condition: latestAttempt?.status !== 'SUCCEEDED',
+          errorCode: 'PAYMENT_ALREADY_SUCCEEDED',
+          message: 'This order has already been paid.',
+          field: 'order_payments.status',
+          severity: 'BLOCKING',
+          actual: {
+            latestAttemptId: latestAttempt?.id ?? null,
+            latestAttemptStatus: latestAttempt?.status ?? null,
+          },
+        },
+        {
+          name: 'payment_amount_positive',
+          condition: typeof amount === 'number' && amount > 0 && Number.isInteger(amount),
+          errorCode: 'PAYMENT_AMOUNT_INVALID',
+          message: 'This order is missing payment details.',
+          field: 'amount',
+          severity: 'BLOCKING',
+          actual: { amount, phase },
+        },
+        {
+          name: 'currency_supported',
+          condition: !!orderCurrency,
+          errorCode: 'PAYMENT_CURRENCY_UNSUPPORTED',
+          message: 'This order currency is not supported for payment right now.',
+          field: 'currency',
+          severity: 'BLOCKING',
+          actual: { currency: row.currency ?? null, quotedCurrency: row.quoted_currency ?? null },
+        },
+        {
+          name: 'provider_matches_currency',
+          condition: provider === paymentProviderForCurrency(orderCurrency),
+          errorCode: 'PAYMENT_PROVIDER_CURRENCY_MISMATCH',
+          message: 'This order has a payment-provider mismatch. Refresh the order and try again.',
+          field: 'payment_provider',
+          severity: 'BLOCKING',
+          actual: { provider, expectedProvider: paymentProviderForCurrency(orderCurrency), currency: orderCurrency },
+        },
+        {
+          name: 'delivery_address_present',
+          condition: phase === 'CONSULTATION' || row.delivery_method === 'LOCAL_COLLECTION' || !!row.delivery_address?.trim(),
+          errorCode: 'DELIVERY_ADDRESS_REQUIRED',
+          message: 'Delivery address is required before payment can start.',
+          field: 'delivery_address',
+          severity: 'BLOCKING',
+          actual: { deliveryMethod: row.delivery_method ?? null, hasDeliveryAddress: !!row.delivery_address?.trim() },
+        },
+        {
+          name: 'paystack_email_present',
+          condition: provider !== 'PAYSTACK' || !!caller.email?.trim(),
+          errorCode: 'PAYSTACK_EMAIL_REQUIRED',
+          message: 'A verified email is required before Paystack checkout can start.',
+          field: 'email',
+          severity: 'BLOCKING',
+          actual: { provider, hasEmail: !!caller.email?.trim() },
+        },
+      ])
+
+      if (!preflight.passed) {
+        const failure = preflight.failures[0]!
+        await auditPaymentBlocked(supabase, caller.id, row, failure.errorCode.toLowerCase(), {
+          payment_phase: phase,
+          preflight_check: failure.name,
+          actual: failure.actual ?? null,
+        })
+        await logPreflightFailure(supabase, preflight, {
+          operation: 'payment_initiation',
+          entityType: 'order',
+          entityId: row.id,
+          orderId: row.id,
+          actorId: caller.id,
+          actorRole: 'CUSTOMER',
+          userId: caller.id,
+          source: FN,
+          metadata: {
+            payment_phase: phase,
+            provider,
+            currency: orderCurrency,
+            amount,
+            order_kind: orderKind,
+          },
+        })
+        return preflightFailureResponse(preflight, cors, 409)
+      }
     }
 
     if (parsed.data.action === 'confirm-payment') {
@@ -829,14 +1025,14 @@ Deno.serve(async (req) => {
           expected_provider: provider,
           payment_phase: phase,
         })
-        return new Response('This order has a payment-provider mismatch. Refresh the order and try again.', { status: 409, headers: cors })
+        return jsonError(cors, 409, 'This order has a payment-provider mismatch. Refresh the order and try again.')
       }
 
       const preparedPaymentIntentId = preparedPayment.providerPaymentId
 
       if (!preparedPaymentIntentId) {
         await auditPaymentBlocked(supabase, caller.id, row, 'not_prepared')
-        return new Response('Payment has not been prepared for this order yet.', { status: 409, headers: cors })
+        return jsonError(cors, 409, 'Payment has not been prepared for this order yet.')
       }
 
       if (parsed.data.paymentIntentId && parsed.data.paymentIntentId !== preparedPaymentIntentId) {
@@ -845,22 +1041,22 @@ Deno.serve(async (req) => {
           provided_payment_intent_id: parsed.data.paymentIntentId,
           payment_phase: phase,
         })
-        return new Response('This payment attempt is no longer current. Please retry from the order screen.', { status: 409, headers: cors })
+        return jsonError(cors, 409, 'This payment attempt is no longer current. Please retry from the order screen.')
       }
 
       if (phase === 'INITIAL_ORDER' && !isPayableStage(row.stage)) {
         await auditPaymentBlocked(supabase, caller.id, row, 'confirm_wrong_stage')
-        return new Response('This order is no longer awaiting payment confirmation.', { status: 409, headers: cors })
+        return jsonError(cors, 409, 'This order is no longer awaiting payment confirmation.')
       }
 
       if (phase === 'CONSULTATION' && !isConsultationPaymentPending(row)) {
         await auditPaymentBlocked(supabase, caller.id, row, 'consultation_not_payable')
-        return new Response('This order is not awaiting consultation payment confirmation right now.', { status: 409, headers: cors })
+        return jsonError(cors, 409, 'This order is not awaiting consultation payment confirmation right now.')
       }
 
       if (phase === 'FULFILLMENT' && !isFulfillmentPaymentPending(row) && !row.fulfillment_payment_paid_at) {
         await auditPaymentBlocked(supabase, caller.id, row, 'fulfillment_not_payable')
-        return new Response('This order is not awaiting fulfillment payment confirmation right now.', { status: 409, headers: cors })
+        return jsonError(cors, 409, 'This order is not awaiting fulfillment payment confirmation right now.')
       }
 
       if (provider === 'PAYSTACK') {
@@ -874,7 +1070,7 @@ Deno.serve(async (req) => {
             payment_phase: phase,
             error: error instanceof Error ? error.message : String(error),
           })
-          return new Response(providerFailureMessage('PAYSTACK', orderCurrency, 'confirm'), { status: 502, headers: cors })
+          return jsonError(cors, 502, providerFailureMessage('PAYSTACK', orderCurrency, 'confirm'))
         }
         if (transaction.status !== 'success') {
           const failureStatus = paystackFailureAttemptStatus(transaction.status)
@@ -939,7 +1135,7 @@ Deno.serve(async (req) => {
           payment_phase: phase,
           error: error instanceof Error ? error.message : String(error),
         })
-        return new Response(providerFailureMessage('STRIPE', orderCurrency, 'confirm'), { status: 502, headers: cors })
+        return jsonError(cors, 502, providerFailureMessage('STRIPE', orderCurrency, 'confirm'))
       }
       if (paymentIntent.status !== 'succeeded') {
         const failureStatus = stripeFailureAttemptStatus(paymentIntent.status)
@@ -1004,33 +1200,33 @@ Deno.serve(async (req) => {
       if (orderKind === 'CUSTOM') {
         if (!['QUOTE_SENT', 'PAYMENT_PENDING', 'PAYMENT_FAILED'].includes(row.stage)) {
           await auditPaymentBlocked(supabase, caller.id, row, 'custom_not_payable')
-          return new Response('This custom order is not ready for payment yet.', { status: 409, headers: cors })
+          return jsonError(cors, 409, 'This custom order is not ready for payment yet.')
         }
         if (row.quote_expires_at && new Date(row.quote_expires_at).getTime() <= Date.now()) {
           await auditPaymentBlocked(supabase, caller.id, row, 'quote_expired', {
             quote_expires_at: row.quote_expires_at,
           })
-          return new Response('This quote has expired. Ask the tailor to send a fresh quote.', { status: 409, headers: cors })
+          return jsonError(cors, 409, 'This quote has expired. Ask the tailor to send a fresh quote.')
         }
       } else if (orderKind === 'READY_MADE') {
         if (!['PAYMENT_PENDING', 'PAYMENT_FAILED'].includes(row.stage)) {
           await auditPaymentBlocked(supabase, caller.id, row, 'ready_made_not_payable')
-          return new Response('This ready-made order is not in a payable state.', { status: 409, headers: cors })
+          return jsonError(cors, 409, 'This ready-made order is not in a payable state.')
         }
       } else {
         await auditPaymentBlocked(supabase, caller.id, row, 'unsupported_order_kind', {
           order_kind: orderKind,
         })
-        return new Response('Unsupported order kind.', { status: 409, headers: cors })
+        return jsonError(cors, 409, 'Unsupported order kind.')
       }
     } else if (phase === 'CONSULTATION') {
       if (!isConsultationPaymentPending(row)) {
         await auditPaymentBlocked(supabase, caller.id, row, 'consultation_not_payable')
-        return new Response('This order is not awaiting a consultation payment right now.', { status: 409, headers: cors })
+        return jsonError(cors, 409, 'This order is not awaiting a consultation payment right now.')
       }
     } else if (!isFulfillmentPaymentPending(row)) {
       await auditPaymentBlocked(supabase, caller.id, row, 'fulfillment_not_payable')
-      return new Response('This order is not awaiting a delivery or shipping payment right now.', { status: 409, headers: cors })
+      return jsonError(cors, 409, 'This order is not awaiting a delivery or shipping payment right now.')
     }
 
     if (!amount || amount <= 0) {
@@ -1039,12 +1235,12 @@ Deno.serve(async (req) => {
         currency: orderCurrency,
         payment_phase: phase,
       })
-      return new Response('This order is missing payment details.', { status: 409, headers: cors })
+      return jsonError(cors, 409, 'This order is missing payment details.')
     }
 
     if (phase !== 'CONSULTATION' && row.delivery_method !== 'LOCAL_COLLECTION' && !row.delivery_address?.trim()) {
       await auditPaymentBlocked(supabase, caller.id, row, 'delivery_address_missing')
-      return new Response('Delivery address is required before payment can start.', { status: 409, headers: cors })
+      return jsonError(cors, 409, 'Delivery address is required before payment can start.')
     }
 
     if (provider === 'PAYSTACK') {
@@ -1052,7 +1248,7 @@ Deno.serve(async (req) => {
         await auditPaymentBlocked(supabase, caller.id, row, 'paystack_email_missing', {
           provider: 'PAYSTACK',
         })
-        return new Response('A verified email is required before Paystack checkout can start.', { status: 409, headers: cors })
+        return jsonError(cors, 409, 'A verified email is required before Paystack checkout can start.')
       }
 
       const preparedPayment = resolvePreparedPaymentReference({
@@ -1067,7 +1263,7 @@ Deno.serve(async (req) => {
           expected_provider: 'PAYSTACK',
           payment_phase: phase,
         })
-        return new Response('This order has a payment-provider mismatch. Refresh the order and try again.', { status: 409, headers: cors })
+        return jsonError(cors, 409, 'This order has a payment-provider mismatch. Refresh the order and try again.')
       }
 
       let paymentReference = preparedPayment.providerPaymentId
@@ -1085,7 +1281,7 @@ Deno.serve(async (req) => {
             payment_phase: phase,
             error: error instanceof Error ? error.message : String(error),
           })
-          return new Response(providerFailureMessage('PAYSTACK', orderCurrency, 'prepare'), { status: 502, headers: cors })
+          return jsonError(cors, 502, providerFailureMessage('PAYSTACK', orderCurrency, 'prepare'))
         }
 
         if (transaction.status === 'success') {
@@ -1118,9 +1314,11 @@ Deno.serve(async (req) => {
             payment_intent_id: paymentReference,
             payment_phase: phase,
           })
-          return new Response(
+          return jsonError(
+            cors,
+            409,
             'Your Paystack checkout is still open, but we could not recover the resume link yet. Wait a moment and try again.',
-            { status: 409, headers: cors },
+            { code: 'PAYSTACK_RESUME_LINK_MISSING' },
           )
         } else {
           paymentReference = null
@@ -1133,6 +1331,11 @@ Deno.serve(async (req) => {
       if (!paymentReference || !checkoutUrl) {
         let transaction
         try {
+          // Paystack references cannot be reused after a terminal abandoned/failed
+          // checkout. Keep retries deterministic without timestamps/randomness.
+          if (!paymentReference) {
+            paystackIdempotencyKey = await buildPaystackReferenceForNewAttempt(supabase, row, phase)
+          }
           transaction = await initializePaystackTransaction({
             amount,
             currency: orderCurrency,
@@ -1154,7 +1357,7 @@ Deno.serve(async (req) => {
             currency: orderCurrency,
             payment_phase: phase,
           })
-          return new Response(providerFailureMessage('PAYSTACK', orderCurrency, 'prepare'), { status: 502, headers: cors })
+          return jsonError(cors, 502, providerFailureMessage('PAYSTACK', orderCurrency, 'prepare'))
         }
 
         paymentReference = transaction.reference
@@ -1168,7 +1371,7 @@ Deno.serve(async (req) => {
           provider: 'PAYSTACK',
           payment_intent_id: paymentReference,
         })
-        return new Response('Paystack did not return a checkout URL for this payment.', { status: 502, headers: cors })
+        return jsonError(cors, 502, 'Payment checkout could not open cleanly. Please try again in a moment.')
       }
 
       const updates: Record<string, unknown> =
@@ -1216,7 +1419,7 @@ Deno.serve(async (req) => {
 
       if (updateError) {
         log('error', FN, 'db.error', { actor_id: caller.id, order_id: row.id, error: updateError.message })
-        return new Response('Could not prepare payment for this order.', { status: 500, headers: cors })
+        return jsonError(cors, 500, 'Could not prepare payment for this order.')
       }
 
       if (movedToPaymentPending) {
@@ -1289,10 +1492,10 @@ Deno.serve(async (req) => {
         expected_provider: 'STRIPE',
         payment_phase: phase,
       })
-      return new Response('This order has a payment-provider mismatch. Refresh the order and try again.', { status: 409, headers: cors })
+      return jsonError(cors, 409, 'This order has a payment-provider mismatch. Refresh the order and try again.')
     }
     const existingPaymentIntentId = preparedPayment.providerPaymentId
-    let stripeIdempotencyKey: string = crypto.randomUUID()
+    let stripeIdempotencyKey = buildPaymentIdempotencyKey(row.id, phase)
 
     if (existingPaymentIntentId) {
       try {
@@ -1304,7 +1507,7 @@ Deno.serve(async (req) => {
           payment_phase: phase,
           error: error instanceof Error ? error.message : String(error),
         })
-        return new Response(providerFailureMessage('STRIPE', orderCurrency, 'prepare'), { status: 502, headers: cors })
+        return jsonError(cors, 502, providerFailureMessage('STRIPE', orderCurrency, 'prepare'))
       }
       if (paymentIntent.status === 'succeeded') {
         const finalized = await finalizeSuccessfulPayment(supabase, row, caller.id, 'STRIPE', paymentIntent.id, phase)
@@ -1331,7 +1534,6 @@ Deno.serve(async (req) => {
         && !(phase === 'INITIAL_ORDER' && row.stage === 'PAYMENT_FAILED' && paymentIntent.status !== 'processing')
       ) {
         existing = true
-        stripeIdempotencyKey = existingPaymentIntentId
       } else {
         paymentIntent = null
       }
@@ -1359,7 +1561,7 @@ Deno.serve(async (req) => {
           currency: orderCurrency,
           payment_phase: phase,
         })
-        return new Response(providerFailureMessage('STRIPE', orderCurrency, 'prepare'), { status: 502, headers: cors })
+        return jsonError(cors, 502, providerFailureMessage('STRIPE', orderCurrency, 'prepare'))
       }
     }
 
@@ -1368,7 +1570,7 @@ Deno.serve(async (req) => {
         provider: 'STRIPE',
         payment_intent_id: paymentIntent.id,
       })
-      return new Response('Stripe did not return a client secret for this payment intent.', { status: 502, headers: cors })
+      return jsonError(cors, 502, 'Card checkout could not open cleanly. Please try again in a moment.')
     }
 
     const updates: Record<string, unknown> =
@@ -1416,7 +1618,7 @@ Deno.serve(async (req) => {
 
     if (updateError) {
       log('error', FN, 'db.error', { actor_id: caller.id, order_id: row.id, error: updateError.message })
-      return new Response('Could not prepare payment for this order.', { status: 500, headers: cors })
+      return jsonError(cors, 500, 'Could not prepare payment for this order.')
     }
 
     if (movedToPaymentPending) {
@@ -1478,6 +1680,6 @@ Deno.serve(async (req) => {
     })
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return new Response('Internal server error', { status: 500, headers: cors })
+    return jsonError(cors, 500, 'Payment could not start cleanly. Please refresh the order and try again.')
   }
 })

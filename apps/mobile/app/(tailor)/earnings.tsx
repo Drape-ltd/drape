@@ -88,7 +88,7 @@ function statusTone(status: TailorTransactionStatus) {
     case 'RELEASED':
       return { bg: Colors.boneDeep, fg: Colors.needleGreen }
     case 'PENDING':
-      return { bg: '#FEF3C7', fg: '#B45309' }
+      return { bg: Colors.statusPendingBg, fg: Colors.statusPending }
     case 'BLOCKED':
       return { bg: Colors.kanteRustLight, fg: Colors.kanteRust }
     case 'FAILED':
@@ -211,7 +211,7 @@ export default function TailorEarningsScreen() {
 
   useRefreshOnFocus(() => {
     void load()
-  }, 20_000)
+  }, 0)
 
   async function onRefresh() {
     setRefreshing(true)
@@ -280,7 +280,7 @@ export default function TailorEarningsScreen() {
             <ActivityIndicator color={Colors.needleGreen} size="large" />
             <Text style={styles.stateTitle}>Loading earnings history…</Text>
             <Text style={styles.stateHint}>
-              We’re pulling your settled order earnings, pending escrow, and payout ledger together.
+              We’re pulling your settled order earnings, protected balances, and payout ledger together.
             </Text>
           </View>
         </View>
@@ -307,6 +307,9 @@ export default function TailorEarningsScreen() {
     )
   }
 
+  const summaryCurrency = data.summaryCurrency ?? data.payoutCurrency
+  const showCurrencyReview = data.hasMixedCurrencies || data.hasPayoutCurrencyMismatch
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView
@@ -331,7 +334,7 @@ export default function TailorEarningsScreen() {
               {data.payoutReverificationRequired ? 'Reconnect your payout account' : 'Payout account still required'}
             </Text>
             <Text style={styles.warningBody}>
-              Drape will not release earnings until your payout account is verified. Orders can still settle into escrow, but withdrawals stay blocked until setup is complete.
+              Drape will not release earnings until your payout account is verified. Orders can still settle into a protected balance, but withdrawals stay blocked until setup is complete.
             </Text>
             <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/earnings' } } as never)}>
               <Text style={styles.primaryBtnText}>{data.payoutReverificationRequired ? 'Reconnect payout account' : 'Finish payout setup'}</Text>
@@ -341,9 +344,11 @@ export default function TailorEarningsScreen() {
 
         <View style={styles.summaryCard}>
           <Text style={styles.summaryEyebrow}>Summary</Text>
-          <Text style={styles.summaryValue}>{money(data.totalEarnings, data.payoutCurrency)}</Text>
+          <Text style={styles.summaryValue}>{money(data.totalEarnings, summaryCurrency)}</Text>
           <Text style={styles.summaryHint}>
-            Total earnings is the sum of your pending, available, and paid out net earnings in {data.payoutCurrency}.
+            {showCurrencyReview
+              ? `This summary is shown in the order's locked earning currency, ${summaryCurrency}. Your payout account is set to ${data.payoutCurrency}, so Drape will not silently convert it.`
+              : `Total earnings is the sum of your pending, available, and paid out net earnings in ${summaryCurrency}.`}
           </Text>
           <View style={styles.summaryMetaCard}>
             <Text style={styles.summaryMetaLabel}>Payout method</Text>
@@ -352,14 +357,33 @@ export default function TailorEarningsScreen() {
           </View>
         </View>
 
+        {showCurrencyReview ? (
+          <View style={styles.currencyNoticeCard}>
+            <Text style={styles.currencyNoticeTitle}>Currency review needed before payout</Text>
+            <Text style={styles.currencyNoticeText}>
+              Some earnings were paid in a different currency from your payout account. They stay locked to the order currency until ops approves an original-currency payout or a conversion.
+            </Text>
+            {data.currencySummaries.length > 0 ? (
+              <View style={styles.currencyBreakdownList}>
+                {data.currencySummaries.map((row) => (
+                  <View key={row.currency} style={styles.currencyBreakdownRow}>
+                    <Text style={styles.currencyBreakdownLabel}>{row.currency}</Text>
+                    <Text style={styles.currencyBreakdownValue}>{money(row.totalEarnings, row.currency)}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
         <View style={styles.statsGrid}>
-          <StatCard label="Available for payout" value={money(data.availableForPayout, data.payoutCurrency)} hint={`Of total: ${money(data.availableForPayout, data.payoutCurrency)} is eligible now or already processing`} />
-          <StatCard label="Pending in escrow" value={money(data.pendingEarnings, data.payoutCurrency)} hint={`Of total: ${money(data.pendingEarnings, data.payoutCurrency)} is still waiting on delivery, review, or payout release`} />
-          <StatCard label="Already paid out" value={money(data.alreadyPaidOut, data.payoutCurrency)} hint={`Of total: ${money(data.alreadyPaidOut, data.payoutCurrency)} has completed provider transfer`} />
+          <StatCard label="Available for payout" value={money(data.availableForPayout, summaryCurrency)} hint={`Of total: ${money(data.availableForPayout, summaryCurrency)} is eligible now or already processing`} />
+          <StatCard label="Pending release" value={money(data.pendingEarnings, summaryCurrency)} hint={`Of total: ${money(data.pendingEarnings, summaryCurrency)} is still waiting on delivery, review, or payout release`} />
+          <StatCard label="Already paid out" value={money(data.alreadyPaidOut, summaryCurrency)} hint={`Of total: ${money(data.alreadyPaidOut, summaryCurrency)} has completed provider transfer`} />
         </View>
 
         <View style={styles.breakdownCard}>
-          <Text style={styles.sectionTitle}>Earnings split</Text>
+          <Text style={styles.sectionTitle}>Earnings split ({summaryCurrency})</Text>
           <View style={styles.breakdownRail}>
             <View style={[styles.breakdownSegmentPending, { flex: shareOf(data.totalEarnings, data.pendingEarnings) || 1 }]} />
             <View style={[styles.breakdownSegmentAvailable, { flex: shareOf(data.totalEarnings, data.availableForPayout) || 1 }]} />
@@ -416,7 +440,7 @@ export default function TailorEarningsScreen() {
             ))}
           </View>
           <Text style={styles.controlsHint}>
-            Rows use your payout currency where the locked order FX makes that safe. Export keeps both the displayed figures and the original customer-paid amount for reconciliation.
+            Rows keep customer-paid and tailor-earning currencies separate. Export includes both values for reconciliation, and Drape never silently converts payout money.
           </Text>
         </View>
 
@@ -627,7 +651,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.sm,
   },
-  primaryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  primaryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   summaryCard: {
     marginHorizontal: Spacing.lg,
     backgroundColor: Colors.needleGreen,
@@ -642,7 +666,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.7,
     fontWeight: FontWeight.semibold,
   },
-  summaryValue: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: -0.6, fontFamily: 'Georgia' },
+  summaryValue: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.textInverse, letterSpacing: -0.6, fontFamily: 'Georgia' },
   summaryHint: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.84)', lineHeight: 18 },
   summaryMetaCard: {
     marginTop: Spacing.xs,
@@ -660,13 +684,56 @@ const styles = StyleSheet.create({
   },
   summaryMetaValue: {
     fontSize: FontSize.sm,
-    color: Colors.white,
+    color: Colors.textInverse,
     fontWeight: FontWeight.semibold,
   },
   summaryMetaHint: {
     fontSize: 11,
     color: 'rgba(255,255,255,0.76)',
     lineHeight: 16,
+  },
+  currencyNoticeCard: {
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.sm,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.kanteRustLight,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
+  currencyNoticeTitle: {
+    fontSize: FontSize.sm,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+  },
+  currencyNoticeText: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    lineHeight: 18,
+  },
+  currencyBreakdownList: {
+    gap: 6,
+    borderTopWidth: 1,
+    borderTopColor: Colors.lightGrey,
+    paddingTop: Spacing.sm,
+  },
+  currencyBreakdownRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  currencyBreakdownLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    fontWeight: FontWeight.semibold,
+  },
+  currencyBreakdownValue: {
+    fontSize: FontSize.sm,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
   },
   statsGrid: {
     marginHorizontal: Spacing.lg,

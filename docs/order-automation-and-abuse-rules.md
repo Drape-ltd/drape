@@ -35,6 +35,7 @@ lock implementation:
 - quote validity window: `48 hours`
 - custom payment checkout timeout: `30 minutes`
 - ready-made checkout timeout: `30 minutes`
+- failed-payment retry window before auto-cancel: `2 hours`
 - delivered / collected review window: `7 days`
 - ready-made per-checkout quantity cap before full inventory exists: `3`
 - consultation no-show grace period before follow-up: `10 minutes`
@@ -73,20 +74,29 @@ lock implementation:
 ### State
 
 - `CONSULTATION`
+- applies to either:
+  - customer-requested consultation waiting on tailor approval
+  - scheduled consultation waiting on the call, quote, or decline
 
 ### Rule
 
-- consultation should move to quote or decline within `24 hours`
+- customer-requested consultation should be approved/declined within `24 hours`
+- scheduled consultation should move to quote or decline within `24 hours` after the scheduled slot
 
 ### System Behavior
 
 - at `12 hours`
-  - remind tailor to send quote or decline
+  - if customer-requested and not approved, remind tailor to approve, price, schedule, or decline
+  - if already scheduled and the slot has passed, remind tailor to send quote or decline
 - at `24 hours`
   - remind both parties that the consultation is still open
 - at `48 hours`
   - auto-expire consultation if no quote is sent
-  - set order to `EXPIRED`
+  - return order to quote review with consultation metadata marked expired
+- 2026-05-09 implementation note:
+  - scheduled reminder automation now also handles the post-slot loop
+  - customer-requested consultations get follow-up and expiry handling
+  - unresolved scheduled consultations create an ops review, send push + email to both parties, and return to quote review after the consultation window
 
 ### Why
 
@@ -296,18 +306,23 @@ Keep V1 simple without pretending inventory is more mature than it is.
 
 - if the order stays untouched for too long, the system should nudge
 
-### Suggested Timers
+### V1 Automation
 
-- `CONFIRMED` with no progress for `72 hours`
-  - remind tailor to move the order into production
 - any production stage idle for `5 days`
-  - remind tailor
-- any production stage idle for `7 days`
-  - notify customer that progress has stalled
+  - create or refresh a `PRODUCTION_STALL` ops issue
+  - remind the tailor to post a production update
+  - notify the customer: "Your order hasn't been updated recently. We're following up."
+- any production stage idle for `10 days`
+  - create or refresh a critical `PRODUCTION_STALL` ops issue
+  - open or refresh the order dispute row
+  - move the order to `IN_DISPUTE`
+  - notify both customer and tailor
+  - block payout release until ops resolves the dispute
 
 ### Why
 
 - keeps “accepted but abandoned” orders visible
+- protects customers without requiring manual ops monitoring every active order
 
 ## 10. Delivered / Collected But Customer Never Finishes Order
 
@@ -360,6 +375,7 @@ Calls should help orders move forward, not become a new source of ambiguity.
 - use one hosted provider for both voice and video
 - allow one active consultation room per order at a time
 - keep the order itself as the source of truth, not the call room
+- allow either customer or tailor to start the scheduled room once the schedule and payment gates are satisfied
 
 ### System Behavior
 
@@ -367,6 +383,16 @@ Calls should help orders move forward, not become a new source of ambiguity.
   - `PENDING_QUOTE`
   - `CONSULTATION`
   - optional later: `QUOTE_SENT` if follow-up clarification is needed
+- customer-requested consultations must be approved by the tailor before a room can be created
+- paid consultations must be paid before the room can be created when payment timing is `BEFORE_CALL_STARTS`
+- scheduled consultations open `15 minutes` before the scheduled start time
+- the same tailor cannot have overlapping scheduled consultation slots
+  - Drape stores confirmed consultation slots in `consultation_bookings`
+  - Postgres enforces a no-overlap constraint, so simultaneous booking attempts cannot double-book the same tailor
+  - customer requests only preflight availability; the slot is reserved when the tailor schedules or approves it
+- reminders are sent to both parties:
+  - `30 minutes` before scheduled start
+  - `5 minutes` before scheduled start
 - if nobody joins within `10 minutes`
   - mark it as a no-show in logs
   - keep the order open

@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
@@ -33,9 +33,24 @@ const BodySchema = z.discriminatedUnion('action', [
     action: z.literal('delete-item'),
     itemId: uuid,
   }),
+  z.object({
+    action: z.literal('set-cover'),
+    itemId: uuid,
+  }),
 ])
 
-async function syncProfilePhotoUrls(supabase: ReturnType<typeof createClient>, tailorProfileId: string) {
+function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
+  if (typeof body.error === 'string' && typeof body.message !== 'string') {
+    body.message = body.error
+  }
+
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...headers, 'Content-Type': 'application/json' },
+  })
+}
+
+async function syncProfilePhotoUrls(supabase: any, tailorProfileId: string) {
   const { data: portfolioRows, error: portfolioError } = await supabase
     .from('portfolio_items')
     .select('image_url')
@@ -62,14 +77,14 @@ Deno.serve(async (req) => {
 
   try {
     const caller = await getAuthUser(req)
-    if (!caller) return new Response('Unauthorized', { status: 401, headers: cors })
+    if (!caller) return jsonResponse({ error: 'Please sign in again before managing your portfolio.' }, 401, cors)
 
     const parsed = parseBody(BodySchema, await req.json().catch(() => ({})))
-    if (!parsed.ok) return new Response(parsed.error, { status: 400, headers: cors })
+    if (!parsed.ok) return jsonResponse({ error: parsed.error }, 400, cors)
 
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
     const allowed = await checkRateLimit(supabase, `${FN}:${caller.id}`, 3600, 80)
-    if (!allowed) return new Response('Too many requests', { status: 429, headers: cors })
+    if (!allowed) return rateLimitExceededResponse(cors)
 
     const { data: profile, error: profileError } = await supabase
       .from('tailor_profiles')
@@ -79,31 +94,32 @@ Deno.serve(async (req) => {
 
     if (profileError) {
       log('error', FN, 'profile.lookup_failed', { actor_id: caller.id, error: profileError.message })
-      return new Response('Database error', { status: 500, headers: cors })
+      return jsonResponse({ error: 'We could not load your tailor profile right now. Please try again.' }, 500, cors)
     }
-    if (!profile?.id) return new Response('Seller profile not found.', { status: 404, headers: cors })
+    if (!profile?.id) return jsonResponse({ error: 'Complete your tailor profile before managing portfolio items.' }, 404, cors)
 
     const body = parsed.data
 
     if (body.action === 'seed-from-setup') {
+      const seedPhotoUrls = body.photoUrls ?? []
       const { data: existingRows, error: existingError } = await supabase
         .from('portfolio_items')
         .select('id, image_url')
         .eq('tailor_profile_id', profile.id)
         .order('sort_order', { ascending: true })
 
-      if (existingError) return new Response('Could not load portfolio', { status: 500, headers: cors })
+      if (existingError) return jsonResponse({ error: 'We could not load your portfolio right now. Please try again.' }, 500, cors)
 
       const existing = (existingRows ?? []) as Array<{ id: string; image_url?: string | null }>
       const allBlank = existing.length > 0 && existing.every((row) => !row.image_url)
       if (allBlank) {
         const { error } = await supabase.from('portfolio_items').delete().eq('tailor_profile_id', profile.id)
-        if (error) return new Response('Could not reset portfolio', { status: 500, headers: cors })
+        if (error) return jsonResponse({ error: 'We could not refresh your portfolio setup right now. Please try again.' }, 500, cors)
       }
 
-      if ((existing.length === 0 || allBlank) && body.photoUrls.length > 0) {
+      if ((existing.length === 0 || allBlank) && seedPhotoUrls.length > 0) {
         const { error } = await supabase.from('portfolio_items').insert(
-          body.photoUrls.map((url, index) => ({
+          seedPhotoUrls.map((url, index) => ({
             tailor_profile_id: profile.id,
             image_url: url,
             title: `Portfolio photo ${index + 1}`,
@@ -112,13 +128,11 @@ Deno.serve(async (req) => {
             sort_order: index,
           })),
         )
-        if (error) return new Response('Could not seed portfolio', { status: 500, headers: cors })
+        if (error) return jsonResponse({ error: 'We could not add your setup photos to your portfolio yet. Please try again.' }, 500, cors)
       }
 
       await syncProfilePhotoUrls(supabase, profile.id)
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { ...cors, 'Content-Type': 'application/json' },
-      })
+      return jsonResponse({ ok: true }, 200, cors)
     }
 
     if (body.action === 'create-item') {
@@ -135,11 +149,9 @@ Deno.serve(async (req) => {
         .select('id')
         .single()
 
-      if (error || !created?.id) return new Response('Could not save portfolio item', { status: 500, headers: cors })
+      if (error || !created?.id) return jsonResponse({ error: 'We could not save this portfolio item right now. Please try again.' }, 500, cors)
       await syncProfilePhotoUrls(supabase, profile.id)
-      return new Response(JSON.stringify({ ok: true, itemId: created.id }), {
-        headers: { ...cors, 'Content-Type': 'application/json' },
-      })
+      return jsonResponse({ ok: true, itemId: created.id }, 200, cors)
     }
 
     if (body.action === 'update-item') {
@@ -154,11 +166,42 @@ Deno.serve(async (req) => {
         .eq('id', body.itemId)
         .eq('tailor_profile_id', profile.id)
 
-      if (error) return new Response('Could not update portfolio item', { status: 500, headers: cors })
+      if (error) return jsonResponse({ error: 'We could not update this portfolio item right now. Please try again.' }, 500, cors)
       await syncProfilePhotoUrls(supabase, profile.id)
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { ...cors, 'Content-Type': 'application/json' },
+      return jsonResponse({ ok: true }, 200, cors)
+    }
+
+    if (body.action === 'set-cover') {
+      const { data: rows, error: rowsError } = await supabase
+        .from('portfolio_items')
+        .select('id, sort_order')
+        .eq('tailor_profile_id', profile.id)
+        .order('sort_order', { ascending: true })
+
+      if (rowsError) return jsonResponse({ error: 'We could not load your portfolio order right now. Please try again.' }, 500, cors)
+
+      const portfolioRows = (rows ?? []) as Array<{ id: string; sort_order?: number | null }>
+      const target = portfolioRows.find((row) => row.id === body.itemId)
+      if (!target) return jsonResponse({ error: 'That portfolio item was not found. Refresh and try again.' }, 404, cors)
+
+      const nextOrder = [target, ...portfolioRows.filter((row) => row.id !== body.itemId)]
+      for (const [index, row] of nextOrder.entries()) {
+        const { error } = await supabase
+          .from('portfolio_items')
+          .update({ sort_order: index })
+          .eq('id', row.id)
+          .eq('tailor_profile_id', profile.id)
+        if (error) return jsonResponse({ error: 'We could not update your portfolio cover right now. Please try again.' }, 500, cors)
+      }
+
+      await syncProfilePhotoUrls(supabase, profile.id)
+      await audit(supabase, {
+        event: 'portfolio_item.cover_set',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        payload: { function: FN, item_id: body.itemId },
       })
+      return jsonResponse({ ok: true }, 200, cors)
     }
 
     const { error } = await supabase
@@ -167,7 +210,7 @@ Deno.serve(async (req) => {
       .eq('id', body.itemId)
       .eq('tailor_profile_id', profile.id)
 
-    if (error) return new Response('Could not delete portfolio item', { status: 500, headers: cors })
+    if (error) return jsonResponse({ error: 'We could not delete this portfolio item right now. Please try again.' }, 500, cors)
     await syncProfilePhotoUrls(supabase, profile.id)
     await audit(supabase, {
       event: 'portfolio_item.deleted',
@@ -175,11 +218,9 @@ Deno.serve(async (req) => {
       actor_role: 'TAILOR',
       payload: { function: FN, item_id: body.itemId },
     })
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    })
+    return jsonResponse({ ok: true }, 200, cors)
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return new Response('Internal server error', { status: 500, headers: cors })
+    return jsonResponse({ error: 'We could not update your portfolio right now. Please try again.' }, 500, cors)
   }
 })

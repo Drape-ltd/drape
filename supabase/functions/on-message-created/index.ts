@@ -24,8 +24,26 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { sendPushToUser } from '../_shared/notify.ts'
 import { log } from '../_shared/logger.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
+import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
+import {
+  getClientIp,
+  RATE_LIMITS,
+  rateLimit,
+  rateLimitExceededResponse,
+} from '../_shared/rateLimit.ts'
 
 const FN = 'on-message-created'
+
+function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
+  if (typeof body.error === 'string' && typeof body.message !== 'string') {
+    body.message = body.error
+  }
+
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...headers, 'Content-Type': 'application/json' },
+  })
+}
 
 /**
  * Timing-safe string comparison via SHA-256 hashing.
@@ -57,15 +75,27 @@ Deno.serve(async (req) => {
     const webhookSecret = Deno.env.get('WEBHOOK_SECRET')
     if (!webhookSecret) {
       log('error', FN, 'auth.misconfigured', { reason: 'WEBHOOK_SECRET not set' })
-      return new Response('Webhook not configured', { status: 401, headers: corsHeaders })
+      return jsonResponse({ error: 'Webhook is not configured.' }, 401, corsHeaders)
     }
     const authHeader = req.headers.get('Authorization') ?? ''
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
     const valid = await timingSafeEqual(token, webhookSecret)
     if (!valid) {
       log('warn', FN, 'auth.unauthorized')
-      return new Response('Unauthorized', { status: 401, headers: corsHeaders })
+      return jsonResponse({ error: 'This webhook request is not authorized.' }, 401, corsHeaders)
     }
+
+    const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
+    const clientIp = getClientIp(req)
+    const limit = await rateLimit(
+      supabase,
+      clientIp,
+      FN,
+      RATE_LIMITS.webhook.limit,
+      RATE_LIMITS.webhook.windowMs,
+      { ip: clientIp, userAgent: req.headers.get('user-agent') },
+    )
+    if (!limit.allowed) return rateLimitExceededResponse(corsHeaders, limit.retryAfter)
 
     const payload = await req.json() as {
       type: string
@@ -82,18 +112,13 @@ Deno.serve(async (req) => {
     }
 
     if (payload.type !== 'INSERT' || payload.table !== 'messages') {
-      return new Response('Ignored', { status: 200, headers: corsHeaders })
+      return jsonResponse({ ok: true, ignored: true }, 200, corsHeaders)
     }
 
     const msg = payload.record
     if (!msg?.order_id || !msg?.sender_id) {
-      return new Response('Invalid payload', { status: 400, headers: corsHeaders })
+      return jsonResponse({ error: 'Message webhook payload is missing required fields.' }, 400, corsHeaders)
     }
-
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-    )
 
     // Look up the order to find the other party
     const { data: order } = await supabase
@@ -102,7 +127,7 @@ Deno.serve(async (req) => {
       .eq('id', msg.order_id)
       .single()
 
-    if (!order) return new Response('Order not found', { status: 200, headers: corsHeaders })
+    if (!order) return jsonResponse({ ok: true, ignored: true, reason: 'ORDER_NOT_FOUND' }, 200, corsHeaders)
 
     // Determine recipient: if sender is CUSTOMER, notify tailor — and vice versa
     const recipientId = msg.sender_role === 'CUSTOMER'
@@ -110,7 +135,7 @@ Deno.serve(async (req) => {
       : order.customer_id?.toString()
 
     if (!recipientId || recipientId === msg.sender_id) {
-      return new Response('No recipient', { status: 200, headers: corsHeaders })
+      return jsonResponse({ ok: true, ignored: true, reason: 'NO_RECIPIENT' }, 200, corsHeaders)
     }
 
     // Build notification body — preview text or fallback label
@@ -128,6 +153,7 @@ Deno.serve(async (req) => {
     await sendPushToUser(supabase, recipientId, {
       title: msg.sender_name ?? 'New message',
       body: preview || 'Sent you a message.',
+      preferenceKey: 'messages',
       data: {
         orderId: msg.order_id,
         target: 'messages',
@@ -136,12 +162,10 @@ Deno.serve(async (req) => {
 
     log('info', FN, 'notification.sent', { order_id: msg.order_id, sender_role: msg.sender_role })
 
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
+    return jsonResponse({ ok: true }, 200, corsHeaders)
 
   } catch (err) {
     log('error', FN, 'unhandled_exception', { error: String(err) })
-    return new Response('Internal error', { status: 500, headers: corsHeaders })
+    return jsonResponse({ error: 'Message notification could not be processed right now.' }, 500, corsHeaders)
   }
 })

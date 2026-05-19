@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, Alert } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { Feather } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
 import {
   blockConversation,
@@ -59,7 +60,7 @@ export default function CustomerMessagesScreen() {
   useRefreshOnFocus(() => {
     void refetch()
     void refreshConversationAccess()
-  })
+  }, 0)
 
   useEffect(() => {
     void refreshConversationAccess()
@@ -238,13 +239,15 @@ export default function CustomerMessagesScreen() {
                   `Join your consultation with ${orderInfo.tailorName}.`,
                   [
                     { text: 'Cancel', style: 'cancel' },
-                    { text: '📹 Video', onPress: () => { void openCallUrl(orderInfo.videoCallUrl!) } },
-                    { text: '🎙 Audio only', onPress: () => { void openCallUrl(orderInfo.videoCallUrl!) } },
+                    { text: 'Video', onPress: () => { void openCallUrl(orderInfo.videoCallUrl!) } },
+                    { text: 'Audio only', onPress: () => { void openCallUrl(orderInfo.videoCallUrl!) } },
                   ]
                 )
               }}
+              accessibilityRole="button"
+              accessibilityLabel={orderInfo.videoCallUrl ? 'Join consultation call' : 'Consultation requested'}
             >
-              <Text style={styles.callBtnText}>{orderInfo.videoCallUrl ? '📞' : '💬'}</Text>
+              <Feather name={orderInfo.videoCallUrl ? 'phone-call' : 'message-circle'} size={18} color={Colors.textInverse} />
             </TouchableOpacity>
           )}
           <TouchableOpacity
@@ -423,7 +426,6 @@ const styles = StyleSheet.create({
     width: 40, height: 40, borderRadius: 20,
     backgroundColor: Colors.needleGreen, alignItems: 'center', justifyContent: 'center',
   },
-  callBtnText: { fontSize: 18 },
   orderBtn: {
     backgroundColor: Colors.white,
     borderWidth: 1,
@@ -441,7 +443,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     borderRadius: 999,
   },
-  retryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  retryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   secondaryBtn: {
     backgroundColor: Colors.white,
     borderColor: Colors.lightGrey,

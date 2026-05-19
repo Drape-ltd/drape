@@ -150,47 +150,16 @@ export const supabase = createClient(supabaseUrl, supabasePublishableKey, {
   },
 })
 
-// Module-level token cache, kept in sync via a module-level auth subscription.
-//
-// Why not just rely on supabase.functions.invoke's built-in auth?
-// The FunctionsClient caches the Authorization header and only updates it via
-// onAuthStateChange. After a hot-reload (module re-eval), the new supabase
-// client starts with only the publishable key until SIGNED_IN fires. Meanwhile the
-// PostgREST client works because it calls getSession() dynamically on every
-// request. Edge function calls fail because they use the stale publishable key.
-//
-// The module-level subscription below is the self-healing layer: when the new
-// supabase client loads the persisted session from AsyncStorage it fires
-// INITIAL_SESSION / SIGNED_IN, which updates _accessToken here — without
-// waiting for AuthProvider to remount.
-let _accessToken: string | null = null
-
-// AuthProvider also calls this on every auth state change as a belt-and-
-// suspenders; the module subscription below is the braces.
-export function setCurrentAccessToken(token: string | null) {
-  _accessToken = token
-}
-
-// Self-healing: keep _accessToken in sync with the supabase client's auth state
-// at module level. This fires as soon as the client loads the stored session from
-// AsyncStorage, regardless of React component lifecycle.
-supabase.auth.onAuthStateChange((_event, session) => {
-  _accessToken = session?.access_token ?? null
-})
-
 async function getFreshAccessToken(forceRefresh = false): Promise<string | null> {
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) {
-    _accessToken = null
     return null
   }
 
   const refresh = async () => {
     const { data, error } = await supabase.auth.refreshSession()
     if (!error) {
-      const refreshed = data.session?.access_token ?? null
-      _accessToken = refreshed
-      return refreshed
+      return data.session?.access_token ?? null
     }
     return null
   }
@@ -208,7 +177,6 @@ async function getFreshAccessToken(forceRefresh = false): Promise<string | null>
   if (userError) {
     const refreshed = await refresh()
     if (refreshed) return refreshed
-    _accessToken = null
     return null
   }
 
@@ -217,7 +185,6 @@ async function getFreshAccessToken(forceRefresh = false): Promise<string | null>
     if (refreshed) return refreshed
   }
 
-  _accessToken = session.access_token
   return session.access_token
 }
 
@@ -238,7 +205,10 @@ export async function invokeFunction<T = any>(
     const invokeOnce = async () =>
       supabase.functions.invoke<T>(fn, {
         body: options?.body ?? {},
-        headers: options?.headers,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...options?.headers,
+        },
       })
 
     let { data, error } = await invokeOnce()
@@ -254,7 +224,9 @@ export async function invokeFunction<T = any>(
           error: new Error('Your session expired. Please sign in again.'),
         }
       }
-      ;({ data, error } = await invokeOnce())
+      const retryResult = await invokeOnce()
+      data = retryResult.data
+      error = retryResult.error
     }
 
     if (error) {

@@ -170,7 +170,7 @@ export default function DataRequestScreen() {
           onPress={handleSubmitRequest}
           disabled={opening}
         >
-          {opening ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.actionBtnText}>Submit data request</Text>}
+          {opening ? <ActivityIndicator color={Colors.textInverse} /> : <Text style={styles.actionBtnText}>Submit data request</Text>}
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -263,7 +263,7 @@ const styles = StyleSheet.create({
     padding: 12,
     alignItems: 'center',
   },
-  actionBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.white },
+  actionBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   secondaryBtn: {
     borderRadius: Radius.lg,
     padding: 12,

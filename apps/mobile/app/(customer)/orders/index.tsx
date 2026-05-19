@@ -106,7 +106,7 @@ export default function OrdersListScreen() {
     : orders
 
   // Refetch whenever this screen comes back into focus (e.g. returning from order detail)
-  useRefreshOnFocus(refetch)
+  useRefreshOnFocus(refetch, 0)
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -343,14 +343,14 @@ const emptyStyles = StyleSheet.create({
     minHeight: 44,
     justifyContent: 'center',
   },
-  ctaBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.md },
+  ctaBtnText: { color: Colors.textInverse, fontWeight: FontWeight.semibold, fontSize: FontSize.md },
   primaryCta: {
     backgroundColor: Colors.needleGreen,
     borderRadius: Radius.full,
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.xxxl,
   },
-  primaryCtaText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.md },
+  primaryCtaText: { color: Colors.textInverse, fontWeight: FontWeight.semibold, fontSize: FontSize.md },
 
   secondaryCard: {
     flexDirection: 'row',

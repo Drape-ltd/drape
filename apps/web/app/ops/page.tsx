@@ -87,6 +87,7 @@ const ERROR_COPY: Record<string, string> = {
   'payout-release-failed': 'The payout release could not be triggered right now.',
   'workflow-issue-save-failed': 'That workflow issue could not be updated right now.',
   'manual-issue-create-failed': 'That manual issue could not be created right now.',
+  'verification-rejection-reason-required': 'Add a rejection reason before rejecting verification.',
 }
 
 function readParam(
@@ -197,6 +198,10 @@ function workflowIssueLabel(event: string) {
       return 'Cancellation review'
     case 'DELIVERY_REVIEW':
       return 'Delivery review'
+    case 'FABRIC_APPROVAL':
+      return 'Fabric approval'
+    case 'PRODUCTION_STALL':
+      return 'Production stall'
     case 'AFTERCARE_REQUEST':
       return 'Aftercare request'
     case 'shipping.handoff_blocked':
@@ -875,11 +880,12 @@ function VerificationCard({
         <input type="hidden" name="redirectTo" value={redirectTo} />
         <input type="hidden" name="tailorUserId" value={profile.userId} />
         <label className="grid gap-2 text-sm text-ink/72">
-          Trust note
+          Trust note / rejection reason
           <textarea
-            name="note"
+            name="reason"
             rows={3}
-            placeholder="Add what you verified, what is missing, or why this needs resubmission."
+            required
+            placeholder="Add what you verified, or explain exactly what needs resubmission before rejecting."
             className="min-h-[104px] rounded-[1.2rem] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
           />
         </label>
@@ -888,6 +894,7 @@ function VerificationCard({
             type="submit"
             name="decision"
             value="APPROVE"
+            formNoValidate
             className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90"
           >
             Approve and go live

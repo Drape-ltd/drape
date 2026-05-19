@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator } from 'react-native'
-import { Image as ExpoImage } from 'expo-image'
 import { Feather } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { goBackOrFallback } from '@/lib/navigation'
+import { uploadPublicStorageImage } from '@/lib/storage-upload'
+import { RemoteImage } from '@/components/ui'
 import {
   draftToSizeInventory,
   formatSizeInventorySummary,
@@ -33,21 +34,25 @@ import {
 import { deriveTailorReadiness, type TailorReadinessInput } from '@/lib/tailor-readiness'
 import { stripExif } from '@/lib/stripExif'
 import { Button } from '@/components/ui'
+import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
+import { Sentry } from '@/lib/sentry'
 
-const HOME_BG = '#F9F7F3'
-const PRIMARY_GREEN = '#1D9E75'
-const CHARCOAL = '#2C2C2A'
-const MUTED_GREY = '#8F8D88'
+const HOME_BG = Colors.bone
+const PRIMARY_GREEN = Colors.needleGreen
+const CHARCOAL = Colors.ink
+const MUTED_GREY = Colors.midGrey
 
 const CURRENCIES = ['GBP', 'USD', 'EUR', 'NGN', 'GHS', 'KES', 'CAD'] as const
-const ITEM_CATEGORIES = ['Agbada', 'Kaftan', 'Suit', 'Dress', 'Crochet', 'Ready-made', 'Two-piece Set', 'Native Wear'] as const
+const ITEM_CATEGORIES = ['Agbada', 'Kaftan', 'Suit', 'Dress', 'Crochet', 'Ready-made', 'Two-piece Set', 'Native Wear', 'Fila', 'Gele', 'Headwear'] as const
 const COMMON_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'One size'] as const
 const ITEM_TEMPLATES: Array<{ title: string; category: (typeof ITEM_CATEGORIES)[number]; sizes: string[] }> = [
   { title: 'Crochet Two-piece Set', category: 'Crochet', sizes: ['S', 'M', 'L'] },
   { title: 'Ready-made Agbada Set', category: 'Agbada', sizes: ['M', 'L', 'XL'] },
   { title: 'Kaftan Set', category: 'Kaftan', sizes: ['M', 'L', 'XL'] },
   { title: 'Two-piece Set', category: 'Two-piece Set', sizes: ['S', 'M', 'L'] },
+  { title: 'Ready-made Fila', category: 'Fila', sizes: ['M', 'L', 'XL'] },
+  { title: 'Gele Set', category: 'Gele', sizes: ['One size'] },
 ]
 
 function isMissingInventoryColumnError(error: any) {
@@ -159,6 +164,8 @@ function formatMissingChecksForAlert(missingChecks: Array<{ blockingMessage: str
   return missingChecks.map((check) => `• ${check.blockingMessage}`).join('\n')
 }
 
+type ItemPhotoSource = 'camera' | 'library'
+
 export default function NewShopItemScreen() {
   const params = useLocalSearchParams<{ itemId?: string; filter?: string; intent?: string }>()
   const router = useRouter()
@@ -232,7 +239,7 @@ export default function NewShopItemScreen() {
     if (!user?.id) return
     const { data } = await supabase
       .from('tailor_profiles')
-      .select('currency, supports_ready_made, profile_completed, id_verification_status, is_live, stripe_account_id, paystack_account_id')
+      .select('currency, supports_ready_made, profile_completed, id_verification_status, is_live, payout_currency, payout_provider, payout_reverification_required, payout_account_verified, payout_account_type')
       .eq('user_id', user.id)
       .maybeSingle()
 
@@ -251,8 +258,13 @@ export default function NewShopItemScreen() {
       profileCompleted: (data as any)?.profile_completed ?? false,
       idVerificationStatus: (data as any)?.id_verification_status ?? 'NOT_SUBMITTED',
       isLive: (data as any)?.is_live ?? false,
-      stripeAccountId: (data as any)?.stripe_account_id ?? null,
-      paystackAccountId: (data as any)?.paystack_account_id ?? null,
+      stripeAccountId: null,
+      paystackAccountId: null,
+      payoutCurrency: (data as any)?.payout_currency ?? null,
+      payoutProvider: (data as any)?.payout_provider ?? null,
+      payoutReverificationRequired: (data as any)?.payout_reverification_required ?? null,
+      payoutAccountVerified: (data as any)?.payout_account_verified ?? null,
+      payoutAccountType: (data as any)?.payout_account_type ?? null,
     })
     setHasPickupAddress(typeof pickupDetails?.pickup_address === 'string' && pickupDetails.pickup_address.trim().length > 0)
 
@@ -390,6 +402,22 @@ export default function NewShopItemScreen() {
     setFitGuideFields(recommended)
   }
 
+  function openDrapeVisionSizeGuide() {
+    if (!itemId) {
+      Alert.alert('Save draft first', 'Save this item once, then use Drape Vision to create a size guide without losing your listing work.')
+      return
+    }
+
+    router.push({
+      pathname: DRAPE_VISION_ROUTE,
+      params: {
+        mode: 'size_guide_scan',
+        itemId,
+        returnTo: `/(tailor)/shop/new?itemId=${itemId}`,
+      },
+    } as never)
+  }
+
   function toggleFitField(field: ReadyMadeFitFieldKey) {
     setFitGuideFields((current) =>
       current.includes(field)
@@ -417,44 +445,72 @@ export default function NewShopItemScreen() {
     setSizeInventoryDraft((current) => ({ ...current, [size]: sanitized }))
   }
 
-  async function addPhoto() {
+  function openAddPhotoSheet() {
+    Alert.alert('Add item photo', 'Take a photo now or choose one from your library.', [
+      { text: 'Take photo', onPress: () => void addPhoto('camera') },
+      { text: 'Choose from library', onPress: () => void addPhoto('library') },
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }
+
+  async function addPhoto(source: ItemPhotoSource) {
     if (!user?.id || uploadingPhoto || photoUrls.length >= 6) return
 
-    const result = await ImagePicker.launchImageLibraryAsync({
+    const permission =
+      source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (!permission.granted) {
+      Alert.alert(
+        'Permission needed',
+        source === 'camera'
+          ? 'Allow camera access to take item photos.'
+          : 'Allow photo access to choose item photos.',
+      )
+      return
+    }
+
+    const pickerOptions = {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.85,
+      allowsEditing: true,
+      aspect: [4, 5] as [number, number],
       allowsMultipleSelection: false,
-    })
+    }
+
+    const result =
+      source === 'camera'
+        ? await ImagePicker.launchCameraAsync(pickerOptions)
+        : await ImagePicker.launchImageLibraryAsync(pickerOptions)
 
     if (result.canceled || !result.assets[0]) return
 
     setUploadingPhoto(true)
     try {
-      const cleanUri = await stripExif(result.assets[0].uri)
+      const cleanUri = await stripExif(result.assets[0].uri, { maxWidth: 1400 })
       const filename = `shop/${user.id}/${Date.now()}.jpg`
-      const response = await fetch(cleanUri)
-      const blob = await response.blob()
-
-      if (blob.size > 10 * 1024 * 1024) {
-        Alert.alert('File too large', 'Item photos must be under 10 MB.')
-        setUploadingPhoto(false)
-        return
-      }
-
-      const { error: uploadError } = await supabase.storage
-        .from('seller-item-media')
-        .upload(filename, blob, { contentType: 'image/jpeg' })
-
-      if (uploadError) throw uploadError
-
-      const { data } = supabase.storage.from('seller-item-media').getPublicUrl(filename)
-      setPhotoUrls((prev) => [...prev, data.publicUrl])
+      const publicUrl = await uploadPublicStorageImage({
+        bucket: 'seller-item-media',
+        path: filename,
+        uri: cleanUri,
+        contentType: 'image/jpeg',
+        maxBytes: 10 * 1024 * 1024,
+      })
+      setPhotoUrls((prev) => [...prev, publicUrl])
     } catch (error: any) {
+      Sentry.captureException(error, {
+        extra: {
+          context: 'tailor_shop_photo_upload',
+          source,
+          userId: user.id,
+          existingPhotoCount: photoUrls.length,
+        },
+      })
       Alert.alert(
         'Upload failed',
         isLikelyConnectivityIssue(error)
           ? 'Connection looks weak. We could not upload this photo yet. Retry when the signal improves.'
-          : error?.message ?? 'Could not upload this photo right now. Please try again in a moment.',
+          : 'Could not upload this photo right now. Please try again in a moment.',
       )
     } finally {
       setUploadingPhoto(false)
@@ -691,7 +747,7 @@ export default function NewShopItemScreen() {
                 ? readiness.canPublishPaidItems
                   ? 'You can keep this as a draft or publish it live once the listing looks right.'
                   : readiness.body
-                : 'Draft items are fine, but paid ready-made listings should stay hidden until Shop now is enabled on your seller profile.'}
+                : 'Draft items are fine, but paid ready-made listings should stay hidden until Shop now is enabled on your tailor profile.'}
             </Text>
             {!hasPickupAddress ? (
               <Text style={styles.readinessMeta}>
@@ -775,7 +831,14 @@ export default function NewShopItemScreen() {
           <View style={styles.photoGrid}>
             {photoUrls.map((url, index) => (
               <View key={url} style={styles.photoThumbWrap}>
-                <ExpoImage source={{ uri: url }} style={styles.photoThumb} contentFit="cover" transition={180} />
+                <RemoteImage
+                  uri={url}
+                  bucket="seller-item-media"
+                  style={styles.photoThumb}
+                  contentFit="cover"
+                  transition={180}
+                  surface="tailor_shop_new_photo_preview"
+                />
                 <TouchableOpacity
                   style={styles.photoRemove}
                   onPress={() => setPhotoUrls((prev) => prev.filter((_, i) => i !== index))}
@@ -785,7 +848,7 @@ export default function NewShopItemScreen() {
               </View>
             ))}
             {photoUrls.length < 6 ? (
-              <TouchableOpacity style={styles.photoAdd} onPress={addPhoto} disabled={uploadingPhoto}>
+              <TouchableOpacity style={styles.photoAdd} onPress={openAddPhotoSheet} disabled={uploadingPhoto}>
                 {uploadingPhoto ? (
                   <ActivityIndicator color={Colors.needleGreen} />
                 ) : (
@@ -847,6 +910,21 @@ export default function NewShopItemScreen() {
             <Text style={styles.fitGuideBody}>
               Drape can recommend a size from the customer's saved measurements when you set real body ranges here.
             </Text>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Open Drape Vision size guide"
+              onPress={openDrapeVisionSizeGuide}
+              style={styles.visionFitGuideCallout}
+            >
+              <View style={styles.visionFitGuideIcon}>
+                <Feather name="grid" size={16} color={PRIMARY_GREEN} />
+              </View>
+              <View style={styles.visionFitGuideCopy}>
+                <Text style={styles.visionFitGuideTitle}>Drape Vision size guide</Text>
+                <Text style={styles.visionFitGuideText}>Capture real fit ranges so shoppers can match their Fit Passport to this listing.</Text>
+              </View>
+              <Feather name="chevron-right" size={18} color={Colors.midGrey} />
+            </TouchableOpacity>
             <View style={styles.rowWrap}>
               <TouchableOpacity style={styles.fitGuideAction} onPress={applyRecommendedFitFields}>
                 <Text style={styles.fitGuideActionText}>
@@ -1051,7 +1129,7 @@ export default function NewShopItemScreen() {
                   'Live publishing unavailable',
                   sellerStatus?.supportsReadyMade
                     ? readiness.body
-                    : 'Enable Shop now on your seller profile before publishing items live.',
+                    : 'Enable Shop now on your tailor profile before publishing items live.',
                 )
                 return
               }
@@ -1154,7 +1232,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  photoRemoveText: { color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold },
+  photoRemoveText: { color: Colors.textInverse, fontSize: 11, fontWeight: FontWeight.bold },
   photoAdd: {
     width: 84,
     height: 84,
@@ -1261,6 +1339,27 @@ const styles = StyleSheet.create({
   },
   fitGuideTitle: { fontSize: 14, color: CHARCOAL, fontWeight: FontWeight.semibold, fontFamily: 'Georgia' },
   fitGuideBody: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
+  visionFitGuideCallout: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '35',
+    backgroundColor: Colors.needleGreenLight,
+    padding: 10,
+  },
+  visionFitGuideIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.white,
+  },
+  visionFitGuideCopy: { flex: 1, gap: 2 },
+  visionFitGuideTitle: { fontSize: 13, color: CHARCOAL, fontWeight: FontWeight.semibold },
+  visionFitGuideText: { fontSize: 11, color: Colors.inkLight, lineHeight: 16 },
   fitGuideAction: {
     alignSelf: 'flex-start',
     paddingHorizontal: 12,

@@ -1,5 +1,10 @@
 import * as WebBrowser from 'expo-web-browser'
-import { readFunctionErrorPayload } from '@/lib/function-errors'
+import {
+  normalizeAccountCurrency,
+  resolvePaymentProviderForCurrency,
+  type PaymentRoutingProvider,
+} from '@drape/shared'
+import { isMachineErrorCodeMessage, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import { invokeFunction } from '@/lib/supabase'
 import {
   getStripeUnavailableMessage,
@@ -11,8 +16,24 @@ import {
 WebBrowser.maybeCompleteAuthSession()
 
 const STRIPE_RETURN_URL = 'drape://stripe-redirect'
-const PAYSTACK_RETURN_URL = 'drape://paystack-redirect'
+const PAYSTACK_RETURN_URL = 'drape:///paystack-redirect'
 const STRIPE_MERCHANT_DISPLAY_NAME = 'Drape'
+
+function paymentProviderDisplayName(provider: PaymentRoutingProvider) {
+  return provider === 'PAYSTACK' ? 'Paystack' : 'Stripe'
+}
+
+export function paymentRouteLabelForCurrency(currency: string | null | undefined) {
+  const orderCurrency = normalizeAccountCurrency(currency)
+  if (!orderCurrency) return null
+  return `${paymentProviderDisplayName(resolvePaymentProviderForCurrency(orderCurrency))} checkout`
+}
+
+export function paymentRouteCopyForCurrency(currency: string | null | undefined) {
+  const orderCurrency = normalizeAccountCurrency(currency)
+  if (!orderCurrency) return null
+  return `Payment route is locked to this ${orderCurrency} order. Drape opens ${paymentRouteLabelForCurrency(orderCurrency)} for this payment; changing account currency later will not move the order, refund, or payout route.`
+}
 
 type BasePreparePaymentResponse = {
   ok: boolean
@@ -79,14 +100,21 @@ async function resolvePaymentErrorMessage(
   fallback: string,
 ) {
   const payload = error ? await readFunctionErrorPayload(error) : null
-  const rawMessage =
-    (typeof payload?.error === 'string' && payload.error.trim().length > 0
-      ? payload.error.trim()
-      : error?.message?.trim()) || fallback
-  const normalized = rawMessage.toLowerCase()
+  const rawMessage = error ? await readFunctionErrorMessage(error, fallback) : fallback
+  const payloadError = typeof payload?.error === 'string' ? payload.error.trim().toLowerCase() : ''
+  const payloadMessage = typeof payload?.message === 'string' ? payload.message.trim().toLowerCase() : ''
+  const normalized = `${rawMessage.toLowerCase()} ${payloadError} ${payloadMessage}`
 
   if (normalized.includes('delivery address is required')) {
     return 'Add a delivery address before starting payment.'
+  }
+
+  if (normalized === 'unauthorized' || normalized.includes('session expired') || normalized.includes('sign in again')) {
+    return 'Your session expired. Sign in again before starting payment.'
+  }
+
+  if (normalized === 'forbidden' || normalized.includes('not available from this account')) {
+    return 'This order is not available from this account. Switch accounts or reopen the correct order.'
   }
 
   if (normalized.includes('quote has expired')) {
@@ -129,7 +157,15 @@ async function resolvePaymentErrorMessage(
     return 'Payment failed. Start payment again when you are ready.'
   }
 
-  return rawMessage
+  if (normalized.includes('checkout url') || normalized.includes('checkout link')) {
+    return 'Payment checkout could not open cleanly. Please try again in a moment.'
+  }
+
+  if (normalized.includes('client secret') || normalized.includes('payment intent')) {
+    return 'Card checkout could not open cleanly. Please try again in a moment.'
+  }
+
+  return isMachineErrorCodeMessage(rawMessage) ? fallback : rawMessage
 }
 
 function successResult(data: {
@@ -147,43 +183,97 @@ function successResult(data: {
   }
 }
 
+function nativePaymentSheetErrorMessage(
+  error: { localizedMessage?: string | null; message?: string | null; code?: string | null } | null | undefined,
+  fallback: string,
+) {
+  const raw = `${error?.localizedMessage ?? ''} ${error?.message ?? ''} ${error?.code ?? ''}`.toLowerCase()
+
+  if (!raw.trim()) return fallback
+  if (raw.includes('declined')) {
+    return 'Your card was declined. Try another card or contact your bank.'
+  }
+  if (raw.includes('insufficient')) {
+    return 'This card does not have enough funds for this payment.'
+  }
+  if (raw.includes('expired')) {
+    return 'This card appears to be expired. Use another card.'
+  }
+  if (raw.includes('authentication') || raw.includes('3d secure') || raw.includes('verification')) {
+    return 'Card authentication was not completed. Try again or use another card.'
+  }
+  if (raw.includes('network') || raw.includes('timed out') || raw.includes('connection')) {
+    return 'Connection looks weak. Your payment was not completed. Try again when the signal improves.'
+  }
+
+  return fallback
+}
+
+async function failureStageFromError(error: Error | null) {
+  const payload = error ? await readFunctionErrorPayload(error) : null
+  return typeof payload?.stage === 'string' ? payload.stage : undefined
+}
+
+export async function confirmOrderPayment(
+  orderId: string,
+  paymentIntentId: string,
+): Promise<OrderPaymentFlowResult> {
+  const { data: confirmed, error: confirmError } = await invokeFunction<ConfirmPaymentResponse>('payment-action', {
+    body: {
+      action: 'confirm-payment',
+      orderId,
+      paymentIntentId,
+    },
+  })
+
+  if (confirmError || !confirmed?.confirmed) {
+    return {
+      ok: false,
+      reason: 'failed',
+      message: await resolvePaymentErrorMessage(
+        confirmError,
+        'Payment went through, but we could not confirm the order yet. Pull to refresh in a moment.',
+      ),
+      stage: await failureStageFromError(confirmError),
+    }
+  }
+
+  return successResult({
+    orderId: confirmed.orderId,
+    stage: confirmed.stage,
+    paymentIntentId: confirmed.paymentIntentId,
+  })
+}
+
+function preparedPaymentRoutingFailure(prepared: PreparePaymentResponse): OrderPaymentFlowResult | null {
+  const orderCurrency = normalizeAccountCurrency(prepared.currency)
+  if (!orderCurrency) {
+    return {
+      ok: false,
+      reason: 'failed',
+      stage: prepared.stage,
+      message: 'This order currency is not supported for payment right now. Refresh the order and try again.',
+    }
+  }
+
+  const expectedProvider = resolvePaymentProviderForCurrency(orderCurrency)
+  if (prepared.provider !== expectedProvider) {
+    return {
+      ok: false,
+      reason: 'failed',
+      stage: prepared.stage,
+      message: `Payment routing did not match this ${orderCurrency} order. Refresh the order and try again before paying.`,
+    }
+  }
+
+  return null
+}
+
 export function useOrderPaymentFlow() {
   const { available: stripeRuntimeAvailable, initPaymentSheet, presentPaymentSheet } = useOptionalStripe()
 
   async function failureStage(error: Error | null) {
-    const payload = error ? await readFunctionErrorPayload(error) : null
-    return typeof payload?.stage === 'string' ? payload.stage : undefined
-  }
-
-  async function confirmPreparedPayment(
-    orderId: string,
-    paymentIntentId: string,
-  ): Promise<OrderPaymentFlowResult> {
-    const { data: confirmed, error: confirmError } = await invokeFunction<ConfirmPaymentResponse>('payment-action', {
-      body: {
-        action: 'confirm-payment',
-        orderId,
-        paymentIntentId,
-      },
-    })
-
-    if (confirmError || !confirmed?.confirmed) {
-      return {
-        ok: false,
-        reason: 'failed',
-        message: await resolvePaymentErrorMessage(
-          confirmError,
-          'Payment went through, but we could not confirm the order yet. Pull to refresh in a moment.',
-        ),
-        stage: await failureStage(confirmError),
-      }
-    }
-
-    return successResult({
-      orderId: confirmed.orderId,
-      stage: confirmed.stage,
-      paymentIntentId: confirmed.paymentIntentId,
-    })
+    return failureStageFromError(error)
   }
 
   async function startOrderPayment(options: {
@@ -207,6 +297,11 @@ export function useOrderPaymentFlow() {
       }
     }
 
+    const routingFailure = preparedPaymentRoutingFailure(prepared)
+    if (routingFailure) {
+      return routingFailure
+    }
+
     if (prepared.confirmed || prepared.alreadyPaid || prepared.stage === 'CONFIRMED') {
       return successResult({
         orderId: prepared.orderId,
@@ -221,7 +316,7 @@ export function useOrderPaymentFlow() {
         return {
           ok: false,
           reason: 'failed',
-          message: 'Paystack did not return a checkout URL. Please try again.',
+          message: 'Payment checkout could not open cleanly. Please try again in a moment.',
         }
       }
 
@@ -243,7 +338,7 @@ export function useOrderPaymentFlow() {
         }
       }
 
-      const confirmed = await confirmPreparedPayment(prepared.orderId, reference)
+      const confirmed = await confirmOrderPayment(prepared.orderId, reference)
       if (confirmed.ok) {
         return confirmed
       }
@@ -264,7 +359,7 @@ export function useOrderPaymentFlow() {
       return {
         ok: false,
         reason: 'not_configured',
-        message: 'Stripe is not configured in this app build yet. Add the publishable key and try again.',
+        message: 'Card payments are not available in this build yet. Use another supported payment method or try again after updating the app.',
       }
     }
 
@@ -280,7 +375,7 @@ export function useOrderPaymentFlow() {
       return {
         ok: false,
         reason: 'failed',
-        message: 'Payment is missing a client secret. Please try again.',
+        message: 'Card checkout could not open cleanly. Please try again in a moment.',
       }
     }
 
@@ -299,7 +394,10 @@ export function useOrderPaymentFlow() {
       return {
         ok: false,
         reason: 'failed',
-        message: initError.localizedMessage ?? initError.message ?? getStripeUnavailableMessage(),
+        message: nativePaymentSheetErrorMessage(
+          initError,
+          'Card checkout could not open cleanly. Please try again in a moment.',
+        ),
       }
     }
 
@@ -317,11 +415,14 @@ export function useOrderPaymentFlow() {
       return {
         ok: false,
         reason: 'failed',
-        message: presentError.localizedMessage ?? presentError.message ?? getStripeUnavailableMessage(),
+        message: nativePaymentSheetErrorMessage(
+          presentError,
+          'Payment could not be completed. Try again or use another card.',
+        ),
       }
     }
 
-    return confirmPreparedPayment(prepared.orderId, prepared.paymentIntentId)
+    return confirmOrderPayment(prepared.orderId, prepared.paymentIntentId)
   }
 
   return {

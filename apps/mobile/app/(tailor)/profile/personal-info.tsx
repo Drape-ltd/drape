@@ -10,12 +10,11 @@ import {
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import { supabase } from '@/lib/supabase'
-import { signInWithPasswordResilient, useAuth } from '@/lib/auth'
-import { authenticate, getBiometricLabel, isBiometricAvailable, isBiometricEnabled } from '@/lib/biometric'
-import { hasRecentReauth, markRecentReauth, RECENT_REAUTH_WINDOW_MINUTES } from '@/lib/recent-reauth'
+import { useAuth } from '@/lib/auth'
+import { updatePersonalInfoWithServerPreflight } from '@/lib/account-profile-actions'
+import { issueReauthProof } from '@/lib/reauth-proof'
 import { goBackOrFallback } from '@/lib/navigation'
-import { syncUserRow } from '@/lib/syncUserRow'
+import { Input } from '@/components/ui'
 import { validateDisplayName } from '@drape/shared/contact-filter'
 import { normalizePhoneForStorage, PHONE_STORAGE_HINT, validatePhoneForProfile } from '@drape/shared/phone'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -32,9 +31,7 @@ export default function TailorPersonalInfoScreen() {
   const [needsPhoneVerification, setNeedsPhoneVerification] = useState(false)
   const [reauthPassword, setReauthPassword] = useState('')
   const [reauthLoading, setReauthLoading] = useState(false)
-  const [biometricLabel, setBiometricLabel] = useState('Biometrics')
-  const [biometricAvailableForReauth, setBiometricAvailableForReauth] = useState(false)
-  const [phoneVerified, setPhoneVerified] = useState(false)
+  const [phoneReauthProof, setPhoneReauthProof] = useState('')
 
   const normalizedDisplayName = displayName.trim()
   const normalizedPhone = normalizePhoneForStorage(phone)
@@ -44,43 +41,10 @@ export default function TailorPersonalInfoScreen() {
   const phoneChanged = normalizedPhone !== initialPhone
 
   useEffect(() => {
-    let active = true
-
-    async function loadVerificationState() {
-      const [recent, available] = await Promise.all([
-        hasRecentReauth(user?.id),
-        isBiometricAvailable(),
-      ])
-
-      if (!active) return
-      setPhoneVerified(recent)
-
-      if (!available) {
-        setBiometricAvailableForReauth(false)
-        return
-      }
-
-      const [label, enabled] = await Promise.all([
-        getBiometricLabel(),
-        isBiometricEnabled(),
-      ])
-
-      if (!active) return
-      setBiometricLabel(label)
-      setBiometricAvailableForReauth(enabled)
-    }
-
-    void loadVerificationState()
-
-    return () => {
-      active = false
-    }
-  }, [user?.id])
-
-  useEffect(() => {
     if (!phoneChanged) {
       setNeedsPhoneVerification(false)
       setReauthPassword('')
+      setPhoneReauthProof('')
     }
   }, [phoneChanged])
 
@@ -105,32 +69,30 @@ export default function TailorPersonalInfoScreen() {
   }
 
   function goBack() {
-    goBackOrFallback(router, navigation, '/(tailor)/profile')
+    goBackOrFallback(router, navigation, '/(tailor)/profile/account-settings')
   }
 
-  async function persistProfile() {
+  async function persistProfile(options?: { reauthProof?: string }) {
     if (!user?.id) return
 
     setSaving(true)
-    const { error } = await supabase.auth.updateUser({
-      data: { display_name: normalizedDisplayName, phone: normalizedPhone || null },
+    const result = await updatePersonalInfoWithServerPreflight({
+      role: 'TAILOR',
+      displayName: normalizedDisplayName,
+      phone: normalizedPhone,
+      reauthProof: phoneChanged ? (options?.reauthProof ?? phoneReauthProof) : undefined,
     })
     setSaving(false)
-    if (error) {
-      Alert.alert('Error', error.message)
+    if (result.error) {
+      Alert.alert('Could not save profile', result.error)
       return
     }
 
-    await syncUserRow({
-      userId: user.id,
-      displayName: normalizedDisplayName,
-      role: 'TAILOR',
-    })
     Alert.alert('Saved', 'Your personal information has been updated.')
     goBack()
   }
 
-  async function save(options?: { skipPhoneVerification?: boolean }) {
+  async function save(options?: { skipPhoneVerification?: boolean; reauthProof?: string }) {
     if (saving || (reauthLoading && !options?.skipPhoneVerification)) return
     if (!validateName(displayName)) {
       Alert.alert('Invalid name', 'Please fix your display name before saving.')
@@ -142,7 +104,8 @@ export default function TailorPersonalInfoScreen() {
     }
     if (!dirty) return
 
-    if (phoneChanged && !options?.skipPhoneVerification && !phoneVerified) {
+    const confirmedProof = options?.reauthProof ?? phoneReauthProof
+    if (phoneChanged && !options?.skipPhoneVerification && !confirmedProof) {
       setNeedsPhoneVerification(true)
       Alert.alert(
         'Verify this change',
@@ -151,31 +114,14 @@ export default function TailorPersonalInfoScreen() {
       return
     }
 
-    await persistProfile()
+    await persistProfile({ reauthProof: options?.reauthProof })
   }
 
-  async function finishPhoneVerification() {
-    await markRecentReauth(user?.id)
-    setPhoneVerified(true)
+  async function finishPhoneVerification(proof: string) {
+    setPhoneReauthProof(proof)
     setNeedsPhoneVerification(false)
     setReauthPassword('')
-    await save({ skipPhoneVerification: true })
-  }
-
-  async function verifyPhoneWithBiometric() {
-    try {
-      setReauthLoading(true)
-      const ok = await authenticate('Verify your identity to update your phone number')
-      if (ok) {
-        await finishPhoneVerification()
-      } else {
-        Alert.alert('Verification failed', 'Could not verify your identity. Enter your current password instead.')
-      }
-    } catch {
-      Alert.alert('Verification failed', 'Biometric verification is unavailable right now. Enter your current password instead.')
-    } finally {
-      setReauthLoading(false)
-    }
+    await save({ skipPhoneVerification: true, reauthProof: proof })
   }
 
   async function verifyPhoneWithPassword() {
@@ -186,14 +132,26 @@ export default function TailorPersonalInfoScreen() {
     }
 
     setReauthLoading(true)
-    const { error } = await signInWithPasswordResilient(user?.email ?? '', reauthPassword)
-    if (error) {
+    const result = await issueReauthProof({
+      password: reauthPassword,
+      purpose: 'PHONE_CHANGE',
+    })
+    if (result.error) {
       setReauthLoading(false)
-      Alert.alert('Incorrect password', 'The password you entered is wrong.')
+      Alert.alert(
+        result.error.toLowerCase().includes('incorrect') ? 'Incorrect password' : 'Could not confirm password',
+        result.error,
+      )
       return
     }
 
-    await finishPhoneVerification()
+    if (!result.proof) {
+      setReauthLoading(false)
+      Alert.alert('Could not confirm password', 'Confirm your password again before saving this phone number.')
+      return
+    }
+
+    await finishPhoneVerification(result.proof)
     setReauthLoading(false)
   }
 
@@ -213,7 +171,7 @@ export default function TailorPersonalInfoScreen() {
             <View style={styles.readOnly}>
               <Text style={styles.readOnlyText}>{user?.email}</Text>
             </View>
-            <Text style={styles.hint}>Your email address cannot be changed here.</Text>
+            <Text style={styles.hint}>Change your email from Login & security so Drape can confirm your current password first.</Text>
           </View>
 
           <View style={styles.divider} />
@@ -259,7 +217,7 @@ export default function TailorPersonalInfoScreen() {
             {!phoneError ? (
               <Text style={styles.hint}>
                 {phoneChanged
-                  ? `Changing this number requires identity verification and stays fresh for ${RECENT_REAUTH_WINDOW_MINUTES} minutes.`
+                  ? 'Changing this number requires your current password before it saves.'
                   : PHONE_STORAGE_HINT}
               </Text>
             ) : null}
@@ -273,28 +231,19 @@ export default function TailorPersonalInfoScreen() {
               Because this phone number may be used for account updates and future recovery, confirm this change before saving it.
             </Text>
 
-            {biometricAvailableForReauth ? (
-              <TouchableOpacity
-                style={[styles.verifyBtn, reauthLoading && { opacity: 0.6 }]}
-                onPress={verifyPhoneWithBiometric}
-                disabled={reauthLoading}
-              >
-                <Feather name="shield" size={18} color={Colors.needleGreen} />
-                <Text style={styles.verifyBtnText}>Use {biometricLabel}</Text>
-              </TouchableOpacity>
-            ) : null}
-
             <View style={styles.field}>
-              <Text style={styles.label}>Current password</Text>
-              <TextInput
-                style={styles.input}
+              <Input
+                label="Current password"
                 value={reauthPassword}
                 onChangeText={setReauthPassword}
                 placeholder="Enter current password"
-                placeholderTextColor={Colors.midGrey}
                 secureTextEntry
                 autoCapitalize="none"
                 autoCorrect={false}
+                textContentType="password"
+                autoComplete="current-password"
+                returnKeyType="done"
+                onSubmitEditing={verifyPhoneWithPassword}
               />
             </View>
 
@@ -304,7 +253,7 @@ export default function TailorPersonalInfoScreen() {
               disabled={reauthLoading}
             >
               {reauthLoading
-                ? <ActivityIndicator color={Colors.white} size="small" />
+                ? <ActivityIndicator color={Colors.textInverse} size="small" />
                 : <Text style={styles.saveBtnText}>Verify & save</Text>}
             </TouchableOpacity>
           </View>
@@ -316,7 +265,7 @@ export default function TailorPersonalInfoScreen() {
           disabled={saving || reauthLoading || !dirty || !!nameError || !!phoneError}
         >
           {saving
-            ? <ActivityIndicator color={Colors.white} size="small" />
+            ? <ActivityIndicator color={Colors.textInverse} size="small" />
             : <Text style={styles.saveBtnText}>Save changes</Text>
           }
         </TouchableOpacity>
@@ -378,5 +327,5 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen, borderRadius: Radius.lg,
     padding: 12, alignItems: 'center',
   },
-  saveBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.white },
+  saveBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
 })

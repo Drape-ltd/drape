@@ -7,7 +7,7 @@ import {
   readConversationAccessState,
 } from '../_shared/conversation-access.ts'
 import { audit, log } from '../_shared/logger.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { parseBody, uuid, z } from '../_shared/validate.ts'
 
 const FN = 'conversation-access'
@@ -107,7 +107,7 @@ Deno.serve(async (req) => {
     const allowed = await checkRateLimit(supabase, `${FN}:block:${caller.id}`, 3600, 6)
     if (!allowed) {
       log('warn', FN, 'rate_limit.exceeded', { actor_id: caller.id })
-      return jsonResponse({ code: 'RATE_LIMITED', error: 'You are changing conversation safety settings too quickly. Please wait a moment.' }, 429, cors)
+      return rateLimitExceededResponse(cors)
     }
 
     const state = await readConversationAccessState(supabase, order.id)

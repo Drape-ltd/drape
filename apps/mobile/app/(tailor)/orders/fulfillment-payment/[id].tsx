@@ -8,7 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { Button } from '@/components/ui'
-import { isLikelyConnectivityIssue, readFunctionErrorPayload } from '@/lib/function-errors'
+import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { minorUnitsFromInput, moneyInputFromMinorUnits } from '@/lib/money-input'
 import { goBackOrReturnTo } from '@/lib/navigation'
 import { filterContactInfo, rejectPlaceholder } from '@drape/shared/contact-filter'
@@ -159,13 +159,8 @@ export default function FulfillmentPaymentRequestScreen() {
     setSaving(false)
 
     if (error || !data?.ok) {
-      const payload = error ? await readFunctionErrorPayload(error) : null
-      const message =
-        typeof data?.error === 'string' && data.error.length > 0
-          ? data.error
-          : typeof payload?.error === 'string' && payload.error.length > 0
-            ? payload.error
-            : error?.message ?? `Could not request ${fulfillmentLabel(order.deliveryMethod)} payment right now.`
+      const fallback = `Could not request ${fulfillmentLabel(order.deliveryMethod)} payment right now.`
+      const message = error ? await readFunctionErrorMessage(error, fallback) : fallback
       Alert.alert(
         'Could not send request',
         isLikelyConnectivityIssue(error)
@@ -210,7 +205,21 @@ export default function FulfillmentPaymentRequestScreen() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.stateCard}>
           <Text style={styles.stateTitle}>Pickup orders do not need this step</Text>
-          <Text style={styles.stateText}>Only delivery and shipping orders use a separate fulfillment payment request.</Text>
+          <Text style={styles.stateText}>The customer receives a collection code when the order is ready, so no delivery or shipping fee is needed.</Text>
+          <Button label="Back to order" variant="secondary" onPress={goBack} />
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  if (!order.fulfillmentPaymentRequestedAt || order.fulfillmentFee > 0) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top']}>
+        <View style={styles.stateCard}>
+          <Text style={styles.stateTitle}>Dispatch fee is already handled</Text>
+          <Text style={styles.stateText}>
+            Drape adds the standard {fulfillmentLabel(order.deliveryMethod)} fee at checkout from the buyer address and your location. If a carrier surcharge, customs charge, or import duty appears later, contact Drape support so the customer can approve it before dispatch.
+          </Text>
           <Button label="Back to order" variant="secondary" onPress={goBack} />
         </View>
       </SafeAreaView>

@@ -13,11 +13,28 @@ import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import { finalizeOrderTerminal } from '../_shared/order-terminal.ts'
+import {
+  getClientIp,
+  RATE_LIMITS,
+  rateLimit,
+  rateLimitExceededResponse,
+} from '../_shared/rateLimit.ts'
 import { buildQuoteExpiredTerminalRequest } from '../../../packages/shared/src/order-terminal.ts'
 
 const FN = 'expire-quotes'
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
+}
+
+function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
+  if (typeof body.error === 'string' && typeof body.message !== 'string') {
+    body.message = body.error
+  }
+
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...headers, 'Content-Type': 'application/json' },
+  })
 }
 
 type OrderRow = {
@@ -51,6 +68,7 @@ async function expireQuote(supabase: any, order: OrderRow) {
       sendPushToUser(supabase, order.customer_id, {
         title: 'Quote expired',
         body: `Your quote for ${orderLabel} expired before payment started. Ask the tailor to send a fresh quote if you still want to continue.`,
+        preferenceKey: 'quotes',
         data: { orderId: order.id },
       }),
     )
@@ -61,6 +79,7 @@ async function expireQuote(supabase: any, order: OrderRow) {
       sendPushToUser(supabase, order.tailor_id, {
         title: 'Quote expired',
         body: `Your quote for ${orderLabel} expired because the customer did not respond in time.`,
+        preferenceKey: 'newOrders',
         data: { orderId: order.id },
       }),
     )
@@ -78,6 +97,17 @@ Deno.serve(async (req) => {
     if (unauthorized) return unauthorized
 
     const supabase: any = createClient(getSupabaseUrl(), getServiceRoleKey())
+    const clientIp = getClientIp(req)
+    const limit = await rateLimit(
+      supabase,
+      clientIp,
+      FN,
+      RATE_LIMITS.authenticated.limit,
+      RATE_LIMITS.authenticated.windowMs,
+      { ip: clientIp, userAgent: req.headers.get('user-agent') },
+    )
+    if (!limit.allowed) return rateLimitExceededResponse(cors, limit.retryAfter)
+
     const nowIso = new Date().toISOString()
 
     const { data, error } = await supabase
@@ -89,7 +119,13 @@ Deno.serve(async (req) => {
 
     if (error) {
       log('error', FN, 'db.error', { error: error.message })
-      return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: cors })
+      return new Response(
+        JSON.stringify({
+          error: 'Quote expiry check failed.',
+          code: 'QUOTE_EXPIRY_LOOKUP_FAILED',
+        }),
+        { status: 500, headers: { ...cors, 'Content-Type': 'application/json' } },
+      )
     }
 
     const orders = (data ?? []) as OrderRow[]
@@ -115,11 +151,9 @@ Deno.serve(async (req) => {
       }
     }
 
-    return new Response(JSON.stringify({ expired, skipped }), {
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    })
+    return jsonResponse({ expired, skipped }, 200, cors)
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return new Response('Internal server error', { status: 500, headers: cors })
+    return jsonResponse({ error: 'Quote expiration job could not complete right now.' }, 500, cors)
   }
 })

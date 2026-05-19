@@ -13,7 +13,7 @@
  *
  * What it does:
  *   - confirms any stale `PAYMENT_PENDING` order whose Stripe or Paystack payment already succeeded
- *   - cancels any `PAYMENT_FAILED` order not retried within 30 minutes
+ *   - cancels any `PAYMENT_FAILED` order not retried within 2 hours
  *   - cancels abandoned Stripe intents after 30 minutes
  *   - returns custom orders to `QUOTE_SENT` when the quote is still valid
  *   - expires custom or ready-made orders when the payment window is over
@@ -25,6 +25,12 @@ import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import { finalizeOrderTerminal } from '../_shared/order-terminal.ts'
+import {
+  getClientIp,
+  RATE_LIMITS,
+  rateLimit,
+  rateLimitExceededResponse,
+} from '../_shared/rateLimit.ts'
 import {
   paymentConfirmedStageNote,
   tailorPaymentConfirmedNotification,
@@ -40,10 +46,22 @@ import {
 } from '../../../packages/shared/src/order-terminal.ts'
 
 const FN = 'expire-pending-payments'
-const PAYMENT_TIMEOUT_MINUTES = 30
+const PAYMENT_PENDING_TIMEOUT_MINUTES = 30
+const PAYMENT_FAILED_RETRY_WINDOW_MINUTES = 120
 
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
+}
+
+function jsonResponse(body: Record<string, unknown>, status: number, headers: HeadersInit) {
+  if (typeof body.error === 'string' && typeof body.message !== 'string') {
+    body.message = body.error
+  }
+
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...headers, 'Content-Type': 'application/json' },
+  })
 }
 
 async function timingSafeEqual(a: string, b: string): Promise<boolean> {
@@ -113,6 +131,18 @@ function customerFailedPaymentNotification(order: OrderRow) {
       }
 }
 
+function tailorFailedPaymentNotification(order: OrderRow) {
+  return order.order_kind === 'CUSTOM'
+    ? {
+        title: 'Order cancelled after failed payment',
+        body: 'The customer did not retry payment within 2 hours, so this custom order was cancelled automatically.',
+      }
+    : {
+        title: 'Checkout cancelled after failed payment',
+        body: 'The customer did not retry payment within 2 hours, so this ready-made checkout was cancelled automatically.',
+      }
+}
+
 async function markOrderConfirmed(
   supabase: any,
   order: OrderRow,
@@ -161,6 +191,7 @@ async function markOrderConfirmed(
     EdgeRuntime.waitUntil(
       sendPushToUser(supabase, order.tailor_id, {
         ...tailorPaymentConfirmedNotification(order.order_kind),
+        preferenceKey: 'newOrders',
         data: { orderId: order.id },
       }),
     )
@@ -233,6 +264,7 @@ async function expireOrderPayment(supabase: any, order: OrderRow) {
     EdgeRuntime.waitUntil(
       sendPushToUser(supabase, order.customer_id, {
         ...customerTimeoutNotification(order, nextStage),
+        preferenceKey: 'paymentConfirmations',
         data: { orderId: order.id },
       }),
     )
@@ -257,6 +289,17 @@ async function cancelFailedPaymentOrder(supabase: any, order: OrderRow) {
     EdgeRuntime.waitUntil(
       sendPushToUser(supabase, order.customer_id, {
         ...customerFailedPaymentNotification(order),
+        preferenceKey: 'paymentConfirmations',
+        data: { orderId: order.id },
+      }),
+    )
+  }
+
+  if (order.tailor_id) {
+    EdgeRuntime.waitUntil(
+      sendPushToUser(supabase, order.tailor_id, {
+        ...tailorFailedPaymentNotification(order),
+        preferenceKey: 'newOrders',
         data: { orderId: order.id },
       }),
     )
@@ -273,13 +316,25 @@ Deno.serve(async (req) => {
     const valid = await timingSafeEqual(token, getServiceRoleKey())
     if (!valid) {
       log('warn', FN, 'auth.unauthorized')
-      return new Response('Unauthorized', { status: 401, headers: cors })
+      return jsonResponse({ error: 'This scheduled payment job requires a trusted service request.' }, 401, cors)
     }
 
     const supabase: any = createClient(getSupabaseUrl(), getServiceRoleKey())
-    const cutoff = new Date(Date.now() - PAYMENT_TIMEOUT_MINUTES * 60 * 1000).toISOString()
+    const clientIp = getClientIp(req)
+    const limit = await rateLimit(
+      supabase,
+      clientIp,
+      FN,
+      RATE_LIMITS.payment.limit,
+      RATE_LIMITS.payment.windowMs,
+      { ip: clientIp, userAgent: req.headers.get('user-agent') },
+    )
+    if (!limit.allowed) return rateLimitExceededResponse(cors, limit.retryAfter)
 
-    const { data, error } = await supabase
+    const pendingCutoff = new Date(Date.now() - PAYMENT_PENDING_TIMEOUT_MINUTES * 60 * 1000).toISOString()
+    const failedCutoff = new Date(Date.now() - PAYMENT_FAILED_RETRY_WINDOW_MINUTES * 60 * 1000).toISOString()
+
+    const { data: pendingData, error: pendingError } = await supabase
       .from('orders')
       .select(`
         id,
@@ -299,15 +354,46 @@ Deno.serve(async (req) => {
         quote_expires_at,
         stage_updated_at
       `)
-      .in('stage', ['PAYMENT_PENDING', 'PAYMENT_FAILED'])
-      .lt('stage_updated_at', cutoff)
+      .eq('stage', 'PAYMENT_PENDING')
+      .lt('stage_updated_at', pendingCutoff)
 
-    if (error) {
-      log('error', FN, 'db.error', { error: error.message })
-      return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: cors })
+    if (pendingError) {
+      log('error', FN, 'db.error', { error: pendingError.message, phase: 'pending_fetch' })
+      return new Response(JSON.stringify({ error: pendingError.message }), { status: 500, headers: cors })
     }
 
-    const orders = (data ?? []) as OrderRow[]
+    const { data: failedData, error: failedError } = await supabase
+      .from('orders')
+      .select(`
+        id,
+        reference,
+        stage,
+        order_kind,
+        customer_id,
+        tailor_id,
+        garment_type,
+        item_title,
+        seller_item_id,
+        item_size,
+        item_quantity,
+        payment_intent_id,
+        payment_provider,
+        payment_checkout_url,
+        quote_expires_at,
+        stage_updated_at
+      `)
+      .eq('stage', 'PAYMENT_FAILED')
+      .lt('stage_updated_at', failedCutoff)
+
+    if (failedError) {
+      log('error', FN, 'db.error', { error: failedError.message, phase: 'failed_fetch' })
+      return new Response(JSON.stringify({ error: failedError.message }), { status: 500, headers: cors })
+    }
+
+    const orders = [
+      ...((pendingData ?? []) as OrderRow[]),
+      ...((failedData ?? []) as OrderRow[]),
+    ]
     if (orders.length === 0) {
       return new Response(JSON.stringify({ expired: 0, confirmed: 0, skipped: 0 }), {
         headers: { ...cors, 'Content-Type': 'application/json' },
@@ -393,11 +479,9 @@ Deno.serve(async (req) => {
       }
     }
 
-    return new Response(JSON.stringify({ expired, confirmed, skipped }), {
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    })
+    return jsonResponse({ expired, confirmed, skipped }, 200, cors)
   } catch (error) {
     log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return new Response('Internal server error', { status: 500, headers: cors })
+    return jsonResponse({ error: 'Payment expiration job could not complete right now.' }, 500, cors)
   }
 })

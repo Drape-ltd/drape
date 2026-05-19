@@ -1,0 +1,49 @@
+{
+  "name": "@drape/drape-vision",
+  "version": "0.0.1",
+  "private": true,
+  "source": "src/index.ts",
+  "react-native": "src/index.ts",
+  "files": [
+    "src",
+    "ios",
+    "android",
+    "models",
+    "nitrogen",
+    "nitro.json",
+    "react-native.config.js",
+    "*.podspec",
+    "README.md"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./angle-detector": "./src/angleDetector.ts",
+    "./calibration": "./src/calibration.ts",
+    "./capture-worklet": "./src/captureWorklet.ts",
+    "./constants": "./src/constants.ts",
+    "./ellipse-fitter": "./src/ellipseFitter.ts",
+    "./field-dictionary": "./src/fieldDictionary.ts",
+    "./measurement-calculator": "./src/measurementCalculator.ts",
+    "./native": "./src/native.ts",
+    "./types": "./src/types.ts"
+  },
+  "scripts": {
+    "specs": "tsc --noEmit false && nitrogen",
+    "test": "../shared/node_modules/.bin/jest --config jest.config.js --watchman=false",
+    "typecheck": "../../node_modules/.bin/tsc --noEmit"
+  },
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*",
+    "react-native-nitro-modules": "*",
+    "react-native-vision-camera": "*"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.17",
+    "nitrogen": "0.35.6",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-nitro-modules": "0.35.6",
+    "react-native-vision-camera": "5.0.8"
+  }
+}

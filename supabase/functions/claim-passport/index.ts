@@ -32,28 +32,16 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { z, parseBody, uuid } from '../_shared/validate.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
+import { mergeDiaryMeasurementsIntoCustomerProfile } from '../_shared/fit-passport.ts'
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({ passportId: uuid, action: z.literal('preview') }),
   z.object({ passportId: uuid, action: z.literal('claim') }),
 ])
-
-// Diary → customer_profiles.measurements field mapping
-// Only fields that have a direct equivalent in the customer measurements schema
-const MEASUREMENT_MAP: Record<string, string> = {
-  chest:            'chest',
-  waist:            'waist',
-  hip:              'hips',
-  shoulder:         'shoulder',
-  sleeve:           'sleeveLength',
-  neck:             'neckCircumference',
-  inseam:           'inseam',
-  measurement_unit: 'unit',
-}
 
 const FN = 'claim-passport'
 
@@ -65,7 +53,10 @@ Deno.serve(async (req: Request) => {
   }
 
   if (req.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405, headers: cors })
+    return new Response(JSON.stringify({ error: 'Method not allowed.', message: 'Method not allowed.', code: 'METHOD_NOT_ALLOWED' }), {
+      status: 405,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    })
   }
 
   // ── Auth ──────────────────────────────────────────────────────────────────
@@ -90,10 +81,7 @@ Deno.serve(async (req: Request) => {
 
   const allowed = await checkRateLimit(service, `claim-passport:${caller.id}`, 3600, 10)
   if (!allowed) {
-    return new Response(JSON.stringify({ error: 'Too many attempts. Try again later.' }), {
-      status: 429,
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    })
+    return rateLimitExceededResponse(cors)
   }
 
   // ── Role check — must be a customer ──────────────────────────────────────
@@ -117,7 +105,7 @@ Deno.serve(async (req: Request) => {
   try {
     rawBody = await req.json()
   } catch {
-    return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
+    return new Response(JSON.stringify({ error: 'Invalid request body.', message: 'Invalid request body.', code: 'INVALID_JSON' }), {
       status: 400,
       headers: { ...cors, 'Content-Type': 'application/json' },
     })
@@ -125,7 +113,7 @@ Deno.serve(async (req: Request) => {
 
   const parsed = parseBody(BodySchema, rawBody)
   if (!parsed.ok) {
-    return new Response(JSON.stringify({ error: parsed.error }), {
+    return new Response(JSON.stringify({ error: 'This invite link could not be opened. Ask your tailor to resend it.', message: 'This invite link could not be opened. Ask your tailor to resend it.', code: 'VALIDATION_FAILED' }), {
       status: 400,
       headers: { ...cors, 'Content-Type': 'application/json' },
     })
@@ -139,8 +127,8 @@ Deno.serve(async (req: Request) => {
     .from('diary_entries')
     .select(`
       id, full_name, invite_status, invite_expires_at, claimed_by_user_id,
-      measurement_unit, chest, shoulder, sleeve, waist, hip, neck, inseam,
-      thigh, ankle, bicep, wrist, back_length, under_bust,
+      measurement_unit, chest, shoulder, sleeve, waist, hip, trouser_length, neck, inseam,
+      thigh, ankle, bicep, wrist, back_length, under_bust, measured_at, measured_location,
       tailor_id,
       tailor_profiles:tailor_profiles!diary_entries_tailor_id_fkey(display_name)
     `)
@@ -163,7 +151,7 @@ Deno.serve(async (req: Request) => {
   }
 
   // Count filled measurements (excluding unit field)
-  const MEASUREMENT_FIELDS = ['chest', 'shoulder', 'sleeve', 'waist', 'hip', 'neck', 'inseam', 'thigh', 'ankle', 'bicep', 'wrist', 'back_length', 'under_bust'] as const
+  const MEASUREMENT_FIELDS = ['chest', 'shoulder', 'sleeve', 'waist', 'hip', 'trouser_length', 'neck', 'inseam', 'thigh', 'ankle', 'bicep', 'wrist', 'back_length', 'under_bust'] as const
   const measurementCount = MEASUREMENT_FIELDS.filter((f) => (entry as any)[f] !== null).length
 
   const tailorName = (entry as any).tailor_profiles?.display_name ?? 'Your tailor'
@@ -214,7 +202,7 @@ Deno.serve(async (req: Request) => {
   }
 
   // Atomic claim — WHERE clause prevents double-claim race condition
-  const { error: claimErr, count } = await service
+  const { data: claimedRows, error: claimErr } = await service
     .from('diary_entries')
     .update({
       invite_status:       'CLAIMED',
@@ -222,7 +210,7 @@ Deno.serve(async (req: Request) => {
     })
     .eq('passport_id', passportId)
     .is('claimed_by_user_id', null) // only claim if not yet claimed
-    .select('id', { count: 'exact', head: true })
+    .select('id')
 
   if (claimErr) {
     console.error(`[${FN}] claim update error:`, claimErr.message)
@@ -232,7 +220,7 @@ Deno.serve(async (req: Request) => {
     })
   }
 
-  if (!count || count === 0) {
+  if (!claimedRows || claimedRows.length === 0) {
     // Race condition — another request claimed it between our read and write
     return new Response(
       JSON.stringify({ error: 'This passport has already been claimed.' }),
@@ -241,15 +229,11 @@ Deno.serve(async (req: Request) => {
   }
 
   // Merge measurements into customer_profiles.measurements
-  const existing: Record<string, unknown> = (customerProfile.measurements as any) ?? {}
-  const merged: Record<string, unknown> = { ...existing }
-
-  for (const [diaryField, customerField] of Object.entries(MEASUREMENT_MAP)) {
-    const val = (entry as any)[diaryField]
-    if (val !== null && val !== undefined) {
-      merged[customerField] = val
-    }
-  }
+  const merged = mergeDiaryMeasurementsIntoCustomerProfile({
+    existing: (customerProfile.measurements as Record<string, unknown> | null) ?? null,
+    diaryEntry: entry as Record<string, unknown>,
+    claimedAt: new Date().toISOString(),
+  })
 
   const { error: profileErr } = await service
     .from('customer_profiles')

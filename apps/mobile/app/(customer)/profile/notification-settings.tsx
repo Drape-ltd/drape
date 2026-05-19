@@ -23,6 +23,7 @@ type NotifPrefs = {
   orderUpdates: boolean
   messages: boolean
   quotes: boolean
+  paymentConfirmations: boolean
   promotions: boolean
 }
 
@@ -30,6 +31,7 @@ const DEFAULT_PREFS: NotifPrefs = {
   orderUpdates: true,
   messages: true,
   quotes: true,
+  paymentConfirmations: true,
   promotions: false,
 }
 
@@ -55,7 +57,7 @@ function PrefRow({
         onValueChange={onChange}
         disabled={disabled}
         trackColor={{ false: Colors.lightGrey, true: Colors.needleGreen }}
-        thumbColor={Colors.white}
+        thumbColor={Colors.textInverse}
       />
     </View>
   )
@@ -136,6 +138,15 @@ export default function NotificationSettingsScreen() {
               onChange={(v) => toggle('quotes', v)}
               disabled={saving}
             />
+            <View style={styles.divider} />
+            <PrefRow
+              icon="credit-card"
+              title="Payment confirmations"
+              description="Payment success, failed-payment, refund, and checkout status alerts."
+              value={prefs.paymentConfirmations}
+              onChange={(v) => toggle('paymentConfirmations', v)}
+              disabled={saving}
+            />
           </View>
         </View>
 
@@ -168,7 +179,7 @@ export default function NotificationSettingsScreen() {
             />
           </View>
           <Text style={styles.hint}>
-            Transactional notifications about your orders are always sent regardless of these settings.
+            Critical account, safety, support, and dispute alerts may still be sent even when routine alerts are off.
           </Text>
         </View>
 

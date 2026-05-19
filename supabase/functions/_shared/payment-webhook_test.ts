@@ -1,5 +1,9 @@
 import { assert, assertEquals } from 'https://deno.land/std@0.224.0/assert/mod.ts'
-import { buildRejectedWebhookEventId, buildRejectedWebhookPayload } from './payment-webhook.ts'
+import {
+  buildRejectedWebhookEventId,
+  buildRejectedWebhookPayload,
+  shouldAlertOnSignatureFailureCount,
+} from './payment-webhook.ts'
 
 Deno.test('buildRejectedWebhookEventId is stable for identical rejected payloads', async () => {
   const payload = JSON.stringify({ id: 'evt_1', type: 'payment_intent.succeeded' })
@@ -28,4 +32,11 @@ Deno.test('buildRejectedWebhookPayload preserves unverified webhook metadata for
   assertEquals(result.unverified_reference, 'pay_ref_123')
   assertEquals(result.signature_header_present, true)
   assertEquals(result.verification_error, 'No Paystack webhook signatures matched the expected signature.')
+})
+
+Deno.test('shouldAlertOnSignatureFailureCount only alerts once at threshold', () => {
+  assertEquals(shouldAlertOnSignatureFailureCount(1), false)
+  assertEquals(shouldAlertOnSignatureFailureCount(2), false)
+  assertEquals(shouldAlertOnSignatureFailureCount(3), true)
+  assertEquals(shouldAlertOnSignatureFailureCount(4), false)
 })

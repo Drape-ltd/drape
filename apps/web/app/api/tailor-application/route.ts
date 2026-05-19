@@ -1,4 +1,9 @@
 import { NextResponse } from 'next/server'
+import {
+  RATE_LIMIT_RETRY_AFTER_SECONDS,
+  RATE_LIMITS,
+  createRateLimitPayload,
+} from '@drape/shared/rate-limit'
 import { createServiceRoleClient } from '../../../lib/server-supabase'
 import { sendTailorApplicationNotification } from '../../../lib/lead-notifications'
 
@@ -65,6 +70,19 @@ import {
   trimmedString,
 } from '../../../lib/request-security'
 
+function rateLimitResponse() {
+  return NextResponse.json(
+    createRateLimitPayload(RATE_LIMIT_RETRY_AFTER_SECONDS),
+    {
+      status: 429,
+      headers: {
+        'Retry-After': String(RATE_LIMIT_RETRY_AFTER_SECONDS),
+        'Content-Type': 'application/json',
+      },
+    },
+  )
+}
+
 function isEmail(value: unknown): value is string {
   return typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 }
@@ -129,7 +147,12 @@ export async function POST(request: Request) {
   }
 
   const ip = getClientIp(request)
-  const ipRateLimit = await checkPublicRateLimit(client, `web:tailor-application:ip:${ip}`, 3600, 30)
+  const ipRateLimit = await checkPublicRateLimit(
+    client,
+    `web:tailor-application:ip:${ip}`,
+    RATE_LIMITS.unauthenticated.windowMs / 1000,
+    RATE_LIMITS.unauthenticated.limit,
+  )
   if (!ipRateLimit.ok) {
     return NextResponse.json(
       { error: 'We are unable to accept applications right now. Please try again shortly.' },
@@ -137,7 +160,7 @@ export async function POST(request: Request) {
     )
   }
   if (!ipRateLimit.allowed) {
-    return NextResponse.json({ error: 'Too many requests. Please try again later.' }, { status: 429 })
+    return rateLimitResponse()
   }
 
   const parsed = await readJsonBody(request)
@@ -178,8 +201,8 @@ export async function POST(request: Request) {
   const emailRateLimit = await checkPublicRateLimit(
     client,
     `web:tailor-application:email:${email}`,
-    3600,
-    3,
+    RATE_LIMITS.unauthenticated.windowMs / 1000,
+    RATE_LIMITS.unauthenticated.limit,
   )
   if (!emailRateLimit.ok) {
     return NextResponse.json(
@@ -188,7 +211,7 @@ export async function POST(request: Request) {
     )
   }
   if (!emailRateLimit.allowed) {
-    return NextResponse.json({ error: 'Too many requests. Please try again later.' }, { status: 429 })
+    return rateLimitResponse()
   }
 
   const application = {

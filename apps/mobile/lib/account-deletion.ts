@@ -1,12 +1,27 @@
 import { invokeFunction } from './supabase'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from './function-errors'
 
-export async function requestAccountDeletion(reason?: string): Promise<{
+export async function requestAccountDeletion(input?: {
+  reason?: string
+  confirmationText?: string
+  reauthProof?: string
+}): Promise<{
   error: string | null
   alreadyPending?: boolean
+  activeOrderCount?: number
+  deletionPath?: 'OPS_REVIEW_ACTIVE_ORDERS' | 'OPS_REVIEW_STANDARD'
 }> {
-  const payload = reason?.trim() ? { reason: reason.trim() } : {}
-  const { data, error } = await invokeFunction<{ ok?: boolean; alreadyPending?: boolean }>(
+  const payload = {
+    reason: input?.reason?.trim() || undefined,
+    confirmationText: input?.confirmationText?.trim() || undefined,
+    reauthProof: input?.reauthProof?.trim() || undefined,
+  }
+  const { data, error } = await invokeFunction<{
+    ok?: boolean
+    alreadyPending?: boolean
+    activeOrderCount?: number
+    deletionPath?: 'OPS_REVIEW_ACTIVE_ORDERS' | 'OPS_REVIEW_STANDARD'
+  }>(
     'request-account-deletion',
     { body: payload }
   )
@@ -22,5 +37,7 @@ export async function requestAccountDeletion(reason?: string): Promise<{
   return {
     error: null,
     alreadyPending: data?.alreadyPending === true,
+    activeOrderCount: data?.activeOrderCount,
+    deletionPath: data?.deletionPath,
   }
 }

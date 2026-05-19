@@ -85,18 +85,33 @@ Everything here should be treated as launch-critical unless explicitly moved out
   - delivery / collection readiness
 - Notification settings are real, not decorative
 - Push token lifecycle is stable
+- Critical SMS fallback is wired for high-trust events only:
+  - payment confirmed
+  - ready for pickup / collection code
+  - delivery / shipping milestones
+  - dispute or ops resolution
+  - payout/security issues
+- Launch blocker before SMS QA: configure `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM_NUMBER` in the target Supabase environment.
 
 ### 6. Calls and Rich Communication
 
-- Decide V1 consultation model:
-  - in-app video/audio room
-  - or defer full call integration behind a deliberate launch choice
-- If consultation is in scope:
-  - provider selected
-  - room creation path exists
-  - permissions and failure states are clean
+- V1 consultation model is scheduled, order-bound consultation rooms:
+  - customer can request a slot before quote
+  - tailor approves, prices, reschedules, or declines
+  - paid consultations must be paid before the room opens
+  - room opens near the scheduled time
+  - reminders run by scheduled function
+  - messages remain the fallback if calling fails
+- Provider selected: Daily for hosted audio/video rooms.
 - Voice note flow remains stable
 - Audio attachments are validated and safe
+
+### 6a. Media Trust Surface
+
+- Profile avatars should use square crop before upload and initials fallback on display.
+- Ready-made item photos should display the whole garment in detail and checkout surfaces; thumbnails can crop only when tapping opens a larger view.
+- Order evidence and production-stage media should use contain-fit previews so proof is never cropped out.
+- Order-stage emails should include the latest proof image when the update has an image, with the app remaining the source of truth for the full timeline.
 
 ### 7. Security and Abuse Prevention
 

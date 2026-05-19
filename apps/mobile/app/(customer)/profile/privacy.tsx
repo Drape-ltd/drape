@@ -31,7 +31,7 @@ type PrivacyPrefs = {
 }
 
 const DEFAULT_PREFS: PrivacyPrefs = {
-  marketingEmails: true,
+  marketingEmails: false,
   personalisation: true,
   analyticsSharing: true,
 }
@@ -64,7 +64,7 @@ export default function PrivacyScreen() {
       }
       setPrefs(previous)
       Alert.alert(
-        'Error',
+        'Privacy setting not saved',
         isLikelyConnectivityIssue(error)
           ? 'Connection looks weak. We could not save your privacy settings yet. Retry when the signal improves.'
           : 'Could not save your privacy settings right now. Please try again in a moment.',
@@ -241,7 +241,7 @@ function ToggleRow({
         onValueChange={onChange}
         disabled={disabled}
         trackColor={{ false: Colors.lightGrey, true: Colors.needleGreen }}
-        thumbColor={Colors.white}
+        thumbColor={Colors.textInverse}
       />
     </View>
   )

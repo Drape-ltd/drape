@@ -152,7 +152,7 @@ export default function TailorDataRequestScreen() {
             value={note}
             onChangeText={setNote}
             multiline
-            placeholder="Example: I need my seller profile, payout-readiness notes, and order history."
+            placeholder="Example: I need my tailor profile, payout-readiness notes, and order history."
             placeholderTextColor={Colors.midGrey}
             maxLength={300}
             textAlignVertical="top"
@@ -170,7 +170,7 @@ export default function TailorDataRequestScreen() {
           onPress={handleSubmitRequest}
           disabled={opening}
         >
-          {opening ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.actionBtnText}>Submit data request</Text>}
+          {opening ? <ActivityIndicator color={Colors.textInverse} /> : <Text style={styles.actionBtnText}>Submit data request</Text>}
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -263,7 +263,7 @@ const styles = StyleSheet.create({
     padding: 12,
     alignItems: 'center',
   },
-  actionBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.white },
+  actionBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   secondaryBtn: {
     borderRadius: Radius.lg,
     padding: 12,

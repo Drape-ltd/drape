@@ -9,6 +9,7 @@ import * as Notifications from 'expo-notifications'
 import { type NotificationResponse } from 'expo-notifications'
 import { useRouter } from 'expo-router'
 import { useUserRole } from './auth'
+import { Sentry } from './sentry'
 import { supabase } from './supabase'
 
 // How foreground notifications look
@@ -27,6 +28,10 @@ const ALLOWED_SCREENS = new Set([
   '/(tailor)/orders',
   '/(tailor)/profile/notifications',
 ])
+
+const EXPO_PROJECT_ID =
+  process.env.EXPO_PUBLIC_PROJECT_ID?.trim()
+  || '4729d6f8-273a-43a9-abdf-6e4ca31ce83d'
 
 type NotificationSubscription = ReturnType<typeof Notifications.addNotificationReceivedListener>
 
@@ -128,7 +133,7 @@ async function registerAndStore(userId: string) {
     if (finalStatus !== 'granted') return // User declined, don't store
 
     const tokenData = await Notifications.getExpoPushTokenAsync({
-      projectId: process.env.EXPO_PUBLIC_PROJECT_ID,
+      projectId: EXPO_PROJECT_ID,
     })
 
     const token = tokenData.data
@@ -147,8 +152,14 @@ async function registerAndStore(userId: string) {
       { user_id: userId, token, platform: Platform.OS, updated_at: new Date().toISOString() },
       { onConflict: 'user_id' }
     )
-  } catch {
-    // Non-fatal — app works without push
+  } catch (error) {
+    Sentry.captureException(error, {
+      extra: {
+        context: 'push_token_registration',
+        projectIdConfigured: !!process.env.EXPO_PUBLIC_PROJECT_ID?.trim(),
+        fallbackProjectIdUsed: !process.env.EXPO_PUBLIC_PROJECT_ID?.trim(),
+      },
+    })
   }
 }
 

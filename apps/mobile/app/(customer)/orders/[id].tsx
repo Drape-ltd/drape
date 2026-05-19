@@ -5,20 +5,22 @@ import {
 } from 'react-native'
 import { useFocusEffect, useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { Image as ExpoImage } from 'expo-image'
+import DateTimePicker from '@react-native-community/datetimepicker'
+import { ResizeMode, Video } from 'expo-av'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { openConsultationCallUrl } from '@/lib/consultation'
+import { createConsultationRoom, openConsultationCallUrl } from '@/lib/consultation'
 import { createOrderCallRoom, openDrapeCallUrl } from '@/lib/order-call'
 import { Sentry } from '@/lib/sentry'
 import { openTrackingPage } from '@/lib/shipping'
-import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
+import { isLikelyConnectivityIssue, isMachineErrorCodeMessage, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import {
   CANCELLATION_REVIEW_REASON_LABELS,
   CONSULTATION_EXPIRY_POLICY_LABELS,
   CONSULTATION_NO_SHOW_POLICY_LABELS,
   CONSULTATION_PAYMENT_TIMING_LABELS,
   CONSULTATION_RESCHEDULE_POLICY_LABELS,
+  CONSULTATION_STATUS_LABELS,
   COVERAGE_PREFERENCE_LABELS,
   DELIVERY_REVIEW_REASON_LABELS,
   enrichMeasurementSnapshot,
@@ -27,6 +29,9 @@ import {
   FABRIC_STRETCH_LABELS,
   FIT_CONFIDENCE_LABELS,
   FIT_INTENT_LABELS,
+  getMeasurementConfirmationFields,
+  labelMeasurementField,
+  measurementGuideForField,
   MATERIAL_ISSUE_REASON_LABELS,
   MATERIAL_ISSUE_RESPONSE_LABELS,
   MEASUREMENT_SOURCE_LABELS,
@@ -57,7 +62,7 @@ import {
   resolveHandoffIssue,
   type HandoffIssue,
 } from '@/lib/handoff-support'
-import { Button, HandoffSupportModal, Input } from '@/components/ui'
+import { Button, HandoffSupportModal, Input, RemoteImage } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { type OrderStage } from '@drape/shared/order-machine'
 import { filterContactInfo } from '@drape/shared/contact-filter'
@@ -66,7 +71,7 @@ import {
   deriveCancellationPolicy,
 } from '@drape/shared/cancellation-policy'
 import { useCurrency, formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
-import { useOrderPaymentFlow } from '@/lib/payments'
+import { paymentRouteCopyForCurrency, useOrderPaymentFlow } from '@/lib/payments'
 import { isTerminalOrderStage, purgeTerminalOrderClientState } from '@/lib/order-client-state'
 
 type StageUpdate = {
@@ -75,6 +80,47 @@ type StageUpdate = {
   note: string | null
   photoUrl: string | null
   createdAt: string
+}
+
+function isVideoUri(uri: string | null | undefined) {
+  return typeof uri === 'string' && /\.(mp4|mov|m4v|webm)(?:[?#].*)?$/iu.test(uri)
+}
+
+function StageMediaPreview({
+  uri,
+  style,
+  surface,
+  accessibilityLabel,
+}: {
+  uri: string
+  style: any
+  surface: string
+  accessibilityLabel?: string
+}) {
+  if (isVideoUri(uri)) {
+    return (
+      <Video
+        source={{ uri }}
+        style={style}
+        useNativeControls
+        resizeMode={ResizeMode.CONTAIN}
+        isLooping={false}
+        accessibilityLabel={accessibilityLabel}
+      />
+    )
+  }
+
+  return (
+    <RemoteImage
+      uri={uri}
+      bucket="order-photos"
+      style={style}
+      contentFit="contain"
+      transition={120}
+      surface={surface}
+      accessibilityLabel={accessibilityLabel}
+    />
+  )
 }
 
 type MeasurementSnapshot = Record<string, unknown> & MeasurementSnapshotMeta
@@ -132,13 +178,24 @@ type OrderDetail = {
   fulfillmentContactPhone: string | null
   collectionCode: string | null
   videoCallUrl: string | null
+  handoffCompletedAt: string | null
+  customerHandoffConfirmedAt: string | null
   measurementSnapshot: MeasurementSnapshot | null
   supportMeta: OrderSupportMeta
+  customDetail: {
+    fabricApprovalRequired: boolean
+    fabricApprovalStatus: string | null
+    fabricDescription: string | null
+    fabricSourcingDeadlineDays: number | null
+    fabricSourcingDeadlineAt: string | null
+  } | null
   stageUpdates: StageUpdate[]
   createdAt: string
 }
 
 const SUPPORT_EMAIL = 'support@drapeon.co'
+const AFTERCARE_WINDOW_DAYS = 14
+const AFTERCARE_WINDOW_MS = AFTERCARE_WINDOW_DAYS * 24 * 60 * 60 * 1000
 type AftercareSupportType =
   | 'FIT_ISSUE'
   | 'FINISH_ISSUE'
@@ -162,14 +219,87 @@ const AFTERCARE_SUPPORT_LABELS: Record<AftercareSupportType, string> = {
   OTHER: 'Other aftercare issue',
 }
 
-// The 5 production stages shown in the progress bar
-const CUSTOM_PROGRESS_STAGES: OrderStage[] = ['CONFIRMED', 'CUTTING', 'SEWING', 'READY_FOR_DRAPE_DISPATCH', 'SHIPPED']
+function formatReadableDate(value: string | Date) {
+  const date = value instanceof Date ? value : new Date(value)
+  if (!Number.isFinite(date.getTime())) return 'the saved date'
+  return new Intl.DateTimeFormat(undefined, {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(date)
+}
+
+function formatTimelineTimestamp(value: string | Date) {
+  const date = value instanceof Date ? value : new Date(value)
+  if (!Number.isFinite(date.getTime())) return 'Time not available'
+  const day = new Intl.DateTimeFormat(undefined, {
+    day: 'numeric',
+    month: 'short',
+  }).format(date)
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date)
+  return `${day} at ${time}`
+}
+
+function timelineStageLabel(update: Pick<StageUpdate, 'stage' | 'note'>, orderKind: 'CUSTOM' | 'READY_MADE') {
+  const note = update.note?.toLowerCase() ?? ''
+  if (update.stage === 'CONFIRMED' && note.includes('payment confirmed')) {
+    return 'Payment confirmed'
+  }
+  if (update.stage === 'CONFIRMED' && (note.includes('guided fit profile') || note.includes('fit intake'))) {
+    return 'Measurements reviewed'
+  }
+  return customerOrderStageLabel(update.stage as OrderStage, orderKind) ?? update.stage
+}
+
+function timelineDotColor(update: Pick<StageUpdate, 'stage' | 'note'>) {
+  const note = update.note?.toLowerCase() ?? ''
+  if (update.stage === 'PAYMENT_FAILED' || note.includes('failed') || note.includes('cancel')) {
+    return Colors.error
+  }
+  if (update.stage === 'PAYMENT_PENDING' || note.includes('checkout started') || note.includes('payment started')) {
+    return Colors.statusPending
+  }
+  if (update.stage === 'IN_DISPUTE' || note.includes('concern') || note.includes('review')) {
+    return Colors.kanteRust
+  }
+  return Colors.needleGreen
+}
+
+function getAftercareStatus(order: OrderDetail) {
+  if (!['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(order.stage)) {
+    return { available: false, message: 'Aftercare opens after delivery or collection is confirmed.', closesAt: null as string | null }
+  }
+
+  const anchor = order.customerHandoffConfirmedAt ?? order.handoffCompletedAt
+  if (!anchor) {
+    return { available: false, message: 'Confirm delivery or collection first, then Drape can open the 14-day aftercare window.', closesAt: null as string | null }
+  }
+
+  const anchorMs = Date.parse(anchor)
+  if (!Number.isFinite(anchorMs)) {
+    return { available: false, message: 'We could not read the delivery confirmation time. Contact support and keep photos in the order thread.', closesAt: null as string | null }
+  }
+
+  const closesAt = new Date(anchorMs + AFTERCARE_WINDOW_MS).toISOString()
+  if (Date.parse(closesAt) < Date.now()) {
+    return { available: false, message: `The ${AFTERCARE_WINDOW_DAYS}-day aftercare window has closed. Contact support if this is a serious safety, fraud, or workmanship concern.`, closesAt }
+  }
+
+  return { available: true, message: `Aftercare is open until ${formatReadableDate(closesAt)}. Add photos in the order thread before sending.`, closesAt }
+}
+
+// The custom production journey is intentionally explicit. Designing and sourcing
+// are visible customer milestones, not hidden history entries.
+const CUSTOM_PROGRESS_STAGES: OrderStage[] = ['CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH', 'SHIPPED']
 const READY_MADE_PROGRESS_STAGES: OrderStage[] = ['CONFIRMED', 'FINISHING', 'READY_FOR_DRAPE_DISPATCH', 'SHIPPED']
 
 // Stages that are before production starts — show a "Waiting" pre-step
 const PRE_PRODUCTION_STAGES: OrderStage[] = ['CONSULTATION', 'PAYMENT_PENDING', 'PAYMENT_FAILED']
 const CUSTOM_PROGRESS_LABELS: Record<string, string> = {
-  CONFIRMED: 'Confirmed', CUTTING: 'Cutting', SEWING: 'Sewing',
+  CONFIRMED: 'Confirmed', DESIGNING: 'Design', SOURCING: 'Fabric', CUTTING: 'Cutting', SEWING: 'Sewing',
   FINISHING: 'Finishing', READY_FOR_DRAPE_DISPATCH: 'Dispatch', SHIPPED: 'Shipped',
 }
 
@@ -177,22 +307,27 @@ function progressStagesForOrder(orderKind: 'CUSTOM' | 'READY_MADE') {
   return orderKind === 'READY_MADE' ? READY_MADE_PROGRESS_STAGES : CUSTOM_PROGRESS_STAGES
 }
 
-function progressLabel(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE', isCollection: boolean) {
+function progressLabel(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE', isCollection: boolean, currentOrderStage?: OrderStage) {
+  const terminalHandoffLabel = currentOrderStage && CUSTOMER_COMPLETED_ORDER_STAGES.includes(currentOrderStage)
+    ? isCollection ? 'Collected' : 'Delivered'
+    : null
+
   if (orderKind === 'READY_MADE') {
     if (stage === 'CONFIRMED') return 'Placed'
     if (stage === 'FINISHING') return 'Preparing'
     if (stage === 'READY_FOR_DRAPE_DISPATCH') return 'Dispatch'
     if (stage === 'OUT_FOR_DELIVERY') return 'On the way'
+    if (stage === 'SHIPPED' && terminalHandoffLabel) return terminalHandoffLabel
     if (stage === 'SHIPPED') return isCollection ? 'Ready' : 'Shipped'
   }
   if (stage === 'READY_FOR_DRAPE_DISPATCH') return 'Dispatch'
   if (stage === 'OUT_FOR_DELIVERY') return 'On the way'
+  if (stage === 'SHIPPED' && terminalHandoffLabel) return terminalHandoffLabel
   return isCollection && stage === 'SHIPPED' ? 'Ready' : CUSTOM_PROGRESS_LABELS[stage]
 }
 
 function stageIndex(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): number {
   // Map READY_FOR_COLLECTION -> same level as SHIPPED.
-  // Map DESIGNING / SOURCING -> CONFIRMED (tailor pre-production stages that customers see as "Confirmed")
   // Map delivered / collected / complete -> final shipped-ready milestone in the progress bar.
   const normalised =
     stage === 'READY_FOR_COLLECTION' ? 'SHIPPED'
@@ -200,7 +335,6 @@ function stageIndex(stage: OrderStage, orderKind: 'CUSTOM' | 'READY_MADE'): numb
     : stage === 'READY_FOR_DRAPE_DISPATCH'
       ? 'READY_FOR_DRAPE_DISPATCH'
     : (orderKind === 'READY_MADE' && isReadyMadePreparationStage(stage)) ? 'FINISHING'
-    : (stage === 'DESIGNING' || stage === 'SOURCING') ? 'CONFIRMED'
     : (stage === 'DELIVERED' || stage === 'COLLECTED' || stage === 'COMPLETE') ? 'SHIPPED'
     : stage
   return progressStagesForOrder(orderKind).indexOf(normalised as OrderStage)
@@ -266,10 +400,10 @@ function stageGuidance(stage: OrderStage, deliveryMethod: string, orderKind: 'CU
     return 'A courier has accepted the parcel. You are next once it arrives, either to confirm receipt or raise a concern.'
   }
   if (stage === 'DELIVERED') {
-    return 'Delivery is recorded. You are next to finish the order or report a problem before closing it out.'
+    return 'Delivery is confirmed. Your 72-hour review window is open before payout is released to the tailor.'
   }
   if (stage === 'COLLECTED') {
-    return 'Collection is confirmed. You are next to finish the order or report a problem before closing it out.'
+    return 'Collection is confirmed. Your 72-hour review window is open before payout is released to the tailor.'
   }
   if (stage === 'COMPLETE') {
     return 'This order is complete.'
@@ -314,9 +448,9 @@ function taxLabelForOrder(order: Pick<OrderDetail, 'taxRegion'>) {
 }
 
 function fulfillmentFeeLabel(order: Pick<OrderDetail, 'orderKind' | 'deliveryMethod' | 'fulfillmentOption'>) {
-  if (order.deliveryMethod === 'LOCAL_DELIVERY' || (order.orderKind === 'READY_MADE' && order.fulfillmentOption === 'DELIVERY')) return 'Delivery fee'
+  if (order.deliveryMethod === 'LOCAL_DELIVERY' || (order.orderKind === 'READY_MADE' && order.fulfillmentOption === 'DELIVERY')) return 'Standard delivery fee'
   if (order.deliveryMethod === 'LOCAL_COLLECTION' || order.fulfillmentOption === 'PICKUP') return 'Fulfillment fee'
-  return 'Shipping fee'
+  return 'Standard shipping fee'
 }
 
 function pendingFulfillmentPaymentLabel(order: Pick<OrderDetail, 'deliveryMethod' | 'fulfillmentOption'>) {
@@ -331,6 +465,26 @@ function hasPendingFulfillmentPayment(
     && order.fulfillmentFee > 0
     && !!order.fulfillmentPaymentRequestedAt
     && !order.fulfillmentPaymentPaidAt
+}
+
+function defaultConsultationStart() {
+  const value = new Date()
+  value.setDate(value.getDate() + 1)
+  value.setMinutes(0, 0, 0)
+  return value
+}
+
+function formatConsultationStart(value: string | Date | null | undefined) {
+  if (!value) return 'Choose a time'
+  const date = value instanceof Date ? value : new Date(value)
+  if (!Number.isFinite(date.getTime())) return 'Choose a time'
+  return date.toLocaleString('en-GB', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 export default function OrderTrackingScreen() {
@@ -375,18 +529,44 @@ export default function OrderTrackingScreen() {
   const [showMaterialIssueResponse, setShowMaterialIssueResponse] = useState(false)
   const [showHandoffSupport, setShowHandoffSupport] = useState(false)
   const [showAftercareSupport, setShowAftercareSupport] = useState(false)
+  const [showCustomerConsultation, setShowCustomerConsultation] = useState(false)
   const [fabricTracking, setFabricTracking] = useState('')
+  const [approvingFabric, setApprovingFabric] = useState(false)
+  const [fabricChangeNote, setFabricChangeNote] = useState('')
   const [savingFabric, setSavingFabric] = useState(false)
   const [confirmingMeasurements, setConfirmingMeasurements] = useState(false)
   const [hasReview, setHasReview] = useState(false)
   const [handoffIssue, setHandoffIssue] = useState<HandoffIssue | null>(null)
   const [startingHandoffCall, setStartingHandoffCall] = useState<'audio' | 'video' | null>(null)
+  const [startingConsultationCall, setStartingConsultationCall] = useState<'audio' | 'video' | null>(null)
   const [resolvingHandoffIssue, setResolvingHandoffIssue] = useState(false)
   const { startOrderPayment } = useOrderPaymentFlow()
   const purgedTerminalOrderRef = useRef<string | null>(null)
 
   async function openCallUrl(url: string) {
     await openConsultationCallUrl(url, 'customer')
+  }
+
+  async function startConsultationCall(callType: 'audio' | 'video') {
+    if (!order || startingConsultationCall) return
+    setStartingConsultationCall(callType)
+    try {
+      const room = await createConsultationRoom(order.id, callType)
+      if (!room?.url) return
+      await openCallUrl(room.url)
+      await fetchOrder()
+    } catch (error) {
+      Sentry.captureException(error, { extra: { context: 'customer_start_consultation', orderId: order.id, callType } })
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. Keep the order thread updated and try again when the signal improves.'
+        : await readFunctionErrorMessage(error, 'Could not start the consultation call right now.')
+      Alert.alert(
+        'Consultation unavailable',
+        message,
+      )
+    } finally {
+      setStartingConsultationCall(null)
+    }
   }
 
   async function contactSupport(kind: 'general' | 'aftercare' = 'general') {
@@ -406,10 +586,13 @@ export default function OrderTrackingScreen() {
     }
   }
 
-  const fetchOrder = useCallback(async () => {
-    setLoading(true)
+  const fetchOrder = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent === true
+    if (!silent) {
+      setLoading(true)
+      setOrder(null)
+    }
     setFetchErrorMessage('')
-    setOrder(null)
     try {
       const [orderRes, reviewRes] = await Promise.allSettled([
         supabase
@@ -421,8 +604,9 @@ export default function OrderTrackingScreen() {
             fulfillment_payment_requested_at, fulfillment_payment_paid_at, fulfillment_payment_provider, fulfillment_payment_intent_id, fulfillment_payment_checkout_url,
             fabric_source, delivery_method, delivery_address, recipient_name, recipient_phone, fabric_tracking, tracking_number, carrier,
             fulfillment_provider, fulfillment_reference, fulfillment_contact_name, fulfillment_contact_phone,
-            collection_code, video_call_url, special_note, customer_measurements_snapshot, created_at,
+            collection_code, video_call_url, handoff_completed_at, customer_handoff_confirmed_at, special_note, customer_measurements_snapshot, created_at,
             tailor_profiles!tailor_profile_id(display_name, location),
+            custom_order_details(fabric_approval_required, fabric_approval_status, fabric_description, fabric_sourcing_deadline_days, fabric_sourcing_deadline_at),
             order_stage_updates(id, stage, note, photo_url, created_at)
           `)
           .eq('id', id)
@@ -474,6 +658,9 @@ export default function OrderTrackingScreen() {
 
         setFabricTracking(d.fabric_tracking ?? '')
         setHandoffIssue(openHandoffIssue)
+        const customDetail = Array.isArray(d.custom_order_details)
+          ? d.custom_order_details[0] ?? null
+          : d.custom_order_details ?? null
         setOrder({
           id: d.id,
           reference: d.reference,
@@ -527,8 +714,19 @@ export default function OrderTrackingScreen() {
           fulfillmentContactPhone: d.fulfillment_contact_phone ?? null,
           collectionCode: d.collection_code,
           videoCallUrl: d.video_call_url ?? null,
+          handoffCompletedAt: d.handoff_completed_at ?? null,
+          customerHandoffConfirmedAt: d.customer_handoff_confirmed_at ?? null,
           measurementSnapshot: enrichMeasurementSnapshot(d.customer_measurements_snapshot ?? null) as MeasurementSnapshot | null,
           supportMeta: parseOrderSupportMeta(d.special_note),
+          customDetail: customDetail
+            ? {
+                fabricApprovalRequired: customDetail.fabric_approval_required === true,
+                fabricApprovalStatus: customDetail.fabric_approval_status ?? null,
+                fabricDescription: customDetail.fabric_description ?? null,
+                fabricSourcingDeadlineDays: customDetail.fabric_sourcing_deadline_days ?? null,
+                fabricSourcingDeadlineAt: customDetail.fabric_sourcing_deadline_at ?? null,
+              }
+            : null,
           stageUpdates: (d.order_stage_updates ?? []).map((u: any) => ({
               id: u.id,
               stage: u.stage,
@@ -539,11 +737,17 @@ export default function OrderTrackingScreen() {
           createdAt: d.created_at,
         })
       } else {
-        setHandoffIssue(null)
-        setOrder(null)
+        if (!silent) {
+          setHandoffIssue(null)
+          setOrder(null)
+        }
       }
-      setLoading(false)
+      if (!silent) setLoading(false)
     } catch (error) {
+      if (silent) {
+        Sentry.captureException(error, { extra: { context: 'customer_order_realtime_refresh', orderId: id } })
+        return
+      }
       setFetchErrorMessage(
         isLikelyConnectivityIssue(error)
           ? 'Connection is weak. We could not load this order yet. Retry when the signal improves, or reopen it from Orders later.'
@@ -581,6 +785,34 @@ export default function OrderTrackingScreen() {
     }, [fetchOrder])
   )
 
+  useEffect(() => {
+    if (!id || !user?.id) return
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null
+    const pollTimer = setInterval(() => {
+      scheduleSilentRefresh()
+    }, 15000)
+
+    const scheduleSilentRefresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      refreshTimer = setTimeout(() => {
+        void fetchOrder({ silent: true })
+      }, 250)
+    }
+
+    const channel = supabase
+      .channel(`customer-order-detail:${id}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders', filter: `id=eq.${id}` }, scheduleSilentRefresh)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'order_stage_updates', filter: `order_id=eq.${id}` }, scheduleSilentRefresh)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'order_stage_updates', filter: `order_id=eq.${id}` }, scheduleSilentRefresh)
+      .subscribe()
+
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      clearInterval(pollTimer)
+      void supabase.removeChannel(channel)
+    }
+  }, [fetchOrder, id, user?.id])
+
   async function startHandoffCall(callType: 'audio' | 'video') {
     if (!order || startingHandoffCall) return
     setStartingHandoffCall(callType)
@@ -589,6 +821,14 @@ export default function OrderTrackingScreen() {
       if (!room?.url) return
       await fetchOrder()
       await openDrapeCallUrl(room.url)
+    } catch (error) {
+      Sentry.captureException(error, { extra: { context: 'customer_start_handoff_call', orderId: order.id, callType } })
+      Alert.alert(
+        'Call unavailable',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. Keep using messages and retry the Drape call when the signal improves.'
+          : 'Could not start the Drape call right now. Keep using messages and try again shortly.',
+      )
     } finally {
       setStartingHandoffCall(null)
     }
@@ -654,7 +894,7 @@ export default function OrderTrackingScreen() {
               const message = isLikelyConnectivityIssue(error)
                 ? 'Connection looks weak. We could not confirm receipt yet. Retry when the signal improves.'
                 : await readFunctionErrorMessage(error, 'Could not confirm receipt. Please try again.')
-              Alert.alert('Error', message)
+              Alert.alert('Could not confirm receipt', message)
             } else {
               router.replace(`/(customer)/review/${id}`)
             }
@@ -668,7 +908,7 @@ export default function OrderTrackingScreen() {
     if (savingFabric) return
     if (!fabricTracking.trim()) return
     if (filterContactInfo(fabricTracking).blocked) {
-      Alert.alert('Invalid input', "Contact details can't be included in tracking numbers.")
+      Alert.alert('Tracking number blocked', "Use the carrier tracking number only. Contact details can't be included here.")
       return
     }
     setSavingFabric(true)
@@ -681,12 +921,56 @@ export default function OrderTrackingScreen() {
       const message = isLikelyConnectivityIssue(error)
         ? 'Connection looks weak. We could not save this tracking detail yet. Retry when the signal improves.'
         : await readFunctionErrorMessage(error, 'Could not save tracking number. Please try again.')
-      Alert.alert('Error', message)
+      Alert.alert('Could not save tracking number', message)
     } else {
       const nextValue = data?.fabricTracking ?? fabricTracking.trim()
       setFabricTracking(nextValue)
       setOrder((prev) => prev ? { ...prev, fabricTracking: nextValue } : prev)
     }
+  }
+
+  async function decideSourcedFabric(action: 'approve-sourced-fabric' | 'request-sourced-fabric-change') {
+    if (approvingFabric) return
+    if (action === 'request-sourced-fabric-change' && fabricChangeNote.trim().length < 5) {
+      Alert.alert('Add a note', 'Tell the tailor what should change before requesting another fabric option.')
+      return
+    }
+
+    setApprovingFabric(true)
+    const { error, data } = await invokeFunction<{ ok: boolean; fabricApprovalStatus?: string }>('customer-order-action', {
+      body: {
+        orderId: id,
+        action,
+        note: action === 'request-sourced-fabric-change' ? fabricChangeNote.trim() : undefined,
+      },
+    })
+    setApprovingFabric(false)
+
+    if (error) {
+      Sentry.captureException(error, { extra: { context: action, orderId: id } })
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. We could not save your fabric decision yet.'
+        : await readFunctionErrorMessage(error, 'Could not save your fabric decision. Please try again.')
+      Alert.alert('Fabric decision not saved', message)
+      return
+    }
+
+    const nextStatus = data?.fabricApprovalStatus ?? (action === 'approve-sourced-fabric' ? 'APPROVED' : 'CHANGES_REQUESTED')
+    setFabricChangeNote('')
+    setOrder((prev) => prev
+      ? {
+          ...prev,
+          customDetail: prev.customDetail
+            ? { ...prev.customDetail, fabricApprovalStatus: nextStatus }
+            : prev.customDetail,
+        }
+      : prev)
+    Alert.alert(
+      action === 'approve-sourced-fabric' ? 'Fabric approved' : 'Change request sent',
+      action === 'approve-sourced-fabric'
+        ? 'Your tailor can continue once the pre-cutting checks are ready.'
+        : 'Your tailor will upload another fabric option for approval.',
+    )
   }
 
   async function continuePayment() {
@@ -695,58 +979,69 @@ export default function OrderTrackingScreen() {
     const payingConsultationNow = consultationPaymentRequired
 
     setPaying(true)
-    const result = await startOrderPayment({
-      orderId: order.id,
-      customerEmail: user?.email,
-    })
-    setPaying(false)
+    try {
+      const result = await startOrderPayment({
+        orderId: order.id,
+        customerEmail: user?.email,
+      })
 
-    await fetchOrder()
+      await fetchOrder()
 
-    if (result.ok) {
-      Alert.alert(
-        payingConsultationNow
-          ? 'Consultation fee confirmed'
-          : payingFulfillmentNow
-          ? 'Extra dispatch payment confirmed'
-          : order.orderKind === 'READY_MADE' ? 'Order placed' : 'Payment confirmed',
-        payingConsultationNow
-          ? 'Your consultation fee is confirmed. Your tailor can now start the consultation when ready.'
-          : payingFulfillmentNow
-          ? order.deliveryMethod === 'LOCAL_DELIVERY'
-            ? 'The extra delivery payment is confirmed. Drape can now finish arranging this handoff.'
-            : 'The extra shipping payment is confirmed. Drape can now finish arranging this shipment.'
-          : order.orderKind === 'READY_MADE'
-            ? 'Payment is confirmed and your seller can now prepare this order.'
-            : 'Payment is confirmed and your order is now ready for production.',
-      )
-      return
-    }
-
-    if (!result.ok) {
-      if (result.reason === 'cancelled') {
+      if (result.ok) {
         Alert.alert(
-          'Payment not finished',
           payingConsultationNow
-            ? 'Your consultation fee is still open. You can finish it from this order any time.'
+            ? 'Consultation fee confirmed'
             : payingFulfillmentNow
-            ? `Your extra ${order.deliveryMethod === 'LOCAL_DELIVERY' ? 'delivery' : 'shipping'} payment is still open. You can finish it from this order any time.`
+            ? 'Extra dispatch payment confirmed'
+            : order.orderKind === 'READY_MADE' ? 'Order placed' : 'Payment confirmed',
+          payingConsultationNow
+            ? 'Your consultation fee is confirmed. Your tailor can now start the consultation when ready.'
+            : payingFulfillmentNow
+            ? order.deliveryMethod === 'LOCAL_DELIVERY'
+              ? 'The extra delivery payment is confirmed. Drape can now finish arranging this handoff.'
+              : 'The extra shipping payment is confirmed. Drape can now finish arranging this shipment.'
             : order.orderKind === 'READY_MADE'
-              ? 'Your checkout is still saved. You can finish payment from this order any time.'
-              : 'Your quote is still saved. You can finish payment from this order any time.',
+              ? 'Payment is confirmed and your seller can now prepare this order.'
+              : 'Payment is confirmed and your order is now ready for production.',
         )
         return
       }
 
-      if (result.stage === 'PAYMENT_FAILED') {
-        Alert.alert(
-          order.orderKind === 'READY_MADE' ? 'Checkout failed' : 'Payment failed',
-          `${result.message}\n\nRetry within 30 minutes or this order will cancel automatically.`,
-        )
-        return
-      }
+      if (!result.ok) {
+        if (result.reason === 'cancelled') {
+          Alert.alert(
+            'Payment not finished',
+            payingConsultationNow
+              ? 'Your consultation fee is still open. You can finish it from this order any time.'
+              : payingFulfillmentNow
+              ? `Your extra ${order.deliveryMethod === 'LOCAL_DELIVERY' ? 'delivery' : 'shipping'} payment is still open. You can finish it from this order any time.`
+              : order.orderKind === 'READY_MADE'
+                ? 'Your checkout is still saved. You can finish payment from this order any time.'
+                : 'Your quote is still saved. You can finish payment from this order any time.',
+          )
+          return
+        }
 
-      Alert.alert('Payment unavailable', result.message)
+        if (result.stage === 'PAYMENT_FAILED') {
+          Alert.alert(
+            order.orderKind === 'READY_MADE' ? 'Checkout failed' : 'Payment failed',
+            `${result.message}\n\nRetry within 2 hours or this order will cancel automatically.`,
+          )
+          return
+        }
+
+        Alert.alert('Payment unavailable', result.message)
+      }
+    } catch (error) {
+      Sentry.captureException(error, { extra: { context: 'continue_order_payment', orderId: order.id } })
+      Alert.alert(
+        'Payment unavailable',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. Your card has not been charged. Retry payment when the signal improves.'
+          : 'Something went wrong before payment could finish. Your card has not been charged. Please try again.',
+      )
+    } finally {
+      setPaying(false)
     }
   }
 
@@ -805,7 +1100,7 @@ export default function OrderTrackingScreen() {
             <Text style={styles.stateEyebrow}>Order detail</Text>
             <Text style={styles.stateTitle}>Couldn't load this order.</Text>
             <Text style={styles.stateHint}>{fetchErrorMessage}</Text>
-            <TouchableOpacity onPress={fetchOrder} style={styles.retryBtn}>
+            <TouchableOpacity onPress={() => { void fetchOrder() }} style={styles.retryBtn}>
               <Text style={styles.retryBtnText}>Try again</Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -860,6 +1155,7 @@ export default function OrderTrackingScreen() {
   const latestUpdate = [...order.stageUpdates].reverse()[0]
   const justPlacedReadyMade = placed === '1' && order.orderKind === 'READY_MADE'
   const isCollection = order.deliveryMethod === 'LOCAL_COLLECTION'
+  const progressIsTerminalComplete = CUSTOMER_COMPLETED_ORDER_STAGES.includes(order.stage)
   const pickupDetailsUnlocked =
     isCollection && ['READY_FOR_COLLECTION', 'COLLECTED', 'COMPLETE', 'IN_DISPUTE'].includes(order.stage)
   const handoffHelpAvailable = ['READY_FOR_COLLECTION', 'OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED', 'COLLECTED', 'IN_DISPUTE'].includes(order.stage)
@@ -867,6 +1163,7 @@ export default function OrderTrackingScreen() {
   const measurementSource = order.measurementSnapshot?.measurementSource
   const fitConfidence = order.measurementSnapshot?.fitConfidence
   const measurementConfirmationNeeded = order.measurementSnapshot?.needsConfirmation === true
+  const measurementConfirmationFields = getMeasurementConfirmationFields(order.measurementSnapshot)
   const fitProfile = order.supportMeta.fitProfile ?? null
   const consultationMeta = order.supportMeta.consultation ?? null
   const quoteBreakdown = order.supportMeta.quoteBreakdown ?? null
@@ -882,6 +1179,12 @@ export default function OrderTrackingScreen() {
     (fabricHandoffMode == null || isShippingFabricHandoff(fabricHandoffMode))
   const materialIssue = order.supportMeta.materialIssue ?? null
   const materialIssueOpen = hasOpenMaterialIssue(order.supportMeta)
+  const sourcedFabricPhoto = [...order.stageUpdates]
+    .reverse()
+    .find((update) => update.stage === 'SOURCING' && update.photoUrl)?.photoUrl ?? null
+  const sourcedFabricPending =
+    order.fabricSource === 'TAILOR_SOURCES'
+    && order.customDetail?.fabricApprovalStatus === 'PENDING_CUSTOMER_APPROVAL'
   const materialIssueNeedsResponse = materialIssue?.status === 'OPEN'
   const materialIssueCancellationRequested = materialIssue?.status === 'CUSTOMER_REQUESTED_CANCEL'
   const materialIssueReasonLabel =
@@ -921,6 +1224,7 @@ export default function OrderTrackingScreen() {
   const deliveryReasonLabel =
     deliveryReview?.reasonLabel ??
     (deliveryReview?.reason ? DELIVERY_REVIEW_REASON_LABELS[deliveryReview.reason] : null)
+  const aftercareStatus = getAftercareStatus(order)
   const canRequestDeliveryReview =
     !cancellationReviewOpen &&
     !deliveryReviewOpen &&
@@ -934,6 +1238,10 @@ export default function OrderTrackingScreen() {
     order.stage === 'CONSULTATION' &&
     !!consultationMeta?.feeAmount &&
     !!consultationMeta.paidAt
+  const consultationApproved =
+    order.stage === 'CONSULTATION' &&
+    consultationMeta?.status !== 'REQUESTED' &&
+    consultationMeta?.status !== 'DECLINED'
 
   async function cancelOrderDirectly() {
     if (!order) return
@@ -1033,6 +1341,13 @@ export default function OrderTrackingScreen() {
               })
             }
           />
+          {!isReadyMadeInquiry ? (
+            <Button
+              label="Request consultation"
+              variant="secondary"
+              onPress={() => setShowCustomerConsultation(true)}
+            />
+          ) : null}
           {isReadyMadeInquiry && order.sellerItemId ? (
             <Button
               label="Continue to checkout"
@@ -1046,6 +1361,16 @@ export default function OrderTrackingScreen() {
               onPress={() => { void cancelOrderDirectly() }}
             />
           ) : null}
+          <CustomerConsultationRequestModal
+            visible={showCustomerConsultation}
+            orderId={order.id}
+            tailorName={order.tailorName}
+            onClose={() => setShowCustomerConsultation(false)}
+            onSent={() => {
+              setShowCustomerConsultation(false)
+              void fetchOrder()
+            }}
+          />
         </View>
       </SafeAreaView>
     )
@@ -1094,7 +1419,7 @@ export default function OrderTrackingScreen() {
           <View style={styles.progressBar}>
             {progressStages.map((s, i) => {
               const done = i <= currentStageIdx
-              const active = i === currentStageIdx
+              const active = i === currentStageIdx && !progressIsTerminalComplete
               return (
                 <View key={s} style={styles.progressStep}>
                   <View style={[styles.progressDot, done && styles.progressDotDone, active && styles.progressDotActive]}>
@@ -1104,7 +1429,7 @@ export default function OrderTrackingScreen() {
                     <View style={[styles.progressLine, done && i < currentStageIdx && styles.progressLineDone]} />
                   )}
                   <Text style={[styles.progressLabel, done && styles.progressLabelDone]}>
-                    {progressLabel(s, order.orderKind, isCollection)}
+                    {progressLabel(s, order.orderKind, isCollection, order.stage)}
                   </Text>
                 </View>
               )
@@ -1120,12 +1445,11 @@ export default function OrderTrackingScreen() {
               <Text style={styles.statusNote}>"{latestUpdate.note}"</Text>
             )}
             {latestUpdate?.photoUrl && (
-              <ExpoImage
-                source={latestUpdate.photoUrl}
+              <StageMediaPreview
+                uri={latestUpdate.photoUrl}
                 style={styles.progressPhoto}
-                contentFit="cover"
-                cachePolicy="memory-disk"
-                transition={120}
+                surface="customer_order_progress_photo"
+                accessibilityLabel="Latest order progress proof"
               />
             )}
             {order.quotedCompletionDate && order.stage !== 'COMPLETE' && order.stage !== 'DELIVERED' && order.stage !== 'COLLECTED' && order.stage !== 'IN_DISPUTE' && (
@@ -1244,8 +1568,8 @@ export default function OrderTrackingScreen() {
                 {order.stage === 'PAYMENT_FAILED'
                   ? (
                     order.orderKind === 'READY_MADE'
-                      ? 'This checkout did not complete. Retry within 30 minutes or it will cancel automatically.'
-                      : 'This payment did not complete. Retry within 30 minutes or the order will cancel automatically.'
+                      ? 'This checkout did not complete. Retry within 2 hours or it will cancel automatically.'
+                      : 'This payment did not complete. Retry within 2 hours or the order will cancel automatically.'
                   )
                   : (
                     order.orderKind === 'READY_MADE'
@@ -1253,6 +1577,9 @@ export default function OrderTrackingScreen() {
                       : 'Your tailor will only see this order as confirmed after payment succeeds.'
                   )}
               </Text>
+              {paymentRouteCopyForCurrency(order.quotedCurrency) ? (
+                <Text style={styles.videoCallHint}>{paymentRouteCopyForCurrency(order.quotedCurrency)}</Text>
+              ) : null}
               <Button
                 label={
                   order.stage === 'PAYMENT_FAILED'
@@ -1274,6 +1601,9 @@ export default function OrderTrackingScreen() {
                   ? 'Your item is already paid. Drape requested an extra delivery payment for a non-standard handoff, such as rush or exception dispatch.'
                   : 'Your item is already paid. Drape requested an extra shipping payment for a non-standard handoff, such as rush or exception dispatch.'}
               </Text>
+              {paymentRouteCopyForCurrency(order.quotedCurrency) ? (
+                <Text style={styles.videoCallHint}>{paymentRouteCopyForCurrency(order.quotedCurrency)}</Text>
+              ) : null}
               <View style={styles.timelineContent}>
                 {baseAmount(order) != null ? (
                   <SummaryLine label="Item already paid" value={formatAmount(baseAmount(order) ?? 0, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)} />
@@ -1296,7 +1626,11 @@ export default function OrderTrackingScreen() {
           {order.stage === 'CONSULTATION' && (
             <View style={styles.videoCallCard}>
               <Text style={styles.videoCallTitle}>
-                {consultationPaymentRequired
+                {consultationMeta?.requestedBy === 'CUSTOMER' && consultationMeta.status === 'REQUESTED'
+                  ? 'Consultation request sent'
+                  : consultationMeta?.status === 'EXPIRED'
+                  ? 'Consultation expired'
+                  : consultationPaymentRequired
                   ? 'Consultation payment required'
                   : order.videoCallUrl
                     ? 'Consultation call ready'
@@ -1314,6 +1648,11 @@ export default function OrderTrackingScreen() {
                       label="Fee treatment"
                       value={consultationMeta.feeCreditable ? 'Counts toward the final order if you go ahead' : 'Separate consultation fee'}
                     />
+                  ) : null}
+                  {consultationMeta.scheduledStartAt ? (
+                    <SummaryLine label="Scheduled for" value={formatConsultationStart(consultationMeta.scheduledStartAt)} />
+                  ) : consultationMeta.proposedStartAt ? (
+                    <SummaryLine label="Requested time" value={formatConsultationStart(consultationMeta.proposedStartAt)} />
                   ) : null}
                   {consultationMeta.paymentTiming ? (
                     <SummaryLine label="Payment timing" value={CONSULTATION_PAYMENT_TIMING_LABELS[consultationMeta.paymentTiming]} />
@@ -1334,12 +1673,18 @@ export default function OrderTrackingScreen() {
               ) : null}
               <Text style={styles.videoCallHint}>
                 {consultationPaymentRequired
-                  ? 'Your tailor charges for this consultation. Pay the consultation fee here first, then they can start the call.'
+                  ? 'Your tailor approved the slot and charges for this consultation. Pay the consultation fee here first; the call opens around the scheduled time.'
                   : order.videoCallUrl
                     ? 'Your tailor has started a call. Join with video or audio only.'
+                    : consultationMeta?.requestedBy === 'CUSTOMER' && consultationMeta.status === 'REQUESTED'
+                      ? `Your request is with ${order.tailorName.split(' ')[0]}. If that slot gets booked before they approve it, they will choose another time or continue by message.`
+                    : consultationMeta?.status === 'EXPIRED'
+                      ? 'This consultation window expired. The order is back in quote review so your tailor can send a quote, reschedule, or decline.'
                     : consultationPaymentPaid
-                      ? `Your consultation fee is paid. Keep chatting here and ${order.tailorName.split(' ')[0]} will share the call link when ready.`
-                      : `Your tailor wants to speak before production starts. Keep chatting here and ${order.tailorName.split(' ')[0]} will share the call link when ready.`}
+                      ? 'Your consultation fee is paid. The call opens around the scheduled time.'
+                      : consultationApproved
+                        ? 'This consultation is scheduled. Open the call around the scheduled time.'
+                        : `Your tailor wants to speak before production starts. Keep chatting here and ${order.tailorName.split(' ')[0]} will share the call link when ready.`}
               </Text>
               {consultationPaymentRequired ? (
                 <Button
@@ -1351,10 +1696,30 @@ export default function OrderTrackingScreen() {
               ) : order.videoCallUrl ? (
                 <View style={{ flexDirection: 'row', gap: Spacing.md }}>
                   <View style={{ flex: 1 }}>
-                    <Button label="📹 Join video" onPress={() => { void openCallUrl(order.videoCallUrl!) }} />
+                    <Button label="Join video" onPress={() => { void openCallUrl(order.videoCallUrl!) }} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Button label="🎙 Audio only" variant="secondary" onPress={() => { void openCallUrl(order.videoCallUrl!) }} />
+                    <Button label="Audio only" variant="secondary" onPress={() => { void openCallUrl(order.videoCallUrl!) }} />
+                  </View>
+                </View>
+              ) : consultationApproved ? (
+                <View style={{ flexDirection: 'row', gap: Spacing.md }}>
+                  <View style={{ flex: 1 }}>
+                    <Button
+                      label="Start video"
+                      onPress={() => { void startConsultationCall('video') }}
+                      loading={startingConsultationCall === 'video'}
+                      disabled={!!startingConsultationCall}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Button
+                      label="Audio only"
+                      variant="secondary"
+                      onPress={() => { void startConsultationCall('audio') }}
+                      loading={startingConsultationCall === 'audio'}
+                      disabled={!!startingConsultationCall}
+                    />
                   </View>
                 </View>
               ) : (
@@ -1553,6 +1918,25 @@ export default function OrderTrackingScreen() {
                     {order.measurementSnapshot?.confirmationReason ? (
                       <Text style={styles.supportBodyText}>{order.measurementSnapshot.confirmationReason}</Text>
                     ) : null}
+                    {measurementConfirmationFields.length > 0 ? (
+                      <View style={styles.measurementConfirmGuideList}>
+                        {measurementConfirmationFields.map((field) => {
+                          const guide = measurementGuideForField(field)
+                          return (
+                            <View key={field} style={styles.measurementConfirmGuideCard}>
+                              <Text style={styles.measurementConfirmGuideTitle}>{labelMeasurementField(field)}</Text>
+                              {guide ? (
+                                <Text style={styles.measurementConfirmGuideText}>{guide}</Text>
+                              ) : (
+                                <Text style={styles.measurementConfirmGuideText}>
+                                  Confirm this value against your latest tape measurement before the tailor cuts.
+                                </Text>
+                              )}
+                            </View>
+                          )
+                        })}
+                      </View>
+                    ) : null}
                     <Text style={styles.supportHint}>
                       Your tailor has paused cutting until you confirm these measurements are still correct.
                     </Text>
@@ -1647,7 +2031,7 @@ export default function OrderTrackingScreen() {
                   <View style={styles.supportMetaList}>
                     <SummaryLine
                       label="Status"
-                      value={consultationMeta.status === 'COMPLETED' ? 'Consultation completed' : 'Consultation requested'}
+                      value={consultationMeta.status ? CONSULTATION_STATUS_LABELS[consultationMeta.status] : 'Consultation requested'}
                     />
                     <SummaryLine
                       label="Fee"
@@ -1667,6 +2051,11 @@ export default function OrderTrackingScreen() {
                         label="Fee treatment"
                         value={consultationMeta.feeCreditable ? 'Counts toward the final order' : 'Separate consultation fee'}
                       />
+                    ) : null}
+                    {consultationMeta.scheduledStartAt ? (
+                      <SummaryLine label="Scheduled for" value={formatConsultationStart(consultationMeta.scheduledStartAt)} />
+                    ) : consultationMeta.proposedStartAt ? (
+                      <SummaryLine label="Requested time" value={formatConsultationStart(consultationMeta.proposedStartAt)} />
                     ) : null}
                     {consultationMeta.paymentTiming ? (
                       <SummaryLine label="Payment timing" value={CONSULTATION_PAYMENT_TIMING_LABELS[consultationMeta.paymentTiming]} />
@@ -1782,6 +2171,67 @@ export default function OrderTrackingScreen() {
                     The tailor will source materials from the accepted quote instead of waiting on a customer handoff.
                   </Text>
                 )}
+                {order.fabricSource === 'TAILOR_SOURCES' && order.customDetail?.fabricDescription ? (
+                  <Text style={styles.supportHint}>Fabric requested: {order.customDetail.fabricDescription}</Text>
+                ) : null}
+                {order.fabricSource === 'TAILOR_SOURCES' && order.customDetail?.fabricApprovalStatus ? (
+                  <View style={[
+                    styles.supportStatusBadge,
+                    order.customDetail.fabricApprovalStatus === 'APPROVED' ? styles.supportStatusSuccess : styles.supportStatusWarning,
+                  ]}>
+                    <Text style={[
+                      styles.supportStatusText,
+                      order.customDetail.fabricApprovalStatus === 'APPROVED' ? styles.supportStatusTextSuccess : styles.supportStatusTextWarning,
+                    ]}>
+                      {order.customDetail.fabricApprovalStatus === 'APPROVED'
+                        ? 'Sourced fabric approved'
+                        : order.customDetail.fabricApprovalStatus === 'CHANGES_REQUESTED'
+                          ? 'Fabric changes requested'
+                          : order.customDetail.fabricApprovalStatus === 'PENDING_CUSTOMER_APPROVAL'
+                            ? 'Your fabric approval is needed'
+                            : 'Fabric approval pending'}
+                    </Text>
+                  </View>
+                ) : null}
+                {sourcedFabricPending ? (
+                  <View style={styles.fabricApprovalCard}>
+                    {sourcedFabricPhoto ? (
+                      <StageMediaPreview
+                        uri={sourcedFabricPhoto}
+                        style={styles.fabricApprovalImage}
+                        surface="customer_fabric_approval_photo"
+                        accessibilityLabel="Sourced fabric proof"
+                      />
+                    ) : null}
+                    <Text style={styles.supportBodyText}>
+                      Approve this fabric to let the tailor continue toward cutting, or request a change before work becomes irreversible.
+                    </Text>
+                    <View style={styles.fabricApprovalActions}>
+                      <Button
+                        label="Approve fabric"
+                        onPress={() => decideSourcedFabric('approve-sourced-fabric')}
+                        loading={approvingFabric}
+                      />
+                      <Input
+                        label="Change request"
+                        placeholder="e.g. I need a darker green or less shiny texture."
+                        value={fabricChangeNote}
+                        onChangeText={setFabricChangeNote}
+                        multiline
+                        numberOfLines={3}
+                        maxLength={300}
+                        filterContact
+                      />
+                      <Button
+                        label="Request changes"
+                        variant="secondary"
+                        onPress={() => decideSourcedFabric('request-sourced-fabric-change')}
+                        loading={approvingFabric}
+                        disabled={fabricChangeNote.trim().length < 5}
+                      />
+                    </View>
+                  </View>
+                ) : null}
                 {fabricPolicy?.rejectionReasons && fabricPolicy.rejectionReasons.length > 0 ? (
                   <Text style={styles.supportHint}>Tailor can reject before cutting for: {fabricPolicy.rejectionReasons.join(' · ')}</Text>
                 ) : null}
@@ -1868,9 +2318,16 @@ export default function OrderTrackingScreen() {
                   support as early as possible and ideally within 30 days. Keep photos, tailoring notes, and any local
                   alteration receipts in Drape.
                 </Text>
+                <Text style={styles.supportHint}>{aftercareStatus.message}</Text>
                 <Button
-                  label="Log aftercare issue in Drape"
-                  onPress={() => setShowAftercareSupport(true)}
+                  label={aftercareStatus.available ? 'Log aftercare issue in Drape' : 'Contact support'}
+                  onPress={() => {
+                    if (aftercareStatus.available) {
+                      setShowAftercareSupport(true)
+                      return
+                    }
+                    void contactSupport('aftercare')
+                  }}
                 />
               </View>
             </View>
@@ -1925,12 +2382,6 @@ export default function OrderTrackingScreen() {
                   label={order.orderKind === 'READY_MADE' ? 'Item subtotal' : 'Quote amount'}
                   value={formatAmount(order.subtotalAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)}
                 />
-                {order.platformFeeAmount > 0 ? (
-                  <SummaryLine
-                    label="Platform fee"
-                    value={formatAmount(order.platformFeeAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES)}
-                  />
-                ) : null}
                 <SummaryLine
                   label={fulfillmentFeeLabel(order)}
                   value={order.shippingAmount > 0 ? formatAmount(order.shippingAmount, order.quotedCurrency, order.quotedCurrency, STATIC_FALLBACK_RATES) : 'Free'}
@@ -1949,6 +2400,11 @@ export default function OrderTrackingScreen() {
                     Tax was estimated because live tax lookup was unavailable for this delivery address.
                   </Text>
                 ) : null}
+                {order.deliveryMethod !== 'LOCAL_COLLECTION' ? (
+                  <Text style={styles.helperText}>
+                    This includes Drape's standard {order.deliveryMethod === 'LOCAL_DELIVERY' ? 'delivery' : 'shipping'} fee. Carrier surcharges, customs, or import duties are never charged automatically; Drape will ask you to approve anything extra before dispatch.
+                  </Text>
+                ) : null}
               </View>
             </View>
           )}
@@ -1959,14 +2415,22 @@ export default function OrderTrackingScreen() {
             <View style={styles.timeline}>
               {order.stageUpdates.map((u) => (
                 <View key={u.id} style={styles.timelineItem}>
-                  <View style={styles.timelineDot} />
+                  <View style={[styles.timelineDot, { backgroundColor: timelineDotColor(u) }]} />
                   <View style={styles.timelineContent}>
                     <Text style={styles.timelineStage}>
-                      {customerOrderStageLabel(u.stage as OrderStage, order.orderKind) ?? u.stage}
+                      {timelineStageLabel(u, order.orderKind)}
                     </Text>
                     {u.note && <Text style={styles.timelineNote}>{u.note}</Text>}
+                    {u.photoUrl ? (
+                      <StageMediaPreview
+                        uri={u.photoUrl}
+                        style={styles.timelinePhoto}
+                        surface="customer_order_timeline_photo"
+                        accessibilityLabel="Order timeline proof"
+                      />
+                    ) : null}
                     <Text style={styles.timelineDate}>
-                      {new Date(u.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      {formatTimelineTimestamp(u.createdAt)}
                     </Text>
                   </View>
                 </View>
@@ -1976,7 +2440,7 @@ export default function OrderTrackingScreen() {
                 <View style={styles.timelineContent}>
                   <Text style={styles.timelineStage}>Order submitted</Text>
                   <Text style={styles.timelineDate}>
-                    {new Date(order.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    {formatTimelineTimestamp(order.createdAt)}
                   </Text>
                 </View>
               </View>
@@ -2008,7 +2472,7 @@ export default function OrderTrackingScreen() {
                   disabled={!fabricTracking.trim() || fabricTracking === order.fabricTracking || savingFabric}
                 >
                   {savingFabric
-                    ? <ActivityIndicator color={Colors.white} size="small" />
+                    ? <ActivityIndicator color={Colors.textInverse} size="small" />
                     : <Text style={styles.fabricSaveBtnText}>Save</Text>
                   }
                 </TouchableOpacity>
@@ -2047,7 +2511,11 @@ export default function OrderTrackingScreen() {
             style={styles.disputeEntry}
             onPress={() => {
               if (['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(order.stage)) {
-                setShowAftercareSupport(true)
+                if (aftercareStatus.available) {
+                  setShowAftercareSupport(true)
+                  return
+                }
+                void contactSupport('aftercare')
                 return
               }
               void contactSupport()
@@ -2056,7 +2524,9 @@ export default function OrderTrackingScreen() {
             <Text style={styles.disputeEntryText}>
               {order.stage === 'IN_DISPUTE'
                 ? 'Need help with this concern? Contact support'
-                : 'Need aftercare help? Log it in Drape'}
+                : aftercareStatus.available
+                  ? 'Need aftercare help? Log it in Drape'
+                  : 'Need aftercare help? Contact support'}
             </Text>
           </TouchableOpacity>
         )}
@@ -2131,6 +2601,131 @@ function SummaryLine({ label, value }: { label: string; value: string }) {
       <Text style={styles.summaryLineLabel}>{label}</Text>
       <Text style={styles.summaryLineValue}>{value}</Text>
     </View>
+  )
+}
+
+function CustomerConsultationRequestModal({
+  visible,
+  orderId,
+  tailorName,
+  onClose,
+  onSent,
+}: {
+  visible: boolean
+  orderId: string
+  tailorName: string
+  onClose: () => void
+  onSent: () => void
+}) {
+  const [scheduledAt, setScheduledAt] = useState<Date>(defaultConsultationStart())
+  const [showPicker, setShowPicker] = useState(false)
+  const [note, setNote] = useState('')
+  const [sending, setSending] = useState(false)
+
+  useEffect(() => {
+    if (!visible) return
+    setScheduledAt(defaultConsultationStart())
+    setShowPicker(false)
+    setNote('')
+    setSending(false)
+  }, [visible])
+
+  async function send() {
+    if (sending) return
+    if (scheduledAt.getTime() < Date.now() + 120 * 60 * 1000) {
+      Alert.alert('Choose another time', 'Pick a consultation time at least 2 hours from now.')
+      return
+    }
+
+    setSending(true)
+    try {
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+      const { data, error } = await invokeFunction('customer-order-action', {
+        body: {
+          orderId,
+          action: 'request-consultation',
+          scheduledStartAt: scheduledAt.toISOString(),
+          timezone,
+          note: note.trim() || undefined,
+        },
+      })
+
+      if (error || !data?.ok) {
+        const message = error
+          ? await readFunctionErrorMessage(error, 'Could not request consultation right now.')
+          : 'Could not request consultation right now.'
+        throw new Error(message)
+      }
+
+      onSent()
+    } catch (error) {
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. Your requested time stayed here, so retry when the signal improves.'
+        : await readFunctionErrorMessage(error, 'Could not request consultation right now.')
+      Alert.alert(
+        'Consultation unavailable',
+        message,
+      )
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={onClose} disabled={sending}>
+              <Text style={styles.modalClose}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Request consultation</Text>
+            <View style={{ width: 60 }} />
+          </View>
+          <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
+            <View style={styles.supportCard}>
+              <Text style={styles.supportCardTitle}>Protected time with {tailorName.split(' ')[0]}</Text>
+              <Text style={styles.supportHint}>
+                The tailor approves the slot and any fee first. If a fee is required, you pay before the call so their time is protected even if you do not continue with the order.
+              </Text>
+              <Text style={styles.supportHint}>
+                Drape checks the tailor's calendar again when you send. If another customer gets that time first, we will ask you to choose another slot.
+              </Text>
+            </View>
+            <Input
+              label="Preferred time"
+              value={formatConsultationStart(scheduledAt)}
+              onPressIn={() => setShowPicker(true)}
+              showSoftInputOnFocus={false}
+              hint="Pick a time at least 2 hours from now."
+              required
+            />
+            {showPicker ? (
+              <DateTimePicker
+                value={scheduledAt}
+                mode="datetime"
+                minimumDate={new Date(Date.now() + 120 * 60 * 1000)}
+                onChange={(_, value) => {
+                  setShowPicker(Platform.OS === 'ios')
+                  if (value) setScheduledAt(value)
+                }}
+              />
+            ) : null}
+            <Input
+              label="What do you want to cover? (optional)"
+              placeholder="e.g. Fit, fabric choice, deadline, or styling direction."
+              value={note}
+              onChangeText={setNote}
+              multiline
+              numberOfLines={3}
+              maxLength={300}
+              filterContact
+            />
+            <Button label="Send request" onPress={send} loading={sending} disabled={sending} />
+          </ScrollView>
+        </SafeAreaView>
+      </KeyboardAvoidingView>
+    </Modal>
   )
 }
 
@@ -2672,7 +3267,14 @@ function MaterialIssueResponseModal({ visible, orderId, onClose, onSubmitted }: 
       }
       const payload = await readFunctionErrorPayload(error)
       const code = typeof payload?.code === 'string' ? payload.code : null
-      const payloadMessage = typeof payload?.error === 'string' ? payload.error : null
+      const payloadMessage =
+        typeof payload?.message === 'string' && payload.message.trim().length > 0
+          ? payload.message.trim()
+          : typeof payload?.error === 'string'
+            && payload.error.trim().length > 0
+            && !isMachineErrorCodeMessage(payload.error.trim())
+            ? payload.error.trim()
+            : null
       if (code === 'THREATENING_LANGUAGE') {
         const message = payloadMessage ?? "That note can't be submitted yet."
         setNoteError(message)
@@ -2780,13 +3382,15 @@ function DisputeModal({ visible, orderId, onClose, onSubmitted, userId }: {
 
   function readPayloadString(payload: Record<string, unknown> | null, key: string) {
     const value = payload?.[key]
-    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+    if (typeof value !== 'string' || value.trim().length === 0) return null
+    const trimmed = value.trim()
+    return key === 'code' || !isMachineErrorCodeMessage(trimmed) ? trimmed : null
   }
 
   async function resolveConcernFailure(error: Error | null) {
     const payload = error ? await readFunctionErrorPayload(error) : null
     const code = readPayloadString(payload, 'code')
-    const payloadMessage = readPayloadString(payload, 'error')
+    const payloadMessage = readPayloadString(payload, 'message') ?? readPayloadString(payload, 'error')
 
     if (code === 'UNAUTHORIZED') {
       return { message: payloadMessage ?? 'Please sign in again before raising a concern.', descMessage: '', showAlert: true }
@@ -3016,6 +3620,7 @@ function QuoteReviewScreen({
   const accountCurrencyNote = accountCurrency === orderCurrency
     ? `This order is locked in ${orderCurrency}.`
     : `This order stays locked in ${orderCurrency}, even though your account default is now ${accountCurrency}.`
+  const paymentRouteCopy = paymentRouteCopyForCurrency(orderCurrency)
   const consultationMeta = order.supportMeta.consultation ?? null
   const quoteBreakdown = order.supportMeta.quoteBreakdown ?? null
   function goBack() {
@@ -3035,8 +3640,8 @@ function QuoteReviewScreen({
     Alert.alert(
       'Accept and pay',
       feeLabel
-        ? `Accept the quote from ${order.tailorName}? You will pay the full total of ${totalLabel} now, including the ${fulfillmentFeeLabel(order).toLowerCase()} of ${feeLabel}.\n\nProduction starts after payment succeeds.`
-        : `Accept the quote of ${payNowLabel} from ${order.tailorName}?\n\nYou’ll be taken to secure payment now. Standard dispatch is already reflected here when it applies. Extra delivery or shipping payments should only appear later for rush or exception handling.`,
+        ? `Accept the quote from ${order.tailorName}? You will pay the full total of ${totalLabel} now, including the ${fulfillmentFeeLabel(order).toLowerCase()} of ${feeLabel}.\n\n${paymentRouteCopy ?? 'You’ll be taken to secure payment now.'}\n\nProduction starts after payment succeeds.`
+        : `Accept the quote of ${payNowLabel} from ${order.tailorName}?\n\n${paymentRouteCopy ?? 'You’ll be taken to secure payment now.'}\n\nStandard dispatch is already reflected here when it applies. Extra delivery or shipping payments should only appear later for rush or exception handling.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -3044,43 +3649,54 @@ function QuoteReviewScreen({
           onPress: async () => {
             if (accepting || declining) return
             setAccepting(true)
-            const result = await startOrderPayment({
-              orderId: order.id,
-              customerEmail,
-            })
-            setAccepting(false)
-            await onAction()
-
-            if (!result.ok) {
-              if (result.reason === 'cancelled') {
-                Alert.alert('Payment not finished', 'Your quote is still saved. Finish payment from the order screen any time.')
-                router.replace({
-                  pathname: `/(customer)/orders/${order.id}` as any,
-                  params: { tab: preferredTab === 'completed' ? 'completed' : 'active' },
-                })
-                return
-              }
-
-              if (result.stage === 'PAYMENT_FAILED') {
-                Alert.alert('Payment failed', `${result.message}\n\nRetry from the order screen within 30 minutes to keep this quote alive.`)
-                router.replace({
-                  pathname: `/(customer)/orders/${order.id}` as any,
-                  params: { tab: preferredTab === 'completed' ? 'completed' : 'active' },
-                })
-                return
-              }
-
-              Sentry.captureException(new Error(result.message), {
-                extra: { context: 'accept_quote_payment', orderId: order.id, reason: result.reason },
+            try {
+              const result = await startOrderPayment({
+                orderId: order.id,
+                customerEmail,
               })
-              Alert.alert('Payment unavailable', result.message)
-              return
-            }
+              await onAction()
 
-            router.replace({
-              pathname: `/(customer)/orders/${order.id}` as any,
-              params: { tab: preferredTab === 'completed' ? 'completed' : 'active' },
-            })
+              if (!result.ok) {
+                if (result.reason === 'cancelled') {
+                  Alert.alert('Payment not finished', 'Your quote is still saved. Finish payment from the order screen any time.')
+                  router.replace({
+                    pathname: `/(customer)/orders/${order.id}` as any,
+                    params: { tab: preferredTab === 'completed' ? 'completed' : 'active' },
+                  })
+                  return
+                }
+
+                if (result.stage === 'PAYMENT_FAILED') {
+                  Alert.alert('Payment failed', `${result.message}\n\nRetry from the order screen within 2 hours to keep this quote alive.`)
+                  router.replace({
+                    pathname: `/(customer)/orders/${order.id}` as any,
+                    params: { tab: preferredTab === 'completed' ? 'completed' : 'active' },
+                  })
+                  return
+                }
+
+                Sentry.captureException(new Error(result.message), {
+                  extra: { context: 'accept_quote_payment', orderId: order.id, reason: result.reason },
+                })
+                Alert.alert('Payment unavailable', result.message)
+                return
+              }
+
+              router.replace({
+                pathname: `/(customer)/orders/${order.id}` as any,
+                params: { tab: preferredTab === 'completed' ? 'completed' : 'active' },
+              })
+            } catch (error) {
+              Sentry.captureException(error, { extra: { context: 'accept_quote_payment_unhandled', orderId: order.id } })
+              Alert.alert(
+                'Payment unavailable',
+                isLikelyConnectivityIssue(error)
+                  ? 'Connection looks weak. Your card has not been charged. Retry payment from this order when the signal improves.'
+                  : 'Something went wrong before payment could finish. Your card has not been charged. Please try again.',
+              )
+            } finally {
+              setAccepting(false)
+            }
           },
         },
       ]
@@ -3108,7 +3724,7 @@ function QuoteReviewScreen({
               const message = isLikelyConnectivityIssue(error)
                 ? 'Connection looks weak. We could not decline this quote yet. Retry when the signal improves.'
                 : await readFunctionErrorMessage(error, 'Could not decline this quote right now. Please try again in a moment.')
-              Alert.alert('Error', message)
+              Alert.alert('Could not decline quote', message)
               return
             }
             await purgeTerminalOrderClientState({
@@ -3145,6 +3761,7 @@ function QuoteReviewScreen({
               <Text style={styles.stateEyebrow}>{orderCurrency}</Text>
             </View>
             <Text style={styles.statusNote}>{accountCurrencyNote}</Text>
+            {paymentRouteCopy ? <Text style={styles.statusNote}>{paymentRouteCopy}</Text> : null}
 
             {baseAmount(order) != null && (
               <View style={quoteDetailRow}>
@@ -3245,8 +3862,8 @@ function QuoteReviewScreen({
             <View style={styles.escrowNote}>
               <Text style={styles.escrowNoteText}>
                 {consultationMeta?.feeCreditable && order.consultationFee
-                  ? 'Your consultation fee is set to count toward this order if you go ahead. Accepting locks in the price and target completion date shown here.'
-                  : 'Accepting locks in the price and target completion date shown here. Raise a dispute inside Drape any time if something goes wrong.'}
+                  ? 'Your consultation fee is set to count toward this order if you go ahead. Accepting locks in the price and target date. Your payment stays held securely by Drape until delivery is confirmed.'
+                  : 'Accepting locks in the price and target date. Your payment stays held securely by Drape until delivery is confirmed. Raise a dispute inside Drape if something goes wrong.'}
               </Text>
             </View>
           </View>
@@ -3336,7 +3953,7 @@ const styles = StyleSheet.create({
   },
   progressDotDone: { backgroundColor: Colors.needleGreen, borderColor: Colors.needleGreen },
   progressDotActive: { backgroundColor: Colors.white, borderColor: Colors.needleGreen, borderWidth: 3 },
-  progressCheck: { fontSize: 9, color: Colors.white, fontWeight: FontWeight.bold },
+  progressCheck: { fontSize: 9, color: Colors.textInverse, fontWeight: FontWeight.bold },
   progressLine: {
     position: 'absolute', top: 8, left: '50%', right: '-50%', height: 2,
     backgroundColor: Colors.lightGrey, zIndex: -1,
@@ -3357,7 +3974,7 @@ const styles = StyleSheet.create({
   },
   nextStepsTitle: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen, marginBottom: 4, fontFamily: 'Georgia' },
   nextStepsItem: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
-  progressPhoto: { width: '100%', height: 156, borderRadius: Radius.md },
+  progressPhoto: { width: '100%', height: 156, borderRadius: Radius.md, backgroundColor: Colors.boneDeep },
   statusHelp: { fontSize: 11, color: Colors.inkLight, lineHeight: 17 },
   statusEta: { fontSize: 11, color: Colors.midGrey },
 
@@ -3379,6 +3996,21 @@ const styles = StyleSheet.create({
   },
   orderTypePillText: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.5 },
   videoCallHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+
+  // Modal shell
+  modalSafe: { flex: 1, backgroundColor: Colors.bone },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: Spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.lightGrey,
+  },
+  modalClose: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium, width: 60 },
+  modalTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  modalScroll: { flex: 1 },
+  modalContent: { padding: Spacing.xl, gap: Spacing.xl },
 
   // Collection code
   collectionCard: {
@@ -3410,6 +4042,14 @@ const styles = StyleSheet.create({
   timelineContent: { flex: 1, gap: 2 },
   timelineStage: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   timelineNote: { fontSize: 11, color: Colors.inkLight, fontStyle: 'italic', lineHeight: 16 },
+  timelinePhoto: {
+    width: '100%',
+    height: 132,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.boneDeep,
+    marginTop: Spacing.xs,
+    marginBottom: 2,
+  },
   timelineDate: { fontSize: 10, color: Colors.midGrey },
 
   // Tracking
@@ -3455,6 +4095,25 @@ const styles = StyleSheet.create({
   supportStatusTextSuccess: { color: Colors.needleGreen },
   supportBodyText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
   supportHint: { fontSize: 11, color: Colors.midGrey, lineHeight: 17 },
+  measurementConfirmGuideList: { gap: Spacing.xs },
+  measurementConfirmGuideCard: {
+    borderRadius: Radius.md,
+    padding: Spacing.sm,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.kanteRust + '35',
+  },
+  measurementConfirmGuideTitle: {
+    fontSize: FontSize.xs,
+    color: Colors.kanteRust,
+    fontWeight: FontWeight.semibold,
+  },
+  measurementConfirmGuideText: {
+    marginTop: 3,
+    fontSize: 11,
+    color: Colors.inkLight,
+    lineHeight: 16,
+  },
   handoffIssueCard: {
     gap: Spacing.sm,
     padding: Spacing.md,
@@ -3482,7 +4141,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreenLight,
   },
   handoffStatusPillEscalated: {
-    backgroundColor: '#FFF2DC',
+    backgroundColor: Colors.accentLight,
   },
   handoffStatusText: {
     fontSize: FontSize.xs,
@@ -3504,19 +4163,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md, minWidth: 64, alignItems: 'center',
   },
   fabricSaveBtnDisabled: { backgroundColor: Colors.lightGrey },
-  fabricSaveBtnText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  fabricSaveBtnText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   fabricSavedNote: { fontSize: FontSize.xs, color: Colors.midGrey },
+  fabricApprovalCard: {
+    gap: Spacing.sm,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.bone,
+    padding: Spacing.sm,
+  },
+  fabricApprovalImage: {
+    width: '100%',
+    height: 180,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.boneDeep,
+  },
+  fabricApprovalActions: { gap: Spacing.sm },
 
   reviewCta: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
     padding: Spacing.md, flexDirection: 'row', justifyContent: 'space-between',
     alignItems: 'center', ...Shadow.sm,
-    borderWidth: 1, borderColor: '#F59E0B40',
+    borderWidth: 1, borderColor: Colors.statusPending + '40',
   },
   reviewCtaInner: { gap: 3 },
   reviewCtaTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
   reviewCtaHint: { fontSize: FontSize.sm, color: Colors.inkLight },
-  reviewCtaArrow: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: '#F59E0B' },
+  reviewCtaArrow: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.statusPending },
 
   messageCta: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
@@ -3574,7 +4248,7 @@ const styles = StyleSheet.create({
   },
   backLink: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
   retryBtn: { backgroundColor: Colors.needleGreen, borderRadius: Radius.full, paddingVertical: Spacing.md, paddingHorizontal: Spacing.xxxl },
-  retryBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
+  retryBtnText: { color: Colors.textInverse, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
   secondaryBtn: {
     backgroundColor: Colors.white,
     borderColor: Colors.lightGrey,

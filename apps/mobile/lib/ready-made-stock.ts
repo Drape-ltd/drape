@@ -7,7 +7,58 @@ export type TailorStockAlert = {
   detail: string
 }
 
+export type CustomerStockSignal = {
+  label: string
+  tone: 'available' | 'warning' | 'urgent' | 'muted'
+}
+
 const LOW_STOCK_THRESHOLD = 2
+const CUSTOMER_LOW_STOCK_THRESHOLD = 3
+
+export function isReadyMadeBuyableForCustomer(input: {
+  stockStatus: string | null | undefined
+  inventoryQuantity: number
+  isLive?: boolean | null
+}) {
+  const normalizedStatus = (input.stockStatus ?? 'IN_STOCK').toUpperCase()
+  if (input.isLive === false) return false
+  if (normalizedStatus === 'SOLD_OUT' || normalizedStatus === 'HIDDEN') return false
+  return input.inventoryQuantity > 0
+}
+
+export function buildCustomerStockSignal(input: {
+  stockStatus: string | null | undefined
+  inventoryQuantity: number
+  isLive?: boolean | null
+  showAvailableCount?: boolean
+}): CustomerStockSignal {
+  const normalizedStatus = (input.stockStatus ?? 'IN_STOCK').toUpperCase()
+
+  if (input.isLive === false || normalizedStatus === 'HIDDEN') {
+    return { label: 'No longer available', tone: 'muted' }
+  }
+
+  if (normalizedStatus === 'SOLD_OUT' || input.inventoryQuantity <= 0) {
+    return { label: 'Sold out', tone: 'muted' }
+  }
+
+  if (input.inventoryQuantity === 1) {
+    return { label: 'Only 1 left', tone: 'urgent' }
+  }
+
+  if (input.inventoryQuantity <= CUSTOMER_LOW_STOCK_THRESHOLD) {
+    return { label: `Only ${input.inventoryQuantity} left`, tone: 'warning' }
+  }
+
+  if (normalizedStatus === 'LOW_STOCK') {
+    return { label: 'Low stock', tone: 'warning' }
+  }
+
+  return {
+    label: input.showAvailableCount ? `${input.inventoryQuantity} ready now` : 'In stock',
+    tone: 'available',
+  }
+}
 
 export function normalizeSizeLabels(sizes: string[]) {
   const seen = new Set<string>()

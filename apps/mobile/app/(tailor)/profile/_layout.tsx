@@ -19,10 +19,15 @@ export default function TailorProfileLayout() {
       <Stack.Screen name="payout-setup" />
       <Stack.Screen name="access-review" />
       <Stack.Screen name="personal-info" />
+      <Stack.Screen name="currency" />
       <Stack.Screen name="login-security" />
       <Stack.Screen name="notification-settings" />
+      <Stack.Screen name="privacy" />
+      <Stack.Screen name="data-request" />
+      <Stack.Screen name="delete-account" />
       <Stack.Screen name="portfolio" />
       <Stack.Screen name="edit" />
+      <Stack.Screen name="reviews" />
     </Stack>
   )
 }

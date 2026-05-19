@@ -19,9 +19,12 @@
   - `RESEND_FROM`
   - `OPS_EMAIL`
   - `VERIFICATION_SECRET`
+  - `REAUTH_PROOF_SECRET` for dedicated five-minute password-confirmation proofs
+  - `DRAPE_HEALTHCHECK_SECRET` for protected readiness checks
   - `DECISION_FUNCTION_URL` if not using the default same-project function URL
   - `STRIPE_SECRET_KEY`
   - `STRIPE_WEBHOOK_SECRET`
+  - `STRIPE_WEBHOOK_SECRETS` only during webhook endpoint rotation, as a comma-separated overlap list
   - `PAYSTACK_SECRET_KEY`
   - `DAILY_API_KEY`
   - `SHIPPO_WEBHOOK_SECRET` when Shippo tracking is enabled
@@ -55,6 +58,8 @@
 ## Ops And Observability
 
 - Confirm `/ops` is locked behind `OPS_DASHBOARD_TOKEN`.
+- Confirm uptime monitors call `/functions/v1/service-health`, not webhook URLs.
+- Confirm protected readiness monitors use `DRAPE_HEALTHCHECK_SECRET`, not the service role key.
 - Confirm disputes, verification reviews, workflow issues, deletion requests, and payouts appear in `/ops`.
 - Confirm in-app data access requests and seller access review requests appear in `/ops` workflow issues.
 - Confirm audit logs exist for conversation safety reports and pauses, blocked payment starts, shipping handoff failures, consultation room creation, and webhook failures.

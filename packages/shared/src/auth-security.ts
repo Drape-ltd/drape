@@ -1,8 +1,8 @@
-export const MIN_PASSWORD_LENGTH = 10
+export const MIN_PASSWORD_LENGTH = 8
 export const MAX_PASSWORD_LENGTH = 72
 
 export const PASSWORD_POLICY_HINT =
-  'Use 10-72 characters with at least one letter and one number or symbol. Avoid your name, email, and leading or trailing spaces.'
+  'Use 8-72 characters with at least one letter and one number or symbol. Avoid your name, email, and leading or trailing spaces.'
 
 const COMMON_WEAK_PASSWORDS = new Set([
   'password',

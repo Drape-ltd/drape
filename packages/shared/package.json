@@ -11,7 +11,14 @@
     "./phone": "./src/phone.ts",
     "./cancellation-policy": "./src/cancellation-policy.ts",
     "./sms-copy": "./src/sms-copy.ts",
-    "./order-terminal": "./src/order-terminal.ts"
+    "./order-terminal": "./src/order-terminal.ts",
+    "./tailor-setup": "./src/tailor-setup.ts",
+    "./payout-setup": "./src/payout-setup.ts",
+    "./checkout-policy": "./src/checkout-policy.ts",
+    "./validation": "./src/validation.ts",
+    "./design-system": "./src/design-system.ts",
+    "./rate-limit": "./src/rate-limit.ts",
+    "./preflight": "./src/preflight.ts"
   },
   "scripts": {
     "test": "jest --watchman=false"

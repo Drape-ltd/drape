@@ -294,7 +294,7 @@ export default function ClientDetailScreen() {
   async function saveNotes() {
     if (!notesDirty) return
     if (!user?.id || !clientId) {
-      Alert.alert('Error', 'We could not identify this client note right now. Please try again.')
+      Alert.alert('Could not save note', 'We could not identify this client note right now. Please try again.')
       return
     }
     setSaving(true)
@@ -362,7 +362,7 @@ export default function ClientDetailScreen() {
 
     setSaving(false)
     if (error) {
-      Alert.alert('Error', error.message ? `Could not save notes. ${error.message}` : 'Could not save notes. Please try again.')
+      Alert.alert('Could not save note', 'Your note stayed on this screen. Please try again in a moment.')
     } else {
       setNotesRowId(nextRowId)
       setNotes(normalizedNotes)
@@ -839,7 +839,7 @@ const styles = StyleSheet.create({
     minHeight: 44,
     justifyContent: 'center',
   },
-  secondaryActionText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  secondaryActionText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
 
   section: { paddingHorizontal: Spacing.lg, gap: Spacing.sm, marginBottom: Spacing.lg },
   sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
@@ -947,7 +947,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen, borderRadius: Radius.md,
     paddingHorizontal: Spacing.lg, paddingVertical: 10, minHeight: 44, justifyContent: 'center',
   },
-  saveBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  saveBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
 
   // Order history
   orderList: {
@@ -970,7 +970,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.xxxl,
   },
-  errorRetryText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  errorRetryText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   errorSecondary: {
     backgroundColor: Colors.white,
     borderColor: Colors.lightGrey,

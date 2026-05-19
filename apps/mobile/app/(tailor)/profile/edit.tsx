@@ -10,12 +10,13 @@ import {
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import * as ImagePicker from 'expo-image-picker'
 import * as ImageManipulator from 'expo-image-manipulator'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { pickAvatarImageUri, type AvatarImageSource } from '@/lib/avatar-picker'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { useTailorProfile } from '@/lib/tailorProfile'
+import { uploadPublicStorageImage } from '@/lib/storage-upload'
 import { goBackOrFallback } from '@/lib/navigation'
 import { AddressAutocompleteInput, TagSelector } from '@/components/ui'
 import type { TagGroup } from '@/components/ui'
@@ -36,10 +37,10 @@ const SPECIALTY_GROUPS: TagGroup[] = [
   { label: 'Craft & Textile', items: ['Crochet', 'Knitwear', 'Embroidery', 'Beadwork', 'Adire', 'Batik'] },
   { label: 'Lifestyle & Ready-made', items: ['Two-piece Set', 'Loungewear', 'Beachwear', 'Ready-made'] },
 ]
-const BIO_TEMPLATES = [
-  'I make custom native wear and occasion outfits with clean finishing and reliable delivery.',
-  'I run a boutique and tailor studio, offering custom work and ready-made pieces.',
-  'I focus on crochet and handmade pieces made to order with careful finishing and fit.',
+const BIO_PROMPTS = [
+  'What you make best',
+  'Who you usually sew for',
+  'How fittings and timelines work',
 ] as const
 
 type VerificationStatus = 'NOT_SUBMITTED' | 'PENDING' | 'VERIFIED' | 'REJECTED'
@@ -272,31 +273,34 @@ export default function EditProfileScreen() {
 
   // ── Avatar ───────────────────────────────────────────────────────────────────
 
-  async function handleAvatarPress() {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Allow photo access to update your profile picture.')
-      return
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'images', allowsEditing: true, aspect: [1, 1], quality: 0.9,
-    })
-    if (result.canceled || !result.assets[0]) return
+  function handleAvatarPress() {
+    Alert.alert('Profile photo', 'Take a new photo or choose one from your library.', [
+      { text: 'Take photo', onPress: () => void updateAvatarFromSource('camera') },
+      { text: 'Choose from library', onPress: () => void updateAvatarFromSource('library') },
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }
+
+  async function updateAvatarFromSource(source: AvatarImageSource) {
+    const imageUri = await pickAvatarImageUri(source)
+    if (!imageUri) return
 
     setUploadingAvatar(true)
     try {
       const compressed = await ImageManipulator.manipulateAsync(
-        result.assets[0].uri,
+        imageUri,
         [{ resize: { width: 800, height: 800 } }],
         { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
       )
       const fileName = `${user!.id}/avatar.jpg`
-      const blob = await (await fetch(compressed.uri)).blob()
-      const { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(fileName, blob, { contentType: 'image/jpeg', upsert: true })
-      if (uploadError) throw uploadError
-      const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(fileName)
+      const publicUrl = await uploadPublicStorageImage({
+        bucket: 'avatars',
+        path: fileName,
+        uri: compressed.uri,
+        contentType: 'image/jpeg',
+        maxBytes: 5 * 1024 * 1024,
+        upsert: true,
+      })
       const bustUrl = `${publicUrl}?t=${Date.now()}`
       const { error: profileError } = await invokeFunction('tailor-profile-action', {
         body: { action: 'update-avatar', avatarUrl: bustUrl },
@@ -489,7 +493,7 @@ export default function EditProfileScreen() {
           disabled={!dirty || saving}
         >
           {saving
-            ? <ActivityIndicator size="small" color={Colors.white} />
+            ? <ActivityIndicator size="small" color={Colors.textInverse} />
             : <Text style={styles.saveBtnText}>Save</Text>
           }
         </TouchableOpacity>
@@ -521,7 +525,7 @@ export default function EditProfileScreen() {
           >
             {uploadingAvatar ? (
               <View style={[styles.avatar, styles.avatarLoading]}>
-                <ActivityIndicator color={Colors.white} />
+                <ActivityIndicator color={Colors.textInverse} />
               </View>
             ) : (
               <AvatarImage
@@ -533,7 +537,7 @@ export default function EditProfileScreen() {
               />
             )}
             <View style={styles.cameraBadge}>
-              <Feather name="camera" size={12} color={Colors.white} />
+              <Feather name="camera" size={12} color={Colors.textInverse} />
             </View>
           </TouchableOpacity>
           <Text style={styles.avatarHint}>Tap to change photo</Text>
@@ -596,18 +600,12 @@ export default function EditProfileScreen() {
               maxLength={500}
             />
             <Text style={styles.charCount}>{bio.trim().length}/500</Text>
+            <Text style={styles.fieldHint}>Try covering:</Text>
             <View style={styles.helperRow}>
-              {BIO_TEMPLATES.map((template) => (
-                <TouchableOpacity
-                  key={template}
-                  style={styles.helperChip}
-                  onPress={() => {
-                    setBio(template)
-                    validateBio(template)
-                  }}
-                >
-                  <Text style={styles.helperChipText}>Use template</Text>
-                </TouchableOpacity>
+              {BIO_PROMPTS.map((prompt) => (
+                <View key={prompt} style={styles.helperChip}>
+                  <Text style={styles.helperChipText}>{prompt}</Text>
+                </View>
               ))}
             </View>
           </Field>
@@ -888,7 +886,7 @@ const styles = StyleSheet.create({
     minWidth: 60, alignItems: 'center',
   },
   saveBtnDisabled: { opacity: 0.35 },
-  saveBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.white },
+  saveBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
   stateCard: {
     width: '100%',
@@ -1036,7 +1034,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.xxxl,
   },
-  errorRetryText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  errorRetryText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   errorSecondary: {
     backgroundColor: Colors.white,
     borderColor: Colors.lightGrey,

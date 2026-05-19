@@ -4,7 +4,7 @@ import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
-import { checkRateLimit } from '../_shared/rateLimit.ts'
+import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { parseBody, uuid, z } from '../_shared/validate.ts'
 
 const FN = 'conversation-safety-report'
@@ -52,7 +52,7 @@ Deno.serve(async (req) => {
     const allowed = await checkRateLimit(supabase, `conversation-safety-report:${caller.id}`, 3600, 10)
     if (!allowed) {
       log('warn', FN, 'rate_limit.exceeded', { actor_id: caller.id })
-      return jsonResponse({ code: 'RATE_LIMITED', error: 'You are sending reports too quickly. Please wait a moment and try again.' }, 429, cors)
+      return rateLimitExceededResponse(cors)
     }
 
     const { data: orderData, error: orderError } = await supabase

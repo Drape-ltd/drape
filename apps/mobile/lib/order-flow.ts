@@ -149,7 +149,7 @@ export function customerOrderHint(stage: OrderStage, orderKind: MobileOrderKind)
       return 'In transit'
     case 'DELIVERED':
     case 'COLLECTED':
-      return 'Finish order'
+      return 'Review window open'
     case 'IN_DISPUTE':
       return 'Concern under review'
     default:
@@ -191,7 +191,7 @@ export function tailorOrderHint(stage: OrderStage, orderKind: MobileOrderKind): 
       return 'In transit'
     case 'DELIVERED':
     case 'COLLECTED':
-      return 'Waiting for customer finish'
+      return 'Review window open'
     case 'IN_DISPUTE':
       return 'Concern under review'
     default:

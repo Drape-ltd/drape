@@ -86,7 +86,22 @@ export const READY_MADE_FIT_FIELDS: Array<{
   { key: 'inseam', label: 'Inseam', shortLabel: 'Inseam' },
   { key: 'sleeveLength', label: 'Sleeve length', shortLabel: 'Sleeve' },
   { key: 'neckCircumference', label: 'Neck', shortLabel: 'Neck' },
+  { key: 'underBust', label: 'Under bust', shortLabel: 'Under bust' },
   { key: 'height', label: 'Height', shortLabel: 'Height' },
+  { key: 'backLength', label: 'Back length', shortLabel: 'Back' },
+  { key: 'outseam', label: 'Outseam', shortLabel: 'Outseam' },
+  { key: 'thighCircumference', label: 'Thigh', shortLabel: 'Thigh' },
+  { key: 'kneeCircumference', label: 'Knee', shortLabel: 'Knee' },
+  { key: 'bicepCircumference', label: 'Bicep', shortLabel: 'Bicep' },
+  { key: 'wristCircumference', label: 'Wrist', shortLabel: 'Wrist' },
+  { key: 'headCircumference', label: 'Head circumference', shortLabel: 'Head' },
+  { key: 'hatBandLine', label: 'Hat band line', shortLabel: 'Band' },
+  { key: 'headLength', label: 'Head length', shortLabel: 'Head L' },
+  { key: 'headWidth', label: 'Head width', shortLabel: 'Head W' },
+  { key: 'earToEarOverCrown', label: 'Ear to ear over crown', shortLabel: 'Crown E-E' },
+  { key: 'frontToBackOverCrown', label: 'Front to back over crown', shortLabel: 'Crown F-B' },
+  { key: 'filaHeight', label: 'Fila height', shortLabel: 'Fila H' },
+  { key: 'torsoLength', label: 'Torso length', shortLabel: 'Torso' },
 ]
 
 export const READY_MADE_SIZE_GUIDE_ADVICE_OPTIONS: Array<{
@@ -112,14 +127,22 @@ export const READY_MADE_SIZE_GUIDE_ADVICE_OPTIONS: Array<{
 ]
 
 const CATEGORY_FIELD_MAP: Record<string, ReadyMadeFitFieldKey[]> = {
-  agbada: ['chest', 'shoulderWidth', 'waist', 'inseam', 'height'],
-  kaftan: ['chest', 'shoulderWidth', 'waist', 'height'],
-  suit: ['chest', 'waist', 'shoulderWidth', 'sleeveLength', 'inseam'],
-  dress: ['chest', 'waist', 'hips', 'height'],
-  crochet: ['chest', 'waist', 'hips', 'height'],
+  agbada: ['chest', 'shoulderWidth', 'waist', 'sleeveLength', 'height'],
+  kaftan: ['chest', 'shoulderWidth', 'waist', 'sleeveLength', 'height'],
+  suit: ['chest', 'waist', 'shoulderWidth', 'sleeveLength', 'inseam', 'outseam'],
+  dress: ['chest', 'waist', 'hips', 'height', 'torsoLength'],
+  crochet: ['chest', 'waist', 'hips', 'height', 'torsoLength'],
   'ready-made': ['chest', 'waist', 'hips'],
-  'two-piece set': ['chest', 'waist', 'hips', 'inseam'],
-  'native wear': ['chest', 'shoulderWidth', 'waist', 'inseam', 'height'],
+  'two-piece set': ['chest', 'waist', 'hips', 'inseam', 'outseam'],
+  trousers: ['waist', 'hips', 'inseam', 'outseam', 'thighCircumference'],
+  skirt: ['waist', 'hips', 'height'],
+  shirt: ['chest', 'shoulderWidth', 'sleeveLength', 'neckCircumference'],
+  'native wear': ['chest', 'shoulderWidth', 'waist', 'sleeveLength', 'height'],
+  headwear: ['headCircumference', 'hatBandLine', 'headLength', 'headWidth'],
+  hat: ['headCircumference', 'hatBandLine', 'headLength', 'headWidth'],
+  cap: ['headCircumference', 'hatBandLine', 'headLength', 'headWidth'],
+  fila: ['headCircumference', 'hatBandLine', 'earToEarOverCrown', 'frontToBackOverCrown', 'filaHeight'],
+  gele: ['headCircumference', 'hatBandLine'],
 }
 
 const FIT_FIELD_SET = new Set<ReadyMadeFitFieldKey>(READY_MADE_FIT_FIELDS.map((field) => field.key))

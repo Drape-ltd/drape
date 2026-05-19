@@ -19,11 +19,13 @@ import {
   BODY_PROFILE_FLAG_LABELS,
   buildMeasurementConfidenceByField,
   buildOrderFitProfile,
+  captureMethodForMeasurementSource,
   COVERAGE_PREFERENCE_LABELS,
   deriveOverallMeasurementConfidence,
   FABRIC_STRETCH_LABELS,
   FIT_CONFIDENCE_LABELS,
   FIT_INTENT_LABELS,
+  isMeasurementSource,
   MEASUREMENT_SCAN_CAPTURE_METHOD_LABELS,
   SYMMETRY_FLAG_LABELS,
   WEAR_DAY_SUPPORT_LABELS,
@@ -119,16 +121,11 @@ export default function GuidedFitScreen() {
     requiresTailorReview: boolean
   } | null>(() => {
     if (!measurements) return null
-    const source =
-      measurements.measurementSource === 'HELPER_GUIDED' ||
-      measurements.measurementSource === 'TAILOR_CAPTURED' ||
-      measurements.measurementSource === 'EXTERNAL_PRO_CAPTURED'
-        ? measurements.measurementSource
-        : 'SELF_GUIDED'
+    const source = isMeasurementSource(measurements.measurementSource) ? measurements.measurementSource : 'SELF_GUIDED'
     const confidenceByField = buildMeasurementConfidenceByField(measurements, source)
     const confidenceOverall = deriveOverallMeasurementConfidence(measurements, source)
     const requiresTailorReview = confidenceOverall === 'LOW' || symmetryFlags.length > 0
-    return { captureMethod: source === 'HELPER_GUIDED' ? 'GUIDED_HELPER_BASELINE' : 'GUIDED_MANUAL_BASELINE', confidenceByField, confidenceOverall, requiresTailorReview }
+    return { captureMethod: captureMethodForMeasurementSource(source), confidenceByField, confidenceOverall, requiresTailorReview }
   }, [measurements, symmetryFlags])
 
   useEffect(() => {
@@ -234,14 +231,8 @@ export default function GuidedFitScreen() {
 
     setSaving(true)
 
-    const measurementSource =
-      measurements.measurementSource === 'HELPER_GUIDED' ||
-      measurements.measurementSource === 'TAILOR_CAPTURED' ||
-      measurements.measurementSource === 'EXTERNAL_PRO_CAPTURED'
-        ? measurements.measurementSource
-        : 'SELF_GUIDED'
-    const captureMethod: MeasurementScanCaptureMethod =
-      measurementSource === 'HELPER_GUIDED' ? 'GUIDED_HELPER_BASELINE' : 'GUIDED_MANUAL_BASELINE'
+    const measurementSource = isMeasurementSource(measurements.measurementSource) ? measurements.measurementSource : 'SELF_GUIDED'
+    const captureMethod: MeasurementScanCaptureMethod = captureMethodForMeasurementSource(measurementSource)
     const confidenceByField = buildMeasurementConfidenceByField(measurements, measurementSource)
     const confidenceOverall = deriveOverallMeasurementConfidence(measurements, measurementSource)
     const requiresTailorReview = confidenceOverall === 'LOW' || symmetryFlags.length > 0
@@ -304,7 +295,7 @@ export default function GuidedFitScreen() {
         isLikelyConnectivityIssue(scanError)
           ? 'Connection looks weak. Retry when the signal improves.'
           : isMeasurementScansUnavailable(scanError)
-            ? 'This environment is missing the guided fit database table. Apply the latest Supabase migration, then try again.'
+            ? 'Guided fit is not ready in this build yet. Your measurements are still safe; use manual measurements for now.'
             : 'Please try again in a moment.',
       )
       return
@@ -752,7 +743,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.medium,
   },
   selectionPillTextActive: {
-    color: Colors.white,
+    color: Colors.textInverse,
   },
   summaryRow: {
     flexDirection: 'row',

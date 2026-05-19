@@ -21,7 +21,14 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getCorsHeaders } from '../_shared/cors.ts'
+import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
+import {
+  getClientIp,
+  RATE_LIMITS,
+  rateLimit,
+  rateLimitExceededResponse,
+} from '../_shared/rateLimit.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import { sendSmsToUser } from '../_shared/sms.ts'
 import {
@@ -170,6 +177,18 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 })
 
+  const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
+  const clientIp = getClientIp(req)
+  const limit = await rateLimit(
+    supabase,
+    clientIp,
+    FN,
+    RATE_LIMITS.webhook.limit,
+    RATE_LIMITS.webhook.windowMs,
+    { ip: clientIp, userAgent: req.headers.get('user-agent') },
+  )
+  if (!limit.allowed) return rateLimitExceededResponse(corsHeaders, limit.retryAfter)
+
   // Read raw body first — needed for HMAC verification before JSON parsing
   let rawBody: string
   try {
@@ -266,11 +285,6 @@ Deno.serve(async (req) => {
     carrier = fromShippo.carrier ?? fromTopship.carrier ?? fromShipbubble.carrier
     isDelivered = fromShippo.isDelivered || fromTopship.isDelivered || fromShipbubble.isDelivered
   }
-
-  const supabase = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-  )
 
   if (!trackingNumber) {
     log('warn', FN, 'webhook.skipped', { provider, reason: 'no_tracking_number' })
@@ -388,6 +402,7 @@ Deno.serve(async (req) => {
       sendPushToUser(supabase, order.customer_id.toString(), {
         title: 'Delivered ✅',
         body: 'Your carrier marked this order as delivered.',
+        preferenceKey: 'orderUpdates',
         data: { orderId: order.id },
       })
     )
@@ -422,6 +437,7 @@ Deno.serve(async (req) => {
       sendPushToUser(supabase, order.tailor_id.toString(), {
         title: 'Order delivered 📦',
         body: 'Tracking confirmed that the customer received this order.',
+        preferenceKey: 'newOrders',
         data: { orderId: order.id },
       })
     )

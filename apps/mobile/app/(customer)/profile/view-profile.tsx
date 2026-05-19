@@ -20,6 +20,11 @@ type Measurements = Record<string, unknown>
 const LABELS: Record<string, string> = {
   chest: 'Chest', waist: 'Waist', hips: 'Hips', shoulderWidth: 'Shoulder width',
   inseam: 'Inseam', sleeveLength: 'Sleeve length', neckCircumference: 'Neck', height: 'Height',
+  backLength: 'Back length', outseam: 'Outseam', thighCircumference: 'Thigh',
+  kneeCircumference: 'Knee', underBust: 'Under bust', bicepCircumference: 'Bicep',
+  wristCircumference: 'Wrist', headCircumference: 'Head circumference', hatBandLine: 'Hat band line',
+  headLength: 'Head length', headWidth: 'Head width', earToEarOverCrown: 'Ear to ear over crown',
+  frontToBackOverCrown: 'Front to back over crown', filaHeight: 'Fila height', torsoLength: 'Torso length',
 }
 
 export default function ViewProfileScreen() {
@@ -80,7 +85,12 @@ export default function ViewProfileScreen() {
     : null
 
   const unit = (measurements?.unit as string) ?? 'cm'
-  const measureKeys = ['chest', 'waist', 'hips', 'shoulderWidth', 'inseam', 'sleeveLength', 'neckCircumference', 'height']
+  const measureKeys = [
+    'chest', 'waist', 'hips', 'shoulderWidth', 'inseam', 'sleeveLength', 'neckCircumference', 'height',
+    'underBust', 'backLength', 'outseam', 'thighCircumference', 'kneeCircumference', 'bicepCircumference',
+    'wristCircumference', 'headCircumference', 'hatBandLine', 'headLength', 'headWidth', 'earToEarOverCrown',
+    'frontToBackOverCrown', 'filaHeight', 'torsoLength',
+  ]
 
   function goBack() {
     goBackOrFallback(router, navigation, '/(customer)/profile')
@@ -309,5 +319,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 18,
   },
-  primaryActionText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.white },
+  primaryActionText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
 })

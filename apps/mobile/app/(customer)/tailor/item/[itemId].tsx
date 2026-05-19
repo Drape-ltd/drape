@@ -1,16 +1,15 @@
 import { useMemo, useState } from 'react'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native'
-import { Image as ExpoImage } from 'expo-image'
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, KeyboardAvoidingView, Platform } from 'react-native'
 import { Feather } from '@expo/vector-icons'
-import { useCustomerMeasurements, useRefreshOnFocus, useSellerItem } from '@/lib/queries'
-import { quantityForSize } from '@/lib/ready-made-stock'
+import { useCustomerMeasurements, useRefreshOnFocus, useSellerItem, useWishlistCollections } from '@/lib/queries'
+import { buildCustomerStockSignal, isReadyMadeBuyableForCustomer, quantityForSize } from '@/lib/ready-made-stock'
 import { invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { READY_MADE_POLICY_ROWS } from '@/lib/ready-made-policy'
 import { goBackOrReturnToIfNeeded } from '@/lib/navigation'
-import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
+import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import {
   formatFitRange,
   hasReadyMadeSizeGuide,
@@ -18,29 +17,30 @@ import {
   READY_MADE_FIT_FIELDS,
   recommendReadyMadeSize,
 } from '@/lib/ready-made-fit'
-import { Button } from '@/components/ui'
+import { Button, RemoteImage } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
+import { hapticLight } from '@/lib/haptics'
+import { formatAmount, useCurrency, type CurrencyCode } from '@/lib/currency'
 
-const HOME_BG = '#F9F7F3'
-const PRIMARY_GREEN = '#1D9E75'
-const CHARCOAL = '#2C2C2A'
-const MUTED_GREY = '#8F8D88'
-
-function availabilityCopy(inventoryQuantity: number) {
-  if (inventoryQuantity <= 1) return 'Only 1 left'
-  if (inventoryQuantity <= 2) return `Only ${inventoryQuantity} left`
-  return `${inventoryQuantity} ready now`
-}
+const HOME_BG = Colors.bone
+const PRIMARY_GREEN = Colors.needleGreen
+const CHARCOAL = Colors.ink
+const MUTED_GREY = Colors.midGrey
 
 export default function SellerItemDetailScreen() {
   const { itemId, returnTo } = useLocalSearchParams<{ itemId: string; returnTo?: string }>()
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
+  const { currency: accountCurrency, rates } = useCurrency()
   const [startingInquiry, setStartingInquiry] = useState(false)
   const [imageIndex, setImageIndex] = useState(0)
+  const [wishlistPickerOpen, setWishlistPickerOpen] = useState(false)
+  const [newWishlistName, setNewWishlistName] = useState('')
+  const [savingWishlist, setSavingWishlist] = useState(false)
   const { data: item, isLoading, refetch } = useSellerItem(itemId)
   const { data: measurements } = useCustomerMeasurements(user?.id)
+  const { data: wishlistCollections = [], refetch: refetchWishlists } = useWishlistCollections(user?.id)
 
   useRefreshOnFocus(() => { void refetch() }, 0)
 
@@ -56,6 +56,32 @@ export default function SellerItemDetailScreen() {
     () => recommendReadyMadeSize({ guide: sizeGuide, measurements, sizes: inStockSizes }),
     [inStockSizes, measurements, sizeGuide],
   )
+  const savedWishlistItem = useMemo(() => {
+    if (!item) return null
+    for (const collection of wishlistCollections) {
+      const found = collection.items.find((savedItem) =>
+        savedItem.itemType === 'READY_MADE_ITEM' && savedItem.readyMadeItem.id === item.id
+      )
+      if (found) return found
+    }
+    return null
+  }, [item, wishlistCollections])
+  const stockSignal = item
+    ? buildCustomerStockSignal({
+        stockStatus: item.stockStatus,
+        inventoryQuantity: item.inventoryQuantity,
+        isLive: item.sellerLive,
+        showAvailableCount: true,
+      })
+    : null
+  const canBuy = item
+    ? isReadyMadeBuyableForCustomer({
+        stockStatus: item.stockStatus,
+        inventoryQuantity: item.inventoryQuantity,
+        isLive: item.sellerLive,
+      }) && item.sellerAvailability !== 'FULLY_BOOKED'
+    : false
+  const sellerUnavailable = item ? item.sellerAvailability === 'FULLY_BOOKED' || !item.sellerLive : false
 
   function goBack() {
     goBackOrReturnToIfNeeded(
@@ -79,11 +105,7 @@ export default function SellerItemDetailScreen() {
       })
 
       if (error || !data?.orderId) {
-        const payload = error ? await readFunctionErrorPayload(error) : null
-        const message =
-          typeof payload?.error === 'string' && payload.error.length > 0
-            ? payload.error
-            : await readFunctionErrorMessage(error, 'Could not start this conversation.')
+        const message = await readFunctionErrorMessage(error, 'Could not start this conversation.')
         throw new Error(message)
       }
 
@@ -96,11 +118,69 @@ export default function SellerItemDetailScreen() {
         'Could not start chat',
         isLikelyConnectivityIssue(error)
           ? 'Connection looks weak. Retry from this item when the signal improves, or check Messages if the inquiry already started.'
-          : error?.message ?? 'Please try again.',
+          : 'We could not open this chat right now. Please try again in a moment.',
       )
     } finally {
       setStartingInquiry(false)
     }
+  }
+
+  async function saveReadyMadeToWishlist(input: { collectionId?: string; collectionName?: string }) {
+    if (!item || savingWishlist) return
+    setSavingWishlist(true)
+    try {
+      const { error } = await invokeFunction('saved-tailor-action', {
+        body: {
+          action: 'save-ready-made-item',
+          readyMadeItemId: item.id,
+          collectionId: input.collectionId,
+          collectionName: input.collectionName,
+        },
+      })
+      if (error) throw error
+      setWishlistPickerOpen(false)
+      setNewWishlistName('')
+      hapticLight()
+      void refetchWishlists()
+    } catch (error) {
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. We could not update your wishlist yet. Retry when the signal improves.'
+        : await readFunctionErrorMessage(error, 'Could not update your wishlist right now. Please try again in a moment.')
+      Alert.alert('Wishlist not updated', message)
+    } finally {
+      setSavingWishlist(false)
+    }
+  }
+
+  async function removeReadyMadeFromWishlist() {
+    if (!savedWishlistItem || savingWishlist) return
+    setSavingWishlist(true)
+    try {
+      const { error } = await invokeFunction('saved-tailor-action', {
+        body: { action: 'remove-item', itemId: savedWishlistItem.id },
+      })
+      if (error) throw error
+      hapticLight()
+      void refetchWishlists()
+    } catch (error) {
+      const message = await readFunctionErrorMessage(error, 'Could not remove this item from your wishlist right now.')
+      Alert.alert('Wishlist not updated', message)
+    } finally {
+      setSavingWishlist(false)
+    }
+  }
+
+  function toggleWishlistSave() {
+    if (!item) return
+    if (savedWishlistItem) {
+      void removeReadyMadeFromWishlist()
+      return
+    }
+    if (wishlistCollections.length === 1) {
+      void saveReadyMadeToWishlist({ collectionId: wishlistCollections[0].id })
+      return
+    }
+    setWishlistPickerOpen(true)
   }
 
   return (
@@ -111,7 +191,15 @@ export default function SellerItemDetailScreen() {
             <Feather name="arrow-left" size={20} color={CHARCOAL} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Item</Text>
-          <View style={styles.headerSpacer} />
+          <TouchableOpacity
+            style={[styles.headerHeartButton, savedWishlistItem && styles.headerHeartButtonSaved]}
+            onPress={toggleWishlistSave}
+            disabled={!item || savingWishlist}
+            accessibilityRole="button"
+            accessibilityLabel={savedWishlistItem ? 'Remove item from wishlist' : 'Save item to wishlist'}
+          >
+            <Feather name="heart" size={18} color={savedWishlistItem ? Colors.textInverse : Colors.midGrey} />
+          </TouchableOpacity>
         </View>
 
         {isLoading && !item ? (
@@ -129,12 +217,18 @@ export default function SellerItemDetailScreen() {
           <>
             <View style={styles.mediaCard}>
               {item.photoUrls[imageIndex] ? (
-                <ExpoImage
-                  source={item.photoUrls[imageIndex]}
+                <RemoteImage
+                  uri={item.photoUrls[imageIndex]}
+                  bucket="seller-item-media"
                   style={styles.heroImage}
-                  contentFit="cover"
-                  cachePolicy="memory-disk"
+                  contentFit="contain"
                   transition={120}
+                  surface="customer_ready_made_detail_hero"
+                  fallback={(
+                    <View style={[styles.heroImage, styles.placeholder]}>
+                      <Feather name="shopping-bag" size={28} color={Colors.midGrey} />
+                    </View>
+                  )}
                 />
               ) : (
                 <View style={[styles.heroImage, styles.placeholder]}>
@@ -149,12 +243,18 @@ export default function SellerItemDetailScreen() {
                       onPress={() => setImageIndex(index)}
                       style={[styles.thumbWrap, index === imageIndex && styles.thumbWrapActive]}
                     >
-                      <ExpoImage
-                        source={url}
+                      <RemoteImage
+                        uri={url}
+                        bucket="seller-item-media"
                         style={styles.thumb}
-                        contentFit="cover"
-                        cachePolicy="memory-disk"
+                        contentFit="contain"
                         transition={120}
+                        surface="customer_ready_made_detail_thumb"
+                        fallback={(
+                          <View style={[styles.thumb, styles.placeholder]}>
+                            <Feather name="shopping-bag" size={16} color={Colors.midGrey} />
+                          </View>
+                        )}
                       />
                     </TouchableOpacity>
                   ))}
@@ -166,10 +266,23 @@ export default function SellerItemDetailScreen() {
               <Text style={styles.sellerName}>{item.sellerName}</Text>
               <Text style={styles.title}>{item.title}</Text>
               {item.category ? <Text style={styles.category}>{item.category}</Text> : null}
-              <View style={styles.availabilityPill}>
-                <Text style={styles.availabilityText}>{availabilityCopy(item.inventoryQuantity)}</Text>
-              </View>
-              <Text style={styles.price}>{item.currency} {(item.priceAmount / 100).toFixed(2)}</Text>
+              {stockSignal ? <StockPill signal={stockSignal} /> : null}
+              <Text style={styles.price}>
+                {formatAmount(item.priceAmount, item.currency as CurrencyCode, item.currency as CurrencyCode, rates)}
+              </Text>
+              {item.currency !== accountCurrency ? (
+                <Text style={styles.priceApprox}>
+                  Approx. {formatAmount(item.priceAmount, item.currency as CurrencyCode, accountCurrency, rates)} in your display currency. Checkout uses {item.currency}.
+                </Text>
+              ) : null}
+              {sellerUnavailable ? (
+                <View style={styles.unavailableNotice}>
+                  <Feather name="pause-circle" size={16} color={Colors.error} />
+                  <Text style={styles.unavailableNoticeText}>
+                    {item.sellerName} is not accepting new orders right now. Save this item and check back later.
+                  </Text>
+                </View>
+              ) : null}
             </View>
 
             {item.sizes.length > 0 ? (
@@ -311,10 +424,11 @@ export default function SellerItemDetailScreen() {
               disabled={startingInquiry}
             />
             <Button
-              label="Buy now"
+              label={sellerUnavailable ? 'Seller unavailable' : canBuy && item.inventoryQuantity === 1 ? 'Buy last one' : canBuy ? 'Buy now' : 'Unavailable'}
               size="md"
               fullWidth={false}
               style={styles.footerHalfButton}
+              disabled={!canBuy}
               onPress={() => router.push({
                 pathname: '/(customer)/tailor/item/checkout/[itemId]',
                 params: {
@@ -325,9 +439,10 @@ export default function SellerItemDetailScreen() {
             />
           </View>
           <Button
-            label="Custom order instead"
+            label={sellerUnavailable ? 'Custom orders unavailable' : 'Custom order instead'}
             variant="ghost"
             size="sm"
+            disabled={sellerUnavailable}
             onPress={() => router.push({
               pathname: `/(customer)/brief/${item.tailorProfileId}` as any,
               params: {
@@ -339,7 +454,100 @@ export default function SellerItemDetailScreen() {
           />
         </View>
       ) : null}
+      <ReadyMadeWishlistModal
+        visible={wishlistPickerOpen}
+        collections={wishlistCollections}
+        newWishlistName={newWishlistName}
+        saving={savingWishlist}
+        onChangeNewWishlistName={setNewWishlistName}
+        onClose={() => {
+          setWishlistPickerOpen(false)
+          setNewWishlistName('')
+        }}
+        onSelect={(collectionId) => {
+          void saveReadyMadeToWishlist({ collectionId })
+        }}
+        onCreate={() => {
+          const name = newWishlistName.trim()
+          if (!name) return
+          void saveReadyMadeToWishlist({ collectionName: name })
+        }}
+      />
     </SafeAreaView>
+  )
+}
+
+function ReadyMadeWishlistModal({
+  visible,
+  collections,
+  newWishlistName,
+  saving,
+  onChangeNewWishlistName,
+  onClose,
+  onSelect,
+  onCreate,
+}: {
+  visible: boolean
+  collections: Array<{ id: string; name: string; itemCount: number }>
+  newWishlistName: string
+  saving: boolean
+  onChangeNewWishlistName: (value: string) => void
+  onClose: () => void
+  onSelect: (collectionId: string) => void
+  onCreate: () => void
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.wishlistSheetOverlay}>
+        <TouchableOpacity style={styles.wishlistSheetScrim} activeOpacity={1} onPress={onClose} />
+        <View style={styles.wishlistSheet}>
+          <View style={styles.wishlistSheetHandle} />
+          <Text style={styles.wishlistSheetTitle}>
+            {collections.length === 0 ? 'Create a wishlist to save this' : 'Save to wishlist'}
+          </Text>
+          {collections.length > 0 ? (
+            <View style={styles.wishlistOptions}>
+              {collections.map((collection) => (
+                <TouchableOpacity
+                  key={collection.id}
+                  style={styles.wishlistOption}
+                  onPress={() => onSelect(collection.id)}
+                  disabled={saving}
+                >
+                  <View style={styles.wishlistOptionIcon}>
+                    <Feather name="heart" size={17} color={Colors.needleGreen} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.wishlistOptionTitle}>{collection.name}</Text>
+                    <Text style={styles.wishlistOptionMeta}>{collection.itemCount} item{collection.itemCount === 1 ? '' : 's'}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : null}
+          <View style={styles.wishlistCreateBox}>
+            <TextInput
+              value={newWishlistName}
+              onChangeText={onChangeNewWishlistName}
+              placeholder="e.g. Ankara Inspo"
+              placeholderTextColor={Colors.midGrey}
+              style={styles.wishlistInput}
+              autoFocus={collections.length === 0}
+              maxLength={80}
+              returnKeyType="done"
+              onSubmitEditing={onCreate}
+            />
+            <TouchableOpacity
+              style={[styles.wishlistCreateButton, (!newWishlistName.trim() || saving) && styles.wishlistCreateButtonDisabled]}
+              onPress={onCreate}
+              disabled={!newWishlistName.trim() || saving}
+            >
+              {saving ? <ActivityIndicator color={Colors.textInverse} /> : <Text style={styles.wishlistCreateButtonText}>Create and save</Text>}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
   )
 }
 
@@ -347,6 +555,32 @@ function Chip({ label, muted = false }: { label: string; muted?: boolean }) {
   return (
     <View style={[styles.chip, muted && styles.chipMuted]}>
       <Text style={[styles.chipText, muted && styles.chipTextMuted]}>{label}</Text>
+    </View>
+  )
+}
+
+function StockPill({ signal }: { signal: ReturnType<typeof buildCustomerStockSignal> }) {
+  return (
+    <View
+      style={[
+        styles.availabilityPill,
+        signal.tone === 'available' && styles.availabilityPillAvailable,
+        signal.tone === 'warning' && styles.availabilityPillWarning,
+        signal.tone === 'urgent' && styles.availabilityPillUrgent,
+        signal.tone === 'muted' && styles.availabilityPillMuted,
+      ]}
+    >
+      <Text
+        style={[
+          styles.availabilityText,
+          signal.tone === 'available' && styles.availabilityTextAvailable,
+          signal.tone === 'warning' && styles.availabilityTextWarning,
+          signal.tone === 'urgent' && styles.availabilityTextUrgent,
+          signal.tone === 'muted' && styles.availabilityTextMuted,
+        ]}
+      >
+        {signal.label}
+      </Text>
     </View>
   )
 }
@@ -362,7 +596,16 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     justifyContent: 'center',
   },
-  headerSpacer: { width: 44, height: 44 },
+  headerHeartButton: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.white,
+    ...Shadow.sm,
+  },
+  headerHeartButtonSaved: { backgroundColor: Colors.needleGreen },
   headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   loadingCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: Spacing.lg, alignItems: 'center', gap: Spacing.sm, ...Shadow.sm },
   loadingText: { fontSize: 14, color: Colors.inkLight },
@@ -370,12 +613,12 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 16, fontWeight: FontWeight.semibold, color: CHARCOAL },
   emptyText: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
   mediaCard: { gap: Spacing.xs },
-  heroImage: { width: '100%', height: 244, borderRadius: Radius.md, backgroundColor: Colors.lightGrey },
+  heroImage: { width: '100%', height: 244, borderRadius: Radius.md, backgroundColor: Colors.boneDeep },
   placeholder: { alignItems: 'center', justifyContent: 'center' },
   thumbRow: { gap: Spacing.sm },
   thumbWrap: { width: 60, height: 60, borderRadius: Radius.sm, overflow: 'hidden', borderWidth: 1.5, borderColor: 'transparent' },
   thumbWrapActive: { borderColor: PRIMARY_GREEN },
-  thumb: { width: '100%', height: '100%' },
+  thumb: { width: '100%', height: '100%', backgroundColor: Colors.boneDeep },
   summaryCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: 4, ...Shadow.sm },
   sellerName: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
   title: { fontSize: 24, lineHeight: 28, fontWeight: FontWeight.bold, color: CHARCOAL, fontFamily: 'Georgia' },
@@ -383,13 +626,31 @@ const styles = StyleSheet.create({
   availabilityPill: {
     alignSelf: 'flex-start',
     marginTop: 2,
-    backgroundColor: Colors.needleGreenLight,
     borderRadius: Radius.full,
     paddingHorizontal: 10,
     paddingVertical: 4,
   },
-  availabilityText: { fontSize: 12, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
+  availabilityPillAvailable: { backgroundColor: Colors.needleGreenLight },
+  availabilityPillWarning: { backgroundColor: Colors.statusPendingBg },
+  availabilityPillUrgent: { backgroundColor: Colors.errorLight },
+  availabilityPillMuted: { backgroundColor: Colors.boneDeep },
+  availabilityText: { fontSize: 12, fontWeight: FontWeight.semibold },
+  availabilityTextAvailable: { color: PRIMARY_GREEN },
+  availabilityTextWarning: { color: Colors.statusPending },
+  availabilityTextUrgent: { color: Colors.error },
+  availabilityTextMuted: { color: Colors.midGrey },
   price: { marginTop: 4, fontSize: 22, fontWeight: FontWeight.bold, color: PRIMARY_GREEN, fontFamily: 'Georgia' },
+  priceApprox: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
+  unavailableNotice: {
+    marginTop: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.xs,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.errorLight,
+    padding: Spacing.sm,
+  },
+  unavailableNoticeText: { flex: 1, fontSize: FontSize.xs, color: Colors.error, lineHeight: 18 },
   sectionCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: 8, ...Shadow.sm },
   sectionTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
   recommendationCard: {
@@ -445,6 +706,58 @@ const styles = StyleSheet.create({
   policyRow: { gap: 4 },
   policyTitle: { fontSize: 13, fontWeight: FontWeight.semibold, color: CHARCOAL },
   policyBody: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
+  wishlistSheetOverlay: { flex: 1, justifyContent: 'flex-end' },
+  wishlistSheetScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.35)' },
+  wishlistSheet: {
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
+  },
+  wishlistSheetHandle: { alignSelf: 'center', width: 42, height: 4, borderRadius: 2, backgroundColor: Colors.lightGrey },
+  wishlistSheetTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  wishlistOptions: { gap: Spacing.sm },
+  wishlistOption: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    padding: Spacing.sm,
+  },
+  wishlistOptionIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  wishlistOptionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  wishlistOptionMeta: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
+  wishlistCreateBox: { gap: Spacing.sm },
+  wishlistInput: {
+    minHeight: 52,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    paddingHorizontal: Spacing.md,
+    fontSize: FontSize.md,
+    color: Colors.ink,
+    backgroundColor: Colors.bone,
+  },
+  wishlistCreateButton: {
+    minHeight: 52,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreen,
+  },
+  wishlistCreateButtonDisabled: { opacity: 0.5 },
+  wishlistCreateButtonText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   footer: {
     paddingHorizontal: Spacing.lg,
     paddingTop: 10,
