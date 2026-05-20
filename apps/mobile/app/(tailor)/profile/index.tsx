@@ -561,7 +561,7 @@ export default function TailorProfileScreen() {
             ) : null}
 
             {/* ── No profile CTA ── */}
-            {!loading && (!profile || !profile.profileCompleted) && (
+            {(!profile || !profile.profileCompleted) && (
               <TouchableOpacity
                 style={styles.setupCard}
                 onPress={() => router.push('/(tailor)/profile/setup')}
