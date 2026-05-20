@@ -12,7 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { goBackOrFallback } from '@/lib/navigation'
 
 type Measurements = Record<string, unknown>
@@ -31,12 +31,13 @@ export default function ViewProfileScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
+  const userId = user?.id
   const [measurements, setMeasurements] = useState<Measurements | null>(null)
   const [createdAt, setCreatedAt] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState(false)
 
-  async function loadProfile() {
+  const loadProfile = useCallback(async () => {
     setFetchError(false)
     setLoading(true)
     setMeasurements(null)
@@ -45,7 +46,7 @@ export default function ViewProfileScreen() {
       const { data, error } = await supabase
         .from('customer_profiles')
         .select('measurements, created_at')
-        .eq('user_id', user?.id)
+        .eq('user_id', userId)
         .maybeSingle()
 
       if (error) {
@@ -64,7 +65,7 @@ export default function ViewProfileScreen() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [userId])
 
   const displayName = user?.user_metadata?.display_name ?? ''
   const initials = displayName
@@ -77,7 +78,7 @@ export default function ViewProfileScreen() {
   useFocusEffect(
     useCallback(() => {
       void loadProfile()
-    }, [user?.id])
+    }, [loadProfile])
   )
 
   const memberSince = createdAt
@@ -224,7 +225,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
   nextCard: {
     backgroundColor: Colors.boneDeep,
     borderRadius: Radius.md,
@@ -244,7 +245,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
     lineHeight: 21,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   nextBody: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
 
@@ -255,12 +256,12 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreenLight, alignItems: 'center', justifyContent: 'center',
   },
   avatarText: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.needleGreen },
-  name: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  name: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   meta: { fontSize: FontSize.sm, color: Colors.midGrey, marginTop: 2 },
   infoNote: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
 
   section: { gap: Spacing.sm },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
 
   emptyCard: {
     backgroundColor: Colors.white, borderRadius: Radius.md,
@@ -279,7 +280,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  emptyText: { fontSize: FontSize.md, color: Colors.midGrey, fontFamily: 'Georgia' },
+  emptyText: { fontSize: FontSize.md, color: Colors.midGrey, fontFamily: Fonts.display },
   emptyHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 21 },
   emptyLink: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
   secondaryLink: { fontSize: FontSize.sm, color: Colors.midGrey },
@@ -301,7 +302,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  stateTitle: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.bold, textAlign: 'center', fontFamily: 'Georgia' },
+  stateTitle: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.bold, textAlign: 'center', fontFamily: Fonts.display },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 19 },
 
   measureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'space-between' },

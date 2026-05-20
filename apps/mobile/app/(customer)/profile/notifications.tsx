@@ -7,23 +7,18 @@
  * auth user_metadata and the bell badge clears.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useFocusEffect, useNavigation, useRouter } from 'expo-router'
-import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity,
-} from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { customerOrderStageLabel } from '@/lib/customer-order-copy'
 import { Button, FeatureStateCard } from '@/components/ui'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
 import { goBackOrFallback } from '@/lib/navigation'
-
-const CUSTOMER_NOTIFICATIONS_GUIDE_KEY = 'drape_customer_notifications_best_use_dismissed'
 
 type NotifItem = {
   id: string
@@ -36,6 +31,29 @@ type NotifItem = {
   note: string | null
   createdAt: string
   isNew: boolean
+}
+type TailorProfileJoinRow = {
+  display_name: string | null
+}
+type NotificationOrderRow = {
+  id: string
+  reference: string | null
+  garment_type: string | null
+  order_kind: 'CUSTOM' | 'READY_MADE' | null
+  customer_id: string
+  tailor_profiles: TailorProfileJoinRow | TailorProfileJoinRow[] | null
+}
+type StageUpdateNotificationRow = {
+  id: string
+  stage: OrderStage
+  note: string | null
+  created_at: string
+  order_id: string
+  orders: NotificationOrderRow | NotificationOrderRow[] | null
+}
+
+function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
+  return Array.isArray(value) ? (value[0] ?? null) : (value ?? null)
 }
 
 // Stage → icon mapping
@@ -80,45 +98,49 @@ function timeAgo(iso: string): string {
 export default function NotificationsScreen() {
   const router = useRouter()
   const navigation = useNavigation()
+  const insets = useSafeAreaInsets()
   const { user } = useAuth()
+  const lastNotifCheckRef = useRef<string | null>(null)
   const [items, setItems] = useState<NotifItem[]>([])
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState(false)
   const [retryTrigger, setRetryTrigger] = useState(0)
-  const [showGuide, setShowGuide] = useState(true)
 
   useEffect(() => {
-    AsyncStorage.getItem(`${CUSTOMER_NOTIFICATIONS_GUIDE_KEY}:${user?.id ?? 'guest'}`)
-      .then((value) => setShowGuide(value !== '1'))
-      .catch(() => {})
-  }, [user?.id])
-
-  async function dismissGuide() {
-    setShowGuide(false)
-    try {
-      await AsyncStorage.setItem(`${CUSTOMER_NOTIFICATIONS_GUIDE_KEY}:${user?.id ?? 'guest'}`, '1')
-    } catch {}
-  }
+    lastNotifCheckRef.current =
+      typeof user?.user_metadata?.last_notif_check === 'string'
+        ? user.user_metadata.last_notif_check
+        : null
+  }, [user?.id, user?.user_metadata?.last_notif_check])
 
   useFocusEffect(
     useCallback(() => {
+      void retryTrigger
       async function load() {
+        if (!user?.id) {
+          setItems([])
+          setFetchError(false)
+          setLoading(false)
+          return
+        }
         setFetchError(false)
         setLoading(true)
-        const lastCheck: string | null = user?.user_metadata?.last_notif_check ?? null
+        const lastCheck = lastNotifCheckRef.current
 
         // Fetch order stage updates for this customer's orders (last 30 days)
         const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
         try {
           const { data, error } = await supabase
             .from('order_stage_updates')
-            .select(`
+            .select(
+              `
               id, stage, note, created_at, order_id,
               orders!inner(
                 id, reference, garment_type, order_kind, customer_id,
                 tailor_profiles!tailor_profile_id(display_name)
               )
-            `)
+            `
+            )
             .eq('orders.customer_id', user?.id)
             .gte('created_at', since)
             .order('created_at', { ascending: false })
@@ -127,24 +149,30 @@ export default function NotificationsScreen() {
           if (error) throw error
 
           setItems(
-            ((data ?? []) as any[]).map((row) => ({
-              id: row.id,
-              orderId: row.orders?.id ?? row.order_id,
-              orderRef: row.orders?.reference ?? '',
-              garmentType: row.orders?.garment_type ?? '',
-              tailorName: row.orders?.tailor_profiles?.display_name ?? 'Tailor',
-              orderKind: row.orders?.order_kind ?? 'CUSTOM',
-              stage: row.stage as OrderStage,
-              note: row.note ?? null,
-              createdAt: row.created_at,
-              isNew: lastCheck ? new Date(row.created_at) > new Date(lastCheck) : true,
-            }))
+            ((data ?? []) as StageUpdateNotificationRow[]).map((row) => {
+              const order = firstJoinedRow(row.orders)
+              const tailor = firstJoinedRow(order?.tailor_profiles)
+              return {
+                id: row.id,
+                orderId: order?.id ?? row.order_id,
+                orderRef: order?.reference ?? '',
+                garmentType: order?.garment_type ?? 'Order',
+                tailorName: tailor?.display_name ?? 'Tailor',
+                orderKind: order?.order_kind ?? 'CUSTOM',
+                stage: row.stage,
+                note: row.note ?? null,
+                createdAt: row.created_at,
+                isNew: lastCheck ? new Date(row.created_at) > new Date(lastCheck) : true,
+              }
+            })
           )
 
           try {
+            const checkedAt = new Date().toISOString()
             await supabase.auth.updateUser({
-              data: { last_notif_check: new Date().toISOString() },
+              data: { last_notif_check: checkedAt },
             })
+            lastNotifCheckRef.current = checkedAt
           } catch {
             // Non-fatal — the feed itself loaded successfully.
           }
@@ -164,7 +192,7 @@ export default function NotificationsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={goBack}>
@@ -187,8 +215,6 @@ export default function NotificationsScreen() {
           body="This feed should keep every order update easy to spot without checking each order manually."
           accentColor={Colors.kanteRust}
           icon="alert-circle"
-          supportTitle="Best recovery move"
-          supportBody="Refresh here first. If updates still do not appear, open your active orders first, then profile if needed, so you can keep moving while the feed catches up."
         >
           <Button
             label="Try again"
@@ -202,11 +228,7 @@ export default function NotificationsScreen() {
             variant="secondary"
             onPress={() => router.replace('/(customer)/orders')}
           />
-          <Button
-            label="Open profile"
-            variant="ghost"
-            onPress={goBack}
-          />
+          <Button label="Open profile" variant="ghost" onPress={goBack} />
         </FeatureStateCard>
       ) : items.length === 0 ? (
         <FeatureStateCard
@@ -216,10 +238,7 @@ export default function NotificationsScreen() {
           accentColor={Colors.warning}
           icon="bell-off"
         >
-          <Button
-            label="Open orders"
-            onPress={() => router.replace('/(customer)/orders')}
-          />
+          <Button label="Open orders" onPress={() => router.replace('/(customer)/orders')} />
           <Button
             label="Explore tailors"
             variant="secondary"
@@ -231,29 +250,21 @@ export default function NotificationsScreen() {
           data={items}
           keyExtractor={(i) => i.id}
           showsVerticalScrollIndicator={false}
-          ListHeaderComponent={(
-            <View>
-              {showGuide && (
-                <View style={styles.guideCard}>
-                  <View style={styles.guideHeader}>
-                    <Text style={styles.guideEyebrow}>Best use</Text>
-                    <TouchableOpacity onPress={() => void dismissGuide()} style={styles.guideClose}>
-                      <Feather name="x" size={16} color={Colors.midGrey} />
-                    </TouchableOpacity>
-                  </View>
-                  <Text style={styles.guideTitle}>Treat this as your fast catch-up feed, then jump into the order that needs you.</Text>
-                </View>
-              )}
-            </View>
-          )}
-          contentContainerStyle={{ paddingVertical: Spacing.sm, paddingHorizontal: Spacing.lg, gap: Spacing.xs }}
+          contentContainerStyle={{
+            paddingVertical: Spacing.sm,
+            paddingHorizontal: Spacing.lg,
+            paddingBottom: Math.max(insets.bottom + Spacing.lg, Spacing.xl),
+            gap: Spacing.xs,
+          }}
           renderItem={({ item }) => (
             <TouchableOpacity
               style={[styles.card, item.isNew && styles.cardNew]}
-              onPress={() => router.replace({
-                pathname: '/(customer)/orders/[id]',
-                params: { id: item.orderId, returnTo: '/(customer)/profile' },
-              })}
+              onPress={() =>
+                router.push({
+                  pathname: '/(customer)/orders/[id]',
+                  params: { id: item.orderId, returnTo: 'customer-notifications' },
+                })
+              }
               activeOpacity={0.7}
             >
               {/* Unread dot */}
@@ -265,24 +276,25 @@ export default function NotificationsScreen() {
               </View>
 
               {/* Content */}
-              <View style={{ flex: 1 }}>
-                <Text style={styles.title} numberOfLines={1}>
-                  {item.garmentType}
-                  <Text style={styles.ref}> · #{item.orderRef}</Text>
+              <View style={styles.notificationBody}>
+                <View style={styles.titleRow}>
+                  <Text style={styles.title} numberOfLines={2}>{item.garmentType}</Text>
+                  <Text style={styles.time}>{timeAgo(item.createdAt)}</Text>
+                </View>
+                <Text style={styles.metaLine} numberOfLines={1}>
+                  #{item.orderRef}{item.tailorName ? ` · ${item.tailorName}` : ''}
                 </Text>
                 <Text style={styles.stageLine}>
                   <Text style={{ color: stageColor(item.stage), fontWeight: FontWeight.semibold }}>
                     {customerOrderStageLabel(item.stage, item.orderKind)}
                   </Text>
-                  {item.tailorName ? `  ·  ${item.tailorName}` : ''}
                 </Text>
                 {item.note ? (
-                  <Text style={styles.note} numberOfLines={2}>{item.note}</Text>
+                  <Text style={styles.note} numberOfLines={2}>
+                    {item.note}
+                  </Text>
                 ) : null}
               </View>
-
-              {/* Time */}
-              <Text style={styles.time}>{timeAgo(item.createdAt)}</Text>
             </TouchableOpacity>
           )}
         />
@@ -294,72 +306,84 @@ export default function NotificationsScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    paddingHorizontal: Spacing.lg, paddingVertical: 6,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.lightGrey,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.lightGrey,
     backgroundColor: Colors.bone,
   },
   backBtn: {
-    width: 44, height: 44, borderRadius: Radius.full,
-    backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
-    ...Shadow.sm,
-  },
-  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
-  guideCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: 10,
-    gap: 3,
-    marginBottom: Spacing.sm,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-  },
-  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  guideClose: {
-    width: 28,
-    height: 28,
+    width: 44,
+    height: 44,
     borderRadius: Radius.full,
+    backgroundColor: Colors.white,
     alignItems: 'center',
     justifyContent: 'center',
+    ...Shadow.sm,
   },
-  guideEyebrow: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.midGrey,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  guideTitle: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
+  headerTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
     color: Colors.ink,
-    lineHeight: 17,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
-
   card: {
-    backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: 9, flexDirection: 'row', alignItems: 'flex-start', gap: 9,
-    ...Shadow.sm, position: 'relative', overflow: 'hidden',
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    ...Shadow.sm,
+    position: 'relative',
+    overflow: 'hidden',
   },
   cardNew: {
-    borderLeftWidth: 3, borderLeftColor: Colors.needleGreen,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '35',
   },
   unreadDot: {
-    position: 'absolute', top: 11, right: 11,
-    width: 8, height: 8, borderRadius: 4,
+    position: 'absolute',
+    top: 11,
+    right: 11,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
     backgroundColor: Colors.needleGreen,
   },
 
   iconWrap: {
-    width: 32, height: 32, borderRadius: Radius.sm,
-    alignItems: 'center', justifyContent: 'center',
+    width: 40,
+    height: 40,
+    borderRadius: Radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
     flexShrink: 0,
   },
+  notificationBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
 
-  title: { fontSize: 12, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: 1, fontFamily: 'Georgia', lineHeight: 16 },
+  title: {
+    fontSize: 14,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    lineHeight: 18,
+    flex: 1,
+    minWidth: 0,
+  },
   ref: { fontWeight: FontWeight.regular, color: Colors.midGrey },
-  stageLine: { fontSize: 10, color: Colors.inkLight, marginBottom: 1, lineHeight: 14 },
-  note: { fontSize: 10, color: Colors.midGrey, lineHeight: 14, marginTop: 1 },
-  time: { fontSize: 10, color: Colors.midGrey, flexShrink: 0, marginTop: 1 },
+  metaLine: { fontSize: 12, color: Colors.midGrey, lineHeight: 17, marginTop: 2 },
+  stageLine: { fontSize: 12, color: Colors.inkLight, marginTop: 2, lineHeight: 17 },
+  note: { fontSize: 12, color: Colors.midGrey, lineHeight: 17, marginTop: 2 },
+  time: { fontSize: 12, color: Colors.midGrey, flexShrink: 0, marginTop: 1, maxWidth: 70 },
 })

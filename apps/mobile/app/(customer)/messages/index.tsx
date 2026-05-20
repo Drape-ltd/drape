@@ -1,26 +1,34 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useFocusEffect } from 'expo-router'
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity,
-  RefreshControl, Linking, ScrollView, Alert,
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  RefreshControl,
+  Linking,
+  ScrollView,
+  Alert,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { customerOrderStageLabel } from '@/lib/customer-order-copy'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
-import { SkeletonBlock } from '@/components/ui'
+import { AvatarImage, SkeletonBlock, StateCard } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
+import { CUSTOMER_ACTIVE_ORDER_STAGES } from '@/lib/order-flow'
 
 type ConversationItem = {
   orderId: string
   orderKind: 'CUSTOM' | 'READY_MADE'
   tailorName: string
   tailorInitials: string
+  tailorAvatarUrl: string | null
   garmentType: string
   stage: OrderStage
   createdAt: string
@@ -28,12 +36,43 @@ type ConversationItem = {
   lastMessageAt: string | null
   unreadCount: number
 }
+type MessageRow = {
+  body: string | null
+  created_at: string
+  sender_role: string | null
+  read_at: string | null
+}
+type TailorProfileJoinRow = {
+  display_name: string | null
+  avatar_url: string | null
+  portfolio_photo_urls: string[] | null
+}
+type ConversationOrderRow = {
+  id: string
+  garment_type: string | null
+  order_kind: 'CUSTOM' | 'READY_MADE' | null
+  stage: OrderStage
+  created_at: string
+  tailor_profiles: TailorProfileJoinRow | TailorProfileJoinRow[] | null
+  messages: MessageRow[] | null
+}
 
-type FilterTab = 'all' | 'support'
+type FilterTab = 'open' | 'archive' | 'support'
 
-const MESSAGES_GUIDE_KEY = 'drape_messages_best_use_dismissed'
+function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
+  return Array.isArray(value) ? (value[0] ?? null) : (value ?? null)
+}
 
-function orderPreview(stage: OrderStage, garmentType: string, orderKind: 'CUSTOM' | 'READY_MADE'): string {
+function firstMediaUrl(value: unknown): string | null {
+  if (!Array.isArray(value)) return null
+  return value.find((item): item is string => typeof item === 'string' && item.trim().length > 0) ?? null
+}
+
+function orderPreview(
+  stage: OrderStage,
+  garmentType: string,
+  orderKind: 'CUSTOM' | 'READY_MADE'
+): string {
   switch (stage) {
     case 'PENDING_QUOTE':
       return orderKind === 'READY_MADE'
@@ -72,64 +111,59 @@ function orderPreview(stage: OrderStage, garmentType: string, orderKind: 'CUSTOM
 export default function MessagesInboxScreen() {
   const router = useRouter()
   const { user } = useAuth()
+  const userId = user?.id
   const [conversations, setConversations] = useState<ConversationItem[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [fetchErrorMessage, setFetchErrorMessage] = useState('')
-  const [filter, setFilter] = useState<FilterTab>('all')
-  const [showGuide, setShowGuide] = useState(true)
+  const [filter, setFilter] = useState<FilterTab>('open')
+  const [expandedArchiveTailor, setExpandedArchiveTailor] = useState<string | null>(null)
+  const [archiveDirectoryOpen, setArchiveDirectoryOpen] = useState(false)
 
-  useEffect(() => {
-    AsyncStorage.getItem(MESSAGES_GUIDE_KEY)
-      .then((value) => setShowGuide(value !== '1'))
-      .catch(() => {})
-  }, [])
-
-  async function dismissGuide() {
-    setShowGuide(false)
-    try {
-      await AsyncStorage.setItem(MESSAGES_GUIDE_KEY, '1')
-    } catch {}
-  }
-
-  async function fetchConversations() {
+  const fetchConversations = useCallback(async () => {
     setFetchErrorMessage('')
+    if (!userId) {
+      setConversations([])
+      return
+    }
     try {
       const { data, error } = await supabase
         .from('orders')
-        .select(`
+        .select(
+          `
           id, garment_type, order_kind, stage, created_at,
-          tailor_profiles!tailor_profile_id(display_name),
+          tailor_profiles!tailor_profile_id(display_name, avatar_url, portfolio_photo_urls),
           messages(body, created_at, sender_role, read_at)
-        `)
-        .eq('customer_id', user?.id)
+        `
+        )
+        .eq('customer_id', userId)
         .order('created_at', { ascending: false })
         .limit(20)
 
       if (error) throw error
 
-      const items: ConversationItem[] = ((data ?? []) as any[]).map((o: any) => {
-        const msgs: any[] = o.messages ?? []
-        const sorted = [...msgs].sort((a, b) =>
-          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      const items: ConversationItem[] = ((data ?? []) as ConversationOrderRow[]).map((o) => {
+        const msgs = o.messages ?? []
+        const sorted = [...msgs].sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
         )
         const last = sorted[0] ?? null
-        const unread = sorted.filter(
-          (m) => m.sender_role === 'TAILOR' && m.read_at == null
-        ).length
+        const unread = sorted.filter((m) => m.sender_role === 'TAILOR' && m.read_at == null).length
 
-        const name: string = o.tailor_profiles?.display_name ?? 'Tailor'
+        const tailorProfile = firstJoinedRow(o.tailor_profiles)
+        const name = tailorProfile?.display_name ?? 'Tailor'
         const parts = name.trim().split(' ')
-        const initials = parts.length > 1
-          ? `${parts[0][0]}${parts[parts.length - 1][0]}`
-          : name.slice(0, 2)
+        const initials =
+          parts.length > 1 ? `${parts[0][0]}${parts[parts.length - 1][0]}` : name.slice(0, 2)
 
         return {
           orderId: o.id,
           orderKind: o.order_kind ?? 'CUSTOM',
           tailorName: name,
           tailorInitials: initials.toUpperCase(),
-          garmentType: o.garment_type,
+          tailorAvatarUrl:
+            tailorProfile?.avatar_url ?? firstMediaUrl(tailorProfile?.portfolio_photo_urls) ?? null,
+          garmentType: o.garment_type ?? 'Order',
           stage: o.stage,
           createdAt: o.created_at,
           lastMessage: last?.body ?? null,
@@ -151,15 +185,17 @@ export default function MessagesInboxScreen() {
       setFetchErrorMessage(
         isLikelyConnectivityIssue(error)
           ? 'Connection looks weak. Existing threads will stay here, and you can retry when the signal improves.'
-          : 'We could not refresh your messages right now. Retry here, or open Orders to continue from the latest order record.',
+          : 'We could not refresh your messages right now. Retry here, or open Orders to continue from the latest order record.'
       )
     }
-  }
+  }, [userId])
 
-  useFocusEffect(useCallback(() => {
-    setLoading(true)
-    fetchConversations().finally(() => setLoading(false))
-  }, [user?.id]))
+  useFocusEffect(
+    useCallback(() => {
+      setLoading(true)
+      fetchConversations().finally(() => setLoading(false))
+    }, [fetchConversations])
+  )
 
   async function onRefresh() {
     setRefreshing(true)
@@ -178,7 +214,63 @@ export default function MessagesInboxScreen() {
     return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
   }
 
-  const totalUnread = conversations.reduce((sum, c) => sum + c.unreadCount, 0)
+  const openConversations = conversations.filter((item) => CUSTOMER_ACTIVE_ORDER_STAGES.includes(item.stage))
+  const archivedConversations = conversations
+    .filter((item) => !CUSTOMER_ACTIVE_ORDER_STAGES.includes(item.stage))
+    .sort((a, b) => {
+      const nameCompare = a.tailorName.localeCompare(b.tailorName)
+      if (nameCompare !== 0) return nameCompare
+      const aTime = new Date(a.lastMessageAt ?? a.createdAt).getTime()
+      const bTime = new Date(b.lastMessageAt ?? b.createdAt).getTime()
+      return bTime - aTime
+    })
+  const archiveGroups = groupConversationsByTailor(archivedConversations)
+
+  function renderConversationRow(item: ConversationItem, labelMode: 'tailor' | 'order' = 'tailor') {
+    return (
+      <TouchableOpacity
+        style={styles.row}
+        onPress={() => router.push(`/(customer)/messages/${item.orderId}`)}
+        activeOpacity={0.7}
+      >
+        <AvatarImage
+          uri={item.tailorAvatarUrl}
+          initials={item.tailorName || item.tailorInitials}
+          size={46}
+          borderColor={item.unreadCount > 0 ? Colors.needleGreen : Colors.lightGrey}
+          borderWidth={item.unreadCount > 0 ? 2 : 1}
+        />
+        <View style={styles.content}>
+          <View style={styles.contentTop}>
+            <Text
+              style={[styles.name, item.unreadCount > 0 && styles.nameBold]}
+              numberOfLines={1}
+            >
+              {labelMode === 'order' ? item.garmentType : item.tailorName}
+            </Text>
+            <Text style={[styles.time, item.unreadCount > 0 && styles.timeActive]}>
+              {formatTime(item.lastMessageAt ?? item.createdAt)}
+            </Text>
+          </View>
+          <View style={styles.contentBottom}>
+            <Text
+              style={[styles.preview, item.unreadCount > 0 && styles.previewBold]}
+              numberOfLines={1}
+            >
+              {item.lastMessage ?? orderPreview(item.stage, item.garmentType, item.orderKind)}
+            </Text>
+            {item.unreadCount > 0 && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>
+                  {item.unreadCount > 9 ? '9+' : item.unreadCount}
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
+      </TouchableOpacity>
+    )
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -186,14 +278,24 @@ export default function MessagesInboxScreen() {
       <View style={styles.header}>
         <Text style={styles.title}>Messages</Text>
         <View style={styles.filterRow}>
-          {([
-            { key: 'all' as FilterTab, label: 'All', badge: totalUnread },
+          {[
+            { key: 'open' as FilterTab, label: 'Open', badge: openConversations.reduce((sum, c) => sum + c.unreadCount, 0) },
+            { key: 'archive' as FilterTab, label: 'Archive', badge: archivedConversations.reduce((sum, c) => sum + c.unreadCount, 0) },
             { key: 'support' as FilterTab, label: 'Support', badge: 0 },
-          ]).map(({ key, label, badge }) => (
+          ].map(({ key, label, badge }) => (
             <TouchableOpacity
               key={key}
               style={[styles.filterChip, filter === key && styles.filterChipActive]}
-              onPress={() => setFilter(key)}
+              onPress={() => {
+                setFilter(key)
+                if (key !== 'archive') {
+                  setArchiveDirectoryOpen(false)
+                  setExpandedArchiveTailor(null)
+                }
+              }}
+              accessibilityRole="button"
+              accessibilityState={{ selected: filter === key }}
+              accessibilityLabel={`${label} messages`}
             >
               <Text style={[styles.filterLabel, filter === key && styles.filterLabelActive]}>
                 {label}
@@ -210,7 +312,7 @@ export default function MessagesInboxScreen() {
 
       {/* Support tab */}
       {filter === 'support' ? (
-        <SupportView />
+        <SupportView onOpenMessages={() => setFilter('open')} />
       ) : loading ? (
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
@@ -230,20 +332,17 @@ export default function MessagesInboxScreen() {
         </View>
       ) : fetchErrorMessage && conversations.length === 0 ? (
         <View style={styles.stateWrap}>
-          <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Messages</Text>
-            <Feather name="alert-circle" size={48} color={Colors.lightGrey} />
-            <Text style={styles.stateTitle}>Couldn't load messages</Text>
-            <Text style={styles.stateHint}>{fetchErrorMessage}</Text>
-            <TouchableOpacity
-              style={styles.retryBtn}
-              onPress={() => {
-                setLoading(true)
-                fetchConversations().finally(() => setLoading(false))
-              }}
-            >
-              <Text style={styles.retryBtnText}>Try again</Text>
-            </TouchableOpacity>
+          <StateCard
+            tone="error"
+            icon="alert-circle"
+            title="Couldn't load messages"
+            body={fetchErrorMessage}
+            actionLabel="Try again"
+            onAction={() => {
+              setLoading(true)
+              fetchConversations().finally(() => setLoading(false))
+            }}
+          >
             <TouchableOpacity
               style={styles.secondaryBtn}
               onPress={() => router.navigate('/(customer)')}
@@ -256,25 +355,48 @@ export default function MessagesInboxScreen() {
             >
               <Text style={styles.secondaryBtnText}>Open orders</Text>
             </TouchableOpacity>
-          </View>
+          </StateCard>
         </View>
       ) : (
+        filter === 'archive' ? (
         <FlatList
-          data={conversations}
-          keyExtractor={(c) => c.orderId}
+          data={archiveDirectoryOpen ? archiveGroups : []}
+          keyExtractor={(group) => group.tailorName}
           showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />}
-          ListHeaderComponent={(
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={Colors.needleGreen}
+            />
+          }
+          contentContainerStyle={archiveGroups.length === 0 ? styles.emptyContainer : styles.listContent}
+          ListHeaderComponent={
             <View>
-              {showGuide && conversations.length > 0 ? (
-                <View style={styles.guideCard}>
-                  <View style={styles.guideHeader}>
-                    <Text style={styles.guideEyebrow}>Best use</Text>
-                    <TouchableOpacity onPress={() => { void dismissGuide() }} hitSlop={8}>
-                      <Text style={styles.guideClose}>×</Text>
-                    </TouchableOpacity>
+              {archiveGroups.length > 0 && !archiveDirectoryOpen ? (
+                <TouchableOpacity
+                  style={styles.archiveDirectoryCard}
+                  activeOpacity={0.75}
+                  onPress={() => setArchiveDirectoryOpen(true)}
+                >
+                  <View style={styles.archiveDirectoryIcon}>
+                    <Feather name="archive" size={20} color={Colors.needleGreen} />
                   </View>
-                  <Text style={styles.guideTitle}>Use messages for discussion. Use the order screen for actions.</Text>
+                  <View style={styles.archiveDirectoryCopy}>
+                    <Text style={styles.archiveIntroTitle}>Past order threads</Text>
+                    <Text style={styles.archiveIntroText}>
+                      {archivedConversations.length} conversation{archivedConversations.length === 1 ? '' : 's'} grouped by tailor.
+                    </Text>
+                  </View>
+                  <Feather name="chevron-right" size={18} color={Colors.midGrey} />
+                </TouchableOpacity>
+              ) : null}
+              {archiveGroups.length > 0 && archiveDirectoryOpen ? (
+                <View style={styles.archiveIntro}>
+                  <Text style={styles.archiveIntroTitle}>Past threads are tucked away by tailor.</Text>
+                  <Text style={styles.archiveIntroText}>
+                    Tap a tailor to see older order conversations.
+                  </Text>
                 </View>
               ) : null}
               {fetchErrorMessage && conversations.length > 0 ? (
@@ -284,77 +406,224 @@ export default function MessagesInboxScreen() {
                 </View>
               ) : null}
             </View>
-          )}
-          contentContainerStyle={conversations.length === 0 ? styles.emptyContainer : styles.listContent}
-          ItemSeparatorComponent={() => <View style={styles.separator} />}
+          }
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
-              <View style={styles.emptyCard}>
-                <Feather name="message-circle" size={42} color={Colors.lightGrey} />
-                <Text style={styles.emptyTitle}>No messages yet</Text>
-                <Text style={styles.emptyHint}>Custom orders and item inquiries appear here.</Text>
-                <View style={styles.emptyActions}>
-                  <TouchableOpacity style={styles.retryBtn} onPress={() => router.navigate('/(customer)')}>
-                    <Text style={styles.retryBtnText}>Explore sellers</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.navigate('/(customer)/orders')}>
-                    <Text style={styles.secondaryBtnText}>Open orders</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
+              <StateCard
+                icon="message-circle"
+                title={filter === 'archive' ? 'No archived threads' : 'No open messages'}
+                body={filter === 'archive'
+                  ? 'Completed, declined, or cancelled order threads will move here.'
+                  : 'Active custom orders and item inquiries appear here.'}
+                actionLabel={filter === 'archive' ? 'Open messages' : 'Explore tailors'}
+                onAction={() => filter === 'archive' ? setFilter('open') : router.navigate('/(customer)')}
+              >
+                <TouchableOpacity
+                  style={styles.secondaryBtn}
+                  onPress={() => setFilter('open')}
+                >
+                  <Text style={styles.secondaryBtnText}>Open messages</Text>
+                </TouchableOpacity>
+              </StateCard>
             </View>
           }
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.row}
-              onPress={() => router.push(`/(customer)/messages/${item.orderId}`)}
-              activeOpacity={0.7}
-            >
-              <View style={[styles.avatar, item.unreadCount > 0 && styles.avatarActive]}>
-                <Text style={[styles.avatarText, item.unreadCount > 0 && styles.avatarTextActive]}>
-                  {item.tailorInitials}
-                </Text>
-              </View>
-              <View style={styles.content}>
-                <View style={styles.contentTop}>
-                  <Text style={[styles.name, item.unreadCount > 0 && styles.nameBold]} numberOfLines={1}>
-                    {item.tailorName}
-                  </Text>
-                  <Text style={[styles.time, item.unreadCount > 0 && styles.timeActive]}>
-                    {formatTime(item.lastMessageAt ?? item.createdAt)}
-                  </Text>
-                </View>
-                <View style={styles.contentBottom}>
-                  <Text
-                    style={[styles.preview, item.unreadCount > 0 && styles.previewBold]}
-                    numberOfLines={1}
-                  >
-                    {item.lastMessage ?? orderPreview(item.stage, item.garmentType, item.orderKind)}
-                  </Text>
-                  {item.unreadCount > 0 && (
-                    <View style={styles.badge}>
-                      <Text style={styles.badgeText}>
-                        {item.unreadCount > 9 ? '9+' : item.unreadCount}
-                      </Text>
+          renderItem={({ item }) => {
+            const expanded = expandedArchiveTailor === item.tailorName
+            const unread = item.threads.reduce((sum, thread) => sum + thread.unreadCount, 0)
+            const latest = item.threads[0]
+            return (
+              <View style={styles.archiveGroupCard}>
+                <TouchableOpacity
+                  style={styles.archiveGroupRow}
+                  activeOpacity={0.75}
+                  onPress={() => setExpandedArchiveTailor(expanded ? null : item.tailorName)}
+                >
+                  <AvatarImage
+                    uri={latest?.tailorAvatarUrl ?? null}
+                    initials={item.tailorName}
+                    size={46}
+                    borderColor={unread > 0 ? Colors.needleGreen : Colors.lightGrey}
+                    borderWidth={unread > 0 ? 2 : 1}
+                  />
+                  <View style={styles.content}>
+                    <View style={styles.contentTop}>
+                      <Text style={[styles.name, unread > 0 && styles.nameBold]} numberOfLines={1}>{item.tailorName}</Text>
+                      <Feather name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color={Colors.midGrey} />
                     </View>
-                  )}
-                </View>
+                    <View style={styles.contentBottom}>
+                      <Text style={styles.preview} numberOfLines={1}>
+                        {item.threads.length} past thread{item.threads.length === 1 ? '' : 's'}
+                      </Text>
+                      {unread > 0 ? (
+                        <View style={styles.badge}>
+                          <Text style={styles.badgeText}>{unread > 9 ? '9+' : unread}</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  </View>
+                </TouchableOpacity>
+                {expanded ? (
+                  <View style={styles.archiveThreadList}>
+                    {item.threads.map((thread) => (
+                      <View key={thread.orderId} style={styles.archiveThreadItem}>
+                        {renderConversationRow(thread, 'order')}
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
               </View>
-            </TouchableOpacity>
-          )}
+            )
+          }}
         />
+        ) : (
+        <FlatList
+          data={openConversations}
+          keyExtractor={(c) => c.orderId}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={Colors.needleGreen}
+            />
+          }
+          contentContainerStyle={openConversations.length === 0 ? styles.emptyContainer : styles.listContent}
+          ItemSeparatorComponent={() => <View style={styles.separator} />}
+          ListHeaderComponent={
+            <View>
+              {archivedConversations.length > 0 ? (
+                <TouchableOpacity
+                  style={styles.archiveShortcut}
+                  activeOpacity={0.75}
+                  onPress={() => setFilter('archive')}
+                >
+                  <Feather name="archive" size={16} color={Colors.needleGreen} />
+                  <Text style={styles.archiveShortcutText}>
+                    {archivedConversations.length} past thread{archivedConversations.length === 1 ? '' : 's'}
+                  </Text>
+                  <Feather name="chevron-right" size={16} color={Colors.midGrey} />
+                </TouchableOpacity>
+              ) : null}
+              {fetchErrorMessage && conversations.length > 0 ? (
+                <View style={styles.syncNoticeCard}>
+                  <Text style={styles.syncNoticeEyebrow}>Sync notice</Text>
+                  <Text style={styles.syncNoticeBody}>{fetchErrorMessage}</Text>
+                </View>
+              ) : null}
+            </View>
+          }
+          ListEmptyComponent={
+            <View style={styles.emptyWrap}>
+              <StateCard
+                icon="message-circle"
+                title="No open messages"
+                body="Active custom orders and item inquiries appear here."
+                actionLabel="Explore tailors"
+                onAction={() => router.navigate('/(customer)')}
+              >
+                <TouchableOpacity
+                  style={styles.secondaryBtn}
+                  onPress={() => router.navigate('/(customer)/orders')}
+                >
+                  <Text style={styles.secondaryBtnText}>Open orders</Text>
+                </TouchableOpacity>
+              </StateCard>
+            </View>
+          }
+          renderItem={({ item }) => renderConversationRow(item)}
+        />
+        )
       )}
     </SafeAreaView>
   )
 }
 
-function SupportView() {
+function SupportView({ onOpenMessages }: { onOpenMessages: () => void }) {
   const SUPPORT_EMAIL = 'support@drapeon.co'
-  const HELP_OPTIONS = [
-    { icon: 'package' as const, label: 'Order issue' },
-    { icon: 'credit-card' as const, label: 'Payment' },
-    { icon: 'flag' as const, label: 'Report a problem' },
-    { icon: 'help-circle' as const, label: 'FAQs' },
+  type SupportTopicKey = 'order' | 'payments' | 'report' | 'guide'
+  const [selectedTopic, setSelectedTopic] = useState<SupportTopicKey | null>(null)
+  const supportTopics: Record<
+    SupportTopicKey,
+    {
+      icon: keyof typeof Feather.glyphMap
+      title: string
+      body: string
+      details: string[]
+      primaryLabel?: string
+      onPrimary?: () => void
+    }
+  > = {
+    order: {
+      icon: 'package',
+      title: 'Order help',
+      body: 'Keep live order questions attached to the right thread so the tailor and support team see the same context.',
+      details: [
+        'Open the order conversation for quote, pickup, delivery, or stage questions.',
+        'Use the order detail screen for timelines, payments, and production photos.',
+      ],
+      primaryLabel: 'Open order threads',
+      onPrimary: onOpenMessages,
+    },
+    payments: {
+      icon: 'credit-card',
+      title: 'Payments and refunds',
+      body: 'For payment issues, include the order name, receipt, and what changed after checkout.',
+      details: [
+        'Payment questions stay tied to the order before support steps in.',
+        'Refund reviews need the original order and payment provider record.',
+      ],
+      primaryLabel: 'Email support',
+      onPrimary: () => {
+        void openSupportEmail('Payment or refund help')
+      },
+    },
+    report: {
+      icon: 'flag',
+      title: 'Report a problem',
+      body: 'Share what happened, when it happened, and attach screenshots if they help explain the issue.',
+      details: [
+        'For active orders, keep the order thread updated first.',
+        'For bugs or account issues, email support with the screen name and steps.',
+      ],
+      primaryLabel: 'Email support',
+      onPrimary: () => {
+        void openSupportEmail('Report a problem')
+      },
+    },
+    guide: {
+      icon: 'book-open',
+      title: 'Help guide',
+      body: 'Quick paths for the moments customers usually need help with.',
+      details: [
+        'Custom order questions: open the order thread.',
+        'Payment or refund questions: include the order and receipt.',
+        'Account or app issues: email support with screenshots.',
+      ],
+      primaryLabel: 'Open order threads',
+      onPrimary: onOpenMessages,
+    },
+  }
+  const helpOptions = [
+    {
+      key: 'order' as const,
+      title: 'Order help',
+      body: 'Questions about quotes, pickup, delivery, or production updates.',
+    },
+    {
+      key: 'payments' as const,
+      title: 'Payments and refunds',
+      body: 'What to include before support reviews the payment record.',
+    },
+    {
+      key: 'report' as const,
+      title: 'Report a problem',
+      body: 'App issues, account problems, or anything that feels off.',
+    },
+    {
+      key: 'guide' as const,
+      title: 'Help guide',
+      body: 'Fast answers for common customer support moments.',
+    },
   ]
 
   async function openSupportEmail(subject?: string) {
@@ -363,76 +632,122 @@ function SupportView() {
 
     const supported = await Linking.canOpenURL(url)
     if (!supported) {
-      Alert.alert('Unable to open email', `Please email ${SUPPORT_EMAIL} directly with the subject "${fallbackSubject}". If this is about a live order, keep the order thread updated in Drape too.`)
+      Alert.alert(
+        'Unable to open email',
+        `Please email ${SUPPORT_EMAIL} directly with the subject "${fallbackSubject}". If this is about a live order, keep the order thread updated in Drape too.`
+      )
       return
     }
 
     try {
       await Linking.openURL(url)
     } catch {
-      Alert.alert('Unable to open email', `Please email ${SUPPORT_EMAIL} directly with the subject "${fallbackSubject}". If this is about a live order, keep the order thread updated in Drape too.`)
+      Alert.alert(
+        'Unable to open email',
+        `Please email ${SUPPORT_EMAIL} directly with the subject "${fallbackSubject}". If this is about a live order, keep the order thread updated in Drape too.`
+      )
     }
   }
 
   return (
-    <ScrollView style={styles.supportScroll} contentContainerStyle={styles.supportContent} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      style={styles.supportScroll}
+      contentContainerStyle={styles.supportContent}
+      showsVerticalScrollIndicator={false}
+    >
       <View style={styles.supportHeroCard}>
-        <Text style={styles.supportHeroTitle}>Support</Text>
-        <Text style={styles.supportHeroSub}>Help with orders, payments, or anything off.</Text>
-      </View>
-
-      <View style={styles.supportGuideCard}>
-        <Text style={styles.supportGuideTitle}>Best next step</Text>
-        <Text style={styles.supportGuideBody}>
-          If you already have a live order, open that order first and keep the timeline there. Use support when you need escalation, policy clarity, or recovery after the normal flow stops being enough.
-        </Text>
-      </View>
-
-      {/* Support conversation row */}
-      <TouchableOpacity
-        style={styles.row}
-        onPress={() => { void openSupportEmail() }}
-        activeOpacity={0.7}
-      >
-        <View style={styles.supportAvatar}>
-          <Feather name="shield" size={22} color={Colors.needleGreen} />
+        <View style={styles.supportHeroIcon}>
+          <Feather name="life-buoy" size={22} color={Colors.needleGreen} />
         </View>
-        <View style={styles.content}>
-          <View style={styles.contentTop}>
-            <Text style={styles.name}>Drape Support</Text>
-          </View>
-          <Text style={styles.preview} numberOfLines={1}>
-            Tap to email us — we reply within a few hours
+        <View style={styles.supportHeroCopy}>
+          <Text style={styles.supportHeroTitle}>How can we help?</Text>
+          <Text style={styles.supportHeroSub}>
+            For live orders, start from the order thread. For everything else, email support and include screenshots when useful.
           </Text>
         </View>
-        <Feather name="chevron-right" size={18} color={Colors.midGrey} />
-      </TouchableOpacity>
-
-      <View style={styles.supportDivider} />
-
-      {/* Quick help grid */}
-      <Text style={styles.supportSectionLabel}>What do you need help with?</Text>
-      <View style={styles.helpGrid}>
-        {HELP_OPTIONS.map(({ icon, label }) => (
-          <TouchableOpacity
-            key={label}
-            style={styles.helpCard}
-            onPress={() => { void openSupportEmail(label) }}
-            activeOpacity={0.75}
-          >
-            <View style={styles.helpIcon}>
-              <Feather name={icon} size={20} color={Colors.needleGreen} />
-            </View>
-            <Text style={styles.helpLabel}>{label}</Text>
-          </TouchableOpacity>
-        ))}
       </View>
 
-      <Text style={styles.supportFootnote}>
-        Average response time: under 4 hours{'\n'}support@drapeon.co
-      </Text>
+      {selectedTopic ? (
+        <View style={styles.supportTopicCard}>
+          <View style={styles.supportTopicHeader}>
+            <View style={styles.supportTopicIcon}>
+              <Feather name={supportTopics[selectedTopic].icon} size={18} color={Colors.needleGreen} />
+            </View>
+            <View style={styles.supportTopicTitleWrap}>
+              <Text style={styles.supportTopicTitle}>{supportTopics[selectedTopic].title}</Text>
+              <Text style={styles.supportTopicBody}>{supportTopics[selectedTopic].body}</Text>
+            </View>
+          </View>
+          <View style={styles.supportTopicDetails}>
+            {supportTopics[selectedTopic].details.map((detail) => (
+              <View key={detail} style={styles.supportTopicDetailRow}>
+                <Feather name="check-circle" size={15} color={Colors.needleGreen} />
+                <Text style={styles.supportTopicDetailText}>{detail}</Text>
+              </View>
+            ))}
+          </View>
+          {supportTopics[selectedTopic].primaryLabel && supportTopics[selectedTopic].onPrimary ? (
+            <TouchableOpacity
+              style={styles.supportTopicButton}
+              activeOpacity={0.8}
+              onPress={supportTopics[selectedTopic].onPrimary}
+            >
+              <Text style={styles.supportTopicButtonText}>
+                {supportTopics[selectedTopic].primaryLabel}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
+
+      <View style={styles.supportActionList}>
+        {helpOptions.map(({ key, title, body }, index) => {
+          const topic = supportTopics[key]
+          return (
+          <TouchableOpacity
+            key={title}
+            style={[styles.supportActionRow, index === helpOptions.length - 1 && styles.supportActionRowLast]}
+            onPress={() => setSelectedTopic(selectedTopic === key ? null : key)}
+            activeOpacity={0.75}
+          >
+            <View style={styles.supportActionIcon}>
+              <Feather name={topic.icon} size={20} color={Colors.needleGreen} />
+            </View>
+            <View style={styles.supportActionCopy}>
+              <Text style={styles.supportActionTitle}>{title}</Text>
+              <Text style={styles.supportActionText}>{body}</Text>
+            </View>
+            <Feather
+              name={selectedTopic === key ? 'chevron-up' : 'chevron-down'}
+              size={18}
+              color={Colors.midGrey}
+            />
+          </TouchableOpacity>
+          )
+        })}
+      </View>
+
+      <TouchableOpacity
+        style={styles.supportEmailCard}
+        activeOpacity={0.8}
+        onPress={() => {
+          void openSupportEmail()
+        }}
+      >
+        <Text style={styles.supportEmailTitle}>Email Drape Support</Text>
+        <Text style={styles.supportEmailText}>{SUPPORT_EMAIL} · replies usually arrive within a few hours</Text>
+      </TouchableOpacity>
     </ScrollView>
   )
+}
+
+function groupConversationsByTailor(items: ConversationItem[]) {
+  const groups = new Map<string, ConversationItem[]>()
+  for (const item of items) {
+    const key = item.tailorName || 'Tailor'
+    groups.set(key, [...(groups.get(key) ?? []), item])
+  }
+  return Array.from(groups.entries()).map(([tailorName, threads]) => ({ tailorName, threads }))
 }
 
 const styles = StyleSheet.create({
@@ -455,8 +770,6 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
-  stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
   messageSkeletonList: {
     alignSelf: 'stretch',
     gap: Spacing.sm,
@@ -515,7 +828,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
   guideClose: { fontSize: 22, lineHeight: 22, color: Colors.midGrey },
-  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink, lineHeight: 20 },
+  guideTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.medium,
+    color: Colors.ink,
+    lineHeight: 20,
+  },
   syncNoticeCard: {
     marginHorizontal: Spacing.lg,
     marginTop: Spacing.sm,
@@ -535,6 +853,97 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
   syncNoticeBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  archiveShortcut: {
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.sm,
+    marginBottom: Spacing.sm,
+    minHeight: 52,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
+  archiveShortcutText: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+  },
+  archiveIntro: {
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.sm,
+    marginBottom: Spacing.sm,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: 4,
+    ...Shadow.sm,
+  },
+  archiveIntroTitle: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
+  archiveIntroText: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
+  archiveDirectoryCard: {
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.sm,
+    marginBottom: Spacing.sm,
+    minHeight: 88,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
+  archiveDirectoryIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  archiveDirectoryCopy: { flex: 1, gap: 4 },
+  archiveGroupHeader: {
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  archiveGroupTitle: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
+  archiveGroupCount: { fontSize: FontSize.xs, color: Colors.midGrey },
+  archiveGroupCard: {
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    ...Shadow.sm,
+  },
+  archiveGroupRow: {
+    minHeight: 72,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 12,
+  },
+  archiveThreadList: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.lightGrey,
+    backgroundColor: Colors.bone,
+    paddingVertical: Spacing.xs,
+  },
+  archiveThreadItem: {
+    marginHorizontal: Spacing.sm,
+    marginVertical: 4,
+    borderRadius: Radius.md,
+    overflow: 'hidden',
+  },
 
   filterRow: { flexDirection: 'row', gap: 8 },
   filterChip: {
@@ -548,16 +957,21 @@ const styles = StyleSheet.create({
     minHeight: 44,
     justifyContent: 'center',
   },
-  filterChipActive: { backgroundColor: Colors.ink },
+  filterChipActive: { backgroundColor: Colors.needleGreen },
   filterLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.inkLight },
   filterLabelActive: { color: Colors.textInverse },
   filterBadge: {
-    minWidth: 16, height: 16, borderRadius: 8,
-    backgroundColor: Colors.needleGreen, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: Colors.needleGreen,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
   },
   filterBadgeText: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.textInverse },
 
-  separator: { height: 1, backgroundColor: Colors.lightGrey, marginLeft: 68 },
+  separator: { height: 1, backgroundColor: Colors.lightGrey },
   listContent: { paddingBottom: Spacing.xxxl },
 
   row: {
@@ -569,8 +983,12 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   avatar: {
-    width: 46, height: 46, borderRadius: 23,
-    backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center',
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: Colors.boneDeep,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   avatarActive: { backgroundColor: Colors.needleGreenLight },
   avatarText: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.midGrey },
@@ -580,7 +998,13 @@ const styles = StyleSheet.create({
   contentTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   contentBottom: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
 
-  name: { fontSize: 15, fontWeight: FontWeight.medium, color: Colors.ink, flex: 1, marginRight: Spacing.sm },
+  name: {
+    fontSize: 15,
+    fontWeight: FontWeight.medium,
+    color: Colors.ink,
+    flex: 1,
+    marginRight: Spacing.sm,
+  },
   nameBold: { fontWeight: FontWeight.bold },
   time: { fontSize: FontSize.xs, color: Colors.midGrey },
   timeActive: { color: Colors.needleGreen, fontWeight: FontWeight.semibold },
@@ -588,24 +1012,23 @@ const styles = StyleSheet.create({
   previewBold: { color: Colors.ink, fontWeight: FontWeight.medium },
 
   badge: {
-    minWidth: 20, height: 20, borderRadius: 10,
-    backgroundColor: Colors.needleGreen, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: Colors.needleGreen,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
   },
   badgeText: { fontSize: 11, fontWeight: FontWeight.bold, color: Colors.textInverse },
 
-  emptyContainer: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: Spacing.lg, paddingBottom: Spacing.xxl },
-  emptyWrap: { flex: 1, justifyContent: 'center' },
-  emptyCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 16,
-    gap: Spacing.sm,
-    alignItems: 'center',
-    ...Shadow.sm,
+  emptyContainer: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.lg,
+    paddingBottom: Spacing.xxl,
   },
-  emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
-  emptyHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 22, maxWidth: 280 },
-  emptyActions: { alignSelf: 'stretch', gap: Spacing.sm, marginTop: Spacing.xs },
+  emptyWrap: { flex: 1, justifyContent: 'center' },
   retryBtn: {
     marginTop: Spacing.xs,
     backgroundColor: Colors.needleGreen,
@@ -615,7 +1038,11 @@ const styles = StyleSheet.create({
     minHeight: 44,
     justifyContent: 'center',
   },
-  retryBtnText: { fontSize: FontSize.sm, color: Colors.textInverse, fontWeight: FontWeight.semibold },
+  retryBtnText: {
+    fontSize: FontSize.sm,
+    color: Colors.textInverse,
+    fontWeight: FontWeight.semibold,
+  },
   secondaryBtn: {
     backgroundColor: Colors.white,
     borderColor: Colors.lightGrey,
@@ -635,11 +1062,22 @@ const styles = StyleSheet.create({
     marginHorizontal: Spacing.lg,
     marginTop: Spacing.lg,
     backgroundColor: Colors.white,
-    borderRadius: Radius.md,
+    borderRadius: Radius.lg,
     padding: 16,
-    gap: Spacing.sm,
+    gap: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
     ...Shadow.sm,
   },
+  supportHeroIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  supportHeroCopy: { flex: 1, gap: 4 },
   supportHeroTitle: {
     fontSize: FontSize.lg,
     fontWeight: FontWeight.bold,
@@ -674,33 +1112,152 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   supportAvatar: {
-    width: 52, height: 52, borderRadius: 26,
-    backgroundColor: Colors.needleGreenLight, alignItems: 'center', justifyContent: 'center',
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
+  supportActionList: {
+    marginHorizontal: Spacing.lg,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    ...Shadow.sm,
+  },
+  supportActionRow: {
+    minHeight: 76,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.lightGrey,
+  },
+  supportActionRowLast: { borderBottomWidth: 0 },
+  supportActionIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  supportActionCopy: { flex: 1, gap: 3 },
+  supportActionTitle: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
+  supportActionText: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
+  supportTopicCard: {
+    marginHorizontal: Spacing.lg,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  supportTopicHeader: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    alignItems: 'flex-start',
+  },
+  supportTopicIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  supportTopicTitleWrap: { flex: 1, gap: 4 },
+  supportTopicTitle: {
+    fontSize: FontSize.md,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+  },
+  supportTopicBody: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+  },
+  supportTopicDetails: { gap: Spacing.sm },
+  supportTopicDetailRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    alignItems: 'flex-start',
+  },
+  supportTopicDetailText: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+  },
+  supportTopicButton: {
+    minHeight: 48,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreen,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.lg,
+  },
+  supportTopicButtonText: {
+    fontSize: FontSize.sm,
+    color: Colors.textInverse,
+    fontWeight: FontWeight.semibold,
+  },
+  supportEmailCard: {
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.xs,
+    backgroundColor: Colors.needleGreenLight,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: 4,
+  },
+  supportEmailTitle: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+  supportEmailText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
   supportDivider: {
-    height: 1, backgroundColor: Colors.lightGrey,
-    marginHorizontal: Spacing.lg, marginTop: Spacing.xs,
+    height: 1,
+    backgroundColor: Colors.lightGrey,
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.xs,
   },
   supportSectionLabel: {
-    fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.inkLight,
-    paddingHorizontal: Spacing.lg, paddingTop: Spacing.lg, paddingBottom: Spacing.sm,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.inkLight,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.sm,
   },
   helpGrid: {
-    flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
     paddingHorizontal: Spacing.lg,
   },
   helpCard: {
-    width: '47%', backgroundColor: Colors.bone,
-    borderRadius: Radius.md, padding: 14, gap: Spacing.xs,
+    width: '47%',
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.md,
+    padding: 14,
+    gap: Spacing.xs,
     minHeight: 96,
   },
   helpIcon: {
-    width: 36, height: 36, borderRadius: Radius.md,
-    backgroundColor: Colors.needleGreenLight, alignItems: 'center', justifyContent: 'center',
+    width: 36,
+    height: 36,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   helpLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   supportFootnote: {
-    fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'center',
-    lineHeight: 20, paddingHorizontal: Spacing.xl, marginTop: Spacing.xl,
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    textAlign: 'center',
+    lineHeight: 20,
+    paddingHorizontal: Spacing.xl,
+    marginTop: Spacing.xl,
   },
 })

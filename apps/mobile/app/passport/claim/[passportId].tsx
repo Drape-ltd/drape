@@ -17,7 +17,7 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import { supabase, invokeFunction } from '@/lib/supabase'
+import { invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
@@ -44,8 +44,10 @@ export default function PassportClaimScreen() {
 
   useEffect(() => {
     if (!passportId) {
-      setPreview({ status: 'error', message: 'Invalid invite link.' })
-      return
+      const timer = setTimeout(() => {
+        setPreview({ status: 'error', message: 'Invalid invite link.' })
+      }, 0)
+      return () => clearTimeout(timer)
     }
     let cancelled = false
 

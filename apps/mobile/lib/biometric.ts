@@ -10,6 +10,7 @@
 // We lazy-require it so the app degrades gracefully instead of crashing on import.
 let LocalAuthentication: typeof import('expo-local-authentication') | null = null
 try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- native module must be lazy so Expo Go can degrade cleanly.
   LocalAuthentication = require('expo-local-authentication')
 } catch {
   // Running in Expo Go — biometrics unavailable

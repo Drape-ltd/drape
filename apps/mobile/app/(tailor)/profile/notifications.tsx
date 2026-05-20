@@ -8,23 +8,20 @@
  * Badge clears by stamping last_notif_check on open, same as customer.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useFocusEffect, useNavigation, useRouter } from 'expo-router'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
 } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { Button, FeatureStateCard } from '@/components/ui'
 import { tailorOrderHint, tailorOrderStageLabel } from '@/lib/order-flow'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
 import { goBackOrFallback } from '@/lib/navigation'
-
-const TAILOR_NOTIFICATIONS_GUIDE_KEY = 'drape_tailor_notifications_best_use_dismissed'
 
 type NotifItem = {
   id: string
@@ -37,6 +34,34 @@ type NotifItem = {
   note: string | null
   createdAt: string
   isNew: boolean
+}
+
+type CustomerProfileJoinRow = {
+  display_name: string | null
+}
+
+type TailorNotificationOrderRow = {
+  id: string
+  reference: string | null
+  garment_type: string | null
+  order_kind: 'CUSTOM' | 'READY_MADE' | null
+  stage: OrderStage | null
+  created_at: string
+  customer_profiles: CustomerProfileJoinRow | CustomerProfileJoinRow[] | null
+}
+
+type TailorNotificationStageUpdateRow = {
+  id: string
+  stage: OrderStage | null
+  note: string | null
+  created_at: string
+  order_id: string
+  orders: Omit<TailorNotificationOrderRow, 'stage' | 'created_at'> | Omit<TailorNotificationOrderRow, 'stage' | 'created_at'>[] | null
+}
+
+function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
 }
 
 function stageIcon(stage: OrderStage): React.ComponentProps<typeof Feather>['name'] {
@@ -93,30 +118,27 @@ function stageDescription(item: Pick<NotifItem, 'stage' | 'orderKind'>): string 
 export default function TailorNotificationsScreen() {
   const router = useRouter()
   const navigation = useNavigation()
+  const insets = useSafeAreaInsets()
   const { user } = useAuth()
+  const userId = user?.id ?? null
+  const lastTailorNotifCheckRef = useRef<string | null>(null)
   const [items, setItems] = useState<NotifItem[]>([])
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState(false)
   const [retryTrigger, setRetryTrigger] = useState(0)
-  const [showGuide, setShowGuide] = useState(true)
 
   useEffect(() => {
-    AsyncStorage.getItem(`${TAILOR_NOTIFICATIONS_GUIDE_KEY}:${user?.id ?? 'guest'}`)
-      .then((value) => setShowGuide(value !== '1'))
-      .catch(() => {})
-  }, [user?.id])
-
-  async function dismissGuide() {
-    setShowGuide(false)
-    try {
-      await AsyncStorage.setItem(`${TAILOR_NOTIFICATIONS_GUIDE_KEY}:${user?.id ?? 'guest'}`, '1')
-    } catch {}
-  }
+    lastTailorNotifCheckRef.current =
+      typeof user?.user_metadata?.last_tailor_notif_check === 'string'
+        ? user.user_metadata.last_tailor_notif_check
+        : null
+  }, [user?.id, user?.user_metadata?.last_tailor_notif_check])
 
   useFocusEffect(
     useCallback(() => {
+      void retryTrigger
       async function load() {
-        if (!user?.id) {
+        if (!userId) {
           setItems([])
           setFetchError(false)
           setLoading(false)
@@ -124,14 +146,14 @@ export default function TailorNotificationsScreen() {
         }
         setLoading(true)
         setFetchError(false)
-        const lastCheck: string | null = user?.user_metadata?.last_tailor_notif_check ?? null
+        const lastCheck = lastTailorNotifCheckRef.current
         const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
         try {
           const [newOrdersRes, updatesRes] = await Promise.allSettled([
             supabase
               .from('orders')
               .select(`id, reference, garment_type, order_kind, stage, created_at, customer_profiles!customer_id(display_name)`)
-              .eq('tailor_id', user.id)
+              .eq('tailor_id', userId)
               .eq('stage', 'PENDING_QUOTE')
               .gte('created_at', since)
               .order('created_at', { ascending: false }),
@@ -144,7 +166,7 @@ export default function TailorNotificationsScreen() {
                 customer_profiles!customer_id(display_name)
               )
             `)
-              .eq('orders.tailor_id', user.id)
+              .eq('orders.tailor_id', userId)
               .in('stage', ['CONFIRMED', 'DESIGNING', 'SOURCING', 'CUTTING', 'SEWING', 'FINISHING', 'SHIPPED', 'READY_FOR_COLLECTION', 'COMPLETE', 'COLLECTED', 'DELIVERED', 'IN_DISPUTE', 'CANCELLED', 'EXPIRED', 'CONSULTATION'])
               .gte('created_at', since)
               .order('created_at', { ascending: false })
@@ -153,37 +175,44 @@ export default function TailorNotificationsScreen() {
 
           const bookingItems: NotifItem[] = (
             newOrdersRes.status === 'fulfilled' && !newOrdersRes.value.error
-              ? ((newOrdersRes.value.data ?? []) as any[])
+              ? ((newOrdersRes.value.data ?? []) as TailorNotificationOrderRow[])
               : []
-          ).map((o) => ({
-            id: `order-${o.id}`,
-            orderId: o.id,
-            orderRef: o.reference,
-            garmentType: o.garment_type,
-            orderKind: o.order_kind ?? 'CUSTOM',
-            customerName: o.customer_profiles?.display_name ?? 'Customer',
-            stage: o.stage as OrderStage,
-            note: null,
-            createdAt: o.created_at,
-            isNew: lastCheck ? new Date(o.created_at) > new Date(lastCheck) : true,
-          }))
+          ).map((o) => {
+            const customerProfile = firstJoinedRow(o.customer_profiles)
+            return {
+              id: `order-${o.id}`,
+              orderId: o.id,
+              orderRef: o.reference ?? '',
+              garmentType: o.garment_type ?? 'Order',
+              orderKind: o.order_kind ?? 'CUSTOM',
+              customerName: customerProfile?.display_name ?? 'Customer',
+              stage: o.stage ?? 'PENDING_QUOTE',
+              note: null,
+              createdAt: o.created_at,
+              isNew: lastCheck ? new Date(o.created_at) > new Date(lastCheck) : true,
+            }
+          })
 
           const updateItems: NotifItem[] = (
             updatesRes.status === 'fulfilled' && !updatesRes.value.error
-              ? ((updatesRes.value.data ?? []) as any[])
+              ? ((updatesRes.value.data ?? []) as TailorNotificationStageUpdateRow[])
               : []
-          ).map((row) => ({
-            id: row.id,
-            orderId: row.orders?.id ?? row.order_id,
-            orderRef: row.orders?.reference ?? '',
-            garmentType: row.orders?.garment_type ?? '',
-            orderKind: row.orders?.order_kind ?? 'CUSTOM',
-            customerName: row.orders?.customer_profiles?.display_name ?? 'Customer',
-            stage: row.stage as OrderStage,
-            note: row.note ?? null,
-            createdAt: row.created_at,
-            isNew: lastCheck ? new Date(row.created_at) > new Date(lastCheck) : true,
-          }))
+          ).map((row) => {
+            const order = firstJoinedRow(row.orders)
+            const customerProfile = firstJoinedRow(order?.customer_profiles)
+            return {
+              id: row.id,
+              orderId: order?.id ?? row.order_id,
+              orderRef: order?.reference ?? '',
+              garmentType: order?.garment_type ?? 'Order',
+              orderKind: order?.order_kind ?? 'CUSTOM',
+              customerName: customerProfile?.display_name ?? 'Customer',
+              stage: row.stage ?? 'PENDING_QUOTE',
+              note: row.note ?? null,
+              createdAt: row.created_at,
+              isNew: lastCheck ? new Date(row.created_at) > new Date(lastCheck) : true,
+            }
+          })
 
           if (
             (newOrdersRes.status === 'rejected' || (newOrdersRes.status === 'fulfilled' && newOrdersRes.value.error)) &&
@@ -209,9 +238,11 @@ export default function TailorNotificationsScreen() {
           setItems(merged)
 
           try {
+            const checkedAt = new Date().toISOString()
             await supabase.auth.updateUser({
-              data: { last_tailor_notif_check: new Date().toISOString() },
+              data: { last_tailor_notif_check: checkedAt },
             })
+            lastTailorNotifCheckRef.current = checkedAt
           } catch {
             // Non-fatal — the feed itself loaded successfully.
           }
@@ -223,7 +254,7 @@ export default function TailorNotificationsScreen() {
         }
       }
       void load()
-    }, [user?.id, retryTrigger])
+    }, [retryTrigger, userId])
   )
 
   function goBack() {
@@ -231,7 +262,7 @@ export default function TailorNotificationsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
@@ -253,8 +284,6 @@ export default function TailorNotificationsScreen() {
           body="This feed should surface the business moments that need a quote, a reply, or a production decision."
           accentColor={Colors.kanteRust}
           icon="alert-circle"
-          supportTitle="Best recovery move"
-          supportBody="Refresh here first. If updates still do not appear, open your live orders first, then profile if needed, so quotes, production work, and customer responses do not stall."
         >
           <Button
             label="Try again"
@@ -297,28 +326,18 @@ export default function TailorNotificationsScreen() {
           data={items}
           keyExtractor={(i) => i.id}
           showsVerticalScrollIndicator={false}
-          ListHeaderComponent={(
-            <View>
-              {showGuide && (
-                <View style={styles.guideCard}>
-                  <View style={styles.guideHeader}>
-                    <Text style={styles.guideEyebrow}>Best use</Text>
-                    <TouchableOpacity onPress={() => void dismissGuide()} style={styles.guideClose}>
-                      <Feather name="x" size={16} color={Colors.midGrey} />
-                    </TouchableOpacity>
-                  </View>
-                  <Text style={styles.guideTitle}>Use this as a fast operating feed, then jump into the order that needs action.</Text>
-                </View>
-              )}
-            </View>
-          )}
-          contentContainerStyle={{ paddingVertical: Spacing.sm, paddingHorizontal: Spacing.lg, gap: Spacing.xs }}
+          contentContainerStyle={{
+            paddingVertical: Spacing.sm,
+            paddingHorizontal: Spacing.lg,
+            paddingBottom: Math.max(insets.bottom + Spacing.lg, Spacing.xl),
+            gap: Spacing.xs,
+          }}
           renderItem={({ item }) => (
             <TouchableOpacity
               style={[styles.card, item.isNew && styles.cardNew]}
-              onPress={() => router.replace({
+              onPress={() => router.push({
                 pathname: '/(tailor)/orders/[id]',
-                params: { id: item.orderId, returnTo: '/(tailor)/profile' },
+                params: { id: item.orderId, returnTo: 'tailor-notifications' },
               })}
               activeOpacity={0.7}
             >
@@ -328,23 +347,23 @@ export default function TailorNotificationsScreen() {
                 <Feather name={stageIcon(item.stage)} size={18} color={stageColor(item.stage)} />
               </View>
 
-              <View style={{ flex: 1 }}>
-                <Text style={styles.itemTitle} numberOfLines={1}>
-                  {item.garmentType}
-                  <Text style={styles.ref}> · #{item.orderRef}</Text>
+              <View style={styles.notificationBody}>
+                <View style={styles.titleRow}>
+                  <Text style={styles.itemTitle} numberOfLines={2}>{item.garmentType}</Text>
+                  <Text style={styles.time}>{timeAgo(item.createdAt)}</Text>
+                </View>
+                <Text style={styles.metaLine} numberOfLines={1}>
+                  #{item.orderRef}{item.customerName ? ` · ${item.customerName}` : ''}
                 </Text>
                 <Text style={styles.stageLine}>
                   <Text style={{ color: stageColor(item.stage), fontWeight: FontWeight.semibold }}>
                     {stageDescription(item)}
                   </Text>
-                  {item.customerName ? `  ·  ${item.customerName}` : ''}
                 </Text>
                 {item.note ? (
                   <Text style={styles.note} numberOfLines={2}>{item.note}</Text>
                 ) : null}
               </View>
-
-              <Text style={styles.time}>{timeAgo(item.createdAt)}</Text>
             </TouchableOpacity>
           )}
         />
@@ -366,56 +385,39 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
-  guideCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: 10,
-    gap: 3,
-    marginBottom: Spacing.sm,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-  },
-  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  guideClose: {
-    width: 28,
-    height: 28,
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  guideEyebrow: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.midGrey,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  guideTitle: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-    lineHeight: 17,
-    fontFamily: 'Georgia',
-  },
+  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
   card: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: 9, flexDirection: 'row', alignItems: 'flex-start', gap: 9,
+    padding: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 10,
     ...Shadow.sm, position: 'relative', overflow: 'hidden',
   },
-  cardNew: { borderLeftWidth: 3, borderLeftColor: Colors.needleGreen },
+  cardNew: { borderWidth: 1, borderColor: Colors.needleGreen + '35' },
   unreadDot: {
     position: 'absolute', top: 11, right: 11,
     width: 8, height: 8, borderRadius: 4,
     backgroundColor: Colors.needleGreen,
   },
   iconWrap: {
-    width: 32, height: 32, borderRadius: Radius.sm,
+    width: 40, height: 40, borderRadius: Radius.md,
     alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
-  itemTitle: { fontSize: 12, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: 1, fontFamily: 'Georgia', lineHeight: 16 },
+  notificationBody: { flex: 1, minWidth: 0 },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  itemTitle: {
+    fontSize: 14,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    lineHeight: 18,
+    flex: 1,
+    minWidth: 0,
+  },
   ref: { fontWeight: FontWeight.regular, color: Colors.midGrey },
-  stageLine: { fontSize: 10, color: Colors.inkLight, marginBottom: 1, lineHeight: 14 },
-  note: { fontSize: 10, color: Colors.midGrey, lineHeight: 14, marginTop: 1 },
-  time: { fontSize: 10, color: Colors.midGrey, flexShrink: 0, marginTop: 1 },
+  metaLine: { fontSize: 12, color: Colors.midGrey, lineHeight: 17, marginTop: 2 },
+  stageLine: { fontSize: 12, color: Colors.inkLight, marginTop: 2, lineHeight: 17 },
+  note: { fontSize: 12, color: Colors.midGrey, lineHeight: 17, marginTop: 2 },
+  time: { fontSize: 12, color: Colors.midGrey, flexShrink: 0, marginTop: 1, maxWidth: 70 },
 })

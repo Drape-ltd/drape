@@ -20,7 +20,7 @@ import { goBackOrFallback } from '@/lib/navigation'
 import { Input } from '@/components/ui'
 import { validateDisplayName } from '@drape/shared/contact-filter'
 import { normalizePhoneForStorage, PHONE_STORAGE_HINT, validatePhoneForProfile } from '@drape/shared/phone'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 export default function PersonalInfoScreen() {
   const router = useRouter()
@@ -49,10 +49,14 @@ export default function PersonalInfoScreen() {
 
   useEffect(() => {
     if (!phoneChanged) {
-      setNeedsPhoneVerification(false)
-      setReauthPassword('')
-      setPhoneReauthProof('')
+      const timer = setTimeout(() => {
+        setNeedsPhoneVerification(false)
+        setReauthPassword('')
+        setPhoneReauthProof('')
+      }, 0)
+      return () => clearTimeout(timer)
     }
+    return undefined
   }, [phoneChanged])
 
   function validateName(value: string) {
@@ -159,7 +163,7 @@ export default function PersonalInfoScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
@@ -228,11 +232,18 @@ export default function PersonalInfoScreen() {
         </View>
 
         {needsPhoneVerification && phoneChanged ? (
-          <View style={styles.verifyCard}>
-            <Text style={styles.verifyTitle}>Verify your identity</Text>
-            <Text style={styles.verifyCopy}>
-              Because this phone number may be used for account updates and future recovery, confirm this change before saving it.
-            </Text>
+          <View style={styles.securityPanel}>
+            <View style={styles.securityPanelHeader}>
+              <View style={styles.securityIcon}>
+                <Feather name="lock" size={16} color={Colors.needleGreen} />
+              </View>
+              <View style={styles.securityCopy}>
+                <Text style={styles.securityTitle}>Confirm this change</Text>
+                <Text style={styles.securityText}>
+                  Enter your current password before saving a new phone number.
+                </Text>
+              </View>
+            </View>
 
             <View style={styles.field}>
               <Input
@@ -288,10 +299,10 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
-  body: { padding: Spacing.lg, paddingBottom: 32, gap: Spacing.md },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
+  body: { padding: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.md },
   card: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
-  verifyCard: {
+  securityPanel: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
     padding: Spacing.md,
@@ -299,6 +310,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.lightGrey,
   },
+  securityPanelHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm },
+  securityIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  securityCopy: { flex: 1, gap: 2 },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.md },
   field: { padding: Spacing.md, gap: 6 },
   label: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.inkLight },
@@ -314,8 +335,8 @@ const styles = StyleSheet.create({
     padding: Spacing.md, fontSize: FontSize.md, color: Colors.ink,
     borderWidth: 1, borderColor: Colors.lightGrey,
   },
-  verifyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
-  verifyCopy: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 21 },
+  securityTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  securityText: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   verifyBtn: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -1,11 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert,
-  Animated, ActivityIndicator, Linking, Platform,
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Alert,
+  ActivityIndicator,
+  Linking,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Feather } from '@expo/vector-icons'
 import * as ImageManipulator from 'expo-image-manipulator'
 import { supabase } from '@/lib/supabase'
@@ -17,11 +22,9 @@ import { useCustomerProfileOverview, useRefreshOnFocus } from '@/lib/queries'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
 import { shareCustomerReferral, shareDiscoverTailors } from '@/lib/invite'
 import { Sentry } from '@/lib/sentry'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import type { OrderStage } from '@drape/shared/order-machine'
 import { AvatarImage } from '@/components/ui/AvatarImage'
-
-const CUSTOMER_PROFILE_GUIDE_KEY = 'drape_customer_profile_best_use_dismissed'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -62,68 +65,30 @@ type RecentOrder = {
 }
 
 const MEASUREMENT_KEYS: Array<keyof MeasurementProfile> = [
-  'chest', 'waist', 'hips', 'shoulderWidth', 'inseam', 'sleeveLength', 'neckCircumference', 'height',
-  'underBust', 'backLength', 'outseam', 'thighCircumference', 'kneeCircumference', 'bicepCircumference',
-  'wristCircumference', 'headCircumference', 'hatBandLine', 'headLength', 'headWidth', 'earToEarOverCrown',
-  'frontToBackOverCrown', 'filaHeight', 'torsoLength',
+  'chest',
+  'waist',
+  'hips',
+  'shoulderWidth',
+  'inseam',
+  'sleeveLength',
+  'neckCircumference',
+  'height',
+  'underBust',
+  'backLength',
+  'outseam',
+  'thighCircumference',
+  'kneeCircumference',
+  'bicepCircumference',
+  'wristCircumference',
+  'headCircumference',
+  'hatBandLine',
+  'headLength',
+  'headWidth',
+  'earToEarOverCrown',
+  'frontToBackOverCrown',
+  'filaHeight',
+  'torsoLength',
 ]
-
-const STAGE_COLOR: Partial<Record<OrderStage, string>> = {
-  PENDING_QUOTE: Colors.warning, CONSULTATION: Colors.warning, QUOTE_SENT: Colors.warning,
-  PAYMENT_FAILED: Colors.kanteRust,
-  CONFIRMED: Colors.needleGreen, DESIGNING: Colors.needleGreen, SOURCING: Colors.needleGreen,
-  CUTTING: Colors.needleGreen, SEWING: Colors.needleGreen,
-  FINISHING: Colors.needleGreen, SHIPPED: Colors.needleGreen, READY_FOR_COLLECTION: Colors.needleGreen,
-  IN_DISPUTE: Colors.kanteRust,
-  COMPLETE: Colors.midGrey, DELIVERED: Colors.needleGreen, COLLECTED: Colors.needleGreen,
-  DECLINED: Colors.midGrey, CANCELLED: Colors.midGrey, EXPIRED: Colors.midGrey, REFUNDED: Colors.midGrey,
-}
-
-function recentOrderHint(stage: OrderStage): string {
-  switch (stage) {
-    case 'PENDING_QUOTE':
-      return 'Waiting for quote'
-    case 'CONSULTATION':
-      return 'Consultation requested'
-    case 'QUOTE_SENT':
-      return 'Review quote'
-    case 'PAYMENT_FAILED':
-      return 'Retry payment'
-    case 'READY_FOR_COLLECTION':
-      return 'Bring your collection code'
-    case 'SHIPPED':
-      return 'Track delivery'
-    case 'DELIVERED':
-      return 'Finish and review'
-    case 'COLLECTED':
-      return 'Finish and review'
-    case 'IN_DISPUTE':
-      return 'Concern under review'
-    case 'COMPLETE':
-      return 'Order complete'
-    default:
-      return STAGE_LABELS[stage] ?? stage
-  }
-}
-
-// ─── Skeleton ─────────────────────────────────────────────────────────────────
-
-function SkeletonBox({ width, height, style }: { width?: number | string; height: number; style?: object }) {
-  const anim = useRef(new Animated.Value(0.4)).current
-  useEffect(() => {
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(anim, { toValue: 1, duration: 700, useNativeDriver: true }),
-        Animated.timing(anim, { toValue: 0.4, duration: 700, useNativeDriver: true }),
-      ])
-    )
-    animation.start()
-    return () => animation.stop()
-  }, [anim])
-  return (
-    <Animated.View style={[{ width, height, borderRadius: Radius.sm, backgroundColor: Colors.lightGrey, opacity: anim }, style]} />
-  )
-}
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
@@ -131,7 +96,6 @@ export default function CustomerProfileScreen() {
   const router = useRouter()
   const { user, signOut } = useAuth()
   const { avatarUrl, setAvatarUrl } = useCustomerProfile()
-  const [showGuide, setShowGuide] = useState(true)
 
   async function openExternalUrl(url: string, fallbackMessage: string) {
     const supported = await Linking.canOpenURL(url)
@@ -164,43 +128,35 @@ export default function CustomerProfileScreen() {
   const notifCount = overview?.notifCount ?? 0
 
   useEffect(() => {
-    AsyncStorage.getItem(`${CUSTOMER_PROFILE_GUIDE_KEY}:${user?.id ?? 'guest'}`)
-      .then((value) => setShowGuide(value !== '1'))
-      .catch(() => {})
-  }, [user?.id])
-
-  useEffect(() => {
     if (overview?.avatarUrl && !avatarUrl) {
       setAvatarUrl(overview.avatarUrl)
     }
   }, [overview?.avatarUrl, avatarUrl, setAvatarUrl])
 
-  useRefreshOnFocus(() => { void refetch() })
-
-  async function dismissGuide() {
-    setShowGuide(false)
-    try {
-      await AsyncStorage.setItem(`${CUSTOMER_PROFILE_GUIDE_KEY}:${user?.id ?? 'guest'}`, '1')
-    } catch {}
-  }
+  useRefreshOnFocus(() => {
+    void refetch()
+  })
 
   const displayName =
-    String(user?.user_metadata?.display_name ?? '').trim()
-    || user?.email?.split('@')[0]?.replace(/[._-]+/gu, ' ').trim()
-    || 'Drape customer'
-  const initials = displayName
-    .split(' ')
-    .map((p: string) => p[0])
-    .slice(0, 2)
-    .join('')
-    .toUpperCase() || '?'
+    String(user?.user_metadata?.display_name ?? '').trim() ||
+    user?.email
+      ?.split('@')[0]
+      ?.replace(/[._-]+/gu, ' ')
+      .trim() ||
+    'Drape customer'
+  const initials =
+    displayName
+      .split(' ')
+      .map((p: string) => p[0])
+      .slice(0, 2)
+      .join('')
+      .toUpperCase() || '?'
 
   const filledCount = measurements
-    ? MEASUREMENT_KEYS.filter((k) => measurements[k] !== null && measurements[k] !== undefined).length
+    ? MEASUREMENT_KEYS.filter((k) => measurements[k] !== null && measurements[k] !== undefined)
+        .length
     : 0
-  const measurementProgressLabel = filledCount > 0
-    ? `${filledCount} saved`
-    : 'Set up'
+  const measurementProgressLabel = filledCount > 0 ? `${filledCount} fields` : 'Set up'
   const guidedFitStatus =
     measurementMeta?.latestMeasurementScanStatus === 'TAILOR_REVIEW_REQUIRED'
       ? 'Tailor review pending'
@@ -261,12 +217,14 @@ export default function CustomerProfileScreen() {
 
       setAvatarUrl(bustUrl)
     } catch (err) {
-      Sentry.captureException(err, { extra: { context: 'customer_avatar_upload', userId: user?.id } })
+      Sentry.captureException(err, {
+        extra: { context: 'customer_avatar_upload', userId: user?.id },
+      })
       Alert.alert(
         'Upload failed',
         isLikelyConnectivityIssue(err)
           ? 'Connection looks weak. We could not update your photo yet. Retry when the signal improves.'
-          : 'Could not update your photo right now. Please try again in a moment.',
+          : 'Could not update your photo right now. Please try again in a moment.'
       )
     } finally {
       setUploadingAvatar(false)
@@ -283,7 +241,10 @@ export default function CustomerProfileScreen() {
         style: 'destructive',
         onPress: () => {
           void signOut().catch(() => {
-            Alert.alert('Unable to sign out', 'Please try again in a moment. You can keep using your profile and come back to sign out later.')
+            Alert.alert(
+              'Unable to sign out',
+              'Please try again in a moment. You can keep using your profile and come back to sign out later.'
+            )
           })
         },
       },
@@ -300,7 +261,9 @@ export default function CustomerProfileScreen() {
             <Text style={styles.stateHint}>{profileLoadErrorMessage}</Text>
             <TouchableOpacity
               style={styles.statePrimaryBtn}
-              onPress={() => { void refetch() }}
+              onPress={() => {
+                void refetch()
+              }}
             >
               <Text style={styles.statePrimaryBtnText}>Try again</Text>
             </TouchableOpacity>
@@ -318,8 +281,11 @@ export default function CustomerProfileScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: Spacing.xxxl }}>
-
+      <ScrollView
+        style={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+      >
         {/* ── Profile header strip ── */}
         <View style={styles.profileHeader}>
           <Text style={styles.profileHeaderTitle}>Profile</Text>
@@ -328,10 +294,12 @@ export default function CustomerProfileScreen() {
             onPress={() => router.push('/(customer)/profile/notifications')}
             activeOpacity={0.7}
           >
-            <Feather name="bell" size={20} color={Colors.textInverse} />
+            <Feather name="bell" size={20} color={Colors.ink} />
             {notifCount > 0 && (
               <View style={styles.bellBadge}>
-                <Text style={styles.bellBadgeText}>{notifCount > 9 ? '9+' : String(notifCount)}</Text>
+                <Text style={styles.bellBadgeText}>
+                  {notifCount > 9 ? '9+' : String(notifCount)}
+                </Text>
               </View>
             )}
           </TouchableOpacity>
@@ -364,25 +332,13 @@ export default function CustomerProfileScreen() {
             </View>
           </TouchableOpacity>
 
-          <Text style={styles.heroName}>{displayName}</Text>
-          {memberSince && <Text style={styles.heroMeta}>Member since {memberSince}</Text>}
+          <View style={styles.heroCopy}>
+            <Text style={styles.heroName}>{displayName}</Text>
+            {memberSince && <Text style={styles.heroMeta}>Member since {memberSince}</Text>}
+          </View>
         </View>
 
         <View style={styles.body}>
-          {showGuide && (
-            <View style={styles.workspaceCard}>
-              <View style={styles.workspaceHeader}>
-                <Text style={styles.workspaceEyebrow}>Best use</Text>
-                <TouchableOpacity onPress={() => void dismissGuide()} style={styles.workspaceClose}>
-                  <Feather name="x" size={16} color={Colors.midGrey} />
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.workspaceText}>
-                Keep your measurements current and use this page to revisit finished orders and keep your fit profile sharp.
-              </Text>
-            </View>
-          )}
-
           <View style={styles.quickLinksRow}>
             <TouchableOpacity
               style={styles.quickLinkCard}
@@ -401,12 +357,16 @@ export default function CustomerProfileScreen() {
                 {averageRating ? averageRating.toFixed(1) : 'No rating'}
               </Text>
               <Text style={styles.quickLinkLabel}>
-                {reviewCount > 0 ? `${reviewCount} review${reviewCount === 1 ? '' : 's'}` : 'Ratings'}
+                {reviewCount > 0
+                  ? `${reviewCount} review${reviewCount === 1 ? '' : 's'}`
+                  : 'Ratings'}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.quickLinkCard}
-              onPress={() => router.navigate({ pathname: '/(customer)/orders', params: { tab: 'completed' } })}
+              onPress={() =>
+                router.navigate({ pathname: '/(customer)/orders', params: { tab: 'completed' } })
+              }
               activeOpacity={0.75}
             >
               <Text style={styles.quickLinkValue}>{recentOrders.length}</Text>
@@ -420,11 +380,11 @@ export default function CustomerProfileScreen() {
             activeOpacity={0.8}
           >
             <View style={styles.workspaceHeader}>
-              <Text style={styles.workspaceEyebrow}>Guided fit intake</Text>
+              <Text style={styles.workspaceEyebrow}>Fit preferences</Text>
               <Feather name="chevron-right" size={16} color={Colors.midGrey} />
             </View>
             <Text style={styles.workspaceText}>
-              Save fit intent, stretch, posture, and symmetry cues so the next tailor has a cleaner pre-cutting brief.
+              Tell tailors how you like clothes to sit, move, and feel before they start your order.
             </Text>
             <Text style={styles.workspaceStatus}>{guidedFitStatus}</Text>
           </TouchableOpacity>
@@ -432,7 +392,12 @@ export default function CustomerProfileScreen() {
           {/* ── Become a tailor ── */}
           <TouchableOpacity
             style={styles.becomeCard}
-            onPress={() => { void openExternalUrl('https://drapeon.co/tailors', 'Please visit https://drapeon.co/tailors manually.') }}
+            onPress={() => {
+              void openExternalUrl(
+                'https://drapeon.co/tailors',
+                'Please visit https://drapeon.co/tailors manually.'
+              )
+            }}
             activeOpacity={0.8}
           >
             <View style={styles.becomeIcon}>
@@ -440,19 +405,42 @@ export default function CustomerProfileScreen() {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.becomeTitle}>Are you a tailor?</Text>
-              <Text style={styles.becomeSub}>Join Drape to offer custom work, consultations, or ready-made pieces.</Text>
+              <Text style={styles.becomeSub}>
+                Join Drape to offer custom work, consultations, or ready-made pieces.
+              </Text>
             </View>
             <Feather name="chevron-right" size={18} color={Colors.inkLight} />
           </TouchableOpacity>
 
           {/* ── Main action list ── */}
           <View style={styles.flatList}>
-            <FlatRow icon="credit-card" label="Payment history" onPress={() => router.push('/(customer)/profile/payments' as never)} />
-            <View style={styles.flatDivider} />
-            <FlatRow icon="settings" label="Account settings" onPress={() => router.push('/(customer)/profile/account-settings')} />
-            <FlatRow icon="help-circle" label="Get help" onPress={() => router.push('/(customer)/profile/help')} />
-            <FlatRow icon="user" label="View profile" onPress={() => router.push('/(customer)/profile/view-profile')} />
-            <FlatRow icon="shield" label="Privacy" last onPress={() => router.push('/(customer)/profile/privacy')} />
+            <FlatRow
+              icon="book-open"
+              label="Drape guide & help"
+              accent
+              onPress={() => router.push('/(customer)/profile/help')}
+            />
+            <FlatRow
+              icon="credit-card"
+              label="Payment history"
+              onPress={() => router.push('/(customer)/profile/payments' as never)}
+            />
+            <FlatRow
+              icon="settings"
+              label="Account settings"
+              onPress={() => router.push('/(customer)/profile/account-settings')}
+            />
+            <FlatRow
+              icon="user"
+              label="View profile"
+              onPress={() => router.push('/(customer)/profile/view-profile')}
+            />
+            <FlatRow
+              icon="shield"
+              label="Privacy"
+              last
+              onPress={() => router.push('/(customer)/profile/privacy')}
+            />
           </View>
 
           {/* ── Refer & share ── */}
@@ -471,16 +459,26 @@ export default function CustomerProfileScreen() {
               icon="file-text"
               label="Legal"
               last
-              onPress={() => { void openExternalUrl('https://drapeon.co/legal', 'Please visit https://drapeon.co/legal manually.') }}
+              onPress={() => {
+                void openExternalUrl(
+                  'https://drapeon.co/legal',
+                  'Please visit https://drapeon.co/legal manually.'
+                )
+              }}
             />
           </View>
 
           {/* ── Sign out ── */}
-          <TouchableOpacity style={styles.logOutRow} onPress={handleSignOut} activeOpacity={0.6} accessibilityRole="button" accessibilityLabel="Sign out">
+          <TouchableOpacity
+            style={styles.logOutRow}
+            onPress={handleSignOut}
+            activeOpacity={0.6}
+            accessibilityRole="button"
+            accessibilityLabel="Sign out"
+          >
             <Feather name="log-out" size={18} color={Colors.error} />
             <Text style={styles.logOutText}>Sign out</Text>
           </TouchableOpacity>
-
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -490,24 +488,34 @@ export default function CustomerProfileScreen() {
 // ─── FlatRow ─────────────────────────────────────────────────────────────────
 
 function FlatRow({
-  icon, label, last, onPress,
+  icon,
+  label,
+  last,
+  accent,
+  onPress,
 }: {
   icon: React.ComponentProps<typeof Feather>['name']
   label: string
   last?: boolean
+  accent?: boolean
   onPress: () => void
 }) {
   return (
     <TouchableOpacity
-      style={[styles.flatRow, last && styles.rowLast]}
+      style={[styles.flatRow, accent && styles.flatRowAccent, last && styles.rowLast]}
       onPress={onPress}
       activeOpacity={0.6}
       accessibilityRole="button"
       accessibilityLabel={label}
     >
-      <Feather name={icon} size={20} color={Colors.inkLight} style={{ width: 24 }} />
-      <Text style={styles.flatRowLabel}>{label}</Text>
-      <Feather name="chevron-right" size={16} color={Colors.midGrey} />
+      <Feather
+        name={icon}
+        size={20}
+        color={accent ? Colors.needleGreen : Colors.inkLight}
+        style={{ width: 24 }}
+      />
+      <Text style={[styles.flatRowLabel, accent && styles.flatRowLabelAccent]}>{label}</Text>
+      <Feather name="chevron-right" size={16} color={accent ? Colors.needleGreen : Colors.midGrey} />
     </TouchableOpacity>
   )
 }
@@ -517,6 +525,7 @@ function FlatRow({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   scroll: { flex: 1 },
+  scrollContent: { paddingBottom: 0 },
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
   stateCard: {
     width: '100%',
@@ -533,14 +542,14 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    letterSpacing: 0,
   },
   stateTitle: {
     fontSize: FontSize.lg,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
     textAlign: 'center',
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   stateHint: {
     fontSize: FontSize.sm,
@@ -554,7 +563,11 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.xxxl,
   },
-  statePrimaryBtnText: { color: Colors.textInverse, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
+  statePrimaryBtnText: {
+    color: Colors.textInverse,
+    fontWeight: FontWeight.semibold,
+    fontSize: FontSize.sm,
+  },
   stateSecondaryBtn: {
     borderRadius: Radius.full,
     borderWidth: 1,
@@ -563,72 +576,116 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.xl,
   },
-  stateSecondaryBtnText: { color: Colors.ink, fontWeight: FontWeight.medium, fontSize: FontSize.sm },
+  stateSecondaryBtnText: {
+    color: Colors.ink,
+    fontWeight: FontWeight.medium,
+    fontSize: FontSize.sm,
+  },
 
   // Profile header strip
   profileHeader: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     paddingHorizontal: Spacing.xl,
     paddingTop: Spacing.sm,
-    paddingBottom: Spacing.xs,
-    backgroundColor: Colors.needleGreen,
+    paddingBottom: Spacing.sm,
+    backgroundColor: Colors.bone,
   },
-  profileHeaderTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textInverse, fontFamily: 'Georgia' },
+  profileHeaderTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    fontFamily: Fonts.display,
+  },
   bellBtn: {
-    width: 38, height: 38, borderRadius: Radius.full,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    alignItems: 'center', justifyContent: 'center',
+    width: 38,
+    height: 38,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
     position: 'relative',
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
   },
   bellBadge: {
-    position: 'absolute', top: -2, right: -2,
-    minWidth: 18, height: 18, borderRadius: 9,
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
     backgroundColor: Colors.kanteRust,
-    alignItems: 'center', justifyContent: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
     paddingHorizontal: 4,
-    borderWidth: 2, borderColor: Colors.needleGreen,
+    borderWidth: 2,
+    borderColor: Colors.white,
   },
   bellBadgeText: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.textInverse },
 
   // Hero
   hero: {
-    backgroundColor: Colors.needleGreen,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.xxl,
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.xs,
-    paddingHorizontal: Spacing.xl,
+    marginHorizontal: Spacing.xl,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    paddingVertical: Spacing.md,
+    gap: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    ...Shadow.sm,
   },
-  avatarWrap: { position: 'relative', marginBottom: Spacing.sm },
+  avatarWrap: { position: 'relative' },
   avatar: {
-    width: 76, height: 76, borderRadius: 38,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderWidth: 3, borderColor: 'rgba(255,255,255,0.45)',
-    alignItems: 'center', justifyContent: 'center',
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: Colors.needleGreenLight,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   avatarLoading: { opacity: 0.6 },
   avatarImage: {
-    width: 76, height: 76, borderRadius: 38,
-    borderWidth: 3, borderColor: 'rgba(255,255,255,0.45)',
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
     overflow: 'hidden',
   },
-  avatarText: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.textInverse },
+  avatarText: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.needleGreen },
   cameraBadge: {
-    position: 'absolute', bottom: 0, right: 0,
-    width: 26, height: 26, borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenDark,
-    borderWidth: 2, borderColor: Colors.needleGreen,
-    alignItems: 'center', justifyContent: 'center',
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 26,
+    height: 26,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreen,
+    borderWidth: 2,
+    borderColor: Colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  heroName: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textInverse, fontFamily: 'Georgia' },
-  heroMeta: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.75)' },
+  heroCopy: { flex: 1, gap: 2 },
+  heroName: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    fontFamily: Fonts.display,
+  },
+  heroMeta: { fontSize: FontSize.sm, color: Colors.inkLight },
 
   body: {
-    marginTop: -(Spacing.xl + 4),
-    borderTopLeftRadius: Radius.xl,
-    borderTopRightRadius: Radius.xl,
     backgroundColor: Colors.bone,
-    paddingTop: Spacing.lg,
+    paddingTop: 0,
     paddingHorizontal: Spacing.xl,
     gap: Spacing.md,
   },
@@ -652,7 +709,7 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    letterSpacing: 0,
   },
   workspaceText: {
     fontSize: FontSize.sm,
@@ -665,44 +722,80 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
   },
-  quickLinksRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  quickLinksRow: { flexDirection: 'row', gap: Spacing.sm },
   quickLinkCard: {
-    width: '48%',
+    flex: 1,
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
     paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.md,
+    paddingHorizontal: Spacing.sm,
     alignItems: 'center',
     justifyContent: 'space-between',
     minHeight: 82,
     gap: 6,
     ...Shadow.sm,
   },
-  quickLinkValue: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
-  quickLinkLabel: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'center', lineHeight: 16 },
+  quickLinkValue: {
+    fontFamily: Fonts.bodyBold,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+  },
+  quickLinkLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    textAlign: 'center',
+    lineHeight: 16,
+  },
 
   // Sections
   section: { gap: Spacing.sm },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  sectionTitle: {
+    fontFamily: Fonts.bodyBold,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
   sectionLink: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  sectionLinkText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  sectionLinkText: {
+    fontSize: FontSize.sm,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.medium,
+  },
 
   // Cards
   card: {
-    backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.md, gap: Spacing.sm, ...Shadow.sm,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+    ...Shadow.sm,
   },
 
   emptyRow: {
-    backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.md, flexDirection: 'row', alignItems: 'center', gap: Spacing.md, ...Shadow.sm,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    ...Shadow.sm,
   },
   emptyRowIcon: {
-    width: 42, height: 42, borderRadius: Radius.md,
-    backgroundColor: Colors.needleGreenLight, alignItems: 'center', justifyContent: 'center',
+    width: 42,
+    height: 42,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  emptyRowTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  emptyRowTitle: {
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
   emptyRowHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
 
   // Completeness bar
@@ -714,8 +807,11 @@ const styles = StyleSheet.create({
   // Measure grid
   measureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   measureCell: {
-    width: '47%', backgroundColor: Colors.bone, borderRadius: Radius.sm,
-    padding: Spacing.md, gap: 2,
+    width: '47%',
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.sm,
+    padding: Spacing.md,
+    gap: 2,
   },
   measureLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
   measureValue: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
@@ -724,24 +820,48 @@ const styles = StyleSheet.create({
   privacyNote: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'center' },
 
   // Recent orders
-  menuList: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
-  orderRow: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    padding: Spacing.md, borderBottomWidth: 1, borderBottomColor: Colors.lightGrey,
+  menuList: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    ...Shadow.sm,
   },
-  orderTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  orderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    padding: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.lightGrey,
+  },
+  orderTitle: {
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
   orderSub: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
-  orderHint: { fontSize: FontSize.xs, color: Colors.needleGreen, marginTop: 4, fontWeight: FontWeight.medium },
+  orderHint: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    marginTop: 4,
+    fontWeight: FontWeight.medium,
+  },
   stagePill: {
-    paddingHorizontal: Spacing.sm, paddingVertical: 3,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 3,
     borderRadius: Radius.full,
   },
   stageText: { fontSize: 11, fontWeight: FontWeight.semibold },
 
   // Become a tailor
   becomeCard: {
-    backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.md, flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
     ...Shadow.sm,
   },
   becomeIcon: {
@@ -752,29 +872,40 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  becomeTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  becomeTitle: {
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
   becomeSub: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2, lineHeight: 16 },
 
   // Flat action list (Airbnb style)
   flatList: {
-    backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm,
-  },
-  flatDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.lightGrey,
-    marginLeft: Spacing.lg + 24,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    ...Shadow.sm,
   },
   flatRow: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.lg,
-    paddingHorizontal: Spacing.lg, paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.lightGrey,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.lg,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.lightGrey,
   },
+  flatRowAccent: { backgroundColor: Colors.needleGreenLight },
   rowLast: { borderBottomWidth: 0 },
   flatRowLabel: { flex: 1, fontSize: FontSize.md, color: Colors.ink },
+  flatRowLabelAccent: { color: Colors.needleGreen, fontWeight: FontWeight.semibold },
 
   // Log out
   logOutRow: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
     paddingVertical: Spacing.sm,
   },
   logOutText: { fontSize: FontSize.md, color: Colors.error, fontWeight: FontWeight.medium },

@@ -4,6 +4,14 @@
 
 - Confirm mobile sign-up, sign-in, reset-password, and in-app password change all use the shared password policy.
 - Confirm OAuth callback and recovery deep links still land in the intended screens.
+- Confirm Google and Apple SSO are production-ready:
+  - Google sign-in works on Android and iOS release builds
+  - Apple sign-in works on a real iPhone release/TestFlight build
+  - Supabase Auth has Google and Apple providers configured in the target project
+  - Supabase Auth redirect URLs include `drape://callback`
+  - iOS has the Apple Sign In capability / entitlement enabled
+  - first-time SSO users route to role selection and setup
+  - returning SSO users route to the correct customer/tailor home
 - Confirm server-side privileged actions derive the caller from the bearer token, never from client role fields.
 - Confirm biometric lock is described as a local device lock, not MFA.
 - Review error messages for auth, payment, shipping, and consultation flows so secrets and internal details are not exposed to users.
@@ -85,6 +93,7 @@
 - Confirm contact, help, trust, privacy, and security pages are coherent and current.
 - Confirm App Store / Play privacy disclosures and the iOS privacy manifest still match the shipped SDK behavior, especially for diagnostics vs optional analytics.
 - Confirm branding assets, app icon, splash, and notification visuals are in their release-ready state.
+- Confirm Drape uses the launch brand system consistently: Needle Green `#2D6A4F`, Fraunces display typography, Inter UI typography, image-led marketplace screens, and quiet Airbnb-style spacing/copy.
 - Confirm reviewer notes and permission explanations are ready:
   - `docs/testflight-review-notes.md`
   - `docs/mobile-permissions-and-disclosure-audit.md`

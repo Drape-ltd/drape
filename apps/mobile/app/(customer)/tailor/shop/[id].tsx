@@ -5,10 +5,14 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator
 import { Feather } from '@expo/vector-icons'
 import { useRefreshOnFocus, useTailorShop } from '@/lib/queries'
 import { Button, RemoteImage } from '@/components/ui'
-import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { goBackOrReturnToIfNeeded } from '@/lib/navigation'
 import { buildCustomerStockSignal } from '@/lib/ready-made-stock'
 import { formatAmount, useCurrency, type CurrencyCode } from '@/lib/currency'
+
+function createDraftSessionId() {
+  return `${new Date().getTime().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+}
 
 export default function TailorShopScreen() {
   const { id, returnTo } = useLocalSearchParams<{ id: string; returnTo?: string }>()
@@ -82,10 +86,11 @@ export default function TailorShopScreen() {
               label={customOrdersAvailable ? 'Start custom order' : 'Custom orders unavailable'}
               disabled={!customOrdersAvailable}
               onPress={() => router.push({
-                pathname: `/(customer)/brief/${id}` as any,
+                pathname: '/(customer)/brief/[tailorId]',
                 params: {
+                  tailorId: id,
                   returnTo: `/(customer)/tailor/shop/${id}`,
-                  draftSession: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+                  draftSession: createDraftSessionId(),
                   freshStart: '1',
                 },
               })}
@@ -215,7 +220,7 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, gap: Spacing.md, paddingBottom: Spacing.xxxl },
   header: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  headerTitle: { flex: 1, textAlign: 'center', fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  headerTitle: { flex: 1, textAlign: 'center', fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
   bestUseCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 4, ...Shadow.sm },
   bestUseEyebrow: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.6 },
   bestUseText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
@@ -228,7 +233,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   emptyHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18, textAlign: 'center' },
   unavailableCard: {
     flexDirection: 'row',
@@ -247,10 +252,10 @@ const styles = StyleSheet.create({
   itemImage: { width: '100%', height: 168, backgroundColor: Colors.boneDeep },
   itemPlaceholder: { alignItems: 'center', justifyContent: 'center' },
   itemBody: { padding: 14, gap: 4 },
-  itemTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  itemTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   itemCategory: { fontSize: FontSize.xs, color: Colors.midGrey },
   priceRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.sm },
-  itemPrice: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.needleGreen, fontFamily: 'Georgia' },
+  itemPrice: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.needleGreen, fontFamily: Fonts.display },
   itemApproxPrice: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 17 },
   stockPill: {
     alignSelf: 'flex-start',

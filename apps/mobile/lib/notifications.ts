@@ -8,6 +8,7 @@ import { Platform } from 'react-native'
 import * as Notifications from 'expo-notifications'
 import { type NotificationResponse } from 'expo-notifications'
 import { useRouter } from 'expo-router'
+import type { Href } from 'expo-router'
 import { useUserRole } from './auth'
 import { Sentry } from './sentry'
 import { supabase } from './supabase'
@@ -86,7 +87,7 @@ export function usePushNotifications(userId: string | null) {
     const activeRole = role
 
     // Foreground: show notification
-    notificationListener.current = Notifications.addNotificationReceivedListener((_notification) => {
+    notificationListener.current = Notifications.addNotificationReceivedListener(() => {
       // Already displayed by setNotificationHandler above
     })
 
@@ -101,7 +102,7 @@ export function usePushNotifications(userId: string | null) {
       const data = (response.notification.request.content.data ?? {}) as Record<string, unknown>
       const nextPath = resolveNotificationPath(activeRole, data)
       if (nextPath) {
-        router.push(nextPath as any)
+        router.push(nextPath as Href)
       }
     }
 

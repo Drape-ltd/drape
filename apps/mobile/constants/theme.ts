@@ -1,6 +1,6 @@
 // Mobile aliases for the locked shared Drape design system.
 import { Appearance } from 'react-native'
-import { colors, darkColors, shadows } from '@drape/shared/design-system'
+import { colors, darkColors, shadows, typography } from '@drape/shared/design-system'
 
 const lightPalette = {
   // Brand
@@ -31,6 +31,10 @@ const lightPalette = {
   statusErrorBg: colors.statusErrorBg,
   statusPending: colors.statusPending,
   statusPendingBg: colors.statusPendingBg,
+  timeEvening: colors.timeEvening,
+  timeEveningBg: colors.timeEveningBg,
+  disabledFill: colors.disabledFill,
+  disabledText: colors.disabledText,
 } as const
 
 type ColorPalette = Record<keyof typeof lightPalette, string>
@@ -66,6 +70,10 @@ const darkPalette: ColorPalette = {
   statusErrorBg: darkColors.statusErrorBg,
   statusPending: darkColors.statusPending,
   statusPendingBg: darkColors.statusPendingBg,
+  timeEvening: darkColors.timeEvening,
+  timeEveningBg: darkColors.timeEveningBg,
+  disabledFill: darkColors.disabledFill,
+  disabledText: darkColors.disabledText,
 }
 
 function isDarkMode() {
@@ -108,6 +116,10 @@ export const Colors = {
   get statusErrorBg() { return color('statusErrorBg') },
   get statusPending() { return color('statusPending') },
   get statusPendingBg() { return color('statusPendingBg') },
+  get timeEvening() { return color('timeEvening') },
+  get timeEveningBg() { return color('timeEveningBg') },
+  get disabledFill() { return color('disabledFill') },
+  get disabledText() { return color('disabledText') },
 } satisfies ColorPalette
 
 export const Spacing = {
@@ -136,6 +148,15 @@ export const FontWeight = {
   semibold: '600' as const,
   bold: '700' as const,
 }
+
+export const Fonts = {
+  display: typography.display,
+  body: typography.body,
+  bodyMedium: 'DrapeTextMedium',
+  bodySemiBold: 'DrapeTextSemiBold',
+  bodyBold: 'DrapeTextBold',
+  mono: typography.mono,
+} as const
 
 export const Radius = {
   sm: 6,

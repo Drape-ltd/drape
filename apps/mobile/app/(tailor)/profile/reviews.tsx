@@ -10,7 +10,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { filterContactInfo } from '@drape/shared/contact-filter'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { goBackOrFallback } from '@/lib/navigation'
 
@@ -25,6 +25,33 @@ type ReviewRow = {
   response: string | null
   publishedAt: string | null
   flagged: boolean
+}
+
+type CustomerProfileJoinRow = {
+  display_name: string | null
+  avatar_url: string | null
+}
+
+type ReviewOrderJoinRow = {
+  customer_profiles: CustomerProfileJoinRow | CustomerProfileJoinRow[] | null
+}
+
+type ReviewQueryRow = {
+  id: string
+  rating: number | null
+  tags: string[] | null
+  body: string | null
+  reviewer_name: string | null
+  created_at: string
+  tailor_response: string | null
+  published_at: string | null
+  flagged: boolean | null
+  orders: ReviewOrderJoinRow | ReviewOrderJoinRow[] | null
+}
+
+function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
 }
 
 function asStringList(value: unknown): string[] {
@@ -61,6 +88,7 @@ export default function TailorReviewsScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
+  const userId = user?.id ?? null
   const [reviews, setReviews] = useState<ReviewRow[]>([])
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState(false)
@@ -71,7 +99,7 @@ export default function TailorReviewsScreen() {
 
   useFocusEffect(useCallback(() => {
     async function load() {
-      if (!user?.id) {
+      if (!userId) {
         setReviews([])
         setFetchError(false)
         setLoading(false)
@@ -82,7 +110,7 @@ export default function TailorReviewsScreen() {
       const { data, error } = await supabase
         .from('reviews')
         .select('id, rating, tags, body, reviewer_name, created_at, tailor_response, published_at, flagged, orders!order_id(customer_profiles!customer_id(display_name, avatar_url))')
-        .eq('tailor_id', user.id)
+        .eq('tailor_id', userId)
         .order('created_at', { ascending: false })
 
       if (error) {
@@ -93,24 +121,28 @@ export default function TailorReviewsScreen() {
       }
 
       setReviews(
-        ((data ?? []) as any[]).map((r) => ({
+        ((data ?? []) as ReviewQueryRow[]).map((r) => {
+          const order = firstJoinedRow(r.orders)
+          const customerProfile = firstJoinedRow(order?.customer_profiles)
+          return {
           id: r.id,
-          rating: r.rating,
+          rating: r.rating ?? 0,
           tags: asStringList(r.tags),
           body: r.body,
-          reviewerName: r.orders?.customer_profiles?.display_name ?? r.reviewer_name ?? 'Customer',
-          reviewerAvatarUrl: r.orders?.customer_profiles?.avatar_url ?? null,
+          reviewerName: customerProfile?.display_name ?? r.reviewer_name ?? 'Customer',
+          reviewerAvatarUrl: customerProfile?.avatar_url ?? null,
           createdAt: r.created_at,
           response: r.tailor_response ?? null,
           publishedAt: r.published_at ?? null,
           flagged: !!r.flagged,
-        }))
+          }
+        })
       )
       setLoading(false)
     }
 
     void load()
-  }, [user?.id]))
+  }, [userId]))
 
   function openReply(reviewId: string, existing: string | null) {
     setReplyOpen(reviewId)
@@ -173,13 +205,6 @@ export default function TailorReviewsScreen() {
       ) : (
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-            <View style={styles.guidanceCard}>
-              <Text style={styles.guidanceEyebrow}>Review visibility</Text>
-              <Text style={styles.guidanceTitle}>Public reviews clear normal trust checks before they go live on your profile.</Text>
-              <Text style={styles.guidanceText}>
-                Use this screen to respond thoughtfully, not defensively. Held reviews can still be visible to ops while moderation is in progress.
-              </Text>
-            </View>
             {reviews.length > 0 ? reviews.map((review) => (
               <View key={review.id} style={styles.reviewCard}>
                 <View style={styles.reviewHeader}>
@@ -250,10 +275,10 @@ export default function TailorReviewsScreen() {
 
                 {review.response && replyOpen !== review.id ? (
                   <View style={styles.responseWrap}>
-                    <Text style={styles.responseLabel}>Your response</Text>
+                    <Text style={styles.responseLabel}>Public response</Text>
                     <Text style={styles.responseText}>{review.response}</Text>
                     <TouchableOpacity onPress={() => openReply(review.id, review.response)}>
-                      <Text style={styles.editResponseLink}>Edit</Text>
+                      <Text style={styles.editResponseLink}>Edit response</Text>
                     </TouchableOpacity>
                   </View>
                 ) : null}
@@ -292,7 +317,7 @@ export default function TailorReviewsScreen() {
                   </View>
                 ) : !review.response ? (
                   <TouchableOpacity onPress={() => openReply(review.id, null)}>
-                    <Text style={styles.replyLink}>Reply to this review</Text>
+                    <Text style={styles.replyLink}>Respond publicly</Text>
                   </TouchableOpacity>
                 ) : null}
               </View>
@@ -322,20 +347,20 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.lightGrey,
   },
   backBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   content: { padding: Spacing.lg, gap: Spacing.md },
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
-  stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   guidanceCard: {
     backgroundColor: Colors.boneDeep,
     borderRadius: Radius.md,
     padding: Spacing.md,
-    borderLeftWidth: 3,
-    borderLeftColor: Colors.needleGreen,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '25',
     gap: 4,
   },
   guidanceEyebrow: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.6 },
-  guidanceTitle: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.semibold, lineHeight: 22, fontFamily: 'Georgia' },
+  guidanceTitle: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.semibold, lineHeight: 22, fontFamily: Fonts.display },
   guidanceText: { fontSize: FontSize.xs, lineHeight: 18, color: Colors.inkLight },
   emptyCard: {
     backgroundColor: Colors.white,
@@ -344,7 +369,7 @@ const styles = StyleSheet.create({
     gap: 6,
     ...Shadow.sm,
   },
-  emptyTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  emptyTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   emptyText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
   reviewCard: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
@@ -357,7 +382,7 @@ const styles = StyleSheet.create({
   },
   reviewAvatarImage: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.lightGrey },
   reviewInitial: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.needleGreen },
-  reviewerName: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  reviewerName: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   reviewDate: { fontSize: FontSize.xs, color: Colors.midGrey },
   reviewStars: { fontSize: FontSize.sm, color: Colors.warning },
   visibilityPill: {
@@ -387,8 +412,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreenLight,
     borderRadius: Radius.md,
     padding: Spacing.md,
-    borderLeftWidth: 3,
-    borderLeftColor: Colors.needleGreen,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '35',
     gap: 4,
   },
   responseLabel: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen },

@@ -15,7 +15,7 @@ import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { goBackOrFallback } from '@/lib/navigation'
 
 type NotifPrefs = {
@@ -74,15 +74,19 @@ export default function TailorNotificationSettingsScreen() {
   useEffect(() => {
     const stored = user?.user_metadata?.notif_prefs
     if (stored) {
-      const legacy = stored as Partial<NotifPrefs> & { promotions?: boolean }
-      setPrefs({
-        ...DEFAULT_PREFS,
-        ...legacy,
-        platformUpdates: typeof legacy.platformUpdates === 'boolean'
-          ? legacy.platformUpdates
-          : legacy.promotions ?? DEFAULT_PREFS.platformUpdates,
-      })
+      const timer = setTimeout(() => {
+        const legacy = stored as Partial<NotifPrefs> & { promotions?: boolean }
+        setPrefs({
+          ...DEFAULT_PREFS,
+          ...legacy,
+          platformUpdates: typeof legacy.platformUpdates === 'boolean'
+            ? legacy.platformUpdates
+            : legacy.promotions ?? DEFAULT_PREFS.platformUpdates,
+        })
+      }, 0)
+      return () => clearTimeout(timer)
     }
+    return undefined
   }, [user?.user_metadata?.notif_prefs])
 
   async function toggle(key: keyof NotifPrefs, value: boolean) {
@@ -108,24 +112,19 @@ export default function TailorNotificationSettingsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Notifications</Text>
+        <Text style={styles.headerTitle}>Notification settings</Text>
         {saving && <ActivityIndicator size="small" color={Colors.midGrey} style={{ marginLeft: 'auto' }} />}
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
-        <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Notification control</Text>
-          </View>
-          <Text style={styles.heroTitle}>Choose what reaches you.</Text>
-        </View>
-
-        <Text style={styles.intro}>You can change these any time.</Text>
+        <Text style={styles.intro}>
+          Choose which routine updates reach you. Critical account, safety, support, and dispute alerts may still be sent.
+        </Text>
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Orders</Text>
@@ -194,9 +193,6 @@ export default function TailorNotificationSettingsScreen() {
               disabled={saving}
             />
           </View>
-          <Text style={styles.hint}>
-            Critical account, safety, support, and dispute alerts may still be sent even when routine alerts are off.
-          </Text>
         </View>
 
       </ScrollView>
@@ -215,8 +211,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
-  body: { padding: Spacing.lg, paddingBottom: 28, gap: Spacing.sm },
+  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
+  body: { padding: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.sm },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
@@ -243,7 +239,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     color: Colors.ink,
     lineHeight: 24,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   heroSub: {
     fontSize: FontSize.md,
@@ -278,7 +274,7 @@ const styles = StyleSheet.create({
   },
   intro: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
   section: { gap: 6 },
-  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   card: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.md },
   hint: { fontSize: 11, color: Colors.midGrey, lineHeight: 16, paddingHorizontal: 2 },

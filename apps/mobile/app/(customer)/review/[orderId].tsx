@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert,
   KeyboardAvoidingView, Platform,
 } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
@@ -24,6 +24,24 @@ const REVIEW_TAGS = [
 ]
 const REVIEW_WINDOW_DAYS = 14
 
+type TailorProfileJoinRow = {
+  display_name: string | null
+}
+
+type ReviewOrderSummaryRow = {
+  stage: string | null
+  stage_updated_at: string | null
+  garment_type: string | null
+  tailor_id: string
+  tailor_profile_id: string | null
+  tailor_profiles: TailorProfileJoinRow | TailorProfileJoinRow[] | null
+}
+
+function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
 function reviewWindowClosed(stageUpdatedAt: string | null) {
   if (!stageUpdatedAt) return false
   const reviewClock = new Date(stageUpdatedAt).getTime()
@@ -34,7 +52,9 @@ function reviewWindowClosed(stageUpdatedAt: string | null) {
 export default function ReviewScreen() {
   const { orderId } = useLocalSearchParams<{ orderId: string }>()
   const router = useRouter()
+  const insets = useSafeAreaInsets()
   const { user } = useAuth()
+  const userId = user?.id ?? null
   const [orderSummary, setOrderSummary] = useState<{
     stage: string
     stageUpdatedAt: string | null
@@ -68,7 +88,7 @@ export default function ReviewScreen() {
 
   async function resolveReviewSubmitFailure(error: Error | null) {
     const payload = error ? await readFunctionErrorPayload(error) : null
-    const code = readPayloadString(payload, 'code')
+    const code = readPayloadString(payload, 'code') ?? readPayloadString(payload, 'reason')
     const payloadMessage = readPayloadString(payload, 'message') ?? readPayloadString(payload, 'error')
 
     if (code === 'UNAUTHORIZED') {
@@ -99,6 +119,14 @@ export default function ReviewScreen() {
       }
     }
 
+    if (code === 'REVIEW_ALREADY_SUBMITTED') {
+      return {
+        message: payloadMessage ?? 'You already reviewed this order.',
+        bodyError: '',
+        showAlert: true,
+      }
+    }
+
     if (code === 'REVIEW_WINDOW_CLOSED') {
       return {
         message: payloadMessage ?? `This review window has closed. Reviews can only be added within ${REVIEW_WINDOW_DAYS} days of delivery or collection.`,
@@ -122,7 +150,7 @@ export default function ReviewScreen() {
     }
   }
 
-  async function loadOrderSummary() {
+  const loadOrderSummary = useCallback(async () => {
     setLoadingOrder(true)
     setOrderErrorMessage('')
     setOrderSummary(null)
@@ -132,7 +160,7 @@ export default function ReviewScreen() {
         .from('orders')
         .select('stage, stage_updated_at, garment_type, tailor_id, tailor_profile_id, tailor_profiles!tailor_profile_id(display_name)')
         .eq('id', orderId)
-        .eq('customer_id', user?.id)
+        .eq('customer_id', userId)
         .maybeSingle()
 
       if (error) throw error
@@ -142,8 +170,9 @@ export default function ReviewScreen() {
         return
       }
 
-      const order = data as any
-      if (!['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(order.stage)) {
+      const order = data as ReviewOrderSummaryRow
+      const currentStage = order.stage ?? ''
+      if (!['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(currentStage)) {
         setOrderSummary(null)
         setLoadingOrder(false)
         Alert.alert('Review unavailable', 'This order is not ready for review yet.')
@@ -156,13 +185,25 @@ export default function ReviewScreen() {
         return
       }
 
+      const { count: existingReviewCount, error: existingReviewError } = await supabase
+        .from('reviews')
+        .select('id', { count: 'exact', head: true })
+        .eq('order_id', orderId)
+
+      if (existingReviewError) throw existingReviewError
+      if ((existingReviewCount ?? 0) > 0) {
+        setOrderErrorMessage('You already reviewed this order. You can review the same tailor again after a future completed order.')
+        setLoadingOrder(false)
+        return
+      }
+
       setOrderSummary({
-        stage: order.stage,
+        stage: currentStage,
         stageUpdatedAt: order.stage_updated_at ?? null,
-        garmentType: order.garment_type,
+        garmentType: order.garment_type ?? 'Order',
         tailorId: order.tailor_id,
         tailorProfileId: order.tailor_profile_id ?? null,
-        tailorName: order.tailor_profiles?.display_name ?? 'your tailor',
+        tailorName: firstJoinedRow(order.tailor_profiles)?.display_name ?? 'your tailor',
       })
     } catch (error) {
       setOrderErrorMessage(
@@ -173,11 +214,14 @@ export default function ReviewScreen() {
     } finally {
       setLoadingOrder(false)
     }
-  }
+  }, [orderId, router, userId])
 
   useEffect(() => {
-    void loadOrderSummary()
-  }, [orderId, user?.id])
+    const timer = setTimeout(() => {
+      void loadOrderSummary()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [loadOrderSummary])
 
   function validateBody(text: string) {
     const res = filterContactInfo(text)
@@ -335,7 +379,7 @@ export default function ReviewScreen() {
 
   if (loadingOrder) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Order review</Text>
@@ -351,7 +395,7 @@ export default function ReviewScreen() {
 
   if (orderErrorMessage || !orderSummary) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Order review</Text>
@@ -372,7 +416,7 @@ export default function ReviewScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
           <View style={styles.content}>
@@ -467,7 +511,7 @@ export default function ReviewScreen() {
         </ScrollView>
 
         {/* CTAs */}
-        <View style={styles.cta}>
+        <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom + Spacing.sm, Spacing.xl) }]}>
           {submitError ? <Text style={styles.submitError}>{submitError}</Text> : null}
           <Button
             label="Submit review"
@@ -520,7 +564,7 @@ const styles = StyleSheet.create({
 
   noteCard: {
     backgroundColor: Colors.boneDeep, borderRadius: Radius.md, padding: Spacing.md,
-    borderLeftWidth: 3, borderLeftColor: Colors.needleGreen,
+    borderWidth: 1, borderColor: Colors.needleGreen + '35',
   },
   noteText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },

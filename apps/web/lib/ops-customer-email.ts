@@ -51,8 +51,8 @@ export async function sendOpsCustomerRefundEmail(input: {
     : `A refund was issued for order #${input.orderReference}`
   const amount = formatMoney(input.amount, input.currency)
   const html = `
-    <div style="font-family:Georgia,serif;max-width:640px;margin:0 auto;color:#2c2c2a">
-      <p style="margin:0 0 10px;color:#1d9e75;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Drape support</p>
+    <div style="font-family:Inter,Arial,sans-serif;max-width:640px;margin:0 auto;color:#2c2c2a">
+      <p style="margin:0 0 10px;color:#2d6a4f;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Drape support</p>
       <h1 style="margin:0 0 14px;font-size:30px;line-height:1.1">${escapeHtml(input.partial ? 'Your partial refund is on the way' : 'Your refund is on the way')}</h1>
       <p style="margin:0 0 16px;font:16px/1.7 Calibri,Arial,sans-serif;color:#4a4a47">Hi ${escapeHtml(input.customerName)},</p>
       <p style="margin:0 0 16px;font:16px/1.7 Calibri,Arial,sans-serif;color:#4a4a47">

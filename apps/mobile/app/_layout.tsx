@@ -3,6 +3,17 @@ import { AppState, AppStateStatus, Modal, View, ActivityIndicator, StyleSheet, A
 import { Stack, useRouter, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import * as SplashScreen from 'expo-splash-screen'
+import { useFonts } from 'expo-font'
+import {
+  Fraunces_600SemiBold,
+  Fraunces_700Bold,
+} from '@expo-google-fonts/fraunces'
+import {
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+} from '@expo-google-fonts/inter'
 
 // Keep the native splash screen visible until RouteGuard has resolved auth + role + profile.
 // This prevents any JS route from flashing through on app start / reload.
@@ -19,7 +30,7 @@ import { initSentry, Sentry } from '@/lib/sentry'
 import { identify, setAnalyticsConsent } from '@/lib/analytics'
 import { isBiometricEnabled, authenticate } from '@/lib/biometric'
 import { queryClient } from '@/lib/queryClient'
-import { Colors, FontSize, FontWeight, Spacing } from '@/constants/theme'
+import { Colors, FontSize, FontWeight, Fonts, Spacing } from '@/constants/theme'
 import { validatePhoneForProfile } from '@drape/shared/phone'
 
 const LOCK_AFTER_MS = 5 * 60 * 1000 // lock after 5 minutes in background
@@ -34,6 +45,15 @@ function hideNativeSplash(reason: string) {
 
 function hasUsablePhone(value: unknown): boolean {
   return typeof value === 'string' && validatePhoneForProfile(value) === null
+}
+
+type CustomerProfileGuardRow = {
+  id: string
+  display_name: string | null
+  phone: string | null
+  unit_preference: string | null
+  garment_context: string | null
+  measurements: Record<string, unknown> | null
 }
 
 function isTailorProfileCompleteFromRow(row: unknown): boolean {
@@ -101,7 +121,7 @@ function BiometricGate() {
         setLocked(false)
       }
     })
-  }, [locked])
+  }, [locked, signOut])
 
   return (
     <Modal visible={locked} transparent animationType="fade" onRequestClose={() => {}}>
@@ -218,21 +238,28 @@ const startupErrorStyles = StyleSheet.create({
   },
 })
 
-function RouteGuard() {
+function RouteGuard({ appReady }: { appReady: boolean }) {
   const { session, loading, user } = useAuth()
   const role = useUserRole()
-  usePushNotifications(user?.id ?? null)
+  const userId = user?.id ?? null
+  const userEmail = user?.email ?? null
+  const userPhone =
+    typeof user?.user_metadata?.phone === 'string' ? user.user_metadata.phone : null
+  usePushNotifications(userId)
   const segments = useSegments()
+  const rootSegment = segments[0] as string | undefined
+  const secondSegment = segments[1] as string | undefined
+  const thirdSegment = segments[2] as string | undefined
   const router = useRouter()
   const splashHidden = useRef(false)
   const [tailorProfileChecked, setTailorProfileChecked] = useState(false)
   const [tailorHasProfile, setTailorHasProfile] = useState(false)
   const [tailorProfileCompleted, setTailorProfileCompleted] = useState(false)
   const [tailorProfileCheckFailed, setTailorProfileCheckFailed] = useState(false)
+  const [tailorProfileChecking, setTailorProfileChecking] = useState(false)
   const [customerProfileChecked, setCustomerProfileChecked] = useState(false)
   const [customerProfileComplete, setCustomerProfileComplete] = useState(false)
-  const customerCheckInProgress = useRef(false)
-  const tailorCheckInProgress = useRef(false)
+  const [customerProfileChecking, setCustomerProfileChecking] = useState(false)
   const analyticsSharing =
     user?.user_metadata?.privacy_prefs?.analyticsSharing === true
 
@@ -240,121 +267,151 @@ function RouteGuard() {
   // RouteGuard never unmounts, so stale `customerProfileComplete = true` from a previous session
   // would otherwise prevent the profile check from re-running for the new user.
   useEffect(() => {
-    setCustomerProfileChecked(false)
-    setCustomerProfileComplete(false)
-    setTailorProfileChecked(false)
-    setTailorHasProfile(false)
-    setTailorProfileCompleted(false)
-    setTailorProfileCheckFailed(false)
-  }, [user?.id, role])
+    const timer = setTimeout(() => {
+      setCustomerProfileChecked(false)
+      setCustomerProfileComplete(false)
+      setCustomerProfileChecking(false)
+      setTailorProfileChecked(false)
+      setTailorHasProfile(false)
+      setTailorProfileCompleted(false)
+      setTailorProfileCheckFailed(false)
+      setTailorProfileChecking(false)
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [userId, role])
 
   // Optional product analytics stay off until we know the user's preference.
   useEffect(() => {
     if (loading) return
-    setAnalyticsConsent(!!user?.id && analyticsSharing)
-  }, [loading, user?.id, analyticsSharing])
+    setAnalyticsConsent(!!userId && analyticsSharing)
+  }, [loading, userId, analyticsSharing])
 
   // Identify only after optional analytics is explicitly enabled for this user.
   useEffect(() => {
-    if (user?.id && analyticsSharing) {
-      identify(user.id, {
+    if (userId && analyticsSharing) {
+      identify(userId, {
         role: role ?? undefined,
-        email: user.email,
+        email: userEmail ?? undefined,
       })
     }
-  }, [user?.id, user?.email, role, analyticsSharing])
+  }, [userId, userEmail, role, analyticsSharing])
 
   useEffect(() => {
     if (loading) return
-    if (user?.id) {
+    if (userId) {
       Sentry.setUser({
-        id: user.id,
-        email: user.email ?? undefined,
+        id: userId,
+        email: userEmail ?? undefined,
         role: role ?? undefined,
       })
     } else {
       Sentry.setUser(null)
     }
-  }, [loading, user?.id, user?.email, role])
+  }, [loading, userId, userEmail, role])
 
   // When a customer signs in (or leaves auth screens), check whether their profile exists.
   // Using `id` — any row means setup is done. Re-checks on segment change so the guard
   // picks up the newly-created row immediately after customer-setup completes.
   useEffect(() => {
-    if (role !== 'CUSTOMER' || !user?.id) return
+    if (role !== 'CUSTOMER' || !userId) return
     if (customerProfileComplete) return // already confirmed — no need to re-query
-    customerCheckInProgress.current = true
-    setCustomerProfileChecked(false)
-    supabase
-      .from('customer_profiles')
-      .select('id, display_name, phone, unit_preference, garment_context, measurements')
-      .eq('user_id', user.id)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        customerCheckInProgress.current = false
-        if (error) {
-          // Network/DB error — don't update profile state; unblock so splash can hide.
-          // The customer's profile screens have their own error handling.
-          setCustomerProfileChecked(true)
-          return
-        }
-        const measurements = (data as any)?.measurements ?? {}
-        const hasDisplayName = typeof (data as any)?.display_name === 'string' && (data as any).display_name.trim().length > 0
-        const hasPhone = hasUsablePhone((data as any)?.phone) || hasUsablePhone(user?.user_metadata?.phone)
-        const hasUnit =
-          typeof (data as any)?.unit_preference === 'string' ||
-          typeof measurements?.unit === 'string'
-        const hasGarmentContext =
-          typeof (data as any)?.garment_context === 'string' ||
-          typeof measurements?.garmentContext === 'string'
+    let cancelled = false
+    const timer = setTimeout(() => {
+      setCustomerProfileChecking(true)
+      setCustomerProfileChecked(false)
+      supabase
+        .from('customer_profiles')
+        .select('id, display_name, phone, unit_preference, garment_context, measurements')
+        .eq('user_id', userId)
+        .maybeSingle()
+        .then(({ data, error }) => {
+          if (cancelled) return
+          setCustomerProfileChecking(false)
+          if (error) {
+            // Network/DB error — don't update profile state; unblock so splash can hide.
+            // The customer's profile screens have their own error handling.
+            setCustomerProfileChecked(true)
+            return
+          }
+          const profile = data as CustomerProfileGuardRow | null
+          const measurements = profile?.measurements ?? {}
+          const hasDisplayName =
+            typeof profile?.display_name === 'string' && profile.display_name.trim().length > 0
+          const hasPhone = hasUsablePhone(profile?.phone) || hasUsablePhone(userPhone)
+          const hasUnit =
+            typeof profile?.unit_preference === 'string' ||
+            typeof measurements?.unit === 'string'
+          const hasGarmentContext =
+            typeof profile?.garment_context === 'string' ||
+            typeof measurements?.garmentContext === 'string'
 
-        setCustomerProfileComplete(hasDisplayName && hasPhone && hasUnit && hasGarmentContext)
-        setCustomerProfileChecked(true)
-      })
-  }, [role, user?.id, segments[0]])
+          setCustomerProfileComplete(hasDisplayName && hasPhone && hasUnit && hasGarmentContext)
+          setCustomerProfileChecked(true)
+        })
+    }, 0)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [customerProfileComplete, role, rootSegment, userId, userPhone])
 
   // When a tailor signs in or navigates within the tailor section, check whether they've completed setup.
   // segments[2] is included so the check re-fires when leaving the setup screen (segments[2] goes from
   // 'setup' → undefined), allowing the guard to pick up profile_completed=true before routing fires.
   useEffect(() => {
-    if (role !== 'TAILOR' || !user?.id) return
+    if (role !== 'TAILOR' || !userId) return
     // Once the profile is confirmed complete, never re-query — prevents redirect loop after submit
     if (tailorProfileChecked && tailorProfileCompleted) return
-    tailorCheckInProgress.current = true
-    setTailorProfileChecked(false)
-    supabase
-      .from('tailor_profiles')
-      .select('id, profile_completed, display_name, location, id_verification_status')
-      .eq('user_id', user.id)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        tailorCheckInProgress.current = false
-        if (error) {
-          // Network/DB error — don't update profile state; unblock so splash can hide.
-          setTailorProfileCheckFailed(true)
+    let cancelled = false
+    const timer = setTimeout(() => {
+      setTailorProfileChecking(true)
+      setTailorProfileChecked(false)
+      supabase
+        .from('tailor_profiles')
+        .select('id, profile_completed, display_name, location, id_verification_status')
+        .eq('user_id', userId)
+        .maybeSingle()
+        .then(({ data, error }) => {
+          if (cancelled) return
+          setTailorProfileChecking(false)
+          if (error) {
+            // Network/DB error — don't update profile state; unblock so splash can hide.
+            setTailorProfileCheckFailed(true)
+            setTailorProfileChecked(true)
+            return
+          }
+          setTailorProfileCheckFailed(false)
+          setTailorHasProfile(!!data)
+          setTailorProfileCompleted(isTailorProfileCompleteFromRow(data))
           setTailorProfileChecked(true)
-          return
-        }
-        setTailorProfileCheckFailed(false)
-        setTailorHasProfile(!!data)
-        setTailorProfileCompleted(isTailorProfileCompleteFromRow(data))
-        setTailorProfileChecked(true)
-      })
-  }, [role, user?.id, segments[0], segments[1], segments[2], tailorProfileCompleted])
+        })
+    }, 0)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [
+    role,
+    rootSegment,
+    secondSegment,
+    tailorProfileChecked,
+    tailorProfileCompleted,
+    thirdSegment,
+    userId,
+  ])
 
   useEffect(() => {
     if (loading) return
 
-    const rootSegment = segments[0] as string | undefined
     const inAuth = rootSegment === '(auth)'
     const inCustomer = rootSegment === '(customer)'
     const inTailor = rootSegment === '(tailor)'
     const inVision = rootSegment === 'vision'
     const inPaymentReturn = rootSegment === 'paystack-redirect' || rootSegment === 'stripe-redirect'
-    const onResetPassword = inAuth && segments[1] === 'reset-password'
+    const onResetPassword = inAuth && secondSegment === 'reset-password'
     // Passport claim links are public deep links — allow unauthenticated access
     // so customers who aren't signed in can still see the preview before logging in.
-    const inPassport = segments[0] === 'passport'
+    const inPassport = rootSegment === 'passport'
 
     if (!session) {
       if (!inAuth && !inPassport) router.replace('/(auth)/welcome')
@@ -363,7 +420,7 @@ function RouteGuard() {
 
     // OAuth sign-in with no role yet — pick role before proceeding
     if (!role) {
-      const onRoleSelect = segments[0] === '(auth)' && segments[1] === 'role-select'
+      const onRoleSelect = rootSegment === '(auth)' && secondSegment === 'role-select'
       if (!onRoleSelect) router.replace('/(auth)/role-select')
       return
     }
@@ -373,16 +430,16 @@ function RouteGuard() {
     }
 
     if (role === 'CUSTOMER') {
-      if (!customerProfileChecked || customerCheckInProgress.current) return
+      if (!customerProfileChecked || customerProfileChecking) return
       if (!customerProfileComplete) {
         // New customer — send to profile setup unless already there
-        const onSetup = inAuth && segments[1] === 'customer-setup'
+        const onSetup = inAuth && secondSegment === 'customer-setup'
         if (!onSetup) router.replace('/(auth)/customer-setup')
         return
       }
       if (!inCustomer && !inVision && !inPaymentReturn) router.replace('/(customer)')
     } else if (role === 'TAILOR') {
-      if (!tailorProfileChecked || tailorCheckInProgress.current) return
+      if (!tailorProfileChecked || tailorProfileChecking) return
       if (tailorProfileCheckFailed) {
         // Do not shove a signed-in tailor into setup because a transient profile
         // lookup failed. Individual screens can show their own retry states.
@@ -391,22 +448,39 @@ function RouteGuard() {
       }
       if (!tailorHasProfile || !tailorProfileCompleted) {
         // No profile row yet, or profile submitted but not yet completed — send to setup
-        const onSetup = inTailor && segments[1] === 'profile' && segments[2] === 'setup'
+        const onSetup = inTailor && secondSegment === 'profile' && thirdSegment === 'setup'
         if (!onSetup) router.replace('/(tailor)/profile/setup')
         return
       }
       // Profile is complete — never redirect to setup again
       if (!inTailor && !inVision && !inPaymentReturn) router.replace('/(tailor)')
     }
-  }, [session, loading, role, segments, tailorProfileChecked, tailorHasProfile, tailorProfileCompleted, tailorProfileCheckFailed, customerProfileChecked, customerProfileComplete])
+  }, [
+    customerProfileChecked,
+    customerProfileChecking,
+    customerProfileComplete,
+    loading,
+    role,
+    rootSegment,
+    router,
+    secondSegment,
+    session,
+    tailorHasProfile,
+    tailorProfileChecked,
+    tailorProfileCheckFailed,
+    tailorProfileChecking,
+    tailorProfileCompleted,
+    thirdSegment,
+  ])
 
   // Hide the native splash screen only once we know where to send the user.
   // Until then, preventAutoHideAsync() (called at module level) keeps it up —
   // so no JS route can flash through on app start or reload.
   const resolving =
+    !appReady ||
     loading ||
-    (!!session && role === 'CUSTOMER' && (!customerProfileChecked || customerCheckInProgress.current)) ||
-    (!!session && role === 'TAILOR'    && (!tailorProfileChecked   || tailorCheckInProgress.current))
+    (!!session && role === 'CUSTOMER' && (!customerProfileChecked || customerProfileChecking)) ||
+    (!!session && role === 'TAILOR'    && (!tailorProfileChecked   || tailorProfileChecking))
 
   function hideSplashOnce(reason: string) {
     if (splashHidden.current) return
@@ -434,6 +508,23 @@ function RouteGuard() {
 export default function RootLayout() {
   const colorScheme = useColorScheme()
   const statusBarStyle = colorScheme === 'dark' ? 'light' : 'dark'
+  const [fontsLoaded, fontError] = useFonts({
+    DrapeDisplay: Fraunces_600SemiBold,
+    DrapeDisplayBold: Fraunces_700Bold,
+    DrapeText: Inter_400Regular,
+    DrapeTextMedium: Inter_500Medium,
+    DrapeTextSemiBold: Inter_600SemiBold,
+    DrapeTextBold: Inter_700Bold,
+  })
+  const appReady = fontsLoaded || !!fontError
+
+  useEffect(() => {
+    if (fontError) {
+      Sentry.captureException(fontError, {
+        tags: { area: 'font_loading' },
+      })
+    }
+  }, [fontError])
 
   return (
     <StartupErrorBoundary>
@@ -446,7 +537,7 @@ export default function RootLayout() {
         <AuthProvider>
           <CustomerProfileProvider>
           <TailorProfileProvider>
-          <RouteGuard />
+          <RouteGuard appReady={appReady} />
           <BiometricGate />
           <StatusBar style={statusBarStyle} />
           <Stack
@@ -454,7 +545,7 @@ export default function RootLayout() {
             screenOptions={{
               headerStyle: { backgroundColor: Colors.bone },
               headerTintColor: Colors.ink,
-              headerTitleStyle: { fontWeight: '600', color: Colors.ink },
+              headerTitleStyle: { fontFamily: Fonts.bodySemiBold, fontWeight: '600', color: Colors.ink },
               headerShadowVisible: false,
               contentStyle: { backgroundColor: Colors.bone },
               animation: 'slide_from_right',

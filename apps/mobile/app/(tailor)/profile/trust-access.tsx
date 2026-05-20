@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking, ActivityIndicator,
 } from 'react-native'
@@ -12,12 +12,26 @@ import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { goBackOrFallback } from '@/lib/navigation'
 import { deriveTailorAccessGuidance } from '@/lib/tailor-access'
 import { payoutSetupCopy, type TailorReadinessInput } from '@/lib/tailor-readiness'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+
+type TailorAccessRow = {
+  profile_completed: boolean | null
+  id_verification_status: string | null
+  is_live: boolean | null
+  ships_internationally: boolean | null
+  currency: string | null
+  payout_currency: string | null
+  payout_provider: 'PAYSTACK' | 'STRIPE' | null
+  payout_reverification_required: boolean | null
+  payout_account_verified: boolean | null
+  payout_account_type: 'PAYSTACK' | 'STRIPE_CONNECT' | null
+}
 
 export default function TailorTrustAccessScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
+  const userId = user?.id
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [input, setInput] = useState<TailorReadinessInput | null>(null)
@@ -42,8 +56,8 @@ export default function TailorTrustAccessScreen() {
     }
   }
 
-  async function load() {
-    if (!user?.id) {
+  const load = useCallback(async () => {
+    if (!userId) {
       setInput(null)
       setLoadError('')
       setLoading(false)
@@ -57,7 +71,7 @@ export default function TailorTrustAccessScreen() {
       const { data, error } = await supabase
         .from('tailor_profiles')
         .select('profile_completed, id_verification_status, is_live, ships_internationally, currency, payout_currency, payout_provider, payout_reverification_required, payout_account_verified, payout_account_type')
-        .eq('user_id', user.id)
+        .eq('user_id', userId)
         .maybeSingle()
 
       if (error) throw error
@@ -68,20 +82,21 @@ export default function TailorTrustAccessScreen() {
         return
       }
 
+      const row = data as TailorAccessRow
       setInput({
-        profileCompleted: (data as any).profile_completed ?? false,
-        idVerificationStatus: (data as any).id_verification_status ?? 'NOT_SUBMITTED',
-        isLive: (data as any).is_live ?? false,
+        profileCompleted: row.profile_completed ?? false,
+        idVerificationStatus: row.id_verification_status ?? 'NOT_SUBMITTED',
+        isLive: row.is_live ?? false,
         stripeAccountId: null,
         paystackAccountId: null,
-        payoutCurrency: (data as any).payout_currency ?? null,
-        payoutProvider: (data as any).payout_provider ?? null,
-        payoutReverificationRequired: (data as any).payout_reverification_required ?? null,
-        payoutAccountVerified: (data as any).payout_account_verified ?? null,
-        payoutAccountType: (data as any).payout_account_type ?? null,
-        shipsInternationally: (data as any).ships_internationally ?? false,
+        payoutCurrency: row.payout_currency ?? null,
+        payoutProvider: row.payout_provider ?? null,
+        payoutReverificationRequired: row.payout_reverification_required ?? null,
+        payoutAccountVerified: row.payout_account_verified ?? null,
+        payoutAccountType: row.payout_account_type ?? null,
+        shipsInternationally: row.ships_internationally ?? false,
       })
-      setWorkingCurrency((data as any).currency ?? null)
+      setWorkingCurrency(row.currency ?? null)
     } catch (error) {
       setLoadError(
         isLikelyConnectivityIssue(error)
@@ -91,11 +106,14 @@ export default function TailorTrustAccessScreen() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [userId])
 
   useEffect(() => {
-    void load()
-  }, [user?.id])
+    const timer = setTimeout(() => {
+      void load()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [load])
 
   const guidance = deriveTailorAccessGuidance(input)
   const payoutNextStep = payoutSetupCopy(workingCurrency)
@@ -114,7 +132,7 @@ export default function TailorTrustAccessScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.backBtn} onPress={goBack}>
             <Feather name="arrow-left" size={20} color={Colors.ink} />
@@ -137,7 +155,7 @@ export default function TailorTrustAccessScreen() {
 
   if (loadError) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.backBtn} onPress={goBack}>
             <Feather name="arrow-left" size={20} color={Colors.ink} />
@@ -162,7 +180,7 @@ export default function TailorTrustAccessScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
@@ -227,7 +245,7 @@ export default function TailorTrustAccessScreen() {
               ? 'This reads like a review state. The usual next move is to wait or add missing context, not to file a full appeal immediately.'
               : guidance.state === 'FIX_REQUIRED'
                 ? 'This reads like a self-fixable hold first. Fix the requirement in-app when possible, then use support if the result still looks wrong.'
-                : 'You are not in an appeal state right now. If Drape later limits access more broadly, this page should explain the scope and what evidence matters.'}
+                : 'No appeal is needed right now. Keep your profile, payout details, and order communication current.'}
           </Text>
           {guidance.appealCopy ? <Text style={styles.noteText}>{guidance.appealCopy}</Text> : null}
           {guidance.state !== 'CLEAR' ? (
@@ -239,13 +257,6 @@ export default function TailorTrustAccessScreen() {
             </TouchableOpacity>
           ) : null}
         </View>
-
-        {guidance.caution ? (
-          <View style={styles.cautionCard}>
-            <Text style={styles.cautionTitle}>Current scope</Text>
-            <Text style={styles.cautionText}>{guidance.caution}</Text>
-          </View>
-        ) : null}
 
         <View style={styles.infoCard}>
           <Text style={styles.sectionEyebrow}>Need human help?</Text>
@@ -268,19 +279,21 @@ export default function TailorTrustAccessScreen() {
                 <Feather name="chevron-right" size={16} color={Colors.midGrey} />
               </TouchableOpacity>
             ) : null}
-            <TouchableOpacity
-              style={styles.contactRow}
-              onPress={() => { void openEmail(CONTACTS.tailors, 'Drape tailor support request') }}
-            >
-              <View style={styles.contactIcon}>
-                <Feather name="help-circle" size={16} color={Colors.needleGreen} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.contactTitle}>Tailor support</Text>
-                <Text style={styles.contactSub}>{CONTACTS.tailors}</Text>
-              </View>
-              <Feather name="chevron-right" size={16} color={Colors.midGrey} />
-            </TouchableOpacity>
+            {guidance.supportEmail !== CONTACTS.tailors ? (
+              <TouchableOpacity
+                style={styles.contactRow}
+                onPress={() => { void openEmail(CONTACTS.tailors, 'Drape tailor support request') }}
+              >
+                <View style={styles.contactIcon}>
+                  <Feather name="help-circle" size={16} color={Colors.needleGreen} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.contactTitle}>Tailor support</Text>
+                  <Text style={styles.contactSub}>{CONTACTS.tailors}</Text>
+                </View>
+                <Feather name="chevron-right" size={16} color={Colors.midGrey} />
+              </TouchableOpacity>
+            ) : null}
           </View>
         </View>
       </ScrollView>
@@ -299,8 +312,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
-  body: { padding: Spacing.lg, paddingBottom: 32, gap: Spacing.md },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
+  body: { padding: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.md },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
@@ -321,7 +334,7 @@ const styles = StyleSheet.create({
   badgeTextClear: { color: Colors.needleGreen },
   badgeTextReview: { color: Colors.warning },
   badgeTextFix: { color: Colors.kanteRust },
-  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 28, fontFamily: 'Georgia' },
+  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 28, fontFamily: Fonts.display },
   heroBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   infoCard: {
     backgroundColor: Colors.white,
@@ -337,7 +350,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.4,
   },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   sectionBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   list: { gap: Spacing.sm },
   listRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
@@ -356,16 +369,6 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
   },
-  cautionCard: {
-    backgroundColor: Colors.boneDeep,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-    gap: Spacing.xs,
-    borderLeftWidth: 3,
-    borderLeftColor: Colors.needleGreen,
-  },
-  cautionTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  cautionText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
   contactList: { gap: Spacing.sm, marginTop: Spacing.xs },
   contactRow: {
     flexDirection: 'row',
@@ -401,7 +404,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  stateTitle: { fontSize: FontSize.lg, color: Colors.ink, fontWeight: FontWeight.semibold, textAlign: 'center', fontFamily: 'Georgia' },
+  stateTitle: { fontSize: FontSize.lg, color: Colors.ink, fontWeight: FontWeight.semibold, textAlign: 'center', fontFamily: Fonts.display },
   stateHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
   primaryBtn: {
     backgroundColor: Colors.needleGreen,

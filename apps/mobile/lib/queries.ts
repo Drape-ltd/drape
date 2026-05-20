@@ -15,7 +15,7 @@
  * Supabase Realtime can be added later per-screen if live updates are needed.
  */
 
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useFocusEffect } from 'expo-router'
 import { supabase } from '@/lib/supabase'
@@ -28,51 +28,54 @@ import {
   TAILOR_COMPLETED_ORDER_STAGES,
   isReadyMadeInquiryOrder,
 } from '@/lib/order-flow'
-import { buildTailorStockAlert, normalizeSizeInventory, type SizeInventory, type TailorStockAlert } from '@/lib/ready-made-stock'
+import {
+  buildTailorStockAlert,
+  normalizeSizeInventory,
+  type SizeInventory,
+  type TailorStockAlert,
+} from '@/lib/ready-made-stock'
 
 // ─── Query Key Factory ───────────────────────────────────────────────────────
 
 export const qk = {
-  customerOrders:   (userId: string, tab: 'active' | 'completed') =>
+  customerOrders: (userId: string, tab: 'active' | 'completed') =>
     ['customer-orders', userId, tab] as const,
-  customerOrder:    (orderId: string) =>
-    ['customer-order', orderId] as const,
-  customerProfile:  (userId: string) =>
-    ['customer-profile', userId] as const,
-  tailorOrders:     (userId: string, tab: 'active' | 'completed') =>
+  customerOrder: (orderId: string) => ['customer-order', orderId] as const,
+  customerProfile: (userId: string) => ['customer-profile', userId] as const,
+  tailorOrders: (userId: string, tab: 'active' | 'completed') =>
     ['tailor-orders', userId, tab] as const,
-  tailorOrder:      (orderId: string) =>
-    ['tailor-order', orderId] as const,
-  tailorPublic:     (tailorId: string) =>
-    ['tailor-public', tailorId] as const,
-  tailorShop:       (tailorId: string) =>
-    ['tailor-shop', tailorId] as const,
-  sellerItem:       (itemId: string) =>
-    ['seller-item', itemId] as const,
-  customerMeasurements: (userId: string) =>
-    ['customer-measurements', userId] as const,
-  savedTailors:     (userId: string) =>
-    ['saved-tailors', userId] as const,
-  wishlistCollections: (userId: string) =>
-    ['wishlist-collections', userId] as const,
-  tailorDashboard:  (userId: string) =>
-    ['tailor-dashboard', userId] as const,
-  customerProfileOverview: (userId: string) =>
-    ['customer-profile-overview', userId] as const,
+  tailorOrder: (orderId: string) => ['tailor-order', orderId] as const,
+  tailorPublic: (tailorId: string) => ['tailor-public', tailorId] as const,
+  tailorShop: (tailorId: string) => ['tailor-shop', tailorId] as const,
+  sellerItem: (itemId: string) => ['seller-item', itemId] as const,
+  customerMeasurements: (userId: string) => ['customer-measurements', userId] as const,
+  savedTailors: (userId: string) => ['saved-tailors', userId] as const,
+  wishlistCollections: (userId: string) => ['wishlist-collections', userId] as const,
+  tailorDashboard: (userId: string) => ['tailor-dashboard', userId] as const,
+  customerProfileOverview: (userId: string) => ['customer-profile-overview', userId] as const,
   customerMessageOrder: (orderId: string, userId: string) =>
     ['customer-message-order', orderId, userId] as const,
-  notifCount:       (userId: string) =>
-    ['notif-count', userId] as const,
+  notifCount: (userId: string) => ['notif-count', userId] as const,
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function isMissingInventoryColumnError(error: any) {
-  const message = typeof error?.message === 'string' ? error.message.toLowerCase() : ''
-  const details = typeof error?.details === 'string' ? error.details.toLowerCase() : ''
-  const hint = typeof error?.hint === 'string' ? error.hint.toLowerCase() : ''
-  return [message, details, hint].some((value) =>
-    value.includes('inventory_quantity') || value.includes('size_inventory') || value.includes('size_guide'),
+type SupabaseErrorLike = {
+  message?: unknown
+  details?: unknown
+  hint?: unknown
+}
+
+function isMissingInventoryColumnError(error: unknown) {
+  const candidate = error as SupabaseErrorLike | null
+  const message = typeof candidate?.message === 'string' ? candidate.message.toLowerCase() : ''
+  const details = typeof candidate?.details === 'string' ? candidate.details.toLowerCase() : ''
+  const hint = typeof candidate?.hint === 'string' ? candidate.hint.toLowerCase() : ''
+  return [message, details, hint].some(
+    (value) =>
+      value.includes('inventory_quantity') ||
+      value.includes('size_inventory') ||
+      value.includes('size_guide')
   )
 }
 
@@ -90,7 +93,9 @@ export function useRefreshOnFocus(refetch: () => void, minIntervalMs = 45_000) {
   const firstRender = useRef(true)
   const lastRefreshAt = useRef(0)
   const refetchRef = useRef(refetch)
-  refetchRef.current = refetch
+  useEffect(() => {
+    refetchRef.current = refetch
+  }, [refetch])
   useFocusEffect(
     useCallback(() => {
       if (firstRender.current) {
@@ -123,6 +128,302 @@ export type CustomerOrderRow = {
   quotedAmount: number | null
   quotedCurrency: string
   hasReview: boolean
+}
+
+type ProfileJoinRow = {
+  id?: string | null
+  display_name: string | null
+  avatar_url?: string | null
+  portfolio_photo_urls?: unknown
+}
+
+type ReviewJoinRow = {
+  id: string
+}
+
+type StageUpdateQueryRow = {
+  id: string
+  stage: string
+  note: string | null
+  photo_url: string | null
+  created_at: string
+}
+
+type ReadyMadePurchaseQueryRow = {
+  customer_id: string | null
+  seller_item_id: string | null
+  garment_type: string | null
+}
+
+type CustomerOrderQueryRow = {
+  id: string
+  reference: string
+  garment_type: string | null
+  order_kind: 'CUSTOM' | 'READY_MADE' | null
+  stage: OrderStage
+  quoted_completion_date: string | null
+  created_at: string
+  quoted_amount: number | null
+  currency: string | null
+  quoted_currency: string | null
+  tailor_profiles: ProfileJoinRow | ProfileJoinRow[] | null
+  reviews: ReviewJoinRow[] | null
+}
+
+type TailorOrderQueryRow = {
+  id: string
+  reference: string
+  garment_type: string | null
+  order_kind: 'CUSTOM' | 'READY_MADE' | null
+  seller_item_id: string | null
+  customer_id: string | null
+  stage: OrderStage
+  quoted_completion_date: string | null
+  quoted_amount: number | null
+  currency: string | null
+  quoted_currency: string | null
+  video_call_url: string | null
+  created_at: string
+  customer_profiles: ProfileJoinRow | ProfileJoinRow[] | null
+}
+
+type CustomerOrderDetailQueryRow = {
+  id: string
+  reference: string
+  garment_type: string | null
+  garment_description: string | null
+  stage: OrderStage
+  tailor_id: string
+  quoted_amount: number | null
+  currency: string | null
+  quoted_currency: string | null
+  quoted_completion_date: string | null
+  fabric_source: string | null
+  delivery_method: string | null
+  fabric_tracking: string | null
+  collection_code: string | null
+  video_call_url: string | null
+  created_at: string
+  tailor_profiles: ProfileJoinRow | ProfileJoinRow[] | null
+  order_stage_updates: StageUpdateQueryRow[] | null
+}
+
+type CustomerRecentOrderQueryRow = {
+  id: string
+  reference: string
+  garment_type: string | null
+  order_kind: 'CUSTOM' | 'READY_MADE' | null
+  stage: OrderStage
+  created_at: string
+  tailor_profiles: ProfileJoinRow | ProfileJoinRow[] | null
+}
+
+type SavedTailorProfileRow = {
+  id: string
+  display_name: string
+  location: string
+  tier: string
+  avg_rating: number
+  total_reviews: number
+  availability: string
+  avatar_url: string | null
+  portfolio_photo_urls: unknown
+}
+
+type SavedTailorQueryRow = {
+  id: string
+  tailor_profiles: SavedTailorProfileRow | SavedTailorProfileRow[] | null
+}
+
+type WishlistCollectionQueryRow = {
+  id: string
+  name: string
+  cover_image_url: string | null
+  item_count: number | null
+  created_at: string
+  updated_at: string
+}
+
+type WishlistItemQueryRow = {
+  id: string
+  collection_id: string
+  item_type: 'TAILOR' | 'READY_MADE_ITEM'
+  tailor_id: string | null
+  ready_made_item_id: string | null
+  note: string | null
+  created_at: string
+}
+
+type WishlistReadyMadeQueryRow = {
+  id: string
+  title: string
+  category: string | null
+  currency: CurrencyCode
+  price_amount: number
+  photo_urls: unknown
+  tailor_profile_id: string
+  stock_status: string | null
+  inventory_quantity: number | null
+  is_live: boolean | null
+  updated_at: string | null
+  tailor_profiles: ProfileJoinRow | ProfileJoinRow[] | null
+}
+
+type TailorPublicProfileQueryRow = {
+  id: string
+  display_name: string
+  location: string
+  seller_type: 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP' | null
+  tier: string
+  avg_rating: number | null
+  total_reviews: number | null
+  total_orders: number
+  avg_response_hours: number | null
+  availability: string
+  bio: string | null
+  specialty_tags: unknown
+  languages: unknown
+  currency: string | null
+  price_range_min: number | null
+  price_range_max: number | null
+  avatar_url: string | null
+  portfolio_photo_urls: unknown
+  portfolio_video_urls: unknown
+  supports_custom_orders: boolean | null
+  supports_ready_made: boolean | null
+  pickup_available: boolean | null
+  delivery_available: boolean | null
+  shipping_available: boolean | null
+}
+
+type PublicReviewQueryRow = {
+  id: string
+  rating: number
+  body: string | null
+  tags: unknown
+  created_at: string
+  reviewer_name: string | null
+  tailor_response: string | null
+  orders:
+    | {
+        customer_profiles: { avatar_url: string | null } | Array<{ avatar_url: string | null }> | null
+      }
+    | Array<{
+        customer_profiles: { avatar_url: string | null } | Array<{ avatar_url: string | null }> | null
+      }>
+    | null
+}
+
+type PortfolioItemQueryRow = {
+  image_url: string | null
+  sort_order: number | null
+}
+
+type TailorShopProfileQueryRow = {
+  display_name: string | null
+  availability: string | null
+  is_live: boolean | null
+  supports_custom_orders: boolean | null
+}
+
+type SellerShopItemQueryRow = {
+  id: string
+  title: string
+  category: string | null
+  price_amount: number
+  currency: string
+  photo_urls: unknown
+  stock_status: string | null
+  inventory_quantity?: number | null
+  pickup_available: boolean | null
+  delivery_available: boolean | null
+  shipping_available: boolean | null
+}
+
+type SellerItemDetailQueryRow = SellerShopItemQueryRow & {
+  tailor_profile_id: string
+  description: string | null
+  sizes: unknown
+  size_guide?: Record<string, unknown> | null
+  size_inventory?: unknown
+  tailor_profiles:
+    | {
+        display_name: string | null
+        user_id: string | null
+        location: string | null
+        availability: string | null
+        is_live: boolean | null
+      }
+    | Array<{
+        display_name: string | null
+        user_id: string | null
+        location: string | null
+        availability: string | null
+        is_live: boolean | null
+      }>
+    | null
+}
+
+type TailorDashboardProfileQueryRow = {
+  id: string
+  display_name: string | null
+  tier: string | null
+  avg_rating: number | null
+  availability: 'OPEN' | 'LIMITED' | 'FULLY_BOOKED' | null
+  currency: string | null
+  payout_currency: string | null
+  payout_provider: 'PAYSTACK' | 'STRIPE' | null
+  payout_reverification_required: boolean | null
+  payout_account_verified: boolean | null
+  payout_account_type: 'PAYSTACK' | 'STRIPE_CONNECT' | null
+  is_live: boolean | null
+  id_verification_status: string | null
+  profile_completed: boolean | null
+}
+
+type TailorDashboardOrderQueryRow = {
+  id: string
+  reference: string
+  garment_type: string | null
+  order_kind: 'CUSTOM' | 'READY_MADE' | null
+  seller_item_id: string | null
+  customer_id: string | null
+  stage: OrderStage
+  quoted_completion_date: string | null
+  quoted_amount: number | null
+  customer_profiles: ProfileJoinRow | ProfileJoinRow[] | null
+}
+
+type MonthEarningsOrderQueryRow = {
+  quoted_amount: number | null
+  currency: string | null
+  quoted_currency: string | null
+}
+
+type StockItemQueryRow = {
+  id: string
+  title: string | null
+  sizes: unknown
+  size_inventory?: unknown
+  inventory_quantity: number | null
+  stock_status: string | null
+  is_live: boolean | null
+}
+
+type CustomerMessageOrderQueryRow = {
+  id: string
+  garment_type: string | null
+  order_kind: 'CUSTOM' | 'READY_MADE' | null
+  seller_item_id: string | null
+  stage: OrderStage
+  customer_id: string
+  video_call_url: string | null
+  tailor_profiles: ProfileJoinRow | ProfileJoinRow[] | null
+  customer_profiles: ProfileJoinRow | ProfileJoinRow[] | null
+}
+
+function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
+  return Array.isArray(value) ? (value[0] ?? null) : (value ?? null)
 }
 
 export type TailorOrderRow = {
@@ -338,9 +639,11 @@ export type CustomerMessageOrderInfo = {
   orderKind: 'CUSTOM' | 'READY_MADE'
   sellerItemId: string | null
   tailorName: string
+  tailorAvatarUrl: string | null
   tailorId: string
   customerId: string
   customerName: string
+  customerAvatarUrl: string | null
   stage: OrderStage
   videoCallUrl: string | null
   resolvedOrderId: string
@@ -446,15 +749,13 @@ function isPubliclyAvailableReadyMade(input: {
 }
 
 function asStringList(value: unknown): string[] {
-  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+  if (Array.isArray(value))
+    return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
   if (typeof value === 'string' && value.length > 0) return [value]
   return []
 }
 
-function readyMadePurchaseKey(input: {
-  customerId?: string | null
-  sellerItemId?: string | null
-}) {
+function readyMadePurchaseKey(input: { customerId?: string | null; sellerItemId?: string | null }) {
   if (!input.customerId || !input.sellerItemId) return null
   return `${input.customerId}:${input.sellerItemId}`
 }
@@ -487,35 +788,38 @@ function readyMadePurchaseKeysForRow(input: {
 
 function hasMatchingReadyMadePurchase(
   keys: Set<string>,
-  input: { customerId?: string | null; sellerItemId?: string | null; garmentType?: string | null },
+  input: { customerId?: string | null; sellerItemId?: string | null; garmentType?: string | null }
 ) {
   return readyMadePurchaseKeysForRow(input).some((key) => keys.has(key))
 }
 
 async function fetchReadyMadePurchaseKeysForTailor(
   tailorUserId: string,
-  inquiryRows: Array<{ customer_id?: string | null; seller_item_id?: string | null; garment_type?: string | null }>,
+  inquiryRows: Array<{
+    customer_id?: string | null
+    seller_item_id?: string | null
+    garment_type?: string | null
+  }>
 ) {
   const customerIds = Array.from(
-    new Set(
-      inquiryRows
-        .map((row) => row.customer_id ?? '')
-        .filter((value) => value.length > 0),
-    ),
+    new Set(inquiryRows.map((row) => row.customer_id ?? '').filter((value) => value.length > 0))
   )
   const garmentTypes = Array.from(
     new Set(
       inquiryRows
         .map((row) => normalizeReadyMadeGarmentType(row.garment_type))
-        .filter((value) => value.length > 0),
-    ),
+        .filter((value) => value.length > 0)
+    )
   )
 
-  if (customerIds.length === 0 || (garmentTypes.length === 0 && inquiryRows.every((row) => !row.seller_item_id))) {
+  if (
+    customerIds.length === 0 ||
+    (garmentTypes.length === 0 && inquiryRows.every((row) => !row.seller_item_id))
+  ) {
     return new Set<string>()
   }
 
-  let query = supabase
+  const query = supabase
     .from('orders')
     .select('customer_id, seller_item_id, garment_type')
     .eq('tailor_id', tailorUserId)
@@ -528,13 +832,13 @@ async function fetchReadyMadePurchaseKeysForTailor(
   if (error) return new Set<string>()
 
   return new Set(
-    (data ?? []).flatMap((row: any) =>
+    ((data ?? []) as ReadyMadePurchaseQueryRow[]).flatMap((row) =>
       readyMadePurchaseKeysForRow({
         customerId: row.customer_id,
         sellerItemId: row.seller_item_id,
         garmentType: row.garment_type,
-      }),
-    ),
+      })
+    )
   )
 }
 
@@ -542,16 +846,18 @@ async function fetchReadyMadePurchaseKeysForTailor(
 
 async function fetchCustomerOrders(
   userId: string,
-  tab: 'active' | 'completed',
+  tab: 'active' | 'completed'
 ): Promise<CustomerOrderRow[]> {
   const stages = tab === 'active' ? CUSTOMER_ACTIVE_ORDER_STAGES : CUSTOMER_COMPLETED_ORDER_STAGES
   const { data, error } = await supabase
     .from('orders')
-    .select(`
+    .select(
+      `
       id, reference, garment_type, order_kind, stage, quoted_completion_date, created_at, quoted_amount, currency, quoted_currency,
       tailor_profiles!tailor_profile_id(id, display_name),
       reviews!order_id(id)
-    `)
+    `
+    )
     .eq('customer_id', userId)
     .in('stage', stages)
     .order('created_at', { ascending: false })
@@ -559,35 +865,42 @@ async function fetchCustomerOrders(
 
   if (error) throw error
 
-  return ((data ?? []) as any[])
-    .filter((o) => !isReadyMadeInquiryOrder({ orderKind: o.order_kind ?? 'CUSTOM', stage: o.stage }))
-    .map((o: any) => ({
-    id: o.id,
-    reference: o.reference,
-    garmentType: o.garment_type,
-    orderKind: o.order_kind ?? 'CUSTOM',
-    stage: o.stage,
-    tailorName: o.tailor_profiles?.display_name ?? '',
-    tailorId: o.tailor_profiles?.id ?? '',
-    estimatedDate: o.quoted_completion_date,
-    createdAt: o.created_at,
-    quotedAmount: o.quoted_amount,
-    quotedCurrency: o.currency ?? o.quoted_currency ?? 'USD',
-    hasReview: (o.reviews ?? []).length > 0,
-  }))
+  return ((data ?? []) as CustomerOrderQueryRow[])
+    .filter(
+      (o) => !isReadyMadeInquiryOrder({ orderKind: o.order_kind ?? 'CUSTOM', stage: o.stage })
+    )
+    .map((o) => {
+      const tailorProfile = firstJoinedRow(o.tailor_profiles)
+      return {
+        id: o.id,
+        reference: o.reference,
+        garmentType: o.garment_type ?? 'Order',
+        orderKind: o.order_kind ?? 'CUSTOM',
+        stage: o.stage,
+        tailorName: tailorProfile?.display_name ?? '',
+        tailorId: tailorProfile?.id ?? '',
+        estimatedDate: o.quoted_completion_date,
+        createdAt: o.created_at,
+        quotedAmount: o.quoted_amount,
+        quotedCurrency: o.currency ?? o.quoted_currency ?? 'USD',
+        hasReview: (o.reviews ?? []).length > 0,
+      }
+    })
 }
 
 async function fetchTailorOrders(
   userId: string,
-  tab: 'active' | 'completed',
+  tab: 'active' | 'completed'
 ): Promise<TailorOrderRow[]> {
   const stages = tab === 'active' ? TAILOR_ACTIVE_ORDER_STAGES : TAILOR_COMPLETED_ORDER_STAGES
   const { data, error } = await supabase
     .from('orders')
-    .select(`
+    .select(
+      `
       id, reference, garment_type, order_kind, seller_item_id, customer_id, stage, quoted_completion_date, quoted_amount, currency, quoted_currency, video_call_url, created_at,
       customer_profiles!customer_id(display_name)
-    `)
+    `
+    )
     .eq('tailor_id', userId)
     .in('stage', stages)
     .order('created_at', { ascending: false })
@@ -595,7 +908,7 @@ async function fetchTailorOrders(
 
   if (error) throw error
 
-  const rows = (data ?? []) as any[]
+  const rows = (data ?? []) as TailorOrderQueryRow[]
   const inquiryRows = rows.filter((o) => {
     if (o.stage !== 'PENDING_QUOTE') return false
     if (o.order_kind === 'READY_MADE') return true
@@ -619,37 +932,42 @@ async function fetchTailorOrders(
       if (!looksLikeReadyMadeInquiry) return true
       return !matchesPurchase
     })
-    .map((o: any) => ({
-    id: o.id,
-    reference: o.reference,
-    garmentType: o.garment_type,
-    orderKind: o.order_kind ?? 'CUSTOM',
-    sellerItemId: o.seller_item_id ?? null,
-    customerId: o.customer_id ?? null,
-    stage: o.stage,
-    customerName: o.customer_profiles?.display_name ?? 'Customer',
-    estimatedDate: o.quoted_completion_date,
-    quotedAmount: o.quoted_amount,
-    quotedCurrency: o.currency ?? o.quoted_currency ?? 'USD',
-    videoCallUrl: o.video_call_url ?? null,
-    createdAt: o.created_at,
-  }))
+    .map((o) => {
+      const customerProfile = firstJoinedRow(o.customer_profiles)
+      return {
+        id: o.id,
+        reference: o.reference,
+        garmentType: o.garment_type ?? 'Order',
+        orderKind: o.order_kind ?? 'CUSTOM',
+        sellerItemId: o.seller_item_id ?? null,
+        customerId: o.customer_id ?? null,
+        stage: o.stage,
+        customerName: customerProfile?.display_name ?? 'Customer',
+        estimatedDate: o.quoted_completion_date,
+        quotedAmount: o.quoted_amount,
+        quotedCurrency: o.currency ?? o.quoted_currency ?? 'USD',
+        videoCallUrl: o.video_call_url ?? null,
+        createdAt: o.created_at,
+      }
+    })
 }
 
 async function fetchCustomerOrderDetail(
   orderId: string,
-  userId: string,
+  userId: string
 ): Promise<CustomerOrderDetail | null> {
   const { data, error } = await supabase
     .from('orders')
-    .select(`
+    .select(
+      `
       id, reference, garment_type, garment_description, stage,
       tailor_id, tailor_profile_id, quoted_amount, currency, quoted_currency, quoted_completion_date,
       fabric_source, delivery_method, fabric_tracking,
       collection_code, video_call_url, created_at,
       tailor_profiles!tailor_profile_id(display_name),
       order_stage_updates(id, stage, note, photo_url, created_at)
-    `)
+    `
+    )
     .eq('id', orderId)
     .eq('customer_id', userId)
     .order('created_at', { ascending: true, referencedTable: 'order_stage_updates' })
@@ -657,30 +975,31 @@ async function fetchCustomerOrderDetail(
 
   if (error) throw error
   if (!data) return null
-  const d = data as any
+  const d = data as CustomerOrderDetailQueryRow
+  const tailorProfile = firstJoinedRow(d.tailor_profiles)
   return {
     id: d.id,
     reference: d.reference,
-    garmentType: d.garment_type,
+    garmentType: d.garment_type ?? 'Order',
     garmentDescription: d.garment_description,
     stage: d.stage,
     tailorId: d.tailor_id,
-    tailorName: d.tailor_profiles?.display_name ?? '',
+    tailorName: tailorProfile?.display_name ?? '',
     quotedAmount: d.quoted_amount,
     quotedCurrency: (d.currency ?? d.quoted_currency ?? 'USD') as CurrencyCode,
     quotedCompletionDate: d.quoted_completion_date,
-    fabricSource: d.fabric_source,
-    deliveryMethod: d.delivery_method,
+    fabricSource: d.fabric_source ?? '',
+    deliveryMethod: d.delivery_method ?? '',
     fabricTracking: d.fabric_tracking,
     collectionCode: d.collection_code,
     videoCallUrl: d.video_call_url ?? null,
-    stageUpdates: (d.order_stage_updates ?? []).map((u: any) => ({
-        id: u.id,
-        stage: u.stage,
-        note: u.note,
-        photoUrl: u.photo_url,
-        createdAt: u.created_at,
-      })),
+    stageUpdates: (d.order_stage_updates ?? []).map((u) => ({
+      id: u.id,
+      stage: u.stage,
+      note: u.note,
+      photoUrl: u.photo_url,
+      createdAt: u.created_at,
+    })),
     createdAt: d.created_at,
   }
 }
@@ -694,7 +1013,9 @@ async function fetchCustomerProfile(userId: string): Promise<CustomerProfileData
       .maybeSingle(),
     supabase
       .from('orders')
-      .select('id, reference, garment_type, order_kind, stage, created_at, tailor_profiles!tailor_profile_id(display_name)')
+      .select(
+        'id, reference, garment_type, order_kind, stage, created_at, tailor_profiles!tailor_profile_id(display_name)'
+      )
       .eq('customer_id', userId)
       .order('created_at', { ascending: false })
       .limit(10),
@@ -704,23 +1025,22 @@ async function fetchCustomerProfile(userId: string): Promise<CustomerProfileData
     profileRes.status === 'rejected' ||
     (profileRes.status === 'fulfilled' && !!profileRes.value.error)
   const ordersFailed =
-    ordersRes.status === 'rejected' ||
-    (ordersRes.status === 'fulfilled' && !!ordersRes.value.error)
+    ordersRes.status === 'rejected' || (ordersRes.status === 'fulfilled' && !!ordersRes.value.error)
 
   if (profileFailed && ordersFailed) {
     throw new Error('Unable to load customer profile')
   }
 
   const profile =
-    profileRes.status === 'fulfilled' && !profileRes.value.error
-      ? profileRes.value.data
-      : null
+    profileRes.status === 'fulfilled' && !profileRes.value.error ? profileRes.value.data : null
   const orders =
     ordersRes.status === 'fulfilled' && !ordersRes.value.error
-      ? ((ordersRes.value.data ?? []) as any[])
+      ? ((ordersRes.value.data ?? []) as CustomerRecentOrderQueryRow[])
       : []
   const visibleOrders = orders
-    .filter((o) => !isReadyMadeInquiryOrder({ orderKind: o.order_kind ?? 'CUSTOM', stage: o.stage }))
+    .filter(
+      (o) => !isReadyMadeInquiryOrder({ orderKind: o.order_kind ?? 'CUSTOM', stage: o.stage })
+    )
     .slice(0, 3)
 
   return {
@@ -730,10 +1050,10 @@ async function fetchCustomerProfile(userId: string): Promise<CustomerProfileData
     recentOrders: visibleOrders.map((o) => ({
       id: o.id,
       reference: o.reference,
-      garmentType: o.garment_type,
+      garmentType: o.garment_type ?? 'Order',
       orderKind: o.order_kind ?? 'CUSTOM',
-      stage: o.stage as OrderStage,
-      tailorName: (o.tailor_profiles as any)?.display_name ?? 'Tailor',
+      stage: o.stage,
+      tailorName: firstJoinedRow(o.tailor_profiles)?.display_name ?? 'Tailor',
       createdAt: o.created_at,
     })),
   }
@@ -742,35 +1062,37 @@ async function fetchCustomerProfile(userId: string): Promise<CustomerProfileData
 async function fetchSavedTailors(userId: string): Promise<SavedTailor[]> {
   const { data, error } = await supabase
     .from('saved_tailors')
-    .select(`
+    .select(
+      `
       id,
       tailor_profiles!tailor_profile_id(
         id, display_name, location, tier, avg_rating, total_reviews, availability, avatar_url, portfolio_photo_urls
       )
-    `)
+    `
+    )
     .eq('user_id', userId)
     .order('created_at', { ascending: false })
 
   if (error) throw error
 
-  return (data ?? [])
-    .filter((row: any) => row?.tailor_profiles)
-    .map((row: any) => {
-    const t = row.tailor_profiles
-    const portfolioPhotos = asStringList(t.portfolio_photo_urls)
-    return {
-      savedId: row.id,
-      id: t.id,
-      displayName: t.display_name,
-      location: t.location,
-      tier: t.tier,
-      avgRating: t.avg_rating,
-      totalReviews: t.total_reviews,
-      availability: t.availability,
-      avatarUrl: t.avatar_url ?? null,
-      portfolioPhoto: portfolioPhotos[0] ?? t.avatar_url ?? null,
-    }
-  })
+  return ((data ?? []) as SavedTailorQueryRow[])
+    .filter((row) => !!firstJoinedRow(row.tailor_profiles))
+    .map((row) => {
+      const t = firstJoinedRow(row.tailor_profiles)!
+      const portfolioPhotos = asStringList(t.portfolio_photo_urls)
+      return {
+        savedId: row.id,
+        id: t.id,
+        displayName: t.display_name,
+        location: t.location,
+        tier: t.tier,
+        avgRating: t.avg_rating,
+        totalReviews: t.total_reviews,
+        availability: t.availability,
+        avatarUrl: t.avatar_url ?? null,
+        portfolioPhoto: portfolioPhotos[0] ?? t.avatar_url ?? null,
+      }
+    })
 }
 
 async function fetchWishlistCollections(userId: string): Promise<WishlistCollection[]> {
@@ -782,7 +1104,7 @@ async function fetchWishlistCollections(userId: string): Promise<WishlistCollect
 
   if (collectionError) throw collectionError
 
-  const collections = (collectionRows ?? []) as any[]
+  const collections = (collectionRows ?? []) as WishlistCollectionQueryRow[]
   if (collections.length === 0) return []
 
   const collectionIds = collections.map((row) => row.id)
@@ -794,25 +1116,31 @@ async function fetchWishlistCollections(userId: string): Promise<WishlistCollect
 
   if (itemError) throw itemError
 
-  const items = (itemRows ?? []) as any[]
+  const items = (itemRows ?? []) as WishlistItemQueryRow[]
   const tailorIds = items
     .filter((row) => row.item_type === 'TAILOR' && typeof row.tailor_id === 'string')
     .map((row) => row.tailor_id)
   const readyMadeIds = items
-    .filter((row) => row.item_type === 'READY_MADE_ITEM' && typeof row.ready_made_item_id === 'string')
+    .filter(
+      (row) => row.item_type === 'READY_MADE_ITEM' && typeof row.ready_made_item_id === 'string'
+    )
     .map((row) => row.ready_made_item_id)
 
   const [tailorsRes, readyMadeRes] = await Promise.all([
     tailorIds.length > 0
       ? supabase
           .from('tailor_profiles')
-          .select('id, display_name, location, tier, avg_rating, total_reviews, avatar_url, portfolio_photo_urls')
+          .select(
+            'id, display_name, location, tier, avg_rating, total_reviews, avatar_url, portfolio_photo_urls'
+          )
           .in('id', tailorIds)
       : Promise.resolve({ data: [], error: null }),
     readyMadeIds.length > 0
       ? supabase
           .from('seller_items')
-          .select('id, title, category, currency, price_amount, photo_urls, tailor_profile_id, stock_status, inventory_quantity, is_live, updated_at, tailor_profiles(display_name)')
+          .select(
+            'id, title, category, currency, price_amount, photo_urls, tailor_profile_id, stock_status, inventory_quantity, is_live, updated_at, tailor_profiles(display_name)'
+          )
           .in('id', readyMadeIds)
       : Promise.resolve({ data: [], error: null }),
   ])
@@ -821,7 +1149,7 @@ async function fetchWishlistCollections(userId: string): Promise<WishlistCollect
   if (readyMadeRes.error) throw readyMadeRes.error
 
   const tailorById = new Map(
-    ((tailorsRes.data ?? []) as any[]).map((tailor) => {
+    ((tailorsRes.data ?? []) as SavedTailorProfileRow[]).map((tailor) => {
       const portfolioPhotos = asStringList(tailor.portfolio_photo_urls)
       return [
         tailor.id,
@@ -836,12 +1164,13 @@ async function fetchWishlistCollections(userId: string): Promise<WishlistCollect
           portfolioPhoto: portfolioPhotos[0] ?? tailor.avatar_url ?? null,
         },
       ]
-    }),
+    })
   )
 
   const readyMadeById = new Map(
-    ((readyMadeRes.data ?? []) as any[]).map((item) => {
+    ((readyMadeRes.data ?? []) as WishlistReadyMadeQueryRow[]).map((item) => {
       const photoUrls = asStringList(item.photo_urls)
+      const sellerProfile = firstJoinedRow(item.tailor_profiles)
       return [
         item.id,
         {
@@ -852,7 +1181,7 @@ async function fetchWishlistCollections(userId: string): Promise<WishlistCollect
           priceAmount: item.price_amount,
           photoUrl: photoUrls[0] ?? null,
           tailorProfileId: item.tailor_profile_id,
-          sellerName: item.tailor_profiles?.display_name ?? 'Tailor',
+          sellerName: sellerProfile?.display_name ?? 'Tailor',
           stockStatus: item.stock_status ?? 'IN_STOCK',
           inventoryQuantity:
             typeof item.inventory_quantity === 'number'
@@ -862,14 +1191,14 @@ async function fetchWishlistCollections(userId: string): Promise<WishlistCollect
           updatedAt: item.updated_at ?? null,
         },
       ]
-    }),
+    })
   )
 
   const itemsByCollection = new Map<string, WishlistItem[]>()
   for (const row of items) {
     let mapped: WishlistItem | null = null
 
-    if (row.item_type === 'TAILOR') {
+    if (row.item_type === 'TAILOR' && typeof row.tailor_id === 'string') {
       const tailor = tailorById.get(row.tailor_id)
       if (tailor) {
         mapped = {
@@ -884,22 +1213,20 @@ async function fetchWishlistCollections(userId: string): Promise<WishlistCollect
     } else if (row.item_type === 'READY_MADE_ITEM') {
       if (typeof row.ready_made_item_id !== 'string') continue
 
-      const readyMadeItem =
-        readyMadeById.get(row.ready_made_item_id) ??
-        {
-          id: row.ready_made_item_id,
-          title: 'Saved item',
-          category: null,
-          currency: 'USD' as CurrencyCode,
-          priceAmount: 0,
-          photoUrl: null,
-          tailorProfileId: '',
-          sellerName: 'Tailor',
-          stockStatus: 'HIDDEN',
-          inventoryQuantity: 0,
-          isLive: false,
-          updatedAt: null,
-        }
+      const readyMadeItem = readyMadeById.get(row.ready_made_item_id) ?? {
+        id: row.ready_made_item_id,
+        title: 'Saved item',
+        category: null,
+        currency: 'USD' as CurrencyCode,
+        priceAmount: 0,
+        photoUrl: null,
+        tailorProfileId: '',
+        sellerName: 'Tailor',
+        stockStatus: 'HIDDEN',
+        inventoryQuantity: 0,
+        isLive: false,
+        updatedAt: null,
+      }
 
       mapped = {
         id: row.id,
@@ -921,7 +1248,8 @@ async function fetchWishlistCollections(userId: string): Promise<WishlistCollect
     const collectionItems = itemsByCollection.get(row.id) ?? []
     const firstItemCover =
       collectionItems.find((item) => item.itemType === 'TAILOR')?.tailor?.portfolioPhoto ??
-      collectionItems.find((item) => item.itemType === 'READY_MADE_ITEM')?.readyMadeItem?.photoUrl ??
+      collectionItems.find((item) => item.itemType === 'READY_MADE_ITEM')?.readyMadeItem
+        ?.photoUrl ??
       null
 
     return {
@@ -940,12 +1268,16 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
   const queries = [
     supabase
       .from('tailor_profiles')
-      .select('id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, bio, specialty_tags, languages, currency, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, portfolio_video_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available')
+      .select(
+        'id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, bio, specialty_tags, languages, currency, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, portfolio_video_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available'
+      )
       .eq('id', tailorId)
       .maybeSingle(),
     supabase
       .from('reviews')
-      .select('id, rating, body, tags, created_at, reviewer_name, tailor_response, orders!order_id(customer_profiles!customer_id(avatar_url))')
+      .select(
+        'id, rating, body, tags, created_at, reviewer_name, tailor_response, orders!order_id(customer_profiles!customer_id(avatar_url))'
+      )
       .eq('tailor_profile_id', tailorId)
       .eq('flagged', false)
       .not('published_at', 'is', null)
@@ -973,24 +1305,24 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
 
   const profileData =
     profileRes.status === 'fulfilled' && !profileRes.value.error
-      ? (profileRes.value.data as any)
+      ? (profileRes.value.data as TailorPublicProfileQueryRow | null)
       : null
   const reviewsData =
     reviewsRes.status === 'fulfilled' && !reviewsRes.value.error
-      ? ((reviewsRes.value.data ?? []) as any[])
+      ? ((reviewsRes.value.data ?? []) as PublicReviewQueryRow[])
       : []
   const portfolioData =
     portfolioRes.status === 'fulfilled' && !portfolioRes.value.error
-      ? ((portfolioRes.value.data ?? []) as any[])
+      ? ((portfolioRes.value.data ?? []) as PortfolioItemQueryRow[])
       : []
   const savedData =
-    savedRes.status === 'fulfilled' && !savedRes.value.error
-      ? savedRes.value.data
-      : null
+    savedRes.status === 'fulfilled' && !savedRes.value.error ? savedRes.value.data : null
 
   if (
-    (profileRes.status === 'rejected' || (profileRes.status === 'fulfilled' && profileRes.value.error)) &&
-    (reviewsRes.status === 'rejected' || (reviewsRes.status === 'fulfilled' && reviewsRes.value.error))
+    (profileRes.status === 'rejected' ||
+      (profileRes.status === 'fulfilled' && profileRes.value.error)) &&
+    (reviewsRes.status === 'rejected' ||
+      (reviewsRes.status === 'fulfilled' && reviewsRes.value.error))
   ) {
     throw new Error('Unable to load seller profile')
   }
@@ -1001,7 +1333,7 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
       ? reviewsData.reduce((sum, row) => sum + (row.rating ?? 0), 0) / derivedReviewCount
       : null
   const portfolioPhotosFromItems = portfolioData
-    .map((row: any) => row.image_url)
+    .map((row) => row.image_url)
     .filter((value: unknown): value is string => typeof value === 'string' && value.length > 0)
 
   return {
@@ -1036,48 +1368,61 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
           shippingAvailable: profileData.shipping_available ?? false,
         }
       : null,
-    reviews: reviewsData.map((r: any) => ({
-      id: r.id,
-      rating: r.rating,
-      body: r.body,
-      tags: asStringList(r.tags),
-      reviewerName: r.reviewer_name ?? 'Customer',
-      reviewerAvatarUrl: r.orders?.customer_profiles?.avatar_url ?? null,
-      response: r.tailor_response ?? null,
-      createdAt: r.created_at,
-    })),
+    reviews: reviewsData.map((r) => {
+      const orderRow = firstJoinedRow(r.orders)
+      const customerProfile = firstJoinedRow(orderRow?.customer_profiles)
+      return {
+        id: r.id,
+        rating: r.rating,
+        body: r.body,
+        tags: asStringList(r.tags),
+        reviewerName: r.reviewer_name ?? 'Customer',
+        reviewerAvatarUrl: customerProfile?.avatar_url ?? null,
+        response: r.tailor_response ?? null,
+        createdAt: r.created_at,
+      }
+    }),
     isSaved: !!savedData,
   }
 }
 
 async function fetchTailorShop(tailorId: string): Promise<TailorShopData> {
-  const [{ data: profileData, error: profileError }, { data: itemsData, error: itemsError }] = await Promise.all([
-    supabase.from('tailor_profiles').select('display_name, availability, is_live, supports_custom_orders').eq('id', tailorId).maybeSingle(),
-    supabase
-      .from('seller_items')
-      .select('id, title, category, price_amount, currency, photo_urls, stock_status, inventory_quantity, pickup_available, delivery_available, shipping_available')
-      .eq('tailor_profile_id', tailorId)
-      .eq('is_live', true)
-      .gt('inventory_quantity', 0)
-      .neq('stock_status', 'SOLD_OUT')
-      .neq('stock_status', 'HIDDEN')
-      .order('updated_at', { ascending: false }),
-  ])
+  const [{ data: profileData, error: profileError }, { data: itemsData, error: itemsError }] =
+    await Promise.all([
+      supabase
+        .from('tailor_profiles')
+        .select('display_name, availability, is_live, supports_custom_orders')
+        .eq('id', tailorId)
+        .maybeSingle(),
+      supabase
+        .from('seller_items')
+        .select(
+          'id, title, category, price_amount, currency, photo_urls, stock_status, inventory_quantity, pickup_available, delivery_available, shipping_available'
+        )
+        .eq('tailor_profile_id', tailorId)
+        .eq('is_live', true)
+        .gt('inventory_quantity', 0)
+        .neq('stock_status', 'SOLD_OUT')
+        .neq('stock_status', 'HIDDEN')
+        .order('updated_at', { ascending: false }),
+    ])
 
-  let resolvedItemsData = itemsData
+  let resolvedItemsData = itemsData as SellerShopItemQueryRow[] | null
   let resolvedItemsError = itemsError
 
   if (itemsError && isMissingInventoryColumnError(itemsError)) {
     const fallback = await supabase
       .from('seller_items')
-      .select('id, title, category, price_amount, currency, photo_urls, stock_status, pickup_available, delivery_available, shipping_available')
+      .select(
+        'id, title, category, price_amount, currency, photo_urls, stock_status, pickup_available, delivery_available, shipping_available'
+      )
       .eq('tailor_profile_id', tailorId)
       .eq('is_live', true)
       .neq('stock_status', 'SOLD_OUT')
       .neq('stock_status', 'HIDDEN')
       .order('updated_at', { ascending: false })
 
-    resolvedItemsData = fallback.data as any
+    resolvedItemsData = fallback.data as SellerShopItemQueryRow[] | null
     resolvedItemsError = fallback.error
   }
 
@@ -1085,7 +1430,7 @@ async function fetchTailorShop(tailorId: string): Promise<TailorShopData> {
   if (resolvedItemsError) throw resolvedItemsError
 
   const items = (resolvedItemsData ?? [])
-    .map((row: any) => ({
+    .map((row) => ({
       id: row.id,
       title: row.title,
       category: row.category ?? null,
@@ -1109,18 +1454,20 @@ async function fetchTailorShop(tailorId: string): Promise<TailorShopData> {
     )
 
   return {
-    tailorName: (profileData as any)?.display_name ?? 'This seller',
-    sellerAvailability: (profileData as any)?.availability ?? null,
-    sellerLive: (profileData as any)?.is_live === true,
-    supportsCustomOrders: (profileData as any)?.supports_custom_orders ?? true,
+    tailorName: (profileData as TailorShopProfileQueryRow | null)?.display_name ?? 'This seller',
+    sellerAvailability: (profileData as TailorShopProfileQueryRow | null)?.availability ?? null,
+    sellerLive: (profileData as TailorShopProfileQueryRow | null)?.is_live === true,
+    supportsCustomOrders:
+      (profileData as TailorShopProfileQueryRow | null)?.supports_custom_orders ?? true,
     items,
   }
 }
 
 async function fetchSellerItem(itemId: string): Promise<SellerItemDetail | null> {
-  let { data, error } = await supabase
+  const { data, error } = await supabase
     .from('seller_items')
-    .select(`
+    .select(
+      `
       id,
       tailor_profile_id,
       title,
@@ -1138,7 +1485,8 @@ async function fetchSellerItem(itemId: string): Promise<SellerItemDetail | null>
       delivery_available,
       shipping_available,
       tailor_profiles(display_name, user_id, location, availability, is_live)
-    `)
+    `
+    )
     .eq('id', itemId)
     .eq('is_live', true)
     .gt('inventory_quantity', 0)
@@ -1146,10 +1494,14 @@ async function fetchSellerItem(itemId: string): Promise<SellerItemDetail | null>
     .neq('stock_status', 'SOLD_OUT')
     .maybeSingle()
 
+  let itemData = data as SellerItemDetailQueryRow | null
+  let itemError = error
+
   if (error && isMissingInventoryColumnError(error)) {
     const fallback = await supabase
       .from('seller_items')
-      .select(`
+      .select(
+        `
         id,
         tailor_profile_id,
         title,
@@ -1164,29 +1516,31 @@ async function fetchSellerItem(itemId: string): Promise<SellerItemDetail | null>
         delivery_available,
         shipping_available,
         tailor_profiles(display_name, user_id, location, availability, is_live)
-      `)
+      `
+      )
       .eq('id', itemId)
       .eq('is_live', true)
       .neq('stock_status', 'HIDDEN')
       .neq('stock_status', 'SOLD_OUT')
       .maybeSingle()
 
-    data = fallback.data as any
-    error = fallback.error as any
+    itemData = fallback.data as SellerItemDetailQueryRow | null
+    itemError = fallback.error
   }
 
-  if (error) throw error
-  if (!data) return null
+  if (itemError) throw itemError
+  if (!itemData) return null
 
-  const row: any = data
+  const row = itemData
+  const sellerProfile = firstJoinedRow(row.tailor_profiles)
   const detail = {
     id: row.id,
     tailorProfileId: row.tailor_profile_id,
-    tailorUserId: row.tailor_profiles?.user_id ?? null,
-    sellerName: row.tailor_profiles?.display_name ?? 'This seller',
-    sellerLocation: row.tailor_profiles?.location ?? null,
-    sellerAvailability: row.tailor_profiles?.availability ?? null,
-    sellerLive: row.tailor_profiles?.is_live === true,
+    tailorUserId: sellerProfile?.user_id ?? null,
+    sellerName: sellerProfile?.display_name ?? 'This seller',
+    sellerLocation: sellerProfile?.location ?? null,
+    sellerAvailability: sellerProfile?.availability ?? null,
+    sellerLive: sellerProfile?.is_live === true,
     title: row.title,
     description: row.description ?? null,
     category: row.category ?? null,
@@ -1198,7 +1552,9 @@ async function fetchSellerItem(itemId: string): Promise<SellerItemDetail | null>
     sizeInventory: normalizeSizeInventory(
       asStringList(row.sizes),
       row.size_inventory,
-      typeof row.inventory_quantity === 'number' ? row.inventory_quantity : fallbackInventoryQuantity(row.stock_status, true),
+      typeof row.inventory_quantity === 'number'
+        ? row.inventory_quantity
+        : fallbackInventoryQuantity(row.stock_status, true)
     ),
     currency: row.currency,
     priceAmount: row.price_amount,
@@ -1213,7 +1569,12 @@ async function fetchSellerItem(itemId: string): Promise<SellerItemDetail | null>
     shippingAvailable: row.shipping_available ?? false,
   }
 
-  if (!isPubliclyAvailableReadyMade({ stockStatus: detail.stockStatus, inventoryQuantity: detail.inventoryQuantity })) {
+  if (
+    !isPubliclyAvailableReadyMade({
+      stockStatus: detail.stockStatus,
+      inventoryQuantity: detail.inventoryQuantity,
+    })
+  ) {
     return null
   }
 
@@ -1228,23 +1589,35 @@ async function fetchCustomerMeasurements(userId: string): Promise<Record<string,
     .maybeSingle()
 
   if (error) throw error
-  if (!data?.measurements || typeof data.measurements !== 'object' || Array.isArray(data.measurements)) return null
+  if (
+    !data?.measurements ||
+    typeof data.measurements !== 'object' ||
+    Array.isArray(data.measurements)
+  )
+    return null
   return data.measurements as Record<string, unknown>
 }
 
-async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): Promise<TailorDashboardData> {
+async function fetchTailorDashboard(
+  userId: string,
+  fallbackDisplayName = ''
+): Promise<TailorDashboardData> {
   const [profileRes, ordersRes, completedRes] = await Promise.allSettled([
     supabase
       .from('tailor_profiles')
-      .select('id, display_name, tier, avg_rating, availability, currency, payout_currency, payout_provider, payout_reverification_required, payout_account_verified, payout_account_type, is_live, id_verification_status, profile_completed')
+      .select(
+        'id, display_name, tier, avg_rating, availability, currency, payout_currency, payout_provider, payout_reverification_required, payout_account_verified, payout_account_type, is_live, id_verification_status, profile_completed'
+      )
       .eq('user_id', userId)
       .maybeSingle(),
     supabase
       .from('orders')
-      .select(`
+      .select(
+        `
       id, reference, garment_type, order_kind, seller_item_id, customer_id, stage, quoted_completion_date, quoted_amount,
         customer_profiles!customer_id(display_name)
-      `)
+      `
+      )
       .eq('tailor_id', userId)
       .in('stage', TAILOR_ACTIVE_ORDER_STAGES)
       .order('created_at', { ascending: false })
@@ -1258,19 +1631,20 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
 
   const profile =
     profileRes.status === 'fulfilled' && !profileRes.value.error
-      ? (profileRes.value.data as any)
+      ? (profileRes.value.data as TailorDashboardProfileQueryRow | null)
       : null
   const orderList =
     ordersRes.status === 'fulfilled' && !ordersRes.value.error
-      ? ((ordersRes.value.data ?? []) as any[])
+      ? ((ordersRes.value.data ?? []) as TailorDashboardOrderQueryRow[])
       : []
   const inquiryRows = orderList.filter((o) =>
-    isReadyMadeInquiryOrder({ orderKind: o.order_kind ?? 'CUSTOM', stage: o.stage }),
+    isReadyMadeInquiryOrder({ orderKind: o.order_kind ?? 'CUSTOM', stage: o.stage })
   )
   const readyMadePurchasedKeys = await fetchReadyMadePurchaseKeysForTailor(userId, inquiryRows)
   const visibleOrderList = (() => {
     return orderList.filter((o) => {
-      if (!isReadyMadeInquiryOrder({ orderKind: o.order_kind ?? 'CUSTOM', stage: o.stage })) return true
+      if (!isReadyMadeInquiryOrder({ orderKind: o.order_kind ?? 'CUSTOM', stage: o.stage }))
+        return true
       return !hasMatchingReadyMadePurchase(readyMadePurchasedKeys, {
         customerId: o.customer_id,
         sellerItemId: o.seller_item_id,
@@ -1285,17 +1659,31 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
   let stockAlerts: TailorStockAlert[] = []
 
   if (
-    (profileRes.status === 'rejected' || (profileRes.status === 'fulfilled' && profileRes.value.error)) &&
+    (profileRes.status === 'rejected' ||
+      (profileRes.status === 'fulfilled' && profileRes.value.error)) &&
     (ordersRes.status === 'rejected' || (ordersRes.status === 'fulfilled' && ordersRes.value.error))
   ) {
     throw new Error('Unable to load tailor dashboard')
   }
 
-  const pendingQuotes = visibleOrderList.filter((o) => o.stage === 'PENDING_QUOTE' && (o.order_kind ?? 'CUSTOM') !== 'READY_MADE').length
-  const itemInquiries = visibleOrderList.filter((o) => isReadyMadeInquiryOrder({ orderKind: o.order_kind ?? 'CUSTOM', stage: o.stage, sellerItemId: o.seller_item_id })).length
-  const activeOrders = visibleOrderList.filter((o) =>
-    TAILOR_ACTIVE_ORDER_STAGES.includes(o.stage as OrderStage) &&
-    !isReadyMadeInquiryOrder({ orderKind: o.order_kind ?? 'CUSTOM', stage: o.stage, sellerItemId: o.seller_item_id }),
+  const pendingQuotes = visibleOrderList.filter(
+    (o) => o.stage === 'PENDING_QUOTE' && (o.order_kind ?? 'CUSTOM') !== 'READY_MADE'
+  ).length
+  const itemInquiries = visibleOrderList.filter((o) =>
+    isReadyMadeInquiryOrder({
+      orderKind: o.order_kind ?? 'CUSTOM',
+      stage: o.stage,
+      sellerItemId: o.seller_item_id,
+    })
+  ).length
+  const activeOrders = visibleOrderList.filter(
+    (o) =>
+      TAILOR_ACTIVE_ORDER_STAGES.includes(o.stage as OrderStage) &&
+      !isReadyMadeInquiryOrder({
+        orderKind: o.order_kind ?? 'CUSTOM',
+        stage: o.stage,
+        sellerItemId: o.seller_item_id,
+      })
   ).length
   const displayCurrency = (profile?.currency ?? 'GBP') as CurrencyCode
 
@@ -1314,19 +1702,23 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
 
   if (!monthOrdersError) {
     const earningsByCurrency = new Map<string, number>()
-    ;(monthOrders ?? []).forEach((o: any) => {
+    ;((monthOrders ?? []) as MonthEarningsOrderQueryRow[]).forEach((o) => {
       const amountMinorUnits = o.quoted_amount ?? 0
       const currency = String(o.currency ?? o.quoted_currency ?? displayCurrency).toUpperCase()
       earningsByCurrency.set(currency, (earningsByCurrency.get(currency) ?? 0) + amountMinorUnits)
     })
-    monthEarningsByCurrency = Array.from(earningsByCurrency, ([currency, amount]) => ({ currency, amount }))
+    monthEarningsByCurrency = Array.from(earningsByCurrency, ([currency, amount]) => ({
+      currency,
+      amount,
+    }))
       .filter((row) => row.amount > 0)
       .sort((a, b) => {
         if (a.currency === displayCurrency && b.currency !== displayCurrency) return -1
         if (b.currency === displayCurrency && a.currency !== displayCurrency) return 1
         return b.amount - a.amount
       })
-    monthEarnings = monthEarningsByCurrency.find((row) => row.currency === displayCurrency)?.amount ?? 0
+    monthEarnings =
+      monthEarningsByCurrency.find((row) => row.currency === displayCurrency)?.amount ?? 0
   }
 
   if (profile?.id) {
@@ -1336,8 +1728,8 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
       .eq('tailor_profile_id', profile.id)
       .order('updated_at', { ascending: false })
 
-    let stockRows: any[] | null = primaryStockItems.data as any[] | null
-    let stockError: any = primaryStockItems.error
+    let stockRows = primaryStockItems.data as StockItemQueryRow[] | null
+    let stockError = primaryStockItems.error
 
     if (stockError && isMissingInventoryColumnError(stockError)) {
       const fallbackStockItems = await supabase
@@ -1346,13 +1738,13 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
         .eq('tailor_profile_id', profile.id)
         .order('updated_at', { ascending: false })
 
-      stockRows = fallbackStockItems.data as any[] | null
+      stockRows = fallbackStockItems.data as StockItemQueryRow[] | null
       stockError = fallbackStockItems.error
     }
 
     if (!stockError) {
       stockAlerts = (stockRows ?? [])
-        .map((row: any) =>
+        .map((row) =>
           buildTailorStockAlert({
             itemId: row.id,
             title: row.title ?? 'This item',
@@ -1362,7 +1754,7 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
               row.size_inventory,
               typeof row.inventory_quantity === 'number'
                 ? row.inventory_quantity
-                : fallbackInventoryQuantity(row.stock_status, row.is_live ?? true),
+                : fallbackInventoryQuantity(row.stock_status, row.is_live ?? true)
             ),
             inventoryQuantity:
               typeof row.inventory_quantity === 'number'
@@ -1370,7 +1762,7 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
                 : fallbackInventoryQuantity(row.stock_status, row.is_live ?? true),
             isLive: row.is_live ?? false,
             stockStatus: row.stock_status ?? 'IN_STOCK',
-          }),
+          })
         )
         .filter((value): value is TailorStockAlert => !!value)
         .slice(0, 3)
@@ -1407,12 +1799,12 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
     orders: visibleOrderList.map((o) => ({
       id: o.id,
       reference: o.reference,
-      garmentType: o.garment_type,
+      garmentType: o.garment_type ?? 'Order',
       orderKind: o.order_kind ?? 'CUSTOM',
       sellerItemId: o.seller_item_id ?? null,
       customerId: o.customer_id ?? null,
       stage: o.stage,
-      customerName: o.customer_profiles?.display_name ?? 'Customer',
+      customerName: firstJoinedRow(o.customer_profiles)?.display_name ?? 'Customer',
       estimatedDate: o.quoted_completion_date,
       quotedAmount: o.quoted_amount,
     })),
@@ -1422,7 +1814,7 @@ async function fetchTailorDashboard(userId: string, fallbackDisplayName = ''): P
 
 async function fetchCustomerProfileOverview(
   userId: string,
-  lastNotifCheck: string,
+  lastNotifCheck: string
 ): Promise<CustomerProfileOverview> {
   const [profileRes, ordersRes, reviewsRes] = await Promise.allSettled([
     supabase
@@ -1432,22 +1824,20 @@ async function fetchCustomerProfileOverview(
       .maybeSingle(),
     supabase
       .from('orders')
-      .select('id, reference, garment_type, order_kind, stage, created_at, tailor_profiles!tailor_profile_id(display_name)')
+      .select(
+        'id, reference, garment_type, order_kind, stage, created_at, tailor_profiles!tailor_profile_id(display_name)'
+      )
       .eq('customer_id', userId)
       .order('created_at', { ascending: false })
       .limit(10),
-    supabase
-      .from('customer_reviews')
-      .select('rating')
-      .eq('customer_id', userId),
+    supabase.from('customer_reviews').select('rating').eq('customer_id', userId),
   ])
 
   const profileFailed =
     profileRes.status === 'rejected' ||
     (profileRes.status === 'fulfilled' && !!profileRes.value.error)
   const ordersFailed =
-    ordersRes.status === 'rejected' ||
-    (ordersRes.status === 'fulfilled' && !!ordersRes.value.error)
+    ordersRes.status === 'rejected' || (ordersRes.status === 'fulfilled' && !!ordersRes.value.error)
   const reviewsFailed =
     reviewsRes.status === 'rejected' ||
     (reviewsRes.status === 'fulfilled' && !!reviewsRes.value.error)
@@ -1457,15 +1847,15 @@ async function fetchCustomerProfileOverview(
   }
 
   const profile =
-    profileRes.status === 'fulfilled' && !profileRes.value.error
-      ? profileRes.value.data
-      : null
+    profileRes.status === 'fulfilled' && !profileRes.value.error ? profileRes.value.data : null
   const orders =
     ordersRes.status === 'fulfilled' && !ordersRes.value.error
-      ? ((ordersRes.value.data ?? []) as any[])
+      ? ((ordersRes.value.data ?? []) as CustomerRecentOrderQueryRow[])
       : []
   const visibleOrders = orders
-    .filter((o) => !isReadyMadeInquiryOrder({ orderKind: o.order_kind ?? 'CUSTOM', stage: o.stage }))
+    .filter(
+      (o) => !isReadyMadeInquiryOrder({ orderKind: o.order_kind ?? 'CUSTOM', stage: o.stage })
+    )
     .slice(0, 3)
   const reviews =
     reviewsRes.status === 'fulfilled' && !reviewsRes.value.error
@@ -1478,7 +1868,10 @@ async function fetchCustomerProfileOverview(
       .from('order_stage_updates')
       .select('id', { count: 'exact', head: true })
       .gte('created_at', lastNotifCheck)
-      .in('order_id', visibleOrders.map((o) => o.id))
+      .in(
+        'order_id',
+        visibleOrders.map((o) => o.id)
+      )
     notifCount = count ?? 0
   }
 
@@ -1488,15 +1881,16 @@ async function fetchCustomerProfileOverview(
     avatarUrl: profile?.avatar_url ?? null,
     notifCount,
     reviewCount: reviews.length,
-    averageRating: reviews.length > 0
-      ? reviews.reduce((sum, row) => sum + (row.rating ?? 0), 0) / reviews.length
-      : null,
+    averageRating:
+      reviews.length > 0
+        ? reviews.reduce((sum, row) => sum + (row.rating ?? 0), 0) / reviews.length
+        : null,
     recentOrders: visibleOrders.map((o) => ({
       id: o.id,
       reference: o.reference,
-      garmentType: o.garment_type,
-      stage: o.stage as OrderStage,
-      tailorName: (o.tailor_profiles as any)?.display_name ?? 'Tailor',
+      garmentType: o.garment_type ?? 'Order',
+      stage: o.stage,
+      tailorName: firstJoinedRow(o.tailor_profiles)?.display_name ?? 'Tailor',
       createdAt: o.created_at,
     })),
   }
@@ -1505,29 +1899,36 @@ async function fetchCustomerProfileOverview(
 async function fetchCustomerMessageOrderInfo(
   orderId: string,
   userId: string,
-  fallbackDisplayName = 'Customer',
+  fallbackDisplayName = 'Customer'
 ): Promise<CustomerMessageOrderInfo> {
   const { data: order, error: orderError } = await supabase
     .from('orders')
-    .select(`
+    .select(
+      `
       id, garment_type, order_kind, seller_item_id, stage, customer_id, video_call_url,
-      tailor_profiles!tailor_profile_id(id, display_name),
-      customer_profiles!customer_id(display_name)
-    `)
+      tailor_profiles!tailor_profile_id(id, display_name, avatar_url, portfolio_photo_urls),
+      customer_profiles!customer_id(display_name, avatar_url)
+    `
+    )
     .eq('id', orderId)
     .eq('customer_id', userId)
     .maybeSingle()
 
   if (order) {
-    const o = order as any
+    const o = order as CustomerMessageOrderQueryRow
+    const tailorProfile = firstJoinedRow(o.tailor_profiles)
+    const customerProfile = firstJoinedRow(o.customer_profiles)
     return {
-      garmentType: o.garment_type,
+      garmentType: o.garment_type ?? 'Order',
       orderKind: o.order_kind ?? 'CUSTOM',
       sellerItemId: o.seller_item_id ?? null,
-      tailorName: o.tailor_profiles?.display_name ?? 'Tailor',
-      tailorId: o.tailor_profiles?.id,
+      tailorName: tailorProfile?.display_name ?? 'Tailor',
+      tailorAvatarUrl:
+        tailorProfile?.avatar_url ?? asStringList(tailorProfile?.portfolio_photo_urls)[0] ?? null,
+      tailorId: tailorProfile?.id ?? '',
       customerId: o.customer_id,
-      customerName: o.customer_profiles?.display_name ?? fallbackDisplayName,
+      customerName: customerProfile?.display_name ?? fallbackDisplayName,
+      customerAvatarUrl: customerProfile?.avatar_url ?? null,
       stage: o.stage,
       videoCallUrl: o.video_call_url ?? null,
       resolvedOrderId: o.id,
@@ -1540,11 +1941,13 @@ async function fetchCustomerMessageOrderInfo(
 
   const { data: found, error: foundError } = await supabase
     .from('orders')
-    .select(`
+    .select(
+      `
       id, garment_type, order_kind, seller_item_id, stage, customer_id, video_call_url,
-      tailor_profiles!inner(id, display_name),
-      customer_profiles(display_name)
-    `)
+      tailor_profiles!inner(id, display_name, avatar_url, portfolio_photo_urls),
+      customer_profiles(display_name, avatar_url)
+    `
+    )
     .eq('customer_id', userId)
     .eq('tailor_id', orderId)
     .not('stage', 'in', '("COMPLETE","DECLINED","EXPIRED","CANCELLED","REFUNDED")')
@@ -1558,15 +1961,20 @@ async function fetchCustomerMessageOrderInfo(
 
   if (!found) return null
 
-  const o = found as any
+  const o = found as CustomerMessageOrderQueryRow
+  const tailorProfile = firstJoinedRow(o.tailor_profiles)
+  const customerProfile = firstJoinedRow(o.customer_profiles)
   return {
-    garmentType: o.garment_type,
+    garmentType: o.garment_type ?? 'Order',
     orderKind: o.order_kind ?? 'CUSTOM',
     sellerItemId: o.seller_item_id ?? null,
-    tailorName: o.tailor_profiles?.display_name ?? 'Tailor',
-    tailorId: o.tailor_profiles?.id,
+    tailorName: tailorProfile?.display_name ?? 'Tailor',
+    tailorAvatarUrl:
+      tailorProfile?.avatar_url ?? asStringList(tailorProfile?.portfolio_photo_urls)[0] ?? null,
+    tailorId: tailorProfile?.id ?? '',
     customerId: o.customer_id,
-    customerName: o.customer_profiles?.display_name ?? fallbackDisplayName,
+    customerName: customerProfile?.display_name ?? fallbackDisplayName,
+    customerAvatarUrl: customerProfile?.avatar_url ?? null,
     stage: o.stage,
     videoCallUrl: o.video_call_url ?? null,
     resolvedOrderId: o.id,
@@ -1602,7 +2010,7 @@ export function useCustomerOrderDetail(orderId: string | undefined, userId: stri
     queryKey: qk.customerOrder(orderId ?? ''),
     queryFn: () => fetchCustomerOrderDetail(orderId!, userId!),
     enabled: !!orderId && !!userId,
-    staleTime: 15_000,  // short-lived freshness for live tracking without full cold reloads
+    staleTime: 15_000, // short-lived freshness for live tracking without full cold reloads
   })
 }
 
@@ -1611,7 +2019,7 @@ export function useCustomerProfile(userId: string | undefined) {
     queryKey: qk.customerProfile(userId ?? ''),
     queryFn: () => fetchCustomerProfile(userId!),
     enabled: !!userId,
-    staleTime: 10 * 60_000,  // profile changes infrequently and should feel instant on revisit
+    staleTime: 10 * 60_000, // profile changes infrequently and should feel instant on revisit
   })
 }
 
@@ -1693,7 +2101,11 @@ export function useCustomerProfileOverview(userId: string | undefined, lastNotif
   })
 }
 
-export function useCustomerMessageOrderInfo(orderId: string | undefined, userId: string | undefined, fallbackDisplayName?: string) {
+export function useCustomerMessageOrderInfo(
+  orderId: string | undefined,
+  userId: string | undefined,
+  fallbackDisplayName?: string
+) {
   return useQuery({
     queryKey: qk.customerMessageOrder(orderId ?? '', userId ?? ''),
     queryFn: () => fetchCustomerMessageOrderInfo(orderId!, userId!, fallbackDisplayName),

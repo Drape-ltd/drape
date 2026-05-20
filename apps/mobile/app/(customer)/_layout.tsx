@@ -1,7 +1,7 @@
-import { Tabs, useRouter } from 'expo-router'
+import { Tabs, useRouter, useSegments } from 'expo-router'
 import { Pressable } from 'react-native'
 import { Feather } from '@expo/vector-icons'
-import { Colors, FontSize, Radius } from '@/constants/theme'
+import { Colors } from '@/constants/theme'
 import { useCustomerProfile } from '@/lib/customerProfile'
 import { useAuth } from '@/lib/auth'
 import { useUnreadMessageCount } from '@/lib/unread-messages'
@@ -9,6 +9,12 @@ import { AvatarImage } from '@/components/ui/AvatarImage'
 
 const PRIMARY_GREEN = Colors.needleGreen
 const MUTED_GREY = Colors.midGrey
+
+function pressableTabProps<T extends { ref?: unknown }>(props: T): Omit<T, 'ref'> {
+  const { ref, ...buttonProps } = props
+  void ref
+  return buttonProps
+}
 
 function ProfileTabIcon({ color, focused }: { color: string; focused: boolean }) {
   const { avatarUrl } = useCustomerProfile()
@@ -29,8 +35,10 @@ function ProfileTabIcon({ color, focused }: { color: string; focused: boolean })
 
 export default function CustomerTabLayout() {
   const router = useRouter()
+  const segments = useSegments()
   const { user } = useAuth()
   const unreadMessages = useUnreadMessageCount(user?.id, 'CUSTOMER')
+  const hideTabBar = segments[0] === '(customer)' && segments.length > 2
 
   return (
     <Tabs
@@ -45,6 +53,7 @@ export default function CustomerTabLayout() {
           backgroundColor: Colors.white,
           borderTopColor: Colors.lightGrey,
           borderTopWidth: 1,
+          display: hideTabBar ? 'none' : 'flex',
         },
         tabBarItemStyle: {
           minHeight: 49,
@@ -65,10 +74,9 @@ export default function CustomerTabLayout() {
           title: 'Explore',
           popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <Feather name="search" size={25} color={color} />,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tabBarButton: (props: any) => (
+          tabBarButton: (props) => (
             <Pressable
-              {...props}
+              {...pressableTabProps(props)}
               testID="tab-home"
               accessibilityRole="button"
               accessibilityLabel="Explore tab"
@@ -83,10 +91,9 @@ export default function CustomerTabLayout() {
           title: 'Wishlists',
           popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <Feather name="heart" size={25} color={color} />,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tabBarButton: (props: any) => (
+          tabBarButton: (props) => (
             <Pressable
-              {...props}
+              {...pressableTabProps(props)}
               testID="tab-saved"
               accessibilityRole="button"
               accessibilityLabel="Wishlists tab"
@@ -101,10 +108,9 @@ export default function CustomerTabLayout() {
           title: 'Orders',
           popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <Feather name="package" size={25} color={color} />,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tabBarButton: (props: any) => (
+          tabBarButton: (props) => (
             <Pressable
-              {...props}
+              {...pressableTabProps(props)}
               testID="tab-orders"
               accessibilityRole="button"
               accessibilityLabel="Orders tab"
@@ -121,10 +127,9 @@ export default function CustomerTabLayout() {
           tabBarBadge: unreadMessages > 0 ? (unreadMessages > 99 ? '99+' : unreadMessages) : undefined,
           tabBarBadgeStyle: { backgroundColor: Colors.kanteRust, fontSize: 10, minWidth: 16, height: 16 },
           tabBarIcon: ({ color }) => <Feather name="message-circle" size={25} color={color} />,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tabBarButton: (props: any) => (
+          tabBarButton: (props) => (
             <Pressable
-              {...props}
+              {...pressableTabProps(props)}
               testID="tab-messages"
               accessibilityRole="button"
               accessibilityLabel={unreadMessages > 0 ? `Messages tab, ${unreadMessages} unread` : 'Messages tab'}
@@ -138,12 +143,10 @@ export default function CustomerTabLayout() {
         options={{
           title: 'Profile',
           popToTopOnBlur: true,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tabBarIcon: ({ color, focused }: any) => <ProfileTabIcon color={color} focused={focused} />,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tabBarButton: (props: any) => (
+          tabBarIcon: ({ color, focused }) => <ProfileTabIcon color={color} focused={focused} />,
+          tabBarButton: (props) => (
             <Pressable
-              {...props}
+              {...pressableTabProps(props)}
               testID="tab-profile"
               accessibilityRole="button"
               accessibilityLabel="Profile tab"

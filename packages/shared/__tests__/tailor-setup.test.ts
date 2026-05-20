@@ -9,6 +9,7 @@ import {
 const COMPLETE_SETUP: TailorSetupProgressInput = {
   displayName: 'Amara Atelier',
   phone: '+2348012345678',
+  profilePhotoPresent: true,
   location: 'Lagos, Nigeria',
   bio: 'I make custom native wear and occasion outfits with clean finishing, reliable delivery, and careful measurement review.',
   languages: ['English'],
@@ -110,6 +111,18 @@ describe('deriveTailorSetupProgress', () => {
     expect(progress.firstIncompleteStep).toBe(0)
     expect(progress.fieldErrors.phone).toBe(
       TAILOR_SETUP_VALIDATION.PHONE_REQUIRED_MESSAGE,
+    )
+  })
+
+  it('resumes at identity when profile photo is missing', () => {
+    const progress = deriveTailorSetupProgress({
+      ...COMPLETE_SETUP,
+      profilePhotoPresent: false,
+    })
+
+    expect(progress.firstIncompleteStep).toBe(0)
+    expect(progress.fieldErrors.profilePhoto).toBe(
+      TAILOR_SETUP_VALIDATION.PROFILE_PHOTO_REQUIRED_MESSAGE,
     )
   })
 

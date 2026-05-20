@@ -1,14 +1,26 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, KeyboardAvoidingView, Platform, Modal, TextInput,
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Modal,
+  TextInput,
 } from 'react-native'
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as ImagePicker from 'expo-image-picker'
 import DateTimePicker from '@react-native-community/datetimepicker'
-import { isLikelyConnectivityIssue, isMachineErrorCodeMessage, readFunctionErrorMessage } from '@/lib/function-errors'
+import {
+  isLikelyConnectivityIssue,
+  isMachineErrorCodeMessage,
+  readFunctionErrorMessage,
+} from '@/lib/function-errors'
 import { Sentry } from '@/lib/sentry'
 import { goBackOrReturnTo } from '@/lib/navigation'
 import {
@@ -39,7 +51,6 @@ import {
   CUSTOM_ORDER_GENDER_PRESENTATIONS,
   CUSTOM_ORDER_MAX_REFERENCE_PHOTOS,
   CUSTOM_ORDER_MAX_STYLE_LINKS,
-  CUSTOM_ORDER_OCCASIONS,
   CUSTOM_ORDER_RESUMABLE_STAGES,
   CUSTOM_ORDER_SHIPPING_PREFERENCES,
   CUSTOM_ORDER_STYLE_ATTRIBUTES,
@@ -66,6 +77,12 @@ type DeliveryMethod = 'SHIPPING' | 'LOCAL_DELIVERY' | 'LOCAL_COLLECTION'
 type RecipientMode = 'SELF' | 'OTHER'
 type GenderPresentation = (typeof CUSTOM_ORDER_GENDER_PRESENTATIONS)[number]
 type ShippingPreference = (typeof CUSTOM_ORDER_SHIPPING_PREFERENCES)[number]
+type MeasurementRecord = Record<string, unknown>
+type NominatimSuggestion = {
+  place_id?: string | number
+  display_name?: string
+  address?: Record<string, string | undefined>
+}
 
 const FABRIC_HANDOFF_OPTIONS: Array<{ value: FabricHandoffMode; title: string; hint: string }> = [
   {
@@ -98,7 +115,14 @@ const FIT_NOTE_PRESETS = [
   'Please keep it modest',
 ] as const
 
-const STEP_TITLES = ['Garment details', 'Style references', 'Measurements', 'Fabric', 'Delivery', 'Review']
+const STEP_TITLES = [
+  'Garment details',
+  'Style references',
+  'Measurements',
+  'Fabric',
+  'Delivery',
+  'Review',
+]
 const STEP_SUBS = [
   'Tell the seller exactly what you want to make, what it is for, and when you need it by.',
   'Show visual references so the seller can understand your taste, shape, and finishing direction faster.',
@@ -108,19 +132,11 @@ const STEP_SUBS = [
   'Check every detail before sending. You can jump back to edit any section.',
 ]
 
-const SUPPORTED_STYLE_LINK_LABELS = [
-  'Instagram posts / reels',
-  'Pinterest pins',
-  'TikTok videos',
-]
-
-function newBriefDraftSession() {
-  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-}
+const SUPPORTED_STYLE_LINK_LABELS = ['Instagram posts / reels', 'Pinterest pins', 'TikTok videos']
 
 function buildBriefRoute(
   tailorId: string,
-  options?: { draftSession?: string | null; resumeDraft?: boolean },
+  options?: { draftSession?: string | null; resumeDraft?: boolean }
 ) {
   const search = new URLSearchParams()
   if (options?.draftSession) search.set('draftSession', options.draftSession)
@@ -136,21 +152,35 @@ function defaultDeadline() {
 }
 
 function asStringList(value: unknown): string[] {
-  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+  if (Array.isArray(value))
+    return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
   if (typeof value === 'string' && value.length > 0) return [value]
   return []
 }
 
-function hasCompleteMeasurementProfile(value: any): boolean {
+function hasCompleteMeasurementProfile(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false
-  const hasCore = value.chest != null
-    && value.waist != null
-    && value.hips != null
-    && value.height != null
-    && typeof value.fitStyle === 'string'
-  const hasContext = typeof value.garmentContext === 'string' && value.garmentContext.length > 0
-  const bodyShapes = Array.isArray(value.bodyShape) ? value.bodyShape : value.bodyShape ? [value.bodyShape] : []
+  const measurement = value as MeasurementRecord
+  const hasCore =
+    measurement.chest != null &&
+    measurement.waist != null &&
+    measurement.hips != null &&
+    measurement.height != null &&
+    typeof measurement.fitStyle === 'string'
+  const hasContext =
+    typeof measurement.garmentContext === 'string' && measurement.garmentContext.length > 0
+  const bodyShapes = Array.isArray(measurement.bodyShape)
+    ? measurement.bodyShape
+    : measurement.bodyShape
+      ? [measurement.bodyShape]
+      : []
   return hasCore && hasContext && bodyShapes.length > 0
+}
+
+function createBriefPhotoPath(userId: string | undefined) {
+  const owner = userId ?? 'guest'
+  const suffix = `${Date.now()}_${Math.random().toString(36).slice(2)}`
+  return `briefs/${owner}/${suffix}.jpg`
 }
 
 async function resolveOrderSubmitErrorMessage(error: Error | null) {
@@ -175,7 +205,10 @@ async function resolveOrderSubmitErrorMessage(error: Error | null) {
     return 'This tailor profile is no longer available. Go back and choose another seller.'
   }
 
-  if (normalized.includes('fabric_handoff_required') || normalized.includes('how your fabric will reach them')) {
+  if (
+    normalized.includes('fabric_handoff_required') ||
+    normalized.includes('how your fabric will reach them')
+  ) {
     return 'Choose how your fabric will reach the tailor before submitting this order.'
   }
 
@@ -192,7 +225,7 @@ async function resolveOrderSubmitErrorMessage(error: Error | null) {
   }
 
   if (normalized.includes("contact details can't be included")) {
-    return "Remove phone numbers, social handles, or off-platform contact details from your brief before sending it. Fit measurements like bust, waist, and hips are still fine."
+    return 'Remove phone numbers, social handles, or off-platform contact details from your brief before sending it. Fit measurements like bust, waist, and hips are still fine.'
   }
 
   return isMachineErrorCodeMessage(rawMessage) ? fallback : rawMessage
@@ -210,7 +243,9 @@ export default function OrderBriefScreen() {
   }>()
   const router = useRouter()
   const navigation = useNavigation()
+  const insets = useSafeAreaInsets()
   const { user } = useAuth()
+  const userId = user?.id
 
   function goBack() {
     goBackOrReturnTo(router, navigation, returnTo, `/(customer)/tailor/${tailorId}`)
@@ -226,6 +261,9 @@ export default function OrderBriefScreen() {
   // Step 1
   const [garmentType, setGarmentType] = useState('')
   const [garmentTypeOther, setGarmentTypeOther] = useState('')
+  const [showGarmentPicker, setShowGarmentPicker] = useState(false)
+  const [showFocusAreasPicker, setShowFocusAreasPicker] = useState(false)
+  const [garmentSearch, setGarmentSearch] = useState('')
   const [genderPresentation, setGenderPresentation] = useState<GenderPresentation | null>(null)
   const [description, setDescription] = useState('')
   const [descriptionError, setDescriptionError] = useState('')
@@ -247,12 +285,16 @@ export default function OrderBriefScreen() {
   const [styleAttributes, setStyleAttributes] = useState<string[]>([])
 
   // Step 3 — measurement profile summary
-  const [measurements, setMeasurements] = useState<any>(null)
+  const [measurements, setMeasurements] = useState<MeasurementRecord | null>(null)
   const [fitNote, setFitNote] = useState('')
   const [fitNoteError, setFitNoteError] = useState('')
 
   // Inline measurement editing
-  const [editingField, setEditingField] = useState<{ key: string; label: string; value: string } | null>(null)
+  const [editingField, setEditingField] = useState<{
+    key: string
+    label: string
+    value: string
+  } | null>(null)
   const [editValue, setEditValue] = useState('')
 
   // Step 4
@@ -260,7 +302,9 @@ export default function OrderBriefScreen() {
   const [fabricHandoffMode, setFabricHandoffMode] = useState<FabricHandoffMode | null>(null)
   const [fabricDescription, setFabricDescription] = useState('')
   const [fabricBudgetAmount, setFabricBudgetAmount] = useState('')
-  const [fabricSourcingDeadlineDays, setFabricSourcingDeadlineDays] = useState(CUSTOM_ORDER_FABRIC_SOURCING_DEFAULT_BUSINESS_DAYS)
+  const [fabricSourcingDeadlineDays, setFabricSourcingDeadlineDays] = useState(
+    CUSTOM_ORDER_FABRIC_SOURCING_DEFAULT_BUSINESS_DAYS
+  )
   const [deliveryMethod, setDeliveryMethod] = useState<DeliveryMethod | null>(null)
   const [shippingPreference, setShippingPreference] = useState<ShippingPreference>('STANDARD')
   const [deliveryInstructions, setDeliveryInstructions] = useState('')
@@ -276,11 +320,37 @@ export default function OrderBriefScreen() {
   const [recipientContactError, setRecipientContactError] = useState('')
   const [deliveryAddressError, setDeliveryAddressError] = useState('')
   const [deliveryAddressSearch, setDeliveryAddressSearch] = useState('')
-  const [deliveryAddressSuggestions, setDeliveryAddressSuggestions] = useState<any[]>([])
+  const [deliveryAddressSuggestions, setDeliveryAddressSuggestions] = useState<
+    NominatimSuggestion[]
+  >([])
   const [showDeliverySuggestions, setShowDeliverySuggestions] = useState(false)
   const [accountCurrency, setAccountCurrency] = useState('USD')
   const suppressNextDeliveryLookup = useRef(false)
   const handledLaunchRef = useRef<string | null>(null)
+
+  const garmentSearchTerm = garmentSearch.trim().toLowerCase()
+  const garmentPickerGroups = CUSTOM_ORDER_GARMENT_TAXONOMY.map((group) => {
+    const categoryMatches = group.category.toLowerCase().includes(garmentSearchTerm)
+    const items = garmentSearchTerm
+      ? group.items.filter(
+          (item) => categoryMatches || item.toLowerCase().includes(garmentSearchTerm)
+        )
+      : group.items
+    return { category: group.category, items }
+  }).filter((group) => group.items.length > 0)
+  const selectedGarmentLabel =
+    garmentType === 'Other' && garmentTypeOther.trim() ? garmentTypeOther.trim() : garmentType
+
+  function closeGarmentPicker() {
+    setShowGarmentPicker(false)
+    setGarmentSearch('')
+  }
+
+  function selectGarmentType(value: string) {
+    setGarmentType(value)
+    if (value !== 'Other') setGarmentTypeOther('')
+    closeGarmentPicker()
+  }
   const guidedFitProfile = buildOrderFitProfile(measurements)
   const recipientPhoneHint = phoneHintForContext(deliveryCountry)
 
@@ -341,27 +411,39 @@ export default function OrderBriefScreen() {
 
   useEffect(() => {
     if (resumeDraft === '1') return
-    resetBriefState()
+    const timer = setTimeout(resetBriefState, 0)
+    return () => clearTimeout(timer)
   }, [tailorId, draftSession, freshStart, resumeDraft])
 
   useEffect(() => {
     if (!user || recipientMode !== 'SELF') return
-    setRecipientName((current) => current || String(user.user_metadata?.display_name ?? '').trim())
-    setRecipientPhone((current) => current || normalizePhoneForStorage(String(user.user_metadata?.phone ?? '')))
+    const timer = setTimeout(() => {
+      setRecipientName((current) => current || String(user.user_metadata?.display_name ?? '').trim())
+      setRecipientPhone(
+        (current) => current || normalizePhoneForStorage(String(user.user_metadata?.phone ?? ''))
+      )
+    }, 0)
+    return () => clearTimeout(timer)
   }, [user, recipientMode])
 
-  async function loadInitialData() {
+  const loadInitialData = useCallback(async () => {
     setFetchError(false)
     setInitialLoading(true)
     setMeasurements(null)
 
     const launchKey = `${tailorId}:${draftSession ?? 'default'}:${freshStart ?? '0'}`
-    if (freshStart === '1' && handledLaunchRef.current !== launchKey && user?.id) {
+    if (!userId) {
+      setFetchError(true)
+      setInitialLoading(false)
+      return
+    }
+
+    if (freshStart === '1' && handledLaunchRef.current !== launchKey) {
       handledLaunchRef.current = launchKey
       const { data: existingOrder } = await supabase
         .from('orders')
         .select('id, reference, stage')
-        .eq('customer_id', user.id)
+        .eq('customer_id', userId)
         .eq('tailor_profile_id', tailorId)
         .eq('order_kind', 'CUSTOM')
         .in('stage', [...CUSTOM_ORDER_RESUMABLE_STAGES])
@@ -383,45 +465,31 @@ export default function OrderBriefScreen() {
               text: 'Open order',
               onPress: () =>
                 router.replace({
-                  pathname: `/(customer)/orders/${existingOrder.id}` as any,
-                  params: { returnTo: '/(customer)/orders?tab=active', tab: 'active' },
+                  pathname: '/(customer)/orders/[id]',
+                  params: {
+                    id: existingOrder.id,
+                    returnTo: '/(customer)/orders?tab=active',
+                    tab: 'active',
+                  },
                 }),
             },
-          ],
+          ]
         )
       }
     }
 
     const [tailorRes, measRes, accountRes] = await Promise.allSettled([
-      supabase
-        .from('tailor_profiles')
-        .select('id')
-        .eq('id', tailorId)
-        .maybeSingle(),
-      supabase
-        .from('customer_profiles')
-        .select('measurements')
-        .eq('user_id', user?.id)
-        .maybeSingle(),
-      supabase
-        .from('users')
-        .select('default_currency')
-        .eq('id', user?.id)
-        .maybeSingle(),
+      supabase.from('tailor_profiles').select('id').eq('id', tailorId).maybeSingle(),
+      supabase.from('customer_profiles').select('measurements').eq('user_id', userId).maybeSingle(),
+      supabase.from('users').select('default_currency').eq('id', userId).maybeSingle(),
     ])
 
     const tailorData =
-      tailorRes.status === 'fulfilled' && !tailorRes.value.error
-        ? tailorRes.value.data
-        : null
+      tailorRes.status === 'fulfilled' && !tailorRes.value.error ? tailorRes.value.data : null
     const measurementData =
-      measRes.status === 'fulfilled' && !measRes.value.error
-        ? measRes.value.data
-        : null
+      measRes.status === 'fulfilled' && !measRes.value.error ? measRes.value.data : null
     const accountData =
-      accountRes.status === 'fulfilled' && !accountRes.value.error
-        ? accountRes.value.data
-        : null
+      accountRes.status === 'fulfilled' && !accountRes.value.error ? accountRes.value.data : null
 
     if (!tailorData?.id) {
       setFetchError(true)
@@ -440,22 +508,30 @@ export default function OrderBriefScreen() {
     const alreadyShown = await AsyncStorage.getItem(MEAS_PROMPT_KEY)
     if (!alreadyShown) setShowMeasPrompt(true)
     setInitialLoading(false)
-  }
+  }, [draftSession, freshStart, router, tailorId, userId])
 
   // Load tailor profile existence + customer measurements; show one-time completeness prompt
   useFocusEffect(
     useCallback(() => {
       void loadInitialData()
-    }, [tailorId, user?.id])
+    }, [loadInitialData])
   )
 
   function validateDescription(text: string) {
     const placeholder = rejectPlaceholder(text, 'Description')
-    if (placeholder) { setDescriptionError(placeholder); return false }
+    if (placeholder) {
+      setDescriptionError(placeholder)
+      return false
+    }
     const res = filterContactInfo(text)
-    if (res.blocked) { setDescriptionError("Contact details can't be included here."); return false }
+    if (res.blocked) {
+      setDescriptionError("Contact details can't be included here.")
+      return false
+    }
     if (!isCustomOrderBriefLongEnough(text)) {
-      setDescriptionError('Use 3 short lines or one clear paragraph so the tailor can understand the shape, details, and finish.')
+      setDescriptionError(
+        'Use 3 short lines or one clear paragraph so the tailor can understand the shape, details, and finish.'
+      )
       return false
     }
     setDescriptionError('')
@@ -512,24 +588,37 @@ export default function OrderBriefScreen() {
 
   useEffect(() => {
     const text = deliveryAddressSearch.trim()
-    setShowDeliverySuggestions(false)
     if (suppressNextDeliveryLookup.current) {
       suppressNextDeliveryLookup.current = false
       return
     }
     if (text.length < 5) {
-      setDeliveryAddressSuggestions([])
-      return
+      const resetTimer = setTimeout(() => {
+        setDeliveryAddressSuggestions([])
+        setShowDeliverySuggestions(false)
+      }, 0)
+      return () => clearTimeout(resetTimer)
     }
 
+    const hideTimer = setTimeout(() => {
+      setShowDeliverySuggestions(false)
+    }, 0)
     const timeout = setTimeout(async () => {
       try {
         const res = await fetch(
           `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&addressdetails=1&limit=5`,
           { headers: { 'Accept-Language': 'en', 'User-Agent': 'Drape/1.0' } }
         )
-        const data: any[] = await res.json()
-        const filtered = data.filter((item) => item && item.display_name && item.address)
+        const data = (await res.json()) as unknown
+        const filtered = Array.isArray(data)
+          ? data.filter(
+              (item): item is NominatimSuggestion =>
+                !!item &&
+                typeof item === 'object' &&
+                typeof (item as NominatimSuggestion).display_name === 'string' &&
+                !!(item as NominatimSuggestion).address
+            )
+          : []
         setDeliveryAddressSuggestions(filtered)
         setShowDeliverySuggestions(filtered.length > 0)
       } catch {
@@ -538,10 +627,13 @@ export default function OrderBriefScreen() {
       }
     }, 400)
 
-    return () => clearTimeout(timeout)
+    return () => {
+      clearTimeout(hideTimer)
+      clearTimeout(timeout)
+    }
   }, [deliveryAddressSearch])
 
-  function selectDeliverySuggestion(item: any) {
+  function selectDeliverySuggestion(item: NominatimSuggestion) {
     const parsed = parseNominatimSuggestion(item)
 
     suppressNextDeliveryLookup.current = true
@@ -560,11 +652,26 @@ export default function OrderBriefScreen() {
   function validateDeliveryAddress() {
     const fullAddress = composeDeliveryAddress()
     const placeholder = rejectPlaceholder(fullAddress, 'Delivery address')
-    if (placeholder) { setDeliveryAddressError(placeholder); return false }
-    if (!deliveryAddressLine1.trim()) { setDeliveryAddressError('Please enter the first line of your address.'); return false }
-    if (!deliveryCity.trim()) { setDeliveryAddressError('Please enter your city.'); return false }
-    if (!deliveryStateRegion.trim()) { setDeliveryAddressError('Please enter your state, region, or county.'); return false }
-    if (!deliveryCountry.trim()) { setDeliveryAddressError('Please enter your country.'); return false }
+    if (placeholder) {
+      setDeliveryAddressError(placeholder)
+      return false
+    }
+    if (!deliveryAddressLine1.trim()) {
+      setDeliveryAddressError('Please enter the first line of your address.')
+      return false
+    }
+    if (!deliveryCity.trim()) {
+      setDeliveryAddressError('Please enter your city.')
+      return false
+    }
+    if (!deliveryStateRegion.trim()) {
+      setDeliveryAddressError('Please enter your state, region, or county.')
+      return false
+    }
+    if (!deliveryCountry.trim()) {
+      setDeliveryAddressError('Please enter your country.')
+      return false
+    }
     setDeliveryAddressError('')
     return true
   }
@@ -573,23 +680,40 @@ export default function OrderBriefScreen() {
     const trimmedName = recipientName.trim()
     const normalizedPhone = normalizePhoneForStorage(recipientPhone)
     const namePlaceholder = rejectPlaceholder(trimmedName, 'Recipient name')
-    if (namePlaceholder) { setRecipientContactError(namePlaceholder); return false }
-    if (!trimmedName) { setRecipientContactError('Please enter the recipient name.'); return false }
+    if (namePlaceholder) {
+      setRecipientContactError(namePlaceholder)
+      return false
+    }
+    if (!trimmedName) {
+      setRecipientContactError('Please enter the recipient name.')
+      return false
+    }
     const phoneError = validatePhoneForProfile(normalizedPhone)
-    if (phoneError) { setRecipientContactError(phoneError); return false }
+    if (phoneError) {
+      setRecipientContactError(phoneError)
+      return false
+    }
     setRecipientContactError('')
     return true
   }
 
   function validateFitNote(text: string) {
     if (text.trim().length < 20) {
-      setFitNoteError('Tell your tailor about your deadline and any key fit details. Use at least 20 characters.')
+      setFitNoteError(
+        'Tell your tailor about your deadline and any key fit details. Use at least 20 characters.'
+      )
       return false
     }
     const placeholder = rejectPlaceholder(text, 'Note')
-    if (placeholder) { setFitNoteError(placeholder); return false }
+    if (placeholder) {
+      setFitNoteError(placeholder)
+      return false
+    }
     const res = filterContactInfo(text)
-    if (res.blocked) { setFitNoteError("Contact details can't be included here."); return false }
+    if (res.blocked) {
+      setFitNoteError("Contact details can't be included here.")
+      return false
+    }
     setFitNoteError('')
     return true
   }
@@ -599,7 +723,7 @@ export default function OrderBriefScreen() {
     if (photos.length >= CUSTOM_ORDER_MAX_REFERENCE_PHOTOS) {
       Alert.alert(
         `Maximum ${CUSTOM_ORDER_MAX_REFERENCE_PHOTOS} reference photos`,
-        'Remove one of your current references before adding another.',
+        'Remove one of your current references before adding another.'
       )
       return
     }
@@ -616,14 +740,17 @@ export default function OrderBriefScreen() {
     if (step === 0) {
       const bulkCount = Number.parseInt(bulkRecipientCount, 10)
       if (isBulkOrder && (!Number.isFinite(bulkCount) || bulkCount < 2)) return false
-      const hasGarment = !!garmentType && (garmentType !== 'Other' || garmentTypeOther.trim().length >= 2)
-      return hasGarment
-        && !!genderPresentation
-        && isCustomOrderBriefLongEnough(description)
-        && !descriptionError
-        && !!deadline
-        && !deadlineError
-        && deadline.getTime() >= customOrderMinimumDeliveryDate().getTime()
+      const hasGarment =
+        !!garmentType && (garmentType !== 'Other' || garmentTypeOther.trim().length >= 2)
+      return (
+        hasGarment &&
+        !!genderPresentation &&
+        isCustomOrderBriefLongEnough(description) &&
+        !descriptionError &&
+        !!deadline &&
+        !deadlineError &&
+        deadline.getTime() >= customOrderMinimumDeliveryDate().getTime()
+      )
     }
     if (step === 1) return photos.length + inspirationLinks.length >= 1 && !linkError
     if (step === 2) return !!measurements && fitNote.trim().length >= 20 && !fitNoteError
@@ -634,8 +761,19 @@ export default function OrderBriefScreen() {
       if (!fabricSource || !deliveryMethod) return false
       if (deliveryMethod !== 'LOCAL_COLLECTION') {
         const normalizedRecipientPhone = normalizePhoneForStorage(recipientPhone)
-        const hasCoreAddress = !!deliveryAddressLine1.trim() && !!deliveryCity.trim() && !!deliveryStateRegion.trim() && !!deliveryCountry.trim()
-        if (!hasCoreAddress || !!deliveryAddressError || !!recipientContactError || !recipientName.trim() || !normalizedRecipientPhone || !!validatePhoneForProfile(normalizedRecipientPhone)) {
+        const hasCoreAddress =
+          !!deliveryAddressLine1.trim() &&
+          !!deliveryCity.trim() &&
+          !!deliveryStateRegion.trim() &&
+          !!deliveryCountry.trim()
+        if (
+          !hasCoreAddress ||
+          !!deliveryAddressError ||
+          !!recipientContactError ||
+          !recipientName.trim() ||
+          !normalizedRecipientPhone ||
+          !!validatePhoneForProfile(normalizedRecipientPhone)
+        ) {
           return false
         }
       }
@@ -647,57 +785,35 @@ export default function OrderBriefScreen() {
 
   function canProceedReview() {
     const originalStep = step
-    return originalStep === 5
-      && (() => {
-        const hasGarment = !!garmentType && (garmentType !== 'Other' || garmentTypeOther.trim().length >= 2)
-        const hasDelivery = !!deliveryMethod
-          && (deliveryMethod === 'LOCAL_COLLECTION'
-            || (!!deliveryAddressLine1.trim() && !!deliveryCity.trim() && !!deliveryStateRegion.trim() && !!deliveryCountry.trim() && !!recipientName.trim() && !!normalizePhoneForStorage(recipientPhone)))
-        return hasGarment
-          && !!genderPresentation
-          && isCustomOrderBriefLongEnough(description)
-          && !!deadline
-          && deadline.getTime() >= customOrderMinimumDeliveryDate().getTime()
-          && photos.length + inspirationLinks.length >= 1
-          && !!measurements
-          && fitNote.trim().length >= 20
-          && validateFabricStep()
-          && hasDelivery
-          && cancellationPolicyAcknowledged
+    return (
+      originalStep === 5 &&
+      (() => {
+        const hasGarment =
+          !!garmentType && (garmentType !== 'Other' || garmentTypeOther.trim().length >= 2)
+        const hasDelivery =
+          !!deliveryMethod &&
+          (deliveryMethod === 'LOCAL_COLLECTION' ||
+            (!!deliveryAddressLine1.trim() &&
+              !!deliveryCity.trim() &&
+              !!deliveryStateRegion.trim() &&
+              !!deliveryCountry.trim() &&
+              !!recipientName.trim() &&
+              !!normalizePhoneForStorage(recipientPhone)))
+        return (
+          hasGarment &&
+          !!genderPresentation &&
+          isCustomOrderBriefLongEnough(description) &&
+          !!deadline &&
+          deadline.getTime() >= customOrderMinimumDeliveryDate().getTime() &&
+          photos.length + inspirationLinks.length >= 1 &&
+          !!measurements &&
+          fitNote.trim().length >= 20 &&
+          validateFabricStep() &&
+          hasDelivery &&
+          cancellationPolicyAcknowledged
+        )
       })()
-  }
-
-  function ctaGuideText() {
-    if (step === 0) {
-      const missing: string[] = []
-      const hasGarment = !!garmentType && (garmentType !== 'Other' || garmentTypeOther.trim().length >= 2)
-      const deadlineIsValid = !!deadline && !deadlineError && deadline.getTime() >= customOrderMinimumDeliveryDate().getTime()
-
-      if (!hasGarment) missing.push('garment type')
-      if (!genderPresentation) missing.push('fit category')
-      if (!isCustomOrderBriefLongEnough(description) || !!descriptionError) missing.push('clear brief')
-      if (!deadlineIsValid) missing.push('deadline')
-
-      return missing.length > 0
-        ? `Still needed: ${missing.join(', ')}.`
-        : 'Be clear about what you want made so the tailor can tell quickly whether they are the right fit.'
-    }
-
-    if (step === 1) {
-      return photos.length + inspirationLinks.length < 1
-        ? 'Add at least one photo or approved style link so the tailor can quote from a real reference.'
-        : 'Use references that show the outcome you want, not just the category you are shopping for.'
-    }
-
-    if (step === 2) {
-      if (!measurements) return 'Add or confirm measurements before asking the tailor to quote.'
-      if (fitNote.trim().length < 20 || !!fitNoteError) return 'Add a short fit note so the tailor knows what to watch for.'
-      return 'Accurate measurements help the tailor quote with much less guesswork.'
-    }
-
-    if (step === 3) return 'Fabric decisions control when cutting can safely begin.'
-    if (step === 4) return 'Structured delivery details keep dispatch and collection from becoming guesswork.'
-    return 'Send the brief once every section reflects what you want made.'
+    )
   }
 
   function addCustomInspirationLink() {
@@ -708,7 +824,7 @@ export default function OrderBriefScreen() {
       return
     }
     if (inspirationLinks.includes(trimmed)) {
-      setLinkError("That link is already added.")
+      setLinkError('That link is already added.')
       return
     }
     if (!isAllowedCustomStyleReference(trimmed)) {
@@ -736,7 +852,7 @@ export default function OrderBriefScreen() {
         'Fabric details needed',
         fabricSource === 'TAILOR_SOURCES'
           ? 'Describe the fabric you want the tailor to source before submitting.'
-          : 'Choose how your fabric will reach the tailor before submitting.',
+          : 'Choose how your fabric will reach the tailor before submitting.'
       )
       return
     }
@@ -746,36 +862,42 @@ export default function OrderBriefScreen() {
 
     const measurementSnapshot = enrichMeasurementSnapshot(measurements)
     const fitProfile = buildOrderFitProfile(measurementSnapshot)
-    const fabricPolicy = fabricSource === 'CUSTOMER_SUPPLIES'
-      ? {
-          approvalRequiredForTailorSourcing: true,
-          rejectionReasons: [
-            'Poor fabric quality',
-            'Insufficient yardage',
-            'Wrong fabric type',
-            'Fabric damaged or mismatched',
-            'Non-continuous remnants or unusable width',
-          ],
-          lateFabricRule: 'Production stays paused until the tailor confirms fabric receipt.',
-          missingFabricRule: 'If the fabric never arrives, the customer can resend, ask the tailor to source, revise the design, or request cancellation review.',
-          replacementRule: 'Replacement fabric must be confirmed inside the order before cutting resumes.',
-          disagreementRule: 'If fabric suitability is disputed, Drape reviews the timeline before work continues.',
-          prepRequirements: [
-            'Share the handoff plan before the order is submitted',
-            'Keep any shipping reference inside the order thread',
-            'Do not expect cutting to start before receipt is confirmed',
-            'Prewash, press, or stabilize the fabric first when the tailor asks for it',
-          ],
-        }
-      : {
-          approvalRequiredForTailorSourcing: true,
-          replacementRule: 'Tailor-sourced fabric should only be replaced after customer approval inside Drape.',
-          disagreementRule: 'If sourcing changes the agreed design or budget, Drape should review before work continues.',
-          prepRequirements: [
-            'Fabric sourcing is covered by the accepted quote',
-            'Tailor should not buy replacement fabric without approval',
-          ],
-        }
+    const fabricPolicy =
+      fabricSource === 'CUSTOMER_SUPPLIES'
+        ? {
+            approvalRequiredForTailorSourcing: true,
+            rejectionReasons: [
+              'Poor fabric quality',
+              'Insufficient yardage',
+              'Wrong fabric type',
+              'Fabric damaged or mismatched',
+              'Non-continuous remnants or unusable width',
+            ],
+            lateFabricRule: 'Production stays paused until the tailor confirms fabric receipt.',
+            missingFabricRule:
+              'If the fabric never arrives, the customer can resend, ask the tailor to source, revise the design, or request cancellation review.',
+            replacementRule:
+              'Replacement fabric must be confirmed inside the order before cutting resumes.',
+            disagreementRule:
+              'If fabric suitability is disputed, Drape reviews the timeline before work continues.',
+            prepRequirements: [
+              'Share the handoff plan before the order is submitted',
+              'Keep any shipping reference inside the order thread',
+              'Do not expect cutting to start before receipt is confirmed',
+              'Prewash, press, or stabilize the fabric first when the tailor asks for it',
+            ],
+          }
+        : {
+            approvalRequiredForTailorSourcing: true,
+            replacementRule:
+              'Tailor-sourced fabric should only be replaced after customer approval inside Drape.',
+            disagreementRule:
+              'If sourcing changes the agreed design or budget, Drape should review before work continues.',
+            prepRequirements: [
+              'Fabric sourcing is covered by the accepted quote',
+              'Tailor should not buy replacement fabric without approval',
+            ],
+          }
     const bulkCount = Number.parseInt(bulkRecipientCount, 10)
     const bulkOrder = isBulkOrder
       ? {
@@ -790,41 +912,44 @@ export default function OrderBriefScreen() {
           notes: bulkNotes.trim() || null,
         }
       : null
-    const supportMeta = fabricSource === 'CUSTOMER_SUPPLIES'
-      ? {
-          fabricHandoffMode,
-          fabricHandoffLabel: fabricHandoffMode ? FABRIC_HANDOFF_LABELS[fabricHandoffMode] : null,
-          fabricPolicy,
-          bulkOrder,
-          fitProfile,
-          styleInspirationLinks: inspirationLinks,
-          styleAttributes,
-          styleNotes: styleNotes.trim() || null,
-          bodyNote: fitNote.trim() || null,
-        }
-      : {
-          fabricHandoffMode: 'NO_CUSTOMER_HANDOFF_REQUIRED' as const,
-          fabricHandoffLabel: FABRIC_HANDOFF_LABELS.NO_CUSTOMER_HANDOFF_REQUIRED,
-          fabricPolicy,
-          bulkOrder,
-          fitProfile,
-          styleInspirationLinks: inspirationLinks,
-          styleAttributes,
-          styleNotes: styleNotes.trim() || null,
-          bodyNote: fitNote.trim() || null,
-          fabricSourcing: {
-            description: fabricDescription.trim() || null,
-            budgetAmount: fabricBudgetAmount.trim() ? Number.parseInt(fabricBudgetAmount, 10) : null,
-            budgetCurrency: fabricBudgetAmount.trim() ? accountCurrency : null,
-            deadlineBusinessDays: fabricSourcingDeadlineDays,
-          },
-        }
+    const supportMeta =
+      fabricSource === 'CUSTOMER_SUPPLIES'
+        ? {
+            fabricHandoffMode,
+            fabricHandoffLabel: fabricHandoffMode ? FABRIC_HANDOFF_LABELS[fabricHandoffMode] : null,
+            fabricPolicy,
+            bulkOrder,
+            fitProfile,
+            styleInspirationLinks: inspirationLinks,
+            styleAttributes,
+            styleNotes: styleNotes.trim() || null,
+            bodyNote: fitNote.trim() || null,
+          }
+        : {
+            fabricHandoffMode: 'NO_CUSTOMER_HANDOFF_REQUIRED' as const,
+            fabricHandoffLabel: FABRIC_HANDOFF_LABELS.NO_CUSTOMER_HANDOFF_REQUIRED,
+            fabricPolicy,
+            bulkOrder,
+            fitProfile,
+            styleInspirationLinks: inspirationLinks,
+            styleAttributes,
+            styleNotes: styleNotes.trim() || null,
+            bodyNote: fitNote.trim() || null,
+            fabricSourcing: {
+              description: fabricDescription.trim() || null,
+              budgetAmount: fabricBudgetAmount.trim()
+                ? Number.parseInt(fabricBudgetAmount, 10)
+                : null,
+              budgetCurrency: fabricBudgetAmount.trim() ? accountCurrency : null,
+              deadlineBusinessDays: fabricSourcingDeadlineDays,
+            },
+          }
 
     const composedFitNote = fitNote.trim() || null
 
     const buildOrderPayload = (
       action: 'preflight-create-order' | 'create-order',
-      uploadedReferencePhotos: string[],
+      uploadedReferencePhotos: string[]
     ) => ({
       action,
       tailorProfileId: tailorId,
@@ -845,9 +970,12 @@ export default function OrderBriefScreen() {
       styleNotes: styleNotes.trim() || null,
       bodyNote: composedFitNote,
       fabricDescription: fabricSource === 'TAILOR_SOURCES' ? fabricDescription.trim() : null,
-      fabricBudgetAmount: fabricBudgetAmount.trim() ? Number.parseInt(fabricBudgetAmount, 10) : null,
+      fabricBudgetAmount: fabricBudgetAmount.trim()
+        ? Number.parseInt(fabricBudgetAmount, 10)
+        : null,
       fabricBudgetCurrency: fabricBudgetAmount.trim() ? accountCurrency : null,
-      fabricSourcingDeadlineDays: fabricSource === 'TAILOR_SOURCES' ? fabricSourcingDeadlineDays : null,
+      fabricSourcingDeadlineDays:
+        fabricSource === 'TAILOR_SOURCES' ? fabricSourcingDeadlineDays : null,
       shippingPreference: deliveryMethod === 'SHIPPING' ? shippingPreference : null,
       deliveryInstructions: deliveryInstructions.trim() || null,
       deliveryAddress: deliveryMethod !== 'LOCAL_COLLECTION' ? composeDeliveryAddress() : null,
@@ -856,17 +984,24 @@ export default function OrderBriefScreen() {
       deliveryPostalCode: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryPostalCode.trim() : null,
       deliveryCountryCode: deliveryMethod !== 'LOCAL_COLLECTION' ? deliveryCountry.trim() : null,
       recipientName: deliveryMethod !== 'LOCAL_COLLECTION' ? recipientName.trim() : null,
-      recipientPhone: deliveryMethod !== 'LOCAL_COLLECTION' ? normalizePhoneForStorage(recipientPhone) : null,
+      recipientPhone:
+        deliveryMethod !== 'LOCAL_COLLECTION' ? normalizePhoneForStorage(recipientPhone) : null,
       cancellationPolicyAcknowledged,
     })
 
-    const { data: preflightData, error: preflightError } = await invokeFunction<{ ok: boolean; preflight?: boolean }>('custom-order-action', {
+    const { data: preflightData, error: preflightError } = await invokeFunction<{
+      ok: boolean
+      preflight?: boolean
+    }>('custom-order-action', {
       body: buildOrderPayload('preflight-create-order', []),
     })
 
     if (preflightError || !preflightData?.ok) {
       setSubmitting(false)
-      if (preflightError) Sentry.captureException(preflightError, { extra: { context: 'custom_order_preflight', tailorId } })
+      if (preflightError)
+        Sentry.captureException(preflightError, {
+          extra: { context: 'custom_order_preflight', tailorId },
+        })
       const message = await resolveOrderSubmitErrorMessage(preflightError)
       if (message.toLowerCase().includes('delivery address')) {
         setDeliveryAddressError('Please enter your full delivery address before continuing.')
@@ -880,11 +1015,9 @@ export default function OrderBriefScreen() {
     for (const uri of photos) {
       try {
         const cleanUri = await stripExif(uri)
-        const ext = 'jpg' // stripExif always outputs JPEG
-        const filename = `briefs/${user?.id}/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`
         const publicUrl = await uploadPublicStorageImage({
           bucket: 'order-photos',
-          path: filename,
+          path: createBriefPhotoPath(user?.id),
           uri: cleanUri,
           contentType: 'image/jpeg',
           maxBytes: 10 * 1024 * 1024,
@@ -896,20 +1029,24 @@ export default function OrderBriefScreen() {
           'Upload failed',
           isLikelyConnectivityIssue(error)
             ? 'Connection looks weak. One of your reference photos could not be uploaded yet. Retry when the signal improves.'
-            : 'One of your reference photos could not be uploaded right now. Please try again in a moment.',
+            : 'One of your reference photos could not be uploaded right now. Please try again in a moment.'
         )
         return
       }
     }
 
-    const { data, error } = await invokeFunction<{ ok: boolean; orderId?: string }>('custom-order-action', {
-      body: buildOrderPayload('create-order', uploadedUrls),
-    })
+    const { data, error } = await invokeFunction<{ ok: boolean; orderId?: string }>(
+      'custom-order-action',
+      {
+        body: buildOrderPayload('create-order', uploadedUrls),
+      }
+    )
 
     setSubmitting(false)
 
     if (error || !data?.orderId) {
-      if (error) Sentry.captureException(error, { extra: { context: 'custom_order_create', tailorId } })
+      if (error)
+        Sentry.captureException(error, { extra: { context: 'custom_order_create', tailorId } })
       const message = await resolveOrderSubmitErrorMessage(error)
       if (message.toLowerCase().includes('delivery address')) {
         setDeliveryAddressError('Please enter your full delivery address before continuing.')
@@ -931,8 +1068,9 @@ export default function OrderBriefScreen() {
     })
 
     router.replace({
-      pathname: `/(customer)/orders/${data.orderId}` as any,
+      pathname: '/(customer)/orders/[id]',
       params: {
+        id: data.orderId,
         sent: '1',
         tab: 'active',
         returnTo: '/(customer)/orders?tab=active',
@@ -949,10 +1087,13 @@ export default function OrderBriefScreen() {
         [
           {
             text: 'Set up now',
-            onPress: () => router.push({
-              pathname: '/(customer)/profile/measurements',
-              params: { returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }) },
-            }),
+            onPress: () =>
+              router.push({
+                pathname: '/(customer)/profile/measurements',
+                params: {
+                  returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }),
+                },
+              }),
           },
           { text: 'Cancel', style: 'cancel' },
         ]
@@ -960,8 +1101,11 @@ export default function OrderBriefScreen() {
       return
     }
     if (!canProceed()) return
-    if (step < STEP_TITLES.length - 1) { setStep(step + 1) }
-    else { submit() }
+    if (step < STEP_TITLES.length - 1) {
+      setStep(step + 1)
+    } else {
+      submit()
+    }
   }
 
   function back() {
@@ -1008,25 +1152,37 @@ export default function OrderBriefScreen() {
             <Text style={styles.errorTitle}>Couldn't load this order form</Text>
             <Text style={styles.errorHint}>Please go back and try again in a moment.</Text>
             <View style={styles.stateGuideCard}>
-              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
+              <Text style={styles.stateGuideTitle}>Recovery</Text>
               <Text style={styles.stateGuideText}>
-                Refresh here first. If it still fails, explore tailors first, then open your measurements if needed, so the next booking can keep moving.
+                Refresh here first. If it still fails, explore tailors first, then open your
+                measurements if needed, so the next booking can keep moving.
               </Text>
             </View>
             <TouchableOpacity style={styles.errorBtn} onPress={() => void loadInitialData()}>
               <Text style={styles.errorBtnText}>Try again</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.errorBtn, styles.errorBtnSecondary]} onPress={() => router.replace('/(customer)')}>
-              <Text style={[styles.errorBtnText, styles.errorBtnTextSecondary]}>Explore tailors</Text>
+            <TouchableOpacity
+              style={[styles.errorBtn, styles.errorBtnSecondary]}
+              onPress={() => router.replace('/(customer)')}
+            >
+              <Text style={[styles.errorBtnText, styles.errorBtnTextSecondary]}>
+                Explore tailors
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.errorBtn, styles.errorBtnSecondary]}
-              onPress={() => router.push({
-                pathname: '/(customer)/profile/measurements',
-                params: { returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }) },
-              })}
+              onPress={() =>
+                router.push({
+                  pathname: '/(customer)/profile/measurements',
+                  params: {
+                    returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }),
+                  },
+                })
+              }
             >
-              <Text style={[styles.errorBtnText, styles.errorBtnTextSecondary]}>Open measurements</Text>
+              <Text style={[styles.errorBtnText, styles.errorBtnTextSecondary]}>
+                Open measurements
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.errorBtn, styles.errorBtnSecondary]} onPress={goBack}>
               <Text style={[styles.errorBtnText, styles.errorBtnTextSecondary]}>Go back</Text>
@@ -1044,7 +1200,10 @@ export default function OrderBriefScreen() {
           <View style={styles.stateCard}>
             <Text style={styles.stateEyebrow}>Order brief</Text>
             <Text style={styles.loadingTitle}>Preparing your order brief…</Text>
-            <Text style={styles.loadingHint}>We’re loading your tailor details and measurement profile so the quote can start from the right context.</Text>
+            <Text style={styles.loadingHint}>
+              We’re loading your tailor details and measurement profile so the quote can start from
+              the right context.
+            </Text>
           </View>
         </View>
       </SafeAreaView>
@@ -1053,13 +1212,18 @@ export default function OrderBriefScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={back}>
             <Text style={styles.backText}>← Back</Text>
           </TouchableOpacity>
-          <Text style={styles.stepLabel}>Step {step + 1} of {STEP_TITLES.length}</Text>
+          <Text style={styles.stepLabel}>
+            Step {step + 1} of {STEP_TITLES.length}
+          </Text>
           <View style={{ width: 60 }} />
         </View>
 
@@ -1070,37 +1234,49 @@ export default function OrderBriefScreen() {
           ))}
         </View>
 
-        <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
+        <ScrollView
+          style={styles.scroll}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: Math.max(180, insets.bottom + 152) }}
+        >
           <View style={styles.content}>
             <Text style={styles.stepTitle}>{STEP_TITLES[step]}</Text>
-            <View style={styles.stepIntroCard}>
-              <Text style={styles.stepIntroEyebrow}>Why this step matters</Text>
-              <Text style={styles.stepIntroText}>{STEP_SUBS[step]}</Text>
-            </View>
+            <Text style={styles.stepSubtitle}>{STEP_SUBS[step]}</Text>
             {/* ── Step 0: Garment details ── */}
             {step === 0 && (
               <View style={styles.fields}>
                 {/* Garment type picker */}
                 <View>
-                  <Text style={styles.fieldLabel}>Garment type <Text style={styles.required}>*</Text></Text>
-                  <View style={styles.taxonomyList}>
-                    {CUSTOM_ORDER_GARMENT_TAXONOMY.map((group) => (
-                      <View key={group.category} style={styles.taxonomyGroup}>
-                        <Text style={styles.taxonomyTitle}>{group.category}</Text>
-                        <View style={styles.garmentRow}>
-                          {group.items.map((g) => (
-                            <TouchableOpacity
-                              key={g}
-                              style={[styles.garmentChip, garmentType === g && styles.garmentChipActive]}
-                              onPress={() => setGarmentType(g)}
-                            >
-                              <Text style={[styles.garmentChipText, garmentType === g && styles.garmentChipTextActive]}>{g}</Text>
-                            </TouchableOpacity>
-                          ))}
-                        </View>
-                      </View>
-                    ))}
-                  </View>
+                  <Text style={styles.fieldLabel}>
+                    Garment type <Text style={styles.required}>*</Text>
+                  </Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.garmentSelectCard,
+                      !!garmentType && styles.garmentSelectCardActive,
+                    ]}
+                    onPress={() => setShowGarmentPicker(true)}
+                    activeOpacity={0.78}
+                    accessibilityRole="button"
+                    accessibilityLabel="Choose garment type"
+                  >
+                    <View style={styles.garmentSelectCopy}>
+                      <Text
+                        style={[
+                          styles.garmentSelectValue,
+                          !selectedGarmentLabel && styles.garmentSelectPlaceholder,
+                        ]}
+                      >
+                        {selectedGarmentLabel || 'Choose garment type'}
+                      </Text>
+                      <Text style={styles.garmentSelectHint}>
+                        Browse cultural, formal, modest, and group order categories.
+                      </Text>
+                    </View>
+                    <Text style={styles.garmentSelectAction}>
+                      {garmentType ? 'Change' : 'Open'}
+                    </Text>
+                  </TouchableOpacity>
                   {garmentType === 'Other' ? (
                     <Input
                       label="What are you having made?"
@@ -1113,31 +1289,48 @@ export default function OrderBriefScreen() {
                 </View>
 
                 <View>
-                  <Text style={styles.fieldLabel}>Fit category <Text style={styles.required}>*</Text></Text>
-                  <View style={styles.optionCards}>
+                  <Text style={styles.fieldLabel}>
+                    Fit category <Text style={styles.required}>*</Text>
+                  </Text>
+                  <Text style={styles.fieldHint}>
+                    Choose the fit convention your tailor should use for this garment.
+                  </Text>
+                  <View style={styles.segmentedControl}>
                     {CUSTOM_ORDER_GENDER_PRESENTATIONS.map((value) => (
-                      <OptionCard
+                      <TouchableOpacity
                         key={value}
-                        title={value}
-                        hint={
-                          value === 'Menswear'
-                            ? 'Structured around menswear fit conventions.'
-                            : value === 'Womenswear'
-                              ? 'Structured around womenswear fit conventions.'
-                              : 'Use when the garment should not follow one fit convention.'
-                        }
-                        active={genderPresentation === value}
+                        style={[
+                          styles.segmentedItem,
+                          genderPresentation === value && styles.segmentedItemActive,
+                        ]}
                         onPress={() => setGenderPresentation(value)}
-                      />
+                        activeOpacity={0.78}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: genderPresentation === value }}
+                      >
+                        <Text
+                          style={[
+                            styles.segmentedItemText,
+                            genderPresentation === value && styles.segmentedItemTextActive,
+                          ]}
+                        >
+                          {value}
+                        </Text>
+                      </TouchableOpacity>
                     ))}
                   </View>
                 </View>
 
                 <Input
                   label="Brief description"
-                  placeholder={'Line 1: what you want made\nLine 2: silhouette, details, or references\nLine 3: finish, fit, or anything important'}
+                  placeholder={
+                    'Line 1: what you want made\nLine 2: silhouette, details, or references\nLine 3: finish, fit, or anything important'
+                  }
                   value={description}
-                  onChangeText={(v) => { setDescription(v); if (descriptionError) validateDescription(v) }}
+                  onChangeText={(v) => {
+                    setDescription(v)
+                    if (descriptionError) validateDescription(v)
+                  }}
                   onBlur={() => validateDescription(description)}
                   error={descriptionError}
                   multiline
@@ -1156,33 +1349,46 @@ export default function OrderBriefScreen() {
                   onChangeText={setOccasion}
                   testID="occasion-input"
                 />
-                <View style={styles.inlineChipRow}>
-                  {CUSTOM_ORDER_OCCASIONS.map((value) => (
-                    <TouchableOpacity
-                      key={value}
-                      style={[styles.inlineChip, occasion === value && styles.inlineChipActive]}
-                      onPress={() => setOccasion(occasion === value ? '' : value)}
-                    >
-                      <Text style={[styles.inlineChipText, occasion === value && styles.inlineChipTextActive]}>{value}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
 
                 <View>
                   <Text style={styles.fieldLabel}>Who is this order for?</Text>
-                  <View style={styles.optionCards}>
-                    <OptionCard
-                      title="One person"
-                      hint="Standard custom order flow for a single recipient."
-                      active={!isBulkOrder}
+                  <Text style={styles.fieldHint}>
+                    Most orders are for one person. Use group when multiple people need linked
+                    outfits.
+                  </Text>
+                  <View style={styles.segmentedControl}>
+                    <TouchableOpacity
+                      style={[styles.segmentedItem, !isBulkOrder && styles.segmentedItemActive]}
                       onPress={() => setIsBulkOrder(false)}
-                    />
-                    <OptionCard
-                      title="Group or family order"
-                      hint="Best for ashoebi, wedding parties, or family sets. Drape may manage this as a linked special case."
-                      active={isBulkOrder}
+                      activeOpacity={0.78}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: !isBulkOrder }}
+                    >
+                      <Text
+                        style={[
+                          styles.segmentedItemText,
+                          !isBulkOrder && styles.segmentedItemTextActive,
+                        ]}
+                      >
+                        One person
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.segmentedItem, isBulkOrder && styles.segmentedItemActive]}
                       onPress={() => setIsBulkOrder(true)}
-                    />
+                      activeOpacity={0.78}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: isBulkOrder }}
+                    >
+                      <Text
+                        style={[
+                          styles.segmentedItemText,
+                          isBulkOrder && styles.segmentedItemTextActive,
+                        ]}
+                      >
+                        Group
+                      </Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
 
@@ -1213,18 +1419,32 @@ export default function OrderBriefScreen() {
                       maxLength={300}
                     />
                     <Text style={styles.measureSubcardHint}>
-                      Bulk custom orders stay inside Drape, but ops may help manage linked recipients, dye-lot consistency, and measurement privacy before quote acceptance.
+                      Bulk custom orders stay inside Drape, but ops may help manage linked
+                      recipients, dye-lot consistency, and measurement privacy before quote
+                      acceptance.
                     </Text>
                   </View>
                 ) : null}
 
                 <View>
-                  <Text style={styles.fieldLabel}>Deadline <Text style={styles.required}>*</Text></Text>
-                  <Text style={styles.fieldHint}>When do you need this by? Minimum is 2 weeks from today.</Text>
-                  <TouchableOpacity style={[styles.dateButton, !deadline && styles.dateButtonRequired]} onPress={() => setShowDatePicker(true)}>
+                  <Text style={styles.fieldLabel}>
+                    Deadline <Text style={styles.required}>*</Text>
+                  </Text>
+                  <Text style={styles.fieldHint}>
+                    When do you need this by? Minimum is 2 weeks from today.
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.dateButton, !deadline && styles.dateButtonRequired]}
+                    onPress={() => setShowDatePicker(true)}
+                  >
                     <Text style={[styles.dateText, !deadline && styles.datePlaceholder]}>
                       {deadline
-                        ? deadline.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' })
+                        ? deadline.toLocaleDateString('en-GB', {
+                            weekday: 'short',
+                            day: 'numeric',
+                            month: 'long',
+                            year: 'numeric',
+                          })
                         : 'Select your deadline'}
                     </Text>
                   </TouchableOpacity>
@@ -1254,7 +1474,8 @@ export default function OrderBriefScreen() {
                 <View>
                   <Text style={styles.fieldLabel}>Reference photos</Text>
                   <Text style={styles.fieldHint}>
-                    Inspiration photos, sketches, or similar garments you love. Add at least one photo or link.
+                    Inspiration photos, sketches, or similar garments you love. Add at least one
+                    photo or link.
                   </Text>
                   <View style={[styles.photoGrid, { marginTop: Spacing.md }]}>
                     {photos.map((uri, i) => (
@@ -1281,18 +1502,25 @@ export default function OrderBriefScreen() {
                       </TouchableOpacity>
                     )}
                   </View>
-                  <Text style={styles.photoCount}>{photos.length}/{CUSTOM_ORDER_MAX_REFERENCE_PHOTOS} photos</Text>
+                  <Text style={styles.photoCount}>
+                    {photos.length}/{CUSTOM_ORDER_MAX_REFERENCE_PHOTOS} photos
+                  </Text>
                 </View>
 
                 {/* Style inspiration */}
                 <View style={styles.inspirationSection}>
                   <Text style={styles.fieldLabel}>Style inspiration</Text>
                   <Text style={styles.fieldHint}>
-                    Add Instagram, Pinterest, or TikTok links to styles you like, up to {CUSTOM_ORDER_MAX_STYLE_LINKS}.
+                    Add Instagram, Pinterest, or TikTok links to styles you like, up to{' '}
+                    {CUSTOM_ORDER_MAX_STYLE_LINKS}.
                   </Text>
 
                   {/* Supported link types */}
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.handlesScroll}>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    style={styles.handlesScroll}
+                  >
                     <View style={styles.handlesRow}>
                       {SUPPORTED_STYLE_LINK_LABELS.map((label) => (
                         <View key={label} style={styles.handleChip}>
@@ -1309,13 +1537,19 @@ export default function OrderBriefScreen() {
                         label=""
                         placeholder="Paste an Instagram / Pinterest / TikTok post link"
                         value={inspirationInput}
-                        onChangeText={(v) => { setInspirationInput(v); if (linkError) setLinkError('') }}
+                        onChangeText={(v) => {
+                          setInspirationInput(v)
+                          if (linkError) setLinkError('')
+                        }}
                         containerStyle={{ marginBottom: 0 }}
                         onSubmitEditing={addCustomInspirationLink}
                         returnKeyType="done"
                       />
                     </View>
-                    <TouchableOpacity style={styles.inspirationAddBtn} onPress={addCustomInspirationLink}>
+                    <TouchableOpacity
+                      style={styles.inspirationAddBtn}
+                      onPress={addCustomInspirationLink}
+                    >
                       <Text style={styles.inspirationAddText}>Add</Text>
                     </TouchableOpacity>
                   </View>
@@ -1326,7 +1560,9 @@ export default function OrderBriefScreen() {
                     <View style={styles.selectedLinks}>
                       {inspirationLinks.map((link) => (
                         <View key={link} style={styles.selectedLinkBadge}>
-                          <Text style={styles.selectedLinkText} numberOfLines={1}>{link}</Text>
+                          <Text style={styles.selectedLinkText} numberOfLines={1}>
+                            {link}
+                          </Text>
                           <TouchableOpacity onPress={() => removeInspirationLink(link)}>
                             <Text style={styles.selectedLinkRemove}>✕</Text>
                           </TouchableOpacity>
@@ -1338,25 +1574,31 @@ export default function OrderBriefScreen() {
 
                 <View>
                   <Text style={styles.fieldLabel}>Style details</Text>
-                  <Text style={styles.fieldHint}>Tap the areas your tailor should pay attention to, then add anything the references do not capture.</Text>
-                  <View style={styles.inlineChipRow}>
-                    {CUSTOM_ORDER_STYLE_ATTRIBUTES.map((value) => {
-                      const active = styleAttributes.includes(value)
-                      return (
-                        <TouchableOpacity
-                          key={value}
-                          style={[styles.inlineChip, active && styles.inlineChipActive]}
-                          onPress={() => setStyleAttributes((current) =>
-                            current.includes(value)
-                              ? current.filter((item) => item !== value)
-                              : [...current, value]
-                          )}
-                        >
-                          <Text style={[styles.inlineChipText, active && styles.inlineChipTextActive]}>{value}</Text>
-                        </TouchableOpacity>
-                      )
-                    })}
-                  </View>
+                  <Text style={styles.fieldHint}>
+                    Choose focus areas only if they matter. Add anything the references do not
+                    capture below.
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.dropdownField}
+                    onPress={() => setShowFocusAreasPicker(true)}
+                    activeOpacity={0.78}
+                    accessibilityRole="button"
+                    accessibilityLabel="Choose style focus areas"
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.dropdownValue} numberOfLines={1}>
+                        {styleAttributes.length > 0
+                          ? styleAttributes.join(', ')
+                          : 'Optional focus areas'}
+                      </Text>
+                      <Text style={styles.dropdownMeta}>
+                        {styleAttributes.length > 0
+                          ? `${styleAttributes.length} selected`
+                          : 'Sleeves, neckline, fit, finishing...'}
+                      </Text>
+                    </View>
+                    <Text style={styles.dropdownChevron}>⌄</Text>
+                  </TouchableOpacity>
                 </View>
 
                 <Input
@@ -1378,13 +1620,35 @@ export default function OrderBriefScreen() {
               <View style={styles.fields}>
                 {measurements ? (
                   <View style={styles.measureSummaryCard}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                      }}
+                    >
                       <Text style={styles.measureSummaryTitle}>Your measurements</Text>
                       <Text style={styles.measureEditHint}>
                         {(() => {
-                          const FIELDS = ['chest','waist','hips','shoulderWidth','inseam','sleeveLength','neckCircumference','height','backLength','outseam','thighCircumference','kneeCircumference','torsoLength']
+                          const FIELDS = [
+                            'chest',
+                            'waist',
+                            'hips',
+                            'shoulderWidth',
+                            'inseam',
+                            'sleeveLength',
+                            'neckCircumference',
+                            'height',
+                            'backLength',
+                            'outseam',
+                            'thighCircumference',
+                            'kneeCircumference',
+                            'torsoLength',
+                          ]
                           const filled = FIELDS.filter((k) => measurements[k] != null).length
-                          return filled < FIELDS.length ? `${filled}/${FIELDS.length} · Tap to edit` : 'Tap any field to edit'
+                          return filled < FIELDS.length
+                            ? `${filled}/${FIELDS.length} · Tap to edit`
+                            : 'Tap any field to edit'
                         })()}
                       </Text>
                     </View>
@@ -1392,7 +1656,9 @@ export default function OrderBriefScreen() {
                       <View style={styles.measureSourceRow}>
                         <Text style={styles.measureSourceLabel}>Source</Text>
                         <Text style={styles.measureSourceValue}>
-                          {MEASUREMENT_SOURCE_LABELS[measurements.measurementSource as keyof typeof MEASUREMENT_SOURCE_LABELS] ?? measurements.measurementSource}
+                          {MEASUREMENT_SOURCE_LABELS[
+                            measurements.measurementSource as keyof typeof MEASUREMENT_SOURCE_LABELS
+                          ] ?? measurements.measurementSource}
                         </Text>
                       </View>
                     ) : null}
@@ -1401,24 +1667,60 @@ export default function OrderBriefScreen() {
                         { key: 'chest', label: 'Chest', value: measurements.chest },
                         { key: 'waist', label: 'Waist', value: measurements.waist },
                         { key: 'hips', label: 'Hips', value: measurements.hips },
-                        { key: 'shoulderWidth', label: 'Shoulders', value: measurements.shoulderWidth },
+                        {
+                          key: 'shoulderWidth',
+                          label: 'Shoulders',
+                          value: measurements.shoulderWidth,
+                        },
                         { key: 'inseam', label: 'Inseam', value: measurements.inseam },
                         { key: 'sleeveLength', label: 'Sleeve', value: measurements.sleeveLength },
-                        { key: 'neckCircumference', label: 'Neck', value: measurements.neckCircumference },
+                        {
+                          key: 'neckCircumference',
+                          label: 'Neck',
+                          value: measurements.neckCircumference,
+                        },
                         { key: 'height', label: 'Height', value: measurements.height },
                         { key: 'underBust', label: 'Under bust', value: measurements.underBust },
                         { key: 'backLength', label: 'Back', value: measurements.backLength },
                         { key: 'outseam', label: 'Outseam', value: measurements.outseam },
-                        { key: 'thighCircumference', label: 'Thigh', value: measurements.thighCircumference },
-                        { key: 'kneeCircumference', label: 'Knee', value: measurements.kneeCircumference },
-                        { key: 'bicepCircumference', label: 'Bicep', value: measurements.bicepCircumference },
-                        { key: 'wristCircumference', label: 'Wrist', value: measurements.wristCircumference },
-                        { key: 'headCircumference', label: 'Head', value: measurements.headCircumference },
+                        {
+                          key: 'thighCircumference',
+                          label: 'Thigh',
+                          value: measurements.thighCircumference,
+                        },
+                        {
+                          key: 'kneeCircumference',
+                          label: 'Knee',
+                          value: measurements.kneeCircumference,
+                        },
+                        {
+                          key: 'bicepCircumference',
+                          label: 'Bicep',
+                          value: measurements.bicepCircumference,
+                        },
+                        {
+                          key: 'wristCircumference',
+                          label: 'Wrist',
+                          value: measurements.wristCircumference,
+                        },
+                        {
+                          key: 'headCircumference',
+                          label: 'Head',
+                          value: measurements.headCircumference,
+                        },
                         { key: 'hatBandLine', label: 'Hat band', value: measurements.hatBandLine },
                         { key: 'headLength', label: 'Head length', value: measurements.headLength },
                         { key: 'headWidth', label: 'Head width', value: measurements.headWidth },
-                        { key: 'earToEarOverCrown', label: 'Crown E-E', value: measurements.earToEarOverCrown },
-                        { key: 'frontToBackOverCrown', label: 'Crown F-B', value: measurements.frontToBackOverCrown },
+                        {
+                          key: 'earToEarOverCrown',
+                          label: 'Crown E-E',
+                          value: measurements.earToEarOverCrown,
+                        },
+                        {
+                          key: 'frontToBackOverCrown',
+                          label: 'Crown F-B',
+                          value: measurements.frontToBackOverCrown,
+                        },
                         { key: 'filaHeight', label: 'Fila height', value: measurements.filaHeight },
                         { key: 'torsoLength', label: 'Torso', value: measurements.torsoLength },
                       ].map(({ key, label, value }) => (
@@ -1431,20 +1733,29 @@ export default function OrderBriefScreen() {
                           }}
                         >
                           <Text style={styles.measureSummaryLabel}>{label}</Text>
-                          <Text style={[styles.measureSummaryValue, !value && { color: Colors.lightGrey }]}>
+                          <Text
+                            style={[
+                              styles.measureSummaryValue,
+                              !value && { color: Colors.lightGrey },
+                            ]}
+                          >
                             {value ? `${value} ${measurements.unit}` : 'Not added'}
                           </Text>
                         </TouchableOpacity>
-                        ))}
+                      ))}
                     </View>
                     {getAdditionalMeasurementRows(measurements).length > 0 && (
                       <View style={styles.additionalMeasurePreview}>
-                        <Text style={styles.additionalMeasurePreviewTitle}>Garment-specific measurements</Text>
+                        <Text style={styles.additionalMeasurePreviewTitle}>
+                          Garment-specific measurements
+                        </Text>
                         <View style={styles.measureSummaryGrid}>
                           {getAdditionalMeasurementRows(measurements).map(({ label, value }) => (
                             <View key={label} style={styles.measureSummaryItem}>
                               <Text style={styles.measureSummaryLabel}>{label}</Text>
-                              <Text style={styles.measureSummaryValue}>{String(value)} {measurements.unit}</Text>
+                              <Text style={styles.measureSummaryValue}>
+                                {String(value)} {String(measurements.unit ?? '')}
+                              </Text>
                             </View>
                           ))}
                         </View>
@@ -1473,25 +1784,33 @@ export default function OrderBriefScreen() {
                           {guidedFitProfile.fitIntent ? (
                             <View style={styles.measureSourceRow}>
                               <Text style={styles.measureSourceLabel}>Fit direction</Text>
-                              <Text style={styles.measureSourceValue}>{FIT_INTENT_LABELS[guidedFitProfile.fitIntent]}</Text>
+                              <Text style={styles.measureSourceValue}>
+                                {FIT_INTENT_LABELS[guidedFitProfile.fitIntent]}
+                              </Text>
                             </View>
                           ) : null}
                           {guidedFitProfile.fabricStretch ? (
                             <View style={styles.measureSourceRow}>
                               <Text style={styles.measureSourceLabel}>Stretch</Text>
-                              <Text style={styles.measureSourceValue}>{FABRIC_STRETCH_LABELS[guidedFitProfile.fabricStretch]}</Text>
+                              <Text style={styles.measureSourceValue}>
+                                {FABRIC_STRETCH_LABELS[guidedFitProfile.fabricStretch]}
+                              </Text>
                             </View>
                           ) : null}
                           {guidedFitProfile.wearDaySupport ? (
                             <View style={styles.measureSourceRow}>
                               <Text style={styles.measureSourceLabel}>Support</Text>
-                              <Text style={styles.measureSourceValue}>{WEAR_DAY_SUPPORT_LABELS[guidedFitProfile.wearDaySupport]}</Text>
+                              <Text style={styles.measureSourceValue}>
+                                {WEAR_DAY_SUPPORT_LABELS[guidedFitProfile.wearDaySupport]}
+                              </Text>
                             </View>
                           ) : null}
                           {guidedFitProfile.coveragePreference ? (
                             <View style={styles.measureSourceRow}>
                               <Text style={styles.measureSourceLabel}>Coverage</Text>
-                              <Text style={styles.measureSourceValue}>{COVERAGE_PREFERENCE_LABELS[guidedFitProfile.coveragePreference]}</Text>
+                              <Text style={styles.measureSourceValue}>
+                                {COVERAGE_PREFERENCE_LABELS[guidedFitProfile.coveragePreference]}
+                              </Text>
                             </View>
                           ) : null}
                           <Text style={styles.measureSubcardHint}>
@@ -1503,14 +1822,22 @@ export default function OrderBriefScreen() {
                       ) : (
                         <>
                           <Text style={styles.measureSubcardHint}>
-                            Add posture, stretch, coverage, and symmetry notes once so future quotes start from a fuller fit brief.
+                            Add posture, stretch, coverage, and symmetry notes once so future quotes
+                            start from a fuller fit brief.
                           </Text>
                           <TouchableOpacity
                             style={styles.measureActionBtn}
-                            onPress={() => router.push({
-                              pathname: '/(customer)/profile/guided-fit',
-                              params: { returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }) },
-                            })}
+                            onPress={() =>
+                              router.push({
+                                pathname: '/(customer)/profile/guided-fit',
+                                params: {
+                                  returnTo: buildBriefRoute(tailorId, {
+                                    draftSession,
+                                    resumeDraft: true,
+                                  }),
+                                },
+                              })
+                            }
                           >
                             <Text style={styles.measureActionBtnText}>Add guided fit intake</Text>
                           </TouchableOpacity>
@@ -1522,40 +1849,44 @@ export default function OrderBriefScreen() {
                   <View style={styles.noMeasureCard}>
                     <Text style={styles.noMeasureTitle}>Choose how to add measurements</Text>
                     <Text style={styles.noMeasureHint}>
-                      Your tailor needs your fit profile before they can quote accurately. Scan with Drape Vision or enter measurements manually, then return to this brief.
+                      Your tailor needs your fit profile before they can quote accurately. Scan with
+                      Drape Vision or enter measurements manually, then return to this brief.
                     </Text>
                     <View style={styles.optionCards}>
                       <OptionCard
                         title="Scan with Drape Vision"
                         hint="Guided rotation scan. Your progress in this order will stay here when you come back."
-                        active
-                        onPress={() => router.push({
-                          pathname: DRAPE_VISION_ROUTE,
-                          params: {
-                            mode: 'customer_scan',
-                            returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }),
-                          },
-                        } as never)}
+                        active={false}
+                        onPress={() =>
+                          router.push({
+                            pathname: DRAPE_VISION_ROUTE,
+                            params: {
+                              mode: 'customer_scan',
+                              returnTo: buildBriefRoute(tailorId, {
+                                draftSession,
+                                resumeDraft: true,
+                              }),
+                            },
+                          } as never)
+                        }
                       />
                       <OptionCard
                         title="Enter measurements manually"
                         hint="Guided manual profile. Your progress in this order will stay here when you come back."
-                        active
-                        onPress={() => router.push({
-                          pathname: '/(customer)/profile/measurements',
-                          params: { returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }) },
-                        })}
+                        active={false}
+                        onPress={() =>
+                          router.push({
+                            pathname: '/(customer)/profile/measurements',
+                            params: {
+                              returnTo: buildBriefRoute(tailorId, {
+                                draftSession,
+                                resumeDraft: true,
+                              }),
+                            },
+                          })
+                        }
                       />
                     </View>
-                    <TouchableOpacity
-                      style={styles.noMeasureBtn}
-                      onPress={() => router.push({
-                        pathname: '/(customer)/profile/measurements',
-                        params: { returnTo: buildBriefRoute(tailorId, { draftSession, resumeDraft: true }) },
-                      })}
-                    >
-                      <Text style={styles.noMeasureBtnText}>Complete measurement profile</Text>
-                    </TouchableOpacity>
                   </View>
                 )}
 
@@ -1563,7 +1894,10 @@ export default function OrderBriefScreen() {
                   label="Body note"
                   placeholder="e.g. I prefer extra room in the shoulders, I have a shorter torso, or I like trousers to sit high on the waist."
                   value={fitNote}
-                  onChangeText={(v) => { setFitNote(v); if (fitNoteError) validateFitNote(v) }}
+                  onChangeText={(v) => {
+                    setFitNote(v)
+                    if (fitNoteError) validateFitNote(v)
+                  }}
                   onBlur={() => validateFitNote(fitNote)}
                   error={fitNoteError}
                   multiline
@@ -1579,7 +1913,8 @@ export default function OrderBriefScreen() {
                       key={value}
                       style={styles.inlineChip}
                       onPress={() => {
-                        const next = fitNote.trim().length > 0 ? `${fitNote.trim()}. ${value}` : value
+                        const next =
+                          fitNote.trim().length > 0 ? `${fitNote.trim()}. ${value}` : value
                         setFitNote(next)
                         if (fitNoteError) validateFitNote(next)
                       }}
@@ -1595,7 +1930,9 @@ export default function OrderBriefScreen() {
             {step === 3 && (
               <View style={styles.fields}>
                 <View>
-                  <Text style={styles.fieldLabel}>Who provides the fabric? <Text style={styles.required}>*</Text></Text>
+                  <Text style={styles.fieldLabel}>
+                    Who provides the fabric? <Text style={styles.required}>*</Text>
+                  </Text>
                   <View style={styles.optionCards}>
                     <OptionCard
                       title="I will provide the fabric"
@@ -1617,10 +1954,14 @@ export default function OrderBriefScreen() {
                     <View style={styles.guideCard}>
                       <Text style={styles.guideTitle}>Fabric handoff</Text>
                       <Text style={styles.guideText}>
-                        Production stays paused until the tailor confirms the fabric has arrived. If the fabric is unsuitable, the order goes to customer and ops review before work continues.
+                        Production stays paused until the tailor confirms the fabric has arrived. If
+                        the fabric is unsuitable, the order goes to customer and ops review before
+                        work continues.
                       </Text>
                     </View>
-                    <Text style={styles.fieldLabel}>How will the fabric reach the tailor? <Text style={styles.required}>*</Text></Text>
+                    <Text style={styles.fieldLabel}>
+                      How will the fabric reach the tailor? <Text style={styles.required}>*</Text>
+                    </Text>
                     <View style={styles.optionCards}>
                       {FABRIC_HANDOFF_OPTIONS.map((option) => (
                         <OptionCard
@@ -1658,16 +1999,28 @@ export default function OrderBriefScreen() {
                       hint="The tailor will still quote the final amount before you pay."
                     />
                     <View>
-                      <Text style={styles.fieldLabel}>Sourcing deadline <Text style={styles.required}>*</Text></Text>
-                      <Text style={styles.fieldHint}>How long should the tailor have to source fabric before you are updated?</Text>
+                      <Text style={styles.fieldLabel}>
+                        Sourcing deadline <Text style={styles.required}>*</Text>
+                      </Text>
+                      <Text style={styles.fieldHint}>
+                        How long should the tailor have to source fabric before you are updated?
+                      </Text>
                       <View style={styles.inlineChipRow}>
                         {CUSTOM_ORDER_FABRIC_SOURCING_DEADLINE_DAYS.map((days) => (
                           <TouchableOpacity
                             key={days}
-                            style={[styles.inlineChip, fabricSourcingDeadlineDays === days && styles.inlineChipActive]}
+                            style={[
+                              styles.inlineChip,
+                              fabricSourcingDeadlineDays === days && styles.inlineChipActive,
+                            ]}
                             onPress={() => setFabricSourcingDeadlineDays(days)}
                           >
-                            <Text style={[styles.inlineChipText, fabricSourcingDeadlineDays === days && styles.inlineChipTextActive]}>
+                            <Text
+                              style={[
+                                styles.inlineChipText,
+                                fabricSourcingDeadlineDays === days && styles.inlineChipTextActive,
+                              ]}
+                            >
                               {days} business days
                             </Text>
                           </TouchableOpacity>
@@ -1689,7 +2042,9 @@ export default function OrderBriefScreen() {
             {step === 4 && (
               <View style={styles.fields}>
                 <View>
-                  <Text style={styles.fieldLabel}>Delivery <Text style={styles.required}>*</Text></Text>
+                  <Text style={styles.fieldLabel}>
+                    Delivery <Text style={styles.required}>*</Text>
+                  </Text>
                   <View style={styles.optionCards}>
                     <OptionCard
                       title="Local delivery"
@@ -1714,15 +2069,25 @@ export default function OrderBriefScreen() {
 
                 {deliveryMethod === 'SHIPPING' ? (
                   <View>
-                    <Text style={styles.fieldLabel}>Shipping preference <Text style={styles.required}>*</Text></Text>
+                    <Text style={styles.fieldLabel}>
+                      Shipping preference <Text style={styles.required}>*</Text>
+                    </Text>
                     <View style={styles.inlineChipRow}>
                       {CUSTOM_ORDER_SHIPPING_PREFERENCES.map((value) => (
                         <TouchableOpacity
                           key={value}
-                          style={[styles.inlineChip, shippingPreference === value && styles.inlineChipActive]}
+                          style={[
+                            styles.inlineChip,
+                            shippingPreference === value && styles.inlineChipActive,
+                          ]}
                           onPress={() => setShippingPreference(value)}
                         >
-                          <Text style={[styles.inlineChipText, shippingPreference === value && styles.inlineChipTextActive]}>
+                          <Text
+                            style={[
+                              styles.inlineChipText,
+                              shippingPreference === value && styles.inlineChipTextActive,
+                            ]}
+                          >
                             {value === 'EXPRESS' ? 'Express' : 'Standard'}
                           </Text>
                         </TouchableOpacity>
@@ -1734,7 +2099,9 @@ export default function OrderBriefScreen() {
                 {deliveryMethod && deliveryMethod !== 'LOCAL_COLLECTION' && (
                   <View style={styles.addressFields}>
                     <View>
-                      <Text style={styles.fieldLabel}>Who should receive this order? <Text style={styles.required}>*</Text></Text>
+                      <Text style={styles.fieldLabel}>
+                        Who should receive this order? <Text style={styles.required}>*</Text>
+                      </Text>
                       <View style={styles.optionCards}>
                         <OptionCard
                           title="I will receive it"
@@ -1759,7 +2126,11 @@ export default function OrderBriefScreen() {
                         if (recipientContactError) setRecipientContactError('')
                       }}
                       onBlur={validateRecipientContact}
-                      hint={recipientMode === 'SELF' ? 'This is the name the courier or rider should ask for.' : 'Use the name of the person collecting this on your behalf.'}
+                      hint={
+                        recipientMode === 'SELF'
+                          ? 'This is the name the courier or rider should ask for.'
+                          : 'Use the name of the person collecting this on your behalf.'
+                      }
                       required
                     />
                     <Input
@@ -1796,7 +2167,8 @@ export default function OrderBriefScreen() {
                             key={`${item.place_id ?? item.display_name}-${index}`}
                             style={[
                               styles.suggestionRow,
-                              index === deliveryAddressSuggestions.length - 1 && styles.suggestionRowLast,
+                              index === deliveryAddressSuggestions.length - 1 &&
+                                styles.suggestionRowLast,
                             ]}
                             onPress={() => selectDeliverySuggestion(item)}
                           >
@@ -1809,7 +2181,10 @@ export default function OrderBriefScreen() {
                       label="Address line 1"
                       placeholder="Street address"
                       value={deliveryAddressLine1}
-                      onChangeText={(v) => { setDeliveryAddressLine1(v); if (deliveryAddressError) setDeliveryAddressError('') }}
+                      onChangeText={(v) => {
+                        setDeliveryAddressLine1(v)
+                        if (deliveryAddressError) setDeliveryAddressError('')
+                      }}
                       onBlur={validateDeliveryAddress}
                       required
                     />
@@ -1817,7 +2192,10 @@ export default function OrderBriefScreen() {
                       label="Address line 2 (optional)"
                       placeholder="Apartment, suite, building"
                       value={deliveryAddressLine2}
-                      onChangeText={(v) => { setDeliveryAddressLine2(v); if (deliveryAddressError) setDeliveryAddressError('') }}
+                      onChangeText={(v) => {
+                        setDeliveryAddressLine2(v)
+                        if (deliveryAddressError) setDeliveryAddressError('')
+                      }}
                     />
                     <View style={styles.addressRow}>
                       <View style={styles.addressHalf}>
@@ -1825,7 +2203,10 @@ export default function OrderBriefScreen() {
                           label="City"
                           placeholder="City"
                           value={deliveryCity}
-                          onChangeText={(v) => { setDeliveryCity(v); if (deliveryAddressError) setDeliveryAddressError('') }}
+                          onChangeText={(v) => {
+                            setDeliveryCity(v)
+                            if (deliveryAddressError) setDeliveryAddressError('')
+                          }}
                           onBlur={validateDeliveryAddress}
                           required
                         />
@@ -1835,7 +2216,10 @@ export default function OrderBriefScreen() {
                           label="State / region"
                           placeholder="State"
                           value={deliveryStateRegion}
-                          onChangeText={(v) => { setDeliveryStateRegion(v); if (deliveryAddressError) setDeliveryAddressError('') }}
+                          onChangeText={(v) => {
+                            setDeliveryStateRegion(v)
+                            if (deliveryAddressError) setDeliveryAddressError('')
+                          }}
                           onBlur={validateDeliveryAddress}
                           required
                         />
@@ -1847,7 +2231,10 @@ export default function OrderBriefScreen() {
                           label="Postcode / ZIP"
                           placeholder="Postcode / ZIP (optional)"
                           value={deliveryPostalCode}
-                          onChangeText={(v) => { setDeliveryPostalCode(v); if (deliveryAddressError) setDeliveryAddressError('') }}
+                          onChangeText={(v) => {
+                            setDeliveryPostalCode(v)
+                            if (deliveryAddressError) setDeliveryAddressError('')
+                          }}
                           onBlur={validateDeliveryAddress}
                         />
                       </View>
@@ -1856,7 +2243,10 @@ export default function OrderBriefScreen() {
                           label="Country"
                           placeholder="Country"
                           value={deliveryCountry}
-                          onChangeText={(v) => { setDeliveryCountry(v); if (deliveryAddressError) setDeliveryAddressError('') }}
+                          onChangeText={(v) => {
+                            setDeliveryCountry(v)
+                            if (deliveryAddressError) setDeliveryAddressError('')
+                          }}
                           onBlur={validateDeliveryAddress}
                           required
                         />
@@ -1868,10 +2258,17 @@ export default function OrderBriefScreen() {
                         : 'Your tailor ships the finished garment here. If search misses your area, you can still enter the address manually in full.'}
                     </Text>
                     <Text style={styles.fieldHint}>
-                      Drape includes a standard {deliveryMethod === 'LOCAL_DELIVERY' ? 'delivery' : 'shipping'} fee when you pay the quote. Carrier surcharges, customs, or import duties are never charged automatically; we will ask you to approve anything extra before dispatch.
+                      Drape includes a standard{' '}
+                      {deliveryMethod === 'LOCAL_DELIVERY' ? 'delivery' : 'shipping'} fee when you
+                      pay the quote. Carrier surcharges, customs, or import duties are never charged
+                      automatically; we will ask you to approve anything extra before dispatch.
                     </Text>
-                    {recipientContactError ? <Text style={styles.linkError}>{recipientContactError}</Text> : null}
-                    {deliveryAddressError ? <Text style={styles.linkError}>{deliveryAddressError}</Text> : null}
+                    {recipientContactError ? (
+                      <Text style={styles.linkError}>{recipientContactError}</Text>
+                    ) : null}
+                    {deliveryAddressError ? (
+                      <Text style={styles.linkError}>{deliveryAddressError}</Text>
+                    ) : null}
                   </View>
                 )}
 
@@ -1879,7 +2276,8 @@ export default function OrderBriefScreen() {
                   <View style={styles.guideCard}>
                     <Text style={styles.guideTitle}>Collection code</Text>
                     <Text style={styles.guideText}>
-                      When the garment is ready, Drape creates a collection code. Share it only when you have collected the order.
+                      When the garment is ready, Drape creates a collection code. Share it only when
+                      you have collected the order.
                     </Text>
                   </View>
                 ) : null}
@@ -1901,7 +2299,10 @@ export default function OrderBriefScreen() {
             {step === 5 && (
               <View style={styles.fields}>
                 <ReviewSection title="Garment details" onEdit={() => setStep(0)}>
-                  <SummaryRow label="Garment" value={garmentType === 'Other' ? garmentTypeOther.trim() : garmentType} />
+                  <SummaryRow
+                    label="Garment"
+                    value={garmentType === 'Other' ? garmentTypeOther.trim() : garmentType}
+                  />
                   <SummaryRow label="Fit category" value={genderPresentation ?? 'Not set'} />
                   <SummaryRow label="Occasion" value={occasion.trim() || 'Not set'} />
                   <SummaryRow label="Target date" value={formatDate(deadline)} />
@@ -1909,17 +2310,31 @@ export default function OrderBriefScreen() {
                 </ReviewSection>
 
                 <ReviewSection title="Style references" onEdit={() => setStep(1)}>
-                  <SummaryRow label="Photos" value={`${photos.length} reference photo${photos.length === 1 ? '' : 's'}`} />
-                  <SummaryRow label="Links" value={`${inspirationLinks.length} style link${inspirationLinks.length === 1 ? '' : 's'}`} />
-                  {styleAttributes.length > 0 ? <SummaryRow label="Focus areas" value={styleAttributes.join(', ')} /> : null}
-                  {styleNotes.trim() ? <SummaryRow label="Style notes" value={styleNotes.trim()} /> : null}
+                  <SummaryRow
+                    label="Photos"
+                    value={`${photos.length} reference photo${photos.length === 1 ? '' : 's'}`}
+                  />
+                  <SummaryRow
+                    label="Links"
+                    value={`${inspirationLinks.length} style link${inspirationLinks.length === 1 ? '' : 's'}`}
+                  />
+                  {styleAttributes.length > 0 ? (
+                    <SummaryRow label="Focus areas" value={styleAttributes.join(', ')} />
+                  ) : null}
+                  {styleNotes.trim() ? (
+                    <SummaryRow label="Style notes" value={styleNotes.trim()} />
+                  ) : null}
                 </ReviewSection>
 
                 <ReviewSection title="Measurements" onEdit={() => setStep(2)}>
                   {measurements?.measurementSource ? (
                     <SummaryRow
                       label="Source"
-                      value={MEASUREMENT_SOURCE_LABELS[measurements.measurementSource as keyof typeof MEASUREMENT_SOURCE_LABELS] ?? measurements.measurementSource}
+                      value={
+                        MEASUREMENT_SOURCE_LABELS[
+                          measurements.measurementSource as keyof typeof MEASUREMENT_SOURCE_LABELS
+                        ] ?? measurements.measurementSource
+                      }
                     />
                   ) : null}
                   <SummaryRow label="Body note" value={fitNote.trim()} />
@@ -1933,30 +2348,59 @@ export default function OrderBriefScreen() {
                   {fabricSource === 'TAILOR_SOURCES' ? (
                     <>
                       <SummaryRow label="Description" value={fabricDescription.trim()} />
-                      <SummaryRow label="Budget" value={fabricBudgetAmount.trim() ? `${accountCurrency} ${fabricBudgetAmount.trim()}` : 'Not set'} />
-                      <SummaryRow label="Sourcing update" value={`${fabricSourcingDeadlineDays} business days`} />
+                      <SummaryRow
+                        label="Budget"
+                        value={
+                          fabricBudgetAmount.trim()
+                            ? `${accountCurrency} ${fabricBudgetAmount.trim()}`
+                            : 'Not set'
+                        }
+                      />
+                      <SummaryRow
+                        label="Sourcing update"
+                        value={`${fabricSourcingDeadlineDays} business days`}
+                      />
                     </>
                   ) : null}
                 </ReviewSection>
 
                 <ReviewSection title="Delivery" onEdit={() => setStep(4)}>
                   <SummaryRow label="Method" value={deliveryMethodLabel(deliveryMethod)} />
-                  {deliveryMethod === 'SHIPPING' ? <SummaryRow label="Shipping" value={shippingPreference === 'EXPRESS' ? 'Express' : 'Standard'} /> : null}
+                  {deliveryMethod === 'SHIPPING' ? (
+                    <SummaryRow
+                      label="Shipping"
+                      value={shippingPreference === 'EXPRESS' ? 'Express' : 'Standard'}
+                    />
+                  ) : null}
                   {deliveryMethod !== 'LOCAL_COLLECTION' && recipientName.trim() ? (
-                    <SummaryRow label={recipientMode === 'SELF' ? 'Receiving contact' : 'Recipient'} value={recipientName.trim()} />
+                    <SummaryRow
+                      label={recipientMode === 'SELF' ? 'Receiving contact' : 'Recipient'}
+                      value={recipientName.trim()}
+                    />
                   ) : null}
                   {deliveryMethod !== 'LOCAL_COLLECTION' && recipientPhone.trim() ? (
-                    <SummaryRow label="Recipient phone" value={normalizePhoneForStorage(recipientPhone)} />
+                    <SummaryRow
+                      label="Recipient phone"
+                      value={normalizePhoneForStorage(recipientPhone)}
+                    />
                   ) : null}
                   {deliveryMethod !== 'LOCAL_COLLECTION' && composeDeliveryAddress().trim() ? (
-                    <SummaryRow label={deliveryMethod === 'SHIPPING' ? 'Ship to' : 'Deliver to'} value={composeDeliveryAddress()} />
+                    <SummaryRow
+                      label={deliveryMethod === 'SHIPPING' ? 'Ship to' : 'Deliver to'}
+                      value={composeDeliveryAddress()}
+                    />
                   ) : null}
-                  {deliveryInstructions.trim() ? <SummaryRow label="Instructions" value={deliveryInstructions.trim()} /> : null}
+                  {deliveryInstructions.trim() ? (
+                    <SummaryRow label="Instructions" value={deliveryInstructions.trim()} />
+                  ) : null}
                 </ReviewSection>
 
                 <View style={styles.summaryCard}>
                   <Text style={styles.summaryTitle}>Checkout preview</Text>
-                  <SummaryRow label="Estimated timeline" value={`Target delivery: ${formatDate(deadline)}`} />
+                  <SummaryRow
+                    label="Estimated timeline"
+                    value={`Target delivery: ${formatDate(deadline)}`}
+                  />
                   <SummaryRow label="Quote" value="Set by tailor after review" />
                   <SummaryRow label="Delivery" value="Calculated after quote" />
                   <SummaryRow label="Tax" value="Calculated at checkout" />
@@ -1987,8 +2431,15 @@ export default function OrderBriefScreen() {
                     accessibilityState={{ checked: cancellationPolicyAcknowledged }}
                     accessibilityLabel="Acknowledge cancellation policy"
                   >
-                    <View style={[styles.policyCheck, cancellationPolicyAcknowledged && styles.policyCheckActive]}>
-                      <Text style={styles.policyCheckText}>{cancellationPolicyAcknowledged ? '✓' : ''}</Text>
+                    <View
+                      style={[
+                        styles.policyCheck,
+                        cancellationPolicyAcknowledged && styles.policyCheckActive,
+                      ]}
+                    >
+                      <Text style={styles.policyCheckText}>
+                        {cancellationPolicyAcknowledged ? '✓' : ''}
+                      </Text>
                     </View>
                     <Text style={styles.policyAckText}>{ORDER_CANCELLATION_ACK_COPY}</Text>
                   </TouchableOpacity>
@@ -1999,11 +2450,7 @@ export default function OrderBriefScreen() {
         </ScrollView>
 
         {/* Bottom CTA */}
-        <View style={styles.cta}>
-          <View style={styles.ctaGuideCard}>
-            <Text style={styles.ctaGuideTitle}>Best next move</Text>
-            <Text style={styles.ctaGuideText}>{ctaGuideText()}</Text>
-          </View>
+        <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom + Spacing.sm, 14) }]}>
           <Button
             label={step < STEP_TITLES.length - 1 ? 'Continue' : 'Submit order'}
             onPress={next}
@@ -2014,10 +2461,194 @@ export default function OrderBriefScreen() {
         </View>
       </KeyboardAvoidingView>
 
+      {/* Garment type picker */}
+      <Modal
+        visible={showGarmentPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={closeGarmentPicker}
+      >
+        <View style={styles.pickerOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFillObject}
+            activeOpacity={1}
+            onPress={closeGarmentPicker}
+          />
+          <KeyboardAvoidingView
+            style={styles.pickerKeyboardWrap}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <View style={styles.pickerSheet}>
+              <View style={styles.pickerHandle} />
+              <View style={styles.pickerHeader}>
+                <View style={styles.pickerHeaderCopy}>
+                  <Text style={styles.pickerTitle}>Choose garment type</Text>
+                  <Text style={styles.pickerSubtitle}>
+                    Start with the closest match. Your brief can explain the details.
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.pickerClose}
+                  onPress={closeGarmentPicker}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close garment picker"
+                >
+                  <Text style={styles.pickerCloseText}>Close</Text>
+                </TouchableOpacity>
+              </View>
+              <TextInput
+                style={styles.pickerSearch}
+                value={garmentSearch}
+                onChangeText={setGarmentSearch}
+                placeholder="Search Agbada, suit, fila..."
+                placeholderTextColor={Colors.midGrey}
+                autoCorrect={false}
+                returnKeyType="search"
+              />
+              <ScrollView
+                style={styles.pickerList}
+                contentContainerStyle={styles.pickerListContent}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                {garmentPickerGroups.length === 0 ? (
+                  <View style={styles.pickerEmpty}>
+                    <Text style={styles.pickerEmptyTitle}>No match yet</Text>
+                    <Text style={styles.pickerEmptyText}>
+                      Choose Other and describe the garment in your own words.
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.pickerOtherButton}
+                      onPress={() => selectGarmentType('Other')}
+                    >
+                      <Text style={styles.pickerOtherButtonText}>Use Other</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  garmentPickerGroups.map((group) => (
+                    <View key={group.category} style={styles.pickerGroup}>
+                      <Text style={styles.pickerGroupTitle}>{group.category}</Text>
+                      {group.items.map((item) => {
+                        const isSelected = garmentType === item
+                        return (
+                          <TouchableOpacity
+                            key={item}
+                            style={[
+                              styles.pickerItem,
+                              isSelected && styles.pickerItemSelected,
+                            ]}
+                            onPress={() => selectGarmentType(item)}
+                            activeOpacity={0.75}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Choose ${item}`}
+                          >
+                            <Text
+                              style={[
+                                styles.pickerItemText,
+                                isSelected && styles.pickerItemTextSelected,
+                              ]}
+                            >
+                              {item}
+                            </Text>
+                            {isSelected ? (
+                              <Text style={styles.pickerItemCheck}>Selected</Text>
+                            ) : null}
+                          </TouchableOpacity>
+                        )
+                      })}
+                    </View>
+                  ))
+                )}
+              </ScrollView>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      {/* Focus areas picker */}
+      <Modal
+        visible={showFocusAreasPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowFocusAreasPicker(false)}
+      >
+        <View style={styles.pickerOverlay}>
+          <KeyboardAvoidingView
+            style={styles.pickerKeyboardWrap}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <View style={styles.pickerSheet}>
+              <View style={styles.pickerHandle} />
+              <View style={styles.pickerHeader}>
+                <View style={styles.pickerHeaderCopy}>
+                  <Text style={styles.pickerTitle}>Focus areas</Text>
+                  <Text style={styles.pickerSubtitle}>
+                    Pick only what your tailor should watch closely. You can leave this blank.
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.pickerClose}
+                  onPress={() => setShowFocusAreasPicker(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close focus areas picker"
+                >
+                  <Text style={styles.pickerCloseText}>Done</Text>
+                </TouchableOpacity>
+              </View>
+              <ScrollView
+                style={styles.pickerList}
+                contentContainerStyle={styles.pickerListContent}
+                showsVerticalScrollIndicator={false}
+              >
+                {CUSTOM_ORDER_STYLE_ATTRIBUTES.map((value) => {
+                  const active = styleAttributes.includes(value)
+                  return (
+                    <TouchableOpacity
+                      key={value}
+                      style={[styles.pickerItem, active && styles.pickerItemSelected]}
+                      onPress={() =>
+                        setStyleAttributes((current) =>
+                          current.includes(value)
+                            ? current.filter((item) => item !== value)
+                            : [...current, value]
+                        )
+                      }
+                      activeOpacity={0.75}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: active }}
+                      accessibilityLabel={`Toggle ${value}`}
+                    >
+                      <Text
+                        style={[styles.pickerItemText, active && styles.pickerItemTextSelected]}
+                      >
+                        {value}
+                      </Text>
+                      {active ? <Text style={styles.pickerItemCheck}>Selected</Text> : null}
+                    </TouchableOpacity>
+                  )
+                })}
+              </ScrollView>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
       {/* Inline measurement edit modal */}
-      <Modal visible={!!editingField} transparent animationType="slide" onRequestClose={() => setEditingField(null)}>
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <TouchableOpacity style={styles.editOverlay} activeOpacity={1} onPress={() => setEditingField(null)} />
+      <Modal
+        visible={!!editingField}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setEditingField(null)}
+      >
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <TouchableOpacity
+            style={styles.editOverlay}
+            activeOpacity={1}
+            onPress={() => setEditingField(null)}
+          />
           <View style={styles.editSheet}>
             <Text style={styles.editSheetTitle}>Edit {editingField?.label}</Text>
             <TextInput
@@ -2052,7 +2683,10 @@ export default function OrderBriefScreen() {
                           .maybeSingle()
 
                         if (error) {
-                          Alert.alert('Could not update profile', 'Your measurement was updated for this order only. Please try again from your profile.')
+                          Alert.alert(
+                            'Could not update profile',
+                            'Your measurement was updated for this order only. Please try again from your profile.'
+                          )
                           return
                         }
 
@@ -2073,7 +2707,10 @@ export default function OrderBriefScreen() {
                           )
 
                         if (updateError) {
-                          Alert.alert('Could not update profile', 'Your measurement was updated for this order only. Please try again from your profile.')
+                          Alert.alert(
+                            'Could not update profile',
+                            'Your measurement was updated for this order only. Please try again from your profile.'
+                          )
                           return
                         }
 
@@ -2084,7 +2721,10 @@ export default function OrderBriefScreen() {
                 )
               }}
             />
-            <TouchableOpacity onPress={() => setEditingField(null)} style={{ alignItems: 'center', paddingVertical: Spacing.sm }}>
+            <TouchableOpacity
+              onPress={() => setEditingField(null)}
+              style={{ alignItems: 'center', paddingVertical: Spacing.sm }}
+            >
               <Text style={{ color: Colors.midGrey, fontSize: FontSize.sm }}>Cancel</Text>
             </TouchableOpacity>
           </View>
@@ -2092,18 +2732,21 @@ export default function OrderBriefScreen() {
       </Modal>
 
       {/* Profile completeness prompt — one-time modal */}
-      <Modal visible={showMeasPrompt} transparent animationType="fade" onRequestClose={() => dismissMeasPrompt(false)}>
+      <Modal
+        visible={showMeasPrompt}
+        transparent
+        animationType="fade"
+        onRequestClose={() => dismissMeasPrompt(false)}
+      >
         <View style={styles.promptOverlay}>
           <View style={styles.promptCard}>
             <Text style={styles.promptEmoji}>📐</Text>
             <Text style={styles.promptTitle}>Add your measurements first?</Text>
             <Text style={styles.promptBody}>
-              Tailors give more accurate quotes when they have your body measurements on file. It only takes a minute and you only do it once.
+              Tailors give more accurate quotes when they have your body measurements on file. It
+              only takes a minute and you only do it once.
             </Text>
-            <TouchableOpacity
-              style={styles.promptPrimary}
-              onPress={() => dismissMeasPrompt(true)}
-            >
+            <TouchableOpacity style={styles.promptPrimary} onPress={() => dismissMeasPrompt(true)}>
               <Text style={styles.promptPrimaryText}>Set up measurements</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => dismissMeasPrompt(false)}>
@@ -2118,9 +2761,23 @@ export default function OrderBriefScreen() {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function OptionCard({ title, hint, active, onPress }: { title: string; hint: string; active: boolean; onPress: () => void }) {
+function OptionCard({
+  title,
+  hint,
+  active,
+  onPress,
+}: {
+  title: string
+  hint: string
+  active: boolean
+  onPress: () => void
+}) {
   return (
-    <TouchableOpacity style={[styles.optionCard, active && styles.optionCardActive]} onPress={onPress} accessibilityLabel={title}>
+    <TouchableOpacity
+      style={[styles.optionCard, active && styles.optionCardActive]}
+      onPress={onPress}
+      accessibilityLabel={title}
+    >
       <View style={[styles.optionRadio, active && styles.optionRadioActive]} />
       <View style={{ flex: 1 }}>
         <Text style={[styles.optionTitle, active && styles.optionTitleActive]}>{title}</Text>
@@ -2130,7 +2787,15 @@ function OptionCard({ title, hint, active, onPress }: { title: string; hint: str
   )
 }
 
-function ReviewSection({ title, onEdit, children }: { title: string; onEdit: () => void; children: ReactNode }) {
+function ReviewSection({
+  title,
+  onEdit,
+  children,
+}: {
+  title: string
+  onEdit: () => void
+  children: ReactNode
+}) {
   return (
     <View style={styles.summaryCard}>
       <View style={styles.reviewHeader}>
@@ -2157,8 +2822,20 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
-  errorState: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.md, padding: Spacing.xl },
-  loadingState: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.sm, padding: Spacing.xl },
+  errorState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.md,
+    padding: Spacing.xl,
+  },
+  loadingState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    padding: Spacing.xl,
+  },
   stateCard: {
     width: '100%',
     maxWidth: 440,
@@ -2176,9 +2853,24 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.8,
   },
-  loadingTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
-  loadingHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
-  errorTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  loadingTitle: {
+    fontSize: FontSize.xl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    textAlign: 'center',
+  },
+  loadingHint: {
+    fontSize: FontSize.sm,
+    color: Colors.midGrey,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  errorTitle: {
+    fontSize: FontSize.xl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    textAlign: 'center',
+  },
   errorHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
   stateGuideCard: {
     width: '100%',
@@ -2209,11 +2901,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.lightGrey,
   },
-  errorBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
+  errorBtnText: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textInverse,
+  },
   errorBtnTextSecondary: { color: Colors.ink },
   header: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: Spacing.lg, paddingVertical: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 10,
   },
   backText: { color: Colors.needleGreen, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
   stepLabel: { fontSize: FontSize.sm, color: Colors.midGrey },
@@ -2224,24 +2923,11 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   content: { padding: Spacing.lg, gap: Spacing.lg },
   stepTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
-  stepIntroCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 14,
-    gap: Spacing.xs,
-    ...Shadow.sm,
-  },
-  stepIntroEyebrow: {
-    fontSize: FontSize.xs,
-    color: Colors.needleGreen,
-    fontWeight: FontWeight.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  stepIntroText: {
+  stepSubtitle: {
     fontSize: FontSize.sm,
     color: Colors.inkLight,
     lineHeight: 21,
+    marginTop: -Spacing.sm,
   },
   guideCard: {
     backgroundColor: Colors.white,
@@ -2264,23 +2950,86 @@ const styles = StyleSheet.create({
   },
 
   fields: { gap: Spacing.lg },
-  fieldLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: 6 },
+  dropdownField: {
+    minHeight: 56,
+    marginTop: Spacing.sm,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  dropdownValue: {
+    fontSize: FontSize.md,
+    color: Colors.ink,
+    fontWeight: FontWeight.medium,
+  },
+  dropdownMeta: {
+    marginTop: 2,
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+  },
+  dropdownChevron: {
+    fontSize: 22,
+    color: Colors.needleGreen,
+    lineHeight: 24,
+  },
+  fieldLabel: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    marginBottom: 6,
+  },
   required: { color: Colors.error },
   fieldHint: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
   inlineChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
   inlineChip: {
-    minHeight: 38,
+    minHeight: 36,
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 7,
     borderRadius: Radius.full,
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     justifyContent: 'center',
   },
-  inlineChipActive: { backgroundColor: Colors.needleGreenLight, borderColor: Colors.needleGreen },
+  inlineChipActive: { backgroundColor: Colors.white, borderColor: Colors.needleGreen },
   inlineChipText: { fontSize: FontSize.xs, color: Colors.ink, fontWeight: FontWeight.medium },
   inlineChipTextActive: { color: Colors.needleGreen },
+  segmentedControl: {
+    marginTop: Spacing.sm,
+    flexDirection: 'row',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    padding: 4,
+    gap: 4,
+  },
+  segmentedItem: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  segmentedItemActive: {
+    backgroundColor: Colors.needleGreen,
+  },
+  segmentedItemText: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    fontWeight: FontWeight.semibold,
+    textAlign: 'center',
+  },
+  segmentedItemTextActive: {
+    color: Colors.textInverse,
+  },
   addressFields: { gap: 8 },
   suggestionsBox: {
     backgroundColor: Colors.white,
@@ -2300,26 +3049,191 @@ const styles = StyleSheet.create({
   addressRow: { flexDirection: 'row', gap: 8 },
   addressHalf: { flex: 1 },
 
-  // Garment type chips
-  taxonomyList: { gap: Spacing.md },
-  taxonomyGroup: { gap: Spacing.xs },
-  taxonomyTitle: { fontSize: FontSize.xs, color: Colors.midGrey, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.8 },
-  garmentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingBottom: Spacing.xs },
-  garmentChip: {
-    minHeight: 38,
-    paddingHorizontal: 14, paddingVertical: 8,
-    borderRadius: Radius.full, borderWidth: 1.5, borderColor: Colors.lightGrey,
+  // Garment type picker
+  garmentSelectCard: {
+    minHeight: 72,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
     backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  garmentSelectCardActive: {
+    borderColor: Colors.needleGreen,
+    backgroundColor: Colors.white,
+  },
+  garmentSelectCopy: { flex: 1, gap: 3 },
+  garmentSelectValue: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  garmentSelectPlaceholder: { color: Colors.midGrey },
+  garmentSelectHint: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    lineHeight: 18,
+  },
+  garmentSelectAction: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.needleGreen,
+  },
+  pickerOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.42)',
+  },
+  pickerKeyboardWrap: {
+    width: '100%',
+  },
+  pickerSheet: {
+    maxHeight: '86%',
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: Spacing.xl,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.xxl,
+    gap: Spacing.md,
+  },
+  pickerHandle: {
+    alignSelf: 'center',
+    width: 44,
+    height: 4,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.lightGrey,
+    marginBottom: Spacing.xs,
+  },
+  pickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  pickerHeaderCopy: { flex: 1, gap: 4 },
+  pickerTitle: {
+    fontSize: FontSize.xl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+  },
+  pickerSubtitle: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+  },
+  pickerClose: {
+    minHeight: 36,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.md,
+    justifyContent: 'center',
+    backgroundColor: Colors.bone,
+  },
+  pickerCloseText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  pickerSearch: {
+    minHeight: 52,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.bone,
+    paddingHorizontal: Spacing.lg,
+    fontSize: FontSize.md,
+    color: Colors.ink,
+  },
+  pickerList: {
+    flexGrow: 0,
+  },
+  pickerListContent: {
+    gap: Spacing.lg,
+    paddingBottom: Spacing.xl,
+  },
+  pickerGroup: { gap: Spacing.sm },
+  pickerGroupTitle: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
+  },
+  pickerItem: {
+    minHeight: 52,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  pickerItemSelected: {
+    borderColor: Colors.needleGreen,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  pickerItemText: {
+    flex: 1,
+    fontSize: FontSize.md,
+    color: Colors.ink,
+    fontWeight: FontWeight.medium,
+  },
+  pickerItemTextSelected: { color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+  pickerItemCheck: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+  },
+  pickerEmpty: {
+    alignItems: 'center',
+    gap: Spacing.sm,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.bone,
+    padding: Spacing.xl,
+  },
+  pickerEmptyTitle: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  pickerEmptyText: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  pickerOtherButton: {
+    minHeight: 42,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreen,
+    paddingHorizontal: Spacing.xl,
     justifyContent: 'center',
   },
-  garmentChipActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
-  garmentChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
-  garmentChipTextActive: { color: Colors.needleGreen },
+  pickerOtherButtonText: {
+    fontSize: FontSize.sm,
+    color: Colors.textInverse,
+    fontWeight: FontWeight.semibold,
+  },
 
   // Date picker
   dateButton: {
-    backgroundColor: Colors.white, borderRadius: Radius.md, borderWidth: 1,
-    borderColor: Colors.lightGrey, padding: 14, marginTop: 6, minHeight: 44,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    padding: 14,
+    marginTop: 6,
+    minHeight: 44,
   },
   dateButtonRequired: { borderColor: Colors.error + '60' },
   dateText: { fontSize: FontSize.sm, color: Colors.ink },
@@ -2327,26 +3241,55 @@ const styles = StyleSheet.create({
 
   // Photos
   photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  photoThumb: { width: 84, height: 84, borderRadius: Radius.md, overflow: 'hidden', position: 'relative' },
+  photoThumb: {
+    width: 84,
+    height: 84,
+    borderRadius: Radius.md,
+    overflow: 'hidden',
+    position: 'relative',
+  },
   photoImage: { width: '100%', height: '100%' },
   photoRemove: {
-    position: 'absolute', top: 4, right: 4,
-    width: 22, height: 22, borderRadius: 11,
-    backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center',
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   photoRemoveText: { color: Colors.textInverse, fontSize: 11, fontWeight: FontWeight.bold },
   photoAdd: {
-    width: 84, height: 84, borderRadius: Radius.md,
-    borderWidth: 1.5, borderColor: Colors.lightGrey, borderStyle: 'dashed',
-    backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center', gap: 4,
+    width: 84,
+    height: 84,
+    borderRadius: Radius.md,
+    borderWidth: 1.5,
+    borderColor: Colors.lightGrey,
+    borderStyle: 'dashed',
+    backgroundColor: Colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
   },
   photoAddIcon: { fontSize: 24, color: Colors.midGrey },
   photoAddLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
   photoCount: { fontSize: FontSize.xs, color: Colors.midGrey },
 
   // Measurements summary
-  measureSummaryCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: Spacing.sm, ...Shadow.sm },
-  measureSummaryTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
+  measureSummaryCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    padding: 14,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
+  measureSummaryTitle: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
   measureSourceRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -2362,11 +3305,24 @@ const styles = StyleSheet.create({
   measureSummaryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   measureSummaryItem: { width: '47%', gap: 2 },
   measureSummaryLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
-  measureSummaryValue: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  measureSummaryValue: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
   additionalMeasurePreview: { gap: Spacing.sm, paddingTop: Spacing.xs },
-  additionalMeasurePreviewTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  additionalMeasurePreviewTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
   flagsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
-  flagBadge: { paddingHorizontal: Spacing.sm, paddingVertical: 3, backgroundColor: Colors.kanteRustLight, borderRadius: Radius.full },
+  flagBadge: {
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 3,
+    backgroundColor: Colors.kanteRustLight,
+    borderRadius: Radius.full,
+  },
   flagBadgeText: { fontSize: FontSize.xs, color: Colors.kanteRust, fontWeight: FontWeight.medium },
   measureSubcard: {
     borderRadius: Radius.md,
@@ -2396,32 +3352,65 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
   },
   measureEditNote: { fontSize: FontSize.xs, color: Colors.midGrey },
-  measureEditHint: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  measureEditHint: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.medium,
+  },
 
   // Inline edit sheet
   editOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
   editSheet: {
-    backgroundColor: Colors.white, borderTopLeftRadius: Radius.xl, borderTopRightRadius: Radius.xl,
-    padding: Spacing.xl, gap: Spacing.lg, paddingBottom: Spacing.xxxl,
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    paddingBottom: Spacing.xxxl,
   },
   editSheetTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
   editSheetInput: {
-    backgroundColor: Colors.bone, borderRadius: Radius.md, padding: Spacing.lg,
-    fontSize: FontSize.xl, fontWeight: FontWeight.semibold, color: Colors.ink,
-    borderWidth: 1.5, borderColor: Colors.needleGreen,
+    backgroundColor: Colors.bone,
+    borderRadius: Radius.md,
+    padding: Spacing.lg,
+    fontSize: FontSize.xl,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    borderWidth: 1.5,
+    borderColor: Colors.needleGreen,
   },
 
   noMeasureCard: {
-    backgroundColor: Colors.boneDeep, borderRadius: Radius.md,
-    padding: 14, gap: Spacing.xs, alignItems: 'center',
+    backgroundColor: Colors.boneDeep,
+    borderRadius: Radius.md,
+    padding: 14,
+    gap: Spacing.xs,
+    alignItems: 'center',
   },
-  noMeasureTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
-  noMeasureHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
+  noMeasureTitle: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.inkLight,
+  },
+  noMeasureHint: {
+    fontSize: FontSize.sm,
+    color: Colors.midGrey,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
   noMeasureBtn: {
-    marginTop: Spacing.sm, backgroundColor: Colors.needleGreen,
-    borderRadius: Radius.md, minHeight: 44, paddingVertical: 10, paddingHorizontal: Spacing.xl,
+    marginTop: Spacing.sm,
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.md,
+    minHeight: 44,
+    paddingVertical: 10,
+    paddingHorizontal: Spacing.xl,
   },
-  noMeasureBtnText: { color: Colors.textInverse, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
+  noMeasureBtnText: {
+    color: Colors.textInverse,
+    fontWeight: FontWeight.semibold,
+    fontSize: FontSize.sm,
+  },
 
   // Style inspiration
   inspirationSection: { gap: Spacing.sm },
@@ -2429,8 +3418,11 @@ const styles = StyleSheet.create({
   handlesRow: { flexDirection: 'row', gap: 8, paddingBottom: Spacing.xs },
   handleChip: {
     minHeight: 38,
-    paddingHorizontal: 12, paddingVertical: 8,
-    borderRadius: Radius.full, borderWidth: 1.5, borderColor: Colors.lightGrey,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: Radius.full,
+    borderWidth: 1.5,
+    borderColor: Colors.lightGrey,
     backgroundColor: Colors.white,
     justifyContent: 'center',
   },
@@ -2439,46 +3431,94 @@ const styles = StyleSheet.create({
   handleChipTextActive: { color: Colors.needleGreen },
   inspirationInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   inspirationAddBtn: {
-    backgroundColor: Colors.needleGreen, borderRadius: Radius.md,
-    minHeight: 44, paddingVertical: 10, paddingHorizontal: Spacing.lg, justifyContent: 'center',
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.md,
+    minHeight: 44,
+    paddingVertical: 10,
+    paddingHorizontal: Spacing.lg,
+    justifyContent: 'center',
   },
-  inspirationAddText: { color: Colors.textInverse, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
+  inspirationAddText: {
+    color: Colors.textInverse,
+    fontWeight: FontWeight.semibold,
+    fontSize: FontSize.sm,
+  },
   selectedLinks: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   selectedLinkBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.xs,
-    backgroundColor: Colors.needleGreenLight, borderRadius: Radius.full,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    backgroundColor: Colors.needleGreenLight,
+    borderRadius: Radius.full,
     minHeight: 34,
-    paddingHorizontal: Spacing.md, paddingVertical: 6,
-    borderWidth: 1, borderColor: Colors.needleGreen, maxWidth: 200,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen,
+    maxWidth: 200,
   },
-  selectedLinkText: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium, flexShrink: 1 },
+  selectedLinkText: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.medium,
+    flexShrink: 1,
+  },
   selectedLinkRemove: { fontSize: 10, color: Colors.needleGreen },
   linkError: { fontSize: FontSize.xs, color: Colors.error, marginTop: Spacing.xs, lineHeight: 18 },
 
   // Fabric & delivery options
   optionCards: { gap: Spacing.sm },
   optionCard: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
-    backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14,
-    borderWidth: 1.5, borderColor: Colors.lightGrey, ...Shadow.sm,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
   },
-  optionCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
+  optionCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.white },
   optionRadio: {
-    width: 20, height: 20, borderRadius: 10, marginTop: 2,
-    borderWidth: 2, borderColor: Colors.lightGrey, backgroundColor: Colors.white,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    marginTop: 2,
+    borderWidth: 2,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
   },
   optionRadioActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreen },
   optionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
-  optionTitleActive: { color: Colors.needleGreen },
+  optionTitleActive: { color: Colors.ink },
   optionHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2, lineHeight: 18 },
 
   // Summary card
-  summaryCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: Spacing.sm, ...Shadow.sm },
+  summaryCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    padding: 14,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
   summaryTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   summaryLabel: { fontSize: FontSize.sm, color: Colors.inkLight },
-  summaryValue: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink, flex: 1, textAlign: 'right', marginLeft: Spacing.md },
-  policyCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: Spacing.sm, ...Shadow.sm },
+  summaryValue: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.medium,
+    color: Colors.ink,
+    flex: 1,
+    textAlign: 'right',
+    marginLeft: Spacing.md,
+  },
+  policyCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    padding: 14,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
   policyList: { gap: Spacing.sm },
   policyRow: { gap: 3 },
   policyRowTitle: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
@@ -2507,9 +3547,18 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
   },
   policyCheckActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreen },
-  policyCheckText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.bold },
+  policyCheckText: {
+    color: Colors.textInverse,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.bold,
+  },
   policyAckText: { flex: 1, fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
-  reviewHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: Spacing.md },
+  reviewHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
   reviewEditBtn: {
     minHeight: 34,
     borderRadius: Radius.full,
@@ -2517,7 +3566,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: Colors.needleGreenLight,
   },
-  reviewEditText: { color: Colors.needleGreen, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
+  reviewEditText: {
+    color: Colors.needleGreen,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+  },
 
   // CTA
   cta: {
@@ -2525,45 +3578,57 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 8,
     backgroundColor: Colors.white,
-    borderTopWidth: 1, borderTopColor: Colors.lightGrey,
-  },
-  ctaGuideCard: {
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.md,
-    padding: 14,
-    gap: 4,
-    marginBottom: 8,
-  },
-  ctaGuideTitle: {
-    fontSize: FontSize.xs,
-    color: Colors.needleGreen,
-    fontWeight: FontWeight.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  ctaGuideText: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    lineHeight: 20,
+    borderTopWidth: 1,
+    borderTopColor: Colors.lightGrey,
   },
 
   // Profile completeness prompt modal
   promptOverlay: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center', alignItems: 'center', padding: Spacing.xl,
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: Spacing.xl,
   },
   promptCard: {
-    backgroundColor: Colors.white, borderRadius: Radius.md,
-    padding: Spacing.lg, gap: Spacing.md, alignItems: 'center', ...Shadow.lg,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    padding: Spacing.lg,
+    gap: Spacing.md,
+    alignItems: 'center',
+    ...Shadow.lg,
   },
   promptEmoji: { fontSize: 40 },
-  promptTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
-  promptBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 22, textAlign: 'center' },
-  promptPrimary: {
-    backgroundColor: Colors.needleGreen, borderRadius: Radius.md,
-    minHeight: 44,
-    paddingVertical: 10, paddingHorizontal: Spacing.xxl, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center',
+  promptTitle: {
+    fontSize: FontSize.xl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    textAlign: 'center',
   },
-  promptPrimaryText: { color: Colors.textInverse, fontWeight: FontWeight.semibold, fontSize: FontSize.md },
-  promptSecondary: { fontSize: FontSize.sm, color: Colors.midGrey, textDecorationLine: 'underline' },
+  promptBody: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 22,
+    textAlign: 'center',
+  },
+  promptPrimary: {
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.md,
+    minHeight: 44,
+    paddingVertical: 10,
+    paddingHorizontal: Spacing.xxl,
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  promptPrimaryText: {
+    color: Colors.textInverse,
+    fontWeight: FontWeight.semibold,
+    fontSize: FontSize.md,
+  },
+  promptSecondary: {
+    fontSize: FontSize.sm,
+    color: Colors.midGrey,
+    textDecorationLine: 'underline',
+  },
 })

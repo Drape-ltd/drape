@@ -31,7 +31,8 @@ function ensureValue(value: string, fallbackMessage: string) {
 export async function shareCustomerReferral(userId: string, displayName: string) {
   if (!ensureValue(userId, 'Your referral link is not ready yet. Retry from Profile in a moment.')) return
   const link = `${BASE_URL}/join?ref=${userId}`
-  const message = `Hey! I've been using Drape to get bespoke clothes made, tailored to your measurements and delivered to you. Join me here:\n\n${link}`
+  const intro = displayName.trim() ? `${displayName.trim()} invited you to Drape.` : 'I found Drape and thought you might like it.'
+  const message = `${intro}\n\nGet bespoke clothes made, tailored to your measurements and delivered to you. Join here:\n\n${link}`
   await openShareSheet(message, 'Join me on Drape')
 }
 

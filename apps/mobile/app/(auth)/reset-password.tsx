@@ -1,12 +1,22 @@
 import { useEffect, useState } from 'react'
-import { KeyboardAvoidingView, Platform, ScrollView, View, Text, StyleSheet, Alert, TouchableOpacity } from 'react-native'
+import {
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  View,
+  Text,
+  StyleSheet,
+  Alert,
+} from 'react-native'
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { clearRecentReauth } from '@/lib/recent-reauth'
+import { AuthBackButton } from '@/components/auth/AuthBackButton'
+import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
 import { Button, Input } from '@/components/ui'
-import { Colors, FontSize, FontWeight, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 import {
   MAX_PASSWORD_LENGTH,
   PASSWORD_POLICY_HINT,
@@ -34,7 +44,9 @@ export default function ResetPasswordScreen() {
       setReady(true)
     })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'PASSWORD_RECOVERY' || event === 'SIGNED_IN') {
         setReady(true)
         setLinkError(null)
@@ -96,7 +108,11 @@ export default function ResetPasswordScreen() {
     if (normalized.includes('weak') || normalized.includes('password')) {
       return PASSWORD_POLICY_HINT
     }
-    if (normalized.includes('expired') || normalized.includes('invalid') || normalized.includes('session')) {
+    if (
+      normalized.includes('expired') ||
+      normalized.includes('invalid') ||
+      normalized.includes('session')
+    ) {
       return 'This reset link is no longer valid. Request a new link and try again.'
     }
     if (normalized.includes('rate') || normalized.includes('security purposes')) {
@@ -108,10 +124,8 @@ export default function ResetPasswordScreen() {
   if (done) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Password updated</Text>
-          </View>
+        <View style={styles.stateCard}>
+          <Text style={styles.stateEyebrow}>Password updated</Text>
           <View style={styles.centred}>
             <View style={styles.successIcon}>
               <Ionicons name="lock-closed" size={32} color={Colors.needleGreen} />
@@ -121,9 +135,12 @@ export default function ResetPasswordScreen() {
           </View>
           <View style={styles.nextCard}>
             <Text style={styles.nextEyebrow}>What happens next</Text>
-            <Text style={styles.nextTitle}>Sign back in and we’ll return you to the right side of Drape.</Text>
+            <Text style={styles.nextTitle}>
+              Sign back in and we’ll return you to the right side of Drape.
+            </Text>
             <Text style={styles.nextCopy}>
-              Your orders, messages, clients, and profile stay exactly where you left them. For safety, you may need to sign in again on other devices too.
+              Your orders, messages, clients, and profile stay exactly where you left them. For
+              safety, you may need to sign in again on other devices too.
             </Text>
           </View>
           <Button label="Sign in" onPress={() => router.replace('/(auth)/sign-in')} />
@@ -135,10 +152,8 @@ export default function ResetPasswordScreen() {
   if (!ready) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Secure recovery</Text>
-          </View>
+        <View style={styles.stateCard}>
+          <Text style={styles.stateEyebrow}>Secure recovery</Text>
           <View style={styles.centred}>
             <Text style={styles.heading}>Checking your reset link</Text>
             <Text style={styles.sub}>{linkError ?? 'Verifying reset link…'}</Text>
@@ -157,21 +172,27 @@ export default function ResetPasswordScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <TouchableOpacity style={styles.back} onPress={goBack}>
-        <Text style={styles.backText}>← Back</Text>
-      </TouchableOpacity>
-      <KeyboardAvoidingView style={styles.keyboardAvoider} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Choose a new password</Text>
-          </View>
-          <Text style={styles.heading}>Set a password you can come back to easily.</Text>
-          <Text style={styles.sub}>Use at least 8 characters. Once saved, we'll send you back to sign in cleanly.</Text>
+      <AuthBackButton style={styles.back} onPress={goBack} />
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoider}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <AuthEntryHeader
+            eyebrow="Choose a new password"
+            title="Set a password you can come back to easily."
+            body="Use at least 8 characters. Once saved, we’ll send you back to sign in cleanly."
+            showWordmark={false}
+          />
           <View style={styles.reassuranceCard}>
             <Text style={styles.reassuranceTitle}>A smooth return matters here.</Text>
-            <Text style={styles.reassuranceText}>You’re updating access to the same Drape account, not creating a new one.</Text>
-            <Text style={styles.reassuranceText}>Once saved, you’ll sign back in and continue with your orders, clients, and messages as normal.</Text>
+            <Text style={styles.reassuranceText}>
+              You’re updating access to the same Drape account, not creating a new one.
+            </Text>
+            <Text style={styles.reassuranceText}>
+              Once saved, you’ll sign back in and continue with your orders, clients, and messages
+              as normal.
+            </Text>
           </View>
 
           <View style={styles.formCard}>
@@ -208,8 +229,7 @@ export default function ResetPasswordScreen() {
               disabled={!password || !confirm || !!passwordError || password !== confirm}
             />
           </View>
-        </View>
-      </ScrollView>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   )
@@ -219,41 +239,49 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.bone },
   keyboardAvoider: { flex: 1 },
   back: { paddingHorizontal: Spacing.xl, paddingTop: Spacing.md },
-  backText: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
-  content: { padding: Spacing.xl, gap: Spacing.lg, paddingTop: Spacing.lg, paddingBottom: Spacing.xxl },
-  heroCard: {
+  content: { padding: Spacing.xl, gap: Spacing.xl, paddingBottom: Spacing.xxl },
+  stateCard: {
     backgroundColor: Colors.white,
-    borderRadius: 28,
+    borderRadius: Radius.xl,
     padding: Spacing.xl,
     gap: Spacing.lg,
     marginTop: Spacing.lg,
   },
-  heroBadge: {
+  stateEyebrow: {
     alignSelf: 'flex-start',
-    borderRadius: 999,
-    backgroundColor: Colors.needleGreenLight,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 6,
-  },
-  heroBadgeText: {
     fontSize: FontSize.xs,
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
   },
-  centred: { alignItems: 'center', justifyContent: 'center', gap: Spacing.lg, paddingVertical: Spacing.lg },
+  centred: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.lg,
+    paddingVertical: Spacing.lg,
+  },
   successIcon: {
     width: 64,
     height: 64,
-    borderRadius: 32,
+    borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: Colors.needleGreenLight,
   },
-  heading: { fontSize: 34, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 40, letterSpacing: -0.6, textAlign: 'center' },
+  heading: {
+    fontFamily: Fonts.display,
+    fontSize: 34,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 40,
+    letterSpacing: 0,
+    textAlign: 'center',
+  },
   sub: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 24 },
   reassuranceCard: {
     backgroundColor: Colors.bone,
-    borderRadius: 24,
+    borderRadius: Radius.xl,
     padding: Spacing.lg,
     gap: Spacing.sm,
   },
@@ -269,13 +297,13 @@ const styles = StyleSheet.create({
   },
   formCard: {
     backgroundColor: Colors.bone,
-    borderRadius: 24,
+    borderRadius: Radius.xl,
     padding: Spacing.lg,
     gap: Spacing.lg,
   },
   nextCard: {
     backgroundColor: Colors.bone,
-    borderRadius: 24,
+    borderRadius: Radius.xl,
     padding: Spacing.lg,
     gap: 4,
   },
@@ -284,7 +312,7 @@ const styles = StyleSheet.create({
     color: Colors.midGrey,
     fontWeight: FontWeight.semibold,
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    letterSpacing: 0,
   },
   nextTitle: {
     fontSize: FontSize.sm,

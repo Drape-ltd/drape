@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   View,
   Text,
@@ -14,7 +14,7 @@ import * as FileSystem from 'expo-file-system/legacy'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation, useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
-import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { goBackOrFallback } from '@/lib/navigation'
 import { useAuth } from '@/lib/auth'
 import {
@@ -22,7 +22,6 @@ import {
   fetchTailorEarningsDashboard,
   type TailorEarningsDashboardData,
   type TailorPayoutHistoryRecord,
-  type TailorTransactionRecord,
   type TailorTransactionStatus,
 } from '@/lib/money-history'
 import { formatAmount, type CurrencyCode } from '@/lib/currency'
@@ -179,6 +178,7 @@ export default function TailorEarningsScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
+  const userId = user?.id
   const [data, setData] = useState<TailorEarningsDashboardData | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -188,26 +188,29 @@ export default function TailorEarningsScreen() {
   const [rangeFilter, setRangeFilter] = useState<RangeFilter>('ALL')
   const [exporting, setExporting] = useState(false)
 
-  async function load() {
-    if (!user?.id) {
+  const load = useCallback(async () => {
+    if (!userId) {
       setData(null)
       setLoading(false)
       return
     }
 
     try {
-      const result = await fetchTailorEarningsDashboard(user.id)
+      const result = await fetchTailorEarningsDashboard(userId)
       setData(result)
       setError(null)
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : 'Could not load earnings.')
     }
-  }
+  }, [userId])
 
   useEffect(() => {
-    setLoading(true)
-    void load().finally(() => setLoading(false))
-  }, [user?.id])
+    const timer = setTimeout(() => {
+      setLoading(true)
+      void load().finally(() => setLoading(false))
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [load])
 
   useRefreshOnFocus(() => {
     void load()
@@ -339,6 +342,20 @@ export default function TailorEarningsScreen() {
             <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/earnings' } } as never)}>
               <Text style={styles.primaryBtnText}>{data.payoutReverificationRequired ? 'Reconnect payout account' : 'Finish payout setup'}</Text>
             </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {data.pendingEarnings > 0 ? (
+          <View style={styles.pendingReleaseCard}>
+            <View style={styles.pendingReleaseIcon}>
+              <Feather name="clock" size={18} color={Colors.needleGreenDark} />
+            </View>
+            <View style={styles.pendingReleaseCopy}>
+              <Text style={styles.pendingReleaseTitle}>{money(data.pendingEarnings, summaryCurrency)} pending release</Text>
+              <Text style={styles.pendingReleaseText}>
+                Held securely until delivery is confirmed, the 72-hour review window closes, and payout checks pass.
+              </Text>
+            </View>
           </View>
         ) : null}
 
@@ -620,7 +637,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
   },
   back: { width: 60, color: Colors.needleGreen, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
-  title: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  title: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
   exportBtn: {
     width: 42,
     height: 42,
@@ -644,6 +661,34 @@ const styles = StyleSheet.create({
   },
   warningTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   warningBody: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 21 },
+  pendingReleaseCard: {
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.needleGreenLight,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '25',
+    padding: Spacing.md,
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    alignItems: 'flex-start',
+  },
+  pendingReleaseIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pendingReleaseCopy: { flex: 1, gap: 4 },
+  pendingReleaseTitle: {
+    fontSize: FontSize.md,
+    color: Colors.needleGreenDark,
+    fontWeight: FontWeight.bold,
+    fontFamily: Fonts.display,
+  },
+  pendingReleaseText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   primaryBtn: {
     alignSelf: 'flex-start',
     backgroundColor: Colors.needleGreen,
@@ -666,7 +711,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.7,
     fontWeight: FontWeight.semibold,
   },
-  summaryValue: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.textInverse, letterSpacing: -0.6, fontFamily: 'Georgia' },
+  summaryValue: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.textInverse, letterSpacing: -0.6, fontFamily: Fonts.display },
   summaryHint: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.84)', lineHeight: 18 },
   summaryMetaCard: {
     marginTop: Spacing.xs,
@@ -805,7 +850,7 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   statLabel: { fontSize: FontSize.xs, color: Colors.midGrey, textTransform: 'uppercase', letterSpacing: 0.6 },
-  statValue: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  statValue: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
   statHint: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 16 },
   controlsCard: {
     marginHorizontal: Spacing.lg,
@@ -817,7 +862,7 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   section: { marginHorizontal: Spacing.lg, marginTop: Spacing.md, gap: Spacing.sm },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   searchInput: {
     borderWidth: 1,
     borderColor: Colors.lightGrey,

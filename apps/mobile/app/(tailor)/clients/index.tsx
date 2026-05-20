@@ -10,22 +10,23 @@ import {
   ActionSheetIOS, Alert, Share, Platform,
 } from 'react-native'
 import { useRouter, useFocusEffect } from 'expo-router'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { shareTailorProfile, inviteCustomerFromTailor, sharePassportInvite } from '@/lib/invite'
+import { AvatarImage } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 const DIARY_BANNER_KEY = 'drape:diary_banner_dismissed'
-const CLIENTS_GUIDE_KEY = 'drape_tailor_clients_best_use_dismissed'
 
 type Tab = 'customers' | 'diary'
 
 type ClientRow = {
   customerId: string
   displayName: string
+  avatarUrl: string | null
   totalOrders: number
   lastOrderDate: string
   lastGarmentType: string
@@ -48,6 +49,44 @@ type DiaryRow = {
   unit: string
 }
 
+type CustomerProfileJoinRow = {
+  display_name: string | null
+  avatar_url: string | null
+}
+
+type ClientOrderQueryRow = {
+  customer_id: string | null
+  garment_type: string | null
+  created_at: string
+  customer_profiles: CustomerProfileJoinRow | CustomerProfileJoinRow[] | null
+}
+
+type DiaryEntryQueryRow = {
+  id: string
+  passport_id: string
+  full_name: string
+  measured_at: string | null
+  invite_status: string
+  chest: number | null
+  shoulder: number | null
+  sleeve: number | null
+  waist: number | null
+  hip: number | null
+  neck: number | null
+  event_type: string | null
+  measurement_unit: string | null
+}
+
+type TailorProfileQueryRow = {
+  id: string
+  display_name: string | null
+  is_live: boolean | null
+}
+
+function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
+  return Array.isArray(value) ? (value[0] ?? null) : (value ?? null)
+}
+
 // An entry is share-ready when it has a name and at least one measurement.
 function isEntryShareReady(item: DiaryRow): boolean {
   if (!item.fullName.trim()) return false
@@ -57,7 +96,9 @@ function isEntryShareReady(item: DiaryRow): boolean {
 
 export default function TailorClientsScreen() {
   const router = useRouter()
+  const insets = useSafeAreaInsets()
   const { user } = useAuth()
+  const userId = user?.id
   const [tab, setTab] = useState<Tab>('customers')
 
   // Online clients
@@ -76,15 +117,11 @@ export default function TailorClientsScreen() {
   const [diaryFetchError, setDiaryFetchError] = useState(false)
   const [showDiaryBanner, setShowDiaryBanner] = useState(false)
   const [sharingDiaryId, setSharingDiaryId] = useState<string | null>(null)
-  const [showGuide, setShowGuide] = useState(false)
 
   useEffect(() => {
     AsyncStorage.getItem(DIARY_BANNER_KEY).then((val) => {
       if (val !== '1') setShowDiaryBanner(true)
     })
-    AsyncStorage.getItem(`${CLIENTS_GUIDE_KEY}:${user?.id ?? 'guest'}`).then((val) => {
-      if (val !== '1') setShowGuide(true)
-    }).catch(() => {})
   }, [])
 
   function dismissDiaryBanner() {
@@ -92,13 +129,8 @@ export default function TailorClientsScreen() {
     AsyncStorage.setItem(DIARY_BANNER_KEY, '1').catch(() => {})
   }
 
-  function dismissGuide() {
-    setShowGuide(false)
-    AsyncStorage.setItem(`${CLIENTS_GUIDE_KEY}:${user?.id ?? 'guest'}`, '1').catch(() => {})
-  }
-
-  async function fetchClients() {
-    if (!user?.id) {
+  const fetchClients = useCallback(async () => {
+    if (!userId) {
       setClients([])
       setFiltered([])
       return
@@ -109,9 +141,9 @@ export default function TailorClientsScreen() {
         .from('orders')
         .select(`
           customer_id, garment_type, created_at,
-          customer_profiles!customer_id(display_name)
+          customer_profiles!customer_id(display_name, avatar_url)
         `)
-        .eq('tailor_id', user.id)
+        .eq('tailor_id', userId)
         .order('created_at', { ascending: false })
 
       if (error) throw error
@@ -123,18 +155,20 @@ export default function TailorClientsScreen() {
 
       // Aggregate per customer
       const map = new Map<string, ClientRow>()
-      for (const row of data as any[]) {
+      for (const row of data as ClientOrderQueryRow[]) {
         if (!row.customer_id) continue
+        const customerProfile = firstJoinedRow(row.customer_profiles)
         const existing = map.get(row.customer_id)
         if (existing) {
           existing.totalOrders += 1
         } else {
           map.set(row.customer_id, {
             customerId: row.customer_id,
-            displayName: row.customer_profiles?.display_name ?? 'Customer',
+            displayName: customerProfile?.display_name ?? 'Customer',
+            avatarUrl: customerProfile?.avatar_url ?? null,
             totalOrders: 1,
             lastOrderDate: row.created_at,
-            lastGarmentType: row.garment_type,
+            lastGarmentType: row.garment_type ?? 'Order',
           })
         }
       }
@@ -149,7 +183,7 @@ export default function TailorClientsScreen() {
       setClients([])
       setFiltered([])
     }
-  }
+  }, [search, userId])
 
   function applySearch(list: ClientRow[], q: string) {
     if (!q.trim()) {
@@ -160,17 +194,17 @@ export default function TailorClientsScreen() {
     }
   }
 
-  async function fetchDiary() {
-    if (!user?.id) return
+  const fetchDiary = useCallback(async () => {
+    if (!userId) return
     setDiaryFetchError(false)
     try {
       const { data, error } = await supabase
         .from('diary_entries')
         .select('id, passport_id, full_name, measured_at, invite_status, chest, shoulder, sleeve, waist, hip, neck, event_type, measurement_unit')
-        .eq('tailor_id', user.id)
+        .eq('tailor_id', userId)
         .order('created_at', { ascending: false })
       if (error) throw error
-      setDiary(((data ?? []) as any[]).map((r) => ({
+      setDiary(((data ?? []) as DiaryEntryQueryRow[]).map((r) => ({
         id: r.id,
         passportId: r.passport_id,
         fullName: r.full_name,
@@ -183,16 +217,16 @@ export default function TailorClientsScreen() {
         hip: r.hip,
         neck: r.neck,
         eventType: r.event_type,
-        unit: r.measurement_unit,
+        unit: r.measurement_unit ?? 'in',
       })))
     } catch {
       setDiaryFetchError(true)
       setDiary([])
     }
-  }
+  }, [userId])
 
-  async function loadTailorProfile() {
-    if (!user?.id) {
+  const loadTailorProfile = useCallback(async () => {
+    if (!userId) {
       setTailorProfile(null)
       return
     }
@@ -200,7 +234,7 @@ export default function TailorClientsScreen() {
     const { data, error } = await supabase
       .from('tailor_profiles')
       .select('id, display_name, is_live')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .maybeSingle()
 
     if (error || !data) {
@@ -208,12 +242,13 @@ export default function TailorClientsScreen() {
       return
     }
 
+    const profile = data as TailorProfileQueryRow
     setTailorProfile({
-      id: (data as any).id,
-      displayName: (data as any).display_name,
-      isLive: (data as any).is_live,
+      id: profile.id,
+      displayName: profile.display_name ?? '',
+      isLive: profile.is_live ?? false,
     })
-  }
+  }, [userId])
 
   useFocusEffect(useCallback(() => {
     setLoading(true)
@@ -221,7 +256,7 @@ export default function TailorClientsScreen() {
     setDiaryLoading(true)
     fetchDiary().finally(() => setDiaryLoading(false))
     void loadTailorProfile()
-  }, [user?.id]))
+  }, [fetchClients, fetchDiary, loadTailorProfile]))
 
   const onSearch = useCallback((text: string) => {
     setSearch(text)
@@ -347,6 +382,7 @@ export default function TailorClientsScreen() {
   const filteredDiary = diarySearch.trim()
     ? diary.filter((d) => d.fullName.toLowerCase().includes(diarySearch.toLowerCase()))
     : diary
+  const showDiaryFab = diary.length > 0 || !showDiaryBanner
 
   if (loading) {
     return (
@@ -389,18 +425,6 @@ export default function TailorClientsScreen() {
         </TouchableOpacity>
       </View>
 
-      {showGuide && (
-        <View style={styles.guideCard}>
-          <View style={styles.guideHeader}>
-            <Text style={styles.guideEyebrow}>Best use</Text>
-            <TouchableOpacity onPress={dismissGuide} style={styles.guideClose}>
-              <Feather name="x" size={16} color={Colors.midGrey} />
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.guideText}>Use Customers for live Drape relationships and Diary for offline fitting memory.</Text>
-        </View>
-      )}
-
       {/* Search */}
       <View style={styles.searchWrap}>
         <TextInput
@@ -419,7 +443,7 @@ export default function TailorClientsScreen() {
         <FlatList
           data={filteredDiary}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, { paddingBottom: Math.max(insets.bottom + 112, 148) }]}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />
@@ -468,15 +492,6 @@ export default function TailorClientsScreen() {
                     ? 'Try a different name.'
                     : 'Add offline clients you\'ve measured. Their data becomes a portable Client Passport they can claim.'}
                 </Text>
-                {!diarySearch && (
-                  <TouchableOpacity
-                    style={styles.addDiaryBtn}
-                    onPress={() => router.push('/(tailor)/clients/diary/new')}
-                  >
-                    <Feather name="plus" size={16} color={Colors.textInverse} />
-                    <Text style={styles.addDiaryBtnText}>Add client</Text>
-                  </TouchableOpacity>
-                )}
               </View>
             )
           }
@@ -500,7 +515,7 @@ export default function TailorClientsScreen() {
                   onPress={() => router.push('/(tailor)/clients/diary/new')}
                   activeOpacity={0.8}
                 >
-                  <Text style={styles.diaryBannerCtaText}>Add first client</Text>
+                  <Text style={styles.diaryBannerCtaText}>{diary.length > 0 ? 'Add client' : 'Add first client'}</Text>
                 </TouchableOpacity>
               </View>
             ) : null
@@ -557,20 +572,21 @@ export default function TailorClientsScreen() {
             </TouchableOpacity>
           )}
         />
-        {/* FAB — only on diary tab */}
-        <TouchableOpacity
-          style={styles.fab}
-          onPress={() => router.push('/(tailor)/clients/diary/new')}
-          activeOpacity={0.85}
-        >
-          <Feather name="plus" size={22} color={Colors.textInverse} />
-        </TouchableOpacity>
+        {showDiaryFab ? (
+          <TouchableOpacity
+            style={[styles.fab, { bottom: Math.max(insets.bottom + Spacing.lg, Spacing.xl) }]}
+            onPress={() => router.push('/(tailor)/clients/diary/new')}
+            activeOpacity={0.85}
+          >
+            <Feather name="plus" size={22} color={Colors.textInverse} />
+          </TouchableOpacity>
+        ) : null}
         </>
       ) : (
       <FlatList
         data={filtered}
         keyExtractor={(item) => item.customerId}
-        contentContainerStyle={styles.list}
+        contentContainerStyle={[styles.list, { paddingBottom: Math.max(insets.bottom + 112, 148) }]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />
@@ -620,6 +636,7 @@ export default function TailorClientsScreen() {
                 isLive={tailorProfile?.isLive ?? false}
                 profileId={tailorProfile?.id ?? null}
                 displayName={tailorProfile?.displayName ?? ''}
+                hasDiaryClients={diary.length > 0}
                 onSetupPress={() => router.push('/(tailor)/profile/setup')}
               />
             )
@@ -630,9 +647,13 @@ export default function TailorClientsScreen() {
             onPress={() => router.push(`/(tailor)/clients/${item.customerId}`)}
             activeOpacity={0.75}
           >
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{initials(item.displayName)}</Text>
-            </View>
+            <AvatarImage
+              uri={item.avatarUrl}
+              initials={item.displayName}
+              size={44}
+              borderColor={Colors.lightGrey}
+              borderWidth={1}
+            />
             <View style={styles.cardBody}>
               <Text style={styles.clientName}>{item.displayName}</Text>
               <Text style={styles.clientMeta}>
@@ -693,11 +714,12 @@ function GhostClientCard({ opacity }: { opacity: number }) {
 }
 
 function ClientsEmptyState({
-  isLive, profileId, displayName, onSetupPress,
+  isLive, profileId, displayName, hasDiaryClients, onSetupPress,
 }: {
   isLive: boolean
   profileId: string | null
   displayName: string
+  hasDiaryClients: boolean
   onSetupPress: () => void
 }) {
   return (
@@ -710,28 +732,29 @@ function ClientsEmptyState({
       <View style={clientEmptyStyles.badge}>
         <Text style={clientEmptyStyles.badgeText}>Clients</Text>
       </View>
-      <Text style={clientEmptyStyles.heading}>No clients yet</Text>
+      <Text style={clientEmptyStyles.heading}>{hasDiaryClients ? 'No Drape customers yet' : 'No clients yet'}</Text>
       <Text style={clientEmptyStyles.sub}>
-        Client relationships start here once someone places their first order with you.
-        {isLive ? ' Share your live profile or invite a first client to get things moving.' : ' Complete your profile to start receiving orders.'}
+        {hasDiaryClients
+          ? 'Your diary clients are saved. This tab fills when someone places an order through Drape.'
+          : 'Client relationships start here once someone places an order or you add them to your diary.'}
+        {isLive ? ' Invite a client when you are ready to bring them into Drape.' : ' Complete your profile before customers can book you.'}
       </Text>
-      <View style={clientEmptyStyles.ctaRow}>
+      <View style={clientEmptyStyles.ctaStack}>
         {isLive && profileId ? (
           <TouchableOpacity
             style={clientEmptyStyles.cta}
-            onPress={() => shareTailorProfile(profileId, displayName)}
+            onPress={() => inviteCustomerFromTailor(profileId, displayName)}
           >
-            <Feather name="share-2" size={16} color={Colors.textInverse} />
-            <Text style={clientEmptyStyles.ctaText}>Share my profile</Text>
+            <Feather name="user-plus" size={16} color={Colors.textInverse} />
+            <Text style={clientEmptyStyles.ctaText}>Invite a client</Text>
           </TouchableOpacity>
         ) : null}
         {isLive && profileId ? (
           <TouchableOpacity
-            style={[clientEmptyStyles.cta, clientEmptyStyles.ctaSecondary]}
-            onPress={() => inviteCustomerFromTailor(profileId, displayName)}
+            style={clientEmptyStyles.secondaryTextButton}
+            onPress={() => shareTailorProfile(profileId, displayName)}
           >
-            <Feather name="user-plus" size={16} color={Colors.needleGreen} />
-            <Text style={[clientEmptyStyles.ctaText, { color: Colors.needleGreen }]}>Invite a first client</Text>
+            <Text style={clientEmptyStyles.secondaryText}>Share live profile instead</Text>
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
@@ -744,7 +767,7 @@ function ClientsEmptyState({
         )}
       </View>
       <Text style={clientEmptyStyles.ctaHint}>
-        The fastest way to make this screen useful is to share your live profile or invite your first customer into Drape.
+        Use the diary for walk-in clients; use this tab for customers with Drape order history.
       </Text>
     </View>
   )
@@ -783,7 +806,7 @@ const clientEmptyStyles = StyleSheet.create({
     fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center',
     lineHeight: 20, marginTop: 6, maxWidth: 300,
   },
-  ctaRow: { flexDirection: 'row', gap: Spacing.md, marginTop: Spacing.xl, flexWrap: 'wrap', justifyContent: 'center' },
+  ctaStack: { gap: Spacing.md, marginTop: Spacing.xl, alignItems: 'center' },
   ctaHint: {
     marginTop: Spacing.md,
     fontSize: FontSize.xs,
@@ -796,12 +819,11 @@ const clientEmptyStyles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
     paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md,
-  },
-  ctaSecondary: {
-    backgroundColor: Colors.white,
-    borderWidth: 1.5, borderColor: Colors.needleGreen,
+    minHeight: 48,
   },
   ctaText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
+  secondaryTextButton: { minHeight: 44, justifyContent: 'center' },
+  secondaryText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
 })
 
 const styles = StyleSheet.create({
@@ -836,28 +858,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
     paddingHorizontal: Spacing.sm, paddingVertical: 4, overflow: 'hidden', minWidth: 26, textAlign: 'center',
   },
-  guideCard: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 14,
-    gap: Spacing.xs,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    ...Shadow.sm,
-  },
-  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  guideClose: { padding: 2 },
-  guideEyebrow: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  guideText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
-
   searchWrap: { paddingHorizontal: Spacing.lg, paddingBottom: Spacing.sm },
   search: {
     backgroundColor: Colors.white, borderRadius: Radius.md,

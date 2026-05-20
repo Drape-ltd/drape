@@ -3,7 +3,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Button } from '@/components/ui'
-import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 
 export default function AuthCallbackScreen() {
   const router = useRouter()
@@ -17,18 +17,25 @@ export default function AuthCallbackScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.content}>
-        <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>{timedOut ? 'Sign-in handoff' : 'Securing your session'}</Text>
+        <View style={styles.stateCard}>
+          <View style={styles.statePill}>
+            <Text style={styles.statePillText}>
+              {timedOut ? 'Sign-in handoff' : 'Securing your session'}
+            </Text>
           </View>
           {!timedOut ? (
             <>
               <ActivityIndicator color={Colors.needleGreen} size="large" />
               <Text style={styles.title}>Finishing sign in…</Text>
-              <Text style={styles.hint}>Please wait while we secure your session and place you on the right side of Drape.</Text>
+              <Text style={styles.hint}>
+                Please wait while we secure your session and place you on the right side of Drape.
+              </Text>
               <View style={styles.noteCard}>
                 <Text style={styles.noteTitle}>What happens next</Text>
-                <Text style={styles.noteText}>If this is your first time, we may ask one or two quick setup questions before you enter the app.</Text>
+                <Text style={styles.noteText}>
+                  If this is your first time, we may ask one or two quick setup questions before you
+                  enter the app.
+                </Text>
               </View>
             </>
           ) : (
@@ -39,16 +46,30 @@ export default function AuthCallbackScreen() {
               </Text>
               <View style={styles.noteCard}>
                 <Text style={styles.noteTitle}>Nothing should be lost</Text>
-                <Text style={styles.noteText}>Your account is still the same. This screen is only the handoff between your provider and Drape.</Text>
+                <Text style={styles.noteText}>
+                  Your account is still the same. This screen is only the handoff between your
+                  provider and Drape.
+                </Text>
               </View>
               <View style={styles.noteCard}>
                 <Text style={styles.noteTitle}>Best retry path</Text>
-                <Text style={styles.noteText}>Return to sign in and use the same provider again. We’ll try the handoff fresh without changing your account.</Text>
+                <Text style={styles.noteText}>
+                  Return to sign in and use the same provider again. We’ll try the handoff fresh
+                  without changing your account.
+                </Text>
               </View>
               <View style={styles.actions}>
                 <Button label="Back to sign in" onPress={() => router.replace('/(auth)/sign-in')} />
-                <Button label="Create account" variant="secondary" onPress={() => router.replace('/(auth)/sign-up')} />
-                <Button label="Back to welcome" variant="ghost" onPress={() => router.replace('/(auth)/welcome')} />
+                <Button
+                  label="Create account"
+                  variant="secondary"
+                  onPress={() => router.replace('/(auth)/sign-up')}
+                />
+                <Button
+                  label="Back to welcome"
+                  variant="ghost"
+                  onPress={() => router.replace('/(auth)/welcome')}
+                />
               </View>
             </>
           )}
@@ -67,7 +88,7 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
     paddingHorizontal: Spacing.xl,
   },
-  heroCard: {
+  stateCard: {
     width: '100%',
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,
@@ -75,19 +96,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.lg,
   },
-  heroBadge: {
+  statePill: {
     alignSelf: 'flex-start',
     borderRadius: Radius.full,
     backgroundColor: Colors.needleGreenLight,
     paddingHorizontal: Spacing.md,
     paddingVertical: 6,
   },
-  heroBadgeText: {
+  statePillText: {
     fontSize: FontSize.xs,
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
   },
   title: {
+    fontFamily: Fonts.display,
     fontSize: 28,
     fontWeight: FontWeight.bold,
     color: Colors.ink,

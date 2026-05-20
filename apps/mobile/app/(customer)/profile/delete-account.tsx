@@ -9,7 +9,7 @@ import { Feather } from '@expo/vector-icons'
 import { requestAccountDeletion } from '@/lib/account-deletion'
 import { useAuth } from '@/lib/auth'
 import { issueReauthProof } from '@/lib/reauth-proof'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { CONTACTS } from '@drape/shared'
 import { goBackOrFallback } from '@/lib/navigation'
 
@@ -92,7 +92,7 @@ export default function DeleteAccountScreen() {
 
   if (submitted) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.backBtn} onPress={goBack} accessibilityRole="button" accessibilityLabel="Back to privacy settings">
             <Feather name="arrow-left" size={20} color={Colors.ink} />
@@ -125,7 +125,7 @@ export default function DeleteAccountScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={goBack} accessibilityRole="button" accessibilityLabel="Back to privacy settings">
           <Feather name="arrow-left" size={20} color={Colors.ink} />
@@ -203,7 +203,7 @@ export default function DeleteAccountScreen() {
         </View>
 
         <View style={styles.noteCard}>
-          <Text style={styles.noteTitle}>Best use</Text>
+          <Text style={styles.noteTitle}>Before deletion</Text>
           <Text style={styles.noteCopy}>Use this flow when you want Drape to process account closure and deletion. It is not an instant wipe while money movement, support, or legal retention obligations may still be open.</Text>
         </View>
 
@@ -246,8 +246,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
-  body: { padding: Spacing.lg, paddingBottom: 32, gap: Spacing.md, flexGrow: 1 },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
+  body: { padding: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.md, flexGrow: 1 },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
@@ -267,7 +267,7 @@ const styles = StyleSheet.create({
     color: Colors.error,
     fontWeight: FontWeight.semibold,
   },
-  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 28, fontFamily: 'Georgia' },
+  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 28, fontFamily: Fonts.display },
   heroCopy: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   card: {
     backgroundColor: Colors.white,
@@ -276,7 +276,7 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
     ...Shadow.sm,
   },
-  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   sectionCopy: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   accountValue: { fontSize: FontSize.md, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey },

@@ -1,7 +1,7 @@
 export const colors = {
-  primary: '#1D9E75',
-  primaryDark: '#0F6E56',
-  primaryLight: '#E1F5EE',
+  primary: '#2D6A4F',
+  primaryDark: '#245540',
+  primaryLight: '#E8F5EF',
 
   accent: '#D85A30',
   accentLight: '#FAEEDA',
@@ -16,19 +16,23 @@ export const colors = {
   textInverse: '#FFFFFF',
 
   border: '#E0DDD8',
-  borderFocus: '#1D9E75',
+  borderFocus: '#2D6A4F',
   borderError: '#D85A30',
 
   statusPending: '#F59E0B',
   statusPendingBg: '#FAEEDA',
-  statusSuccess: '#1D9E75',
-  statusSuccessBg: '#E1F5EE',
+  statusSuccess: '#2D6A4F',
+  statusSuccessBg: '#E8F5EF',
   statusError: '#E24B4A',
   statusErrorBg: '#FCEBEB',
   statusBlocked: '#D85A30',
   statusBlockedBg: '#FAEEDA',
   statusMuted: '#888780',
   statusMutedBg: '#F1EFE8',
+  timeEvening: '#6E61A8',
+  timeEveningBg: '#F0EDFA',
+  disabledFill: '#D9D6D0',
+  disabledText: '#85827A',
 } as const
 
 export const darkColors = {
@@ -41,28 +45,32 @@ export const darkColors = {
   textMuted: '#A8A49D',
   textInverse: '#FFFFFF',
   border: '#3C3B38',
-  borderFocus: '#1D9E75',
+  borderFocus: '#9FCFB5',
   borderError: '#F07A52',
-  primary: '#1D9E75',
-  primaryDark: '#7BD8B8',
-  primaryLight: '#143D32',
+  primary: '#2D6A4F',
+  primaryDark: '#C5E4D3',
+  primaryLight: '#122B20',
   accent: '#F07A52',
   accentLight: '#3D241C',
   statusPending: '#F6B84A',
   statusPendingBg: '#3A2C16',
-  statusSuccess: '#35C99A',
-  statusSuccessBg: '#143D32',
+  statusSuccess: '#9FCFB5',
+  statusSuccessBg: '#122B20',
   statusError: '#FF7A78',
   statusErrorBg: '#3D2222',
   statusBlocked: '#F07A52',
   statusBlockedBg: '#3D241C',
   statusMuted: '#A8A49D',
   statusMutedBg: '#24231F',
+  timeEvening: '#C7BEFF',
+  timeEveningBg: '#292542',
+  disabledFill: '#3C3B38',
+  disabledText: '#A8A49D',
 } as const
 
 export const typography = {
-  display: 'Georgia',
-  body: 'System',
+  display: 'DrapeDisplay',
+  body: 'DrapeText',
   mono: 'Courier',
 
   size: {

@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Alert, ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { useNavigation, useRouter } from 'expo-router'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { resolvePaymentProviderForCurrency } from '@drape/shared'
 import { Button } from '@/components/ui'
-import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { SUPPORTED_CURRENCIES, useCurrency, type CurrencyCode } from '@/lib/currency'
 import { goBackOrFallback } from '@/lib/navigation'
 
@@ -14,6 +14,7 @@ type AccountRole = 'CUSTOMER' | 'TAILOR'
 export function CurrencySettingsScreen({ role }: { role: AccountRole }) {
   const router = useRouter()
   const navigation = useNavigation()
+  const insets = useSafeAreaInsets()
   const { currency, loading, setCurrency, unsupportedMessage } = useCurrency()
   const [selected, setSelected] = useState<CurrencyCode>(currency)
   const [saving, setSaving] = useState(false)
@@ -21,7 +22,10 @@ export function CurrencySettingsScreen({ role }: { role: AccountRole }) {
 
   useEffect(() => {
     if (!saving) {
-      setSelected(currency)
+      const timer = setTimeout(() => {
+        setSelected(currency)
+      }, 0)
+      return () => clearTimeout(timer)
     }
   }, [currency, saving])
 
@@ -47,7 +51,7 @@ export function CurrencySettingsScreen({ role }: { role: AccountRole }) {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={goBack} accessibilityRole="button" accessibilityLabel="Back to account settings">
           <Feather name="arrow-left" size={20} color={Colors.ink} />
@@ -55,12 +59,15 @@ export function CurrencySettingsScreen({ role }: { role: AccountRole }) {
         <Text style={styles.headerTitle}>Currency</Text>
       </View>
 
-      <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={[styles.body, { paddingBottom: Math.max(insets.bottom + 128, 112) }]}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.infoCard}>
           <Text style={styles.eyebrow}>Account default</Text>
           <Text style={styles.title}>{selected}</Text>
           <Text style={styles.copy}>
-            Drape uses this for browsing, checkout, and payment-history totals. Orders already placed do not change currency after payment starts.
+            This controls browsing, checkout, and payment-history totals. Orders already placed do not change currency after payment starts.
           </Text>
           <Text style={styles.copy}>
             {isTailor
@@ -107,12 +114,12 @@ export function CurrencySettingsScreen({ role }: { role: AccountRole }) {
         <View style={styles.noticeCard}>
           <Text style={styles.noticeTitle}>Before you switch</Text>
           <Text style={styles.noticeText}>
-            If you move countries, switch your account currency before starting a new order. Once an order is created, Drape keeps its payment, refund, tax, and payout records in the original locked currency.
+            If you move countries, switch your account currency before starting a new order. Once an order is created, payment, refund, tax, and payout records stay in the original locked currency.
           </Text>
         </View>
       </ScrollView>
 
-      <View style={styles.footer}>
+      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom + Spacing.sm, Spacing.lg) }]}>
         <Button
           label={saving ? 'Saving...' : selected === currency ? 'Currency saved' : `Use ${selected}`}
           onPress={save}
@@ -142,11 +149,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
-  body: { padding: Spacing.lg, paddingBottom: 112, gap: Spacing.md },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
+  body: { padding: Spacing.lg, gap: Spacing.md },
   infoCard: { backgroundColor: Colors.white, borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.sm, ...Shadow.sm },
   eyebrow: { fontSize: FontSize.xs, color: Colors.needleGreenDark, fontWeight: FontWeight.semibold, textTransform: 'uppercase' },
-  title: { fontSize: 34, color: Colors.ink, fontWeight: FontWeight.bold, fontFamily: 'Georgia' },
+  title: { fontSize: 34, color: Colors.ink, fontWeight: FontWeight.bold, fontFamily: Fonts.display },
   copy: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   warning: { fontSize: FontSize.sm, color: Colors.warning, lineHeight: 20 },
   listCard: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },

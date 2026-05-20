@@ -4,14 +4,23 @@
  * it to auth metadata and Supabase's onboarding trigger picks it up.
  */
 import { useState } from 'react'
-import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native'
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Alert,
+  ActivityIndicator,
+  ScrollView,
+} from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { syncUserRow } from '@/lib/syncUserRow'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
-import { Colors, FontSize, FontWeight, Spacing, Radius } from '@/constants/theme'
+import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius } from '@/constants/theme'
 
 type Role = 'CUSTOMER' | 'TAILOR'
 
@@ -19,16 +28,20 @@ export default function RoleSelectScreen() {
   const { user, signOut } = useAuth()
   const [role, setRole] = useState<Role>('CUSTOMER')
   const [loading, setLoading] = useState(false)
+  const accountEmail = typeof user?.email === 'string' ? user.email : null
 
   async function confirm() {
     const displayName =
-      (typeof user?.user_metadata?.display_name === 'string' && user.user_metadata.display_name.trim().length > 0
+      typeof user?.user_metadata?.display_name === 'string' &&
+      user.user_metadata.display_name.trim().length > 0
         ? user.user_metadata.display_name
-        : typeof user?.user_metadata?.full_name === 'string' && user.user_metadata.full_name.trim().length > 0
+        : typeof user?.user_metadata?.full_name === 'string' &&
+            user.user_metadata.full_name.trim().length > 0
           ? user.user_metadata.full_name
-          : typeof user?.user_metadata?.name === 'string' && user.user_metadata.name.trim().length > 0
+          : typeof user?.user_metadata?.name === 'string' &&
+              user.user_metadata.name.trim().length > 0
             ? user.user_metadata.name
-            : null)
+            : null
 
     setLoading(true)
     const { error } = await supabase.auth.updateUser({ data: { role } })
@@ -37,7 +50,7 @@ export default function RoleSelectScreen() {
         'Could not save your role',
         isLikelyConnectivityIssue(error)
           ? 'Connection looks weak. We could not save your role yet. Retry when the signal improves.'
-          : 'We could not save your role right now. Please try again in a moment.',
+          : 'We could not save your role right now. Please try again in a moment.'
       )
       setLoading(false)
       return
@@ -46,7 +59,10 @@ export default function RoleSelectScreen() {
     // Force a session refresh so RouteGuard picks up the new role immediately
     const { error: refreshError } = await supabase.auth.refreshSession()
     if (refreshError) {
-      Alert.alert('Role saved', 'Your role was updated, but the session did not refresh cleanly. Please sign in again if the app does not move on.')
+      Alert.alert(
+        'Role saved',
+        'Your role was updated, but the session did not refresh cleanly. Please sign in again if the app does not move on.'
+      )
     }
     setLoading(false)
     // RouteGuard will redirect once role is set in the session
@@ -66,14 +82,13 @@ export default function RoleSelectScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
-        <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Choose your side</Text>
-          </View>
-          <Text style={styles.heading}>How will you use Drape first?</Text>
-          <Text style={styles.sub}>Pick the side you want to start with now. You’ll go straight into setup for that experience and can switch later inside your account.</Text>
-        </View>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <AuthEntryHeader
+          eyebrow="Almost there"
+          title="Choose how you’ll use Drape first."
+          body="This sets up your first dashboard. You can switch later from account settings."
+          showWordmark={false}
+        />
 
         <View style={styles.roleRow}>
           <TouchableOpacity
@@ -84,7 +99,11 @@ export default function RoleSelectScreen() {
             accessibilityState={{ selected: role === 'CUSTOMER' }}
           >
             <View style={[styles.roleIconWrap, role === 'CUSTOMER' && styles.roleIconWrapActive]}>
-              <Ionicons name="person-outline" size={24} color={role === 'CUSTOMER' ? Colors.needleGreen : Colors.ink} />
+              <Ionicons
+                name="person-outline"
+                size={24}
+                color={role === 'CUSTOMER' ? Colors.needleGreen : Colors.ink}
+              />
             </View>
             <View style={styles.roleTextWrap}>
               <Text style={[styles.roleLabel, role === 'CUSTOMER' && styles.roleLabelActive]}>
@@ -93,7 +112,11 @@ export default function RoleSelectScreen() {
               <Text style={styles.roleHint}>Discover tailors, place orders, and track them.</Text>
             </View>
             <View style={[styles.roleCheck, role === 'CUSTOMER' && styles.roleCheckActive]}>
-              <Text style={[styles.roleCheckText, role === 'CUSTOMER' && styles.roleCheckTextActive]}>✓</Text>
+              <Text
+                style={[styles.roleCheckText, role === 'CUSTOMER' && styles.roleCheckTextActive]}
+              >
+                ✓
+              </Text>
             </View>
           </TouchableOpacity>
 
@@ -105,7 +128,11 @@ export default function RoleSelectScreen() {
             accessibilityState={{ selected: role === 'TAILOR' }}
           >
             <View style={[styles.roleIconWrap, role === 'TAILOR' && styles.roleIconWrapActive]}>
-              <Ionicons name="cut-outline" size={24} color={role === 'TAILOR' ? Colors.needleGreen : Colors.ink} />
+              <Ionicons
+                name="cut-outline"
+                size={24}
+                color={role === 'TAILOR' ? Colors.needleGreen : Colors.ink}
+              />
             </View>
             <View style={styles.roleTextWrap}>
               <Text style={[styles.roleLabel, role === 'TAILOR' && styles.roleLabelActive]}>
@@ -114,7 +141,9 @@ export default function RoleSelectScreen() {
               <Text style={styles.roleHint}>Receive briefs, send quotes, and manage orders.</Text>
             </View>
             <View style={[styles.roleCheck, role === 'TAILOR' && styles.roleCheckActive]}>
-              <Text style={[styles.roleCheckText, role === 'TAILOR' && styles.roleCheckTextActive]}>✓</Text>
+              <Text style={[styles.roleCheckText, role === 'TAILOR' && styles.roleCheckTextActive]}>
+                ✓
+              </Text>
             </View>
           </TouchableOpacity>
         </View>
@@ -123,6 +152,7 @@ export default function RoleSelectScreen() {
           <View style={styles.nextCard}>
             <Text style={styles.nextEyebrow}>Next</Text>
             <Text style={styles.nextTitle}>You’ll go into setup for this side of Drape.</Text>
+            {accountEmail ? <Text style={styles.nextMeta}>{accountEmail}</Text> : null}
           </View>
           <TouchableOpacity
             style={[styles.btn, loading && styles.btnDisabled]}
@@ -131,15 +161,18 @@ export default function RoleSelectScreen() {
             accessibilityRole="button"
             accessibilityLabel="Continue to setup"
           >
-            {loading
-              ? <ActivityIndicator color={Colors.textInverse} />
-              : <Text style={styles.btnText}>Continue</Text>
-            }
+            {loading ? (
+              <ActivityIndicator color={Colors.textInverse} />
+            ) : (
+              <Text style={styles.btnText}>Continue</Text>
+            )}
           </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.altAction}
-            onPress={() => { void switchAccount() }}
+            onPress={() => {
+              void switchAccount()
+            }}
             disabled={loading}
             accessibilityRole="button"
             accessibilityLabel="Use a different account"
@@ -147,36 +180,14 @@ export default function RoleSelectScreen() {
             <Text style={styles.altActionText}>Use a different account</Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   )
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.bone },
-  content: { flex: 1, padding: Spacing.xl, gap: Spacing.lg, justifyContent: 'center' },
-  heroCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
-  },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 6,
-  },
-  heroBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  heading: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 34, letterSpacing: -0.4, fontFamily: 'Georgia' },
-  sub: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 22 },
+  content: { flexGrow: 1, padding: Spacing.xl, gap: Spacing.xl, justifyContent: 'center' },
   roleRow: { gap: Spacing.md },
   roleCard: {
     flexDirection: 'row',
@@ -201,7 +212,12 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreenLight,
   },
   roleTextWrap: { flex: 1, gap: 2 },
-  roleLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  roleLabel: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    fontFamily: Fonts.display,
+  },
   roleLabelActive: { color: Colors.needleGreen },
   roleHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   roleCheck: {
@@ -245,14 +261,19 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    letterSpacing: 0,
   },
   nextTitle: {
     fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
     lineHeight: 21,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
+  },
+  nextMeta: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    lineHeight: 18,
   },
   btn: {
     backgroundColor: Colors.needleGreen,

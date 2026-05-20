@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Alert, TextInput, ActivityIndicator, Modal, KeyboardAvoidingView, Platform, Linking,
+  type ImageStyle, type StyleProp, type ViewStyle,
 } from 'react-native'
-import { useFocusEffect, useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { useFocusEffect, useLocalSearchParams, useRouter, useNavigation, type Href } from 'expo-router'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import { ResizeMode, Video } from 'expo-av'
 import DateTimePicker from '@react-native-community/datetimepicker'
@@ -77,7 +78,7 @@ import { Button, HandoffSupportModal, Input, RemoteImage } from '@/components/ui
 import { DRAPE_VISION_ROUTE, type DrapeVisionMode } from '@/constants/drapeVision'
 import { currencySymbol } from '@drape/shared'
 import { filterContactInfo, rejectPlaceholder } from '@drape/shared/contact-filter'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
 import {
   CANCELLATION_REFUND_COMPONENT_LABELS,
@@ -107,6 +108,85 @@ type StageUpdate = {
   note: string | null
   photoUrl: string | null
   createdAt: string
+}
+
+type CustomerProfileJoinRow = {
+  display_name: string | null
+}
+
+type CustomOrderDetailJoinRow = {
+  garment_type_other: string | null
+  gender_presentation: string | null
+  social_reference_links: unknown
+  style_notes: string | null
+  body_note: string | null
+  fabric_description: string | null
+  fabric_budget_amount: number | null
+  fabric_budget_currency: string | null
+  fabric_sourcing_deadline_days: number | null
+  fabric_sourcing_deadline_at: string | null
+  fabric_approval_status: string | null
+  shipping_preference: string | null
+  delivery_instructions: string | null
+  target_delivery_date: string | null
+}
+
+type TailorOrderDetailQueryRow = {
+  id: string
+  reference: string
+  order_kind: 'CUSTOM' | 'READY_MADE' | null
+  fulfillment_option: string | null
+  garment_type: string | null
+  garment_description: string | null
+  item_title: string | null
+  item_size: string | null
+  item_quantity: number | null
+  item_subtotal: number | null
+  stage: OrderStage
+  customer_id: string
+  quoted_amount: number | null
+  currency: string | null
+  quoted_currency: string | null
+  fulfillment_fee: number | null
+  quoted_completion_date: string | null
+  fulfillment_payment_requested_at: string | null
+  fulfillment_payment_paid_at: string | null
+  fulfillment_payment_provider: string | null
+  fulfillment_payment_intent_id: string | null
+  fulfillment_payment_checkout_url: string | null
+  fabric_source: string | null
+  delivery_method: string | null
+  delivery_address: string | null
+  recipient_name: string | null
+  recipient_phone: string | null
+  tracking_number: string | null
+  carrier: string | null
+  fulfillment_provider: string | null
+  fulfillment_reference: string | null
+  fulfillment_contact_name: string | null
+  fulfillment_contact_phone: string | null
+  reference_photos: unknown
+  fit_note: string | null
+  customer_measurements_snapshot: unknown
+  special_note: string | null
+  collection_code: string | null
+  video_call_url: string | null
+  occasion: string | null
+  deadline: string | null
+  created_at: string
+  customer_profiles: CustomerProfileJoinRow | CustomerProfileJoinRow[] | null
+  custom_order_details: CustomOrderDetailJoinRow | CustomOrderDetailJoinRow[] | null
+  order_stage_updates: Array<{
+    id: string
+    stage: string
+    note: string | null
+    photo_url: string | null
+    created_at: string
+  }> | null
+}
+
+function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
+  return Array.isArray(value) ? (value[0] ?? null) : (value ?? null)
 }
 
 type StageMediaType = 'image' | 'video'
@@ -216,7 +296,7 @@ function StageMediaPreview({
 }: {
   uri: string
   mediaType?: StageMediaType
-  style: any
+  style: StyleProp<ImageStyle>
   surface: string
 }) {
   const isVideo = mediaType === 'video' || isVideoUri(uri)
@@ -224,7 +304,7 @@ function StageMediaPreview({
     return (
       <Video
         source={{ uri }}
-        style={style}
+        style={style as StyleProp<ViewStyle>}
         useNativeControls
         resizeMode={ResizeMode.CONTAIN}
         isLooping={false}
@@ -497,8 +577,31 @@ function formatTimelineDate(value: string | null | undefined) {
   return `${day} at ${time}`
 }
 
-function timelineStageLabel(update: Pick<StageUpdate, 'stage' | 'note'>, orderKind: 'CUSTOM' | 'READY_MADE') {
+function hasSuccessfulPaymentEvent(updates: StageUpdate[]) {
+  return updates.some((update) => {
+    const note = update.note?.toLowerCase() ?? ''
+    return update.stage === 'CONFIRMED' && note.includes('payment confirmed')
+  })
+}
+
+function isResolvedCheckoutAttempt(update: Pick<StageUpdate, 'stage' | 'note'>, successfulPaymentExists: boolean) {
+  if (!successfulPaymentExists) return false
   const note = update.note?.toLowerCase() ?? ''
+  return update.stage === 'PAYMENT_FAILED'
+    || update.stage === 'PAYMENT_PENDING'
+    || note.includes('checkout started')
+    || note.includes('payment started')
+}
+
+function timelineStageLabel(
+  update: Pick<StageUpdate, 'stage' | 'note'>,
+  orderKind: 'CUSTOM' | 'READY_MADE',
+  successfulPaymentExists = false
+) {
+  const note = update.note?.toLowerCase() ?? ''
+  if (isResolvedCheckoutAttempt(update, successfulPaymentExists)) {
+    return update.stage === 'PAYMENT_FAILED' ? 'Earlier checkout failed' : 'Earlier checkout opened'
+  }
   if (update.stage === 'CONFIRMED' && note.includes('payment confirmed')) {
     return 'Payment confirmed'
   }
@@ -508,8 +611,11 @@ function timelineStageLabel(update: Pick<StageUpdate, 'stage' | 'note'>, orderKi
   return tailorOrderStageLabel(update.stage as OrderStage, orderKind)
 }
 
-function timelineDotColor(update: Pick<StageUpdate, 'stage' | 'note'>) {
+function timelineDotColor(update: Pick<StageUpdate, 'stage' | 'note'>, successfulPaymentExists = false) {
   const note = update.note?.toLowerCase() ?? ''
+  if (isResolvedCheckoutAttempt(update, successfulPaymentExists)) {
+    return Colors.midGrey
+  }
   if (update.stage === 'PAYMENT_FAILED' || note.includes('failed') || note.includes('cancel')) {
     return Colors.error
   }
@@ -520,6 +626,15 @@ function timelineDotColor(update: Pick<StageUpdate, 'stage' | 'note'>) {
     return Colors.kanteRust
   }
   return Colors.needleGreen
+}
+
+function timelineNoteText(update: Pick<StageUpdate, 'stage' | 'note'>, successfulPaymentExists: boolean) {
+  if (isResolvedCheckoutAttempt(update, successfulPaymentExists)) {
+    return update.stage === 'PAYMENT_FAILED'
+      ? 'An earlier checkout attempt failed, then the customer completed payment successfully.'
+      : 'An earlier checkout was opened before the successful payment.'
+  }
+  return update.note
 }
 
 function baseAmount(order: Pick<OrderDetail, 'orderKind' | 'itemSubtotal' | 'quotedAmount' | 'fulfillmentFee'>) {
@@ -578,15 +693,21 @@ export default function TailorOrderDetailScreen() {
   const { id, returnTo } = useLocalSearchParams<{ id: string; returnTo?: string }>()
   const router = useRouter()
   const navigation = useNavigation()
+  const insets = useSafeAreaInsets()
   const { user } = useAuth()
+  const userId = user?.id ?? null
 
   async function openCallUrl(url: string) {
     await openConsultationCallUrl(url, 'tailor')
   }
 
   function goBack() {
+    if (returnTo === 'tailor-notifications') {
+      router.push('/(tailor)/profile/notifications')
+      return
+    }
     if (returnTo) {
-      router.replace(returnTo as any)
+      router.replace(returnTo as Href)
       return
     }
     if (navigation.canGoBack()) router.back()
@@ -619,7 +740,7 @@ export default function TailorOrderDetailScreen() {
 
   const fetchOrder = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent === true
-    if (!id || !user?.id) {
+    if (!id || !userId) {
       if (!silent) {
         setLoading(false)
         setFetchErrorMessage('')
@@ -653,32 +774,37 @@ export default function TailorOrderDetailScreen() {
         order_stage_updates(id, stage, note, photo_url, created_at)
       `)
       .eq('id', id)
-      .eq('tailor_id', user.id)
+      .eq('tailor_id', userId)
       .order('created_at', { ascending: true, referencedTable: 'order_stage_updates' })
       .maybeSingle()
 
       if (error) throw error
 
       if (data) {
-        const d = data as any
+        const d = data as TailorOrderDetailQueryRow
+        const customerProfile = firstJoinedRow(d.customer_profiles)
+        const measurementSnapshot =
+          d.customer_measurements_snapshot &&
+          typeof d.customer_measurements_snapshot === 'object' &&
+          !Array.isArray(d.customer_measurements_snapshot)
+            ? (d.customer_measurements_snapshot as Record<string, unknown>)
+            : null
         const openHandoffIssue = await fetchOpenHandoffIssue(d.id)
-        const customDetail = Array.isArray(d.custom_order_details)
-          ? d.custom_order_details[0] ?? null
-          : d.custom_order_details ?? null
+        const customDetail = firstJoinedRow(d.custom_order_details)
         setOrder({
-          id: d.id, reference: d.reference, garmentType: d.garment_type,
+          id: d.id, reference: d.reference, garmentType: d.garment_type ?? 'Order',
           orderKind: d.order_kind ?? 'CUSTOM', fulfillmentOption: d.fulfillment_option ?? null,
           itemTitle: d.item_title ?? null, itemSize: d.item_size ?? null, itemQuantity: d.item_quantity ?? 1, itemSubtotal: d.item_subtotal ?? null, fulfillmentFee: d.fulfillment_fee ?? 0,
           garmentDescription: d.garment_description, stage: d.stage,
           customerId: d.customer_id,
-          customerName: d.customer_profiles?.display_name ?? 'Customer',
+          customerName: customerProfile?.display_name ?? 'Customer',
           quotedAmount: d.quoted_amount, quotedCurrency: d.currency ?? d.quoted_currency ?? 'USD', quotedCompletionDate: d.quoted_completion_date,
           fulfillmentPaymentRequestedAt: d.fulfillment_payment_requested_at ?? null,
           fulfillmentPaymentPaidAt: d.fulfillment_payment_paid_at ?? null,
           fulfillmentPaymentProvider: d.fulfillment_payment_provider ?? null,
           fulfillmentPaymentIntentId: d.fulfillment_payment_intent_id ?? null,
           fulfillmentPaymentCheckoutUrl: d.fulfillment_payment_checkout_url ?? null,
-          fabricSource: d.fabric_source, deliveryMethod: d.delivery_method, deliveryAddress: d.delivery_address ?? null,
+          fabricSource: d.fabric_source ?? '', deliveryMethod: d.delivery_method ?? '', deliveryAddress: d.delivery_address ?? null,
           recipientName: d.recipient_name ?? null, recipientPhone: d.recipient_phone ?? null,
           trackingNumber: d.tracking_number ?? null, carrier: d.carrier ?? null,
           fulfillmentProvider: d.fulfillment_provider ?? null,
@@ -686,7 +812,7 @@ export default function TailorOrderDetailScreen() {
           fulfillmentContactName: d.fulfillment_contact_name ?? null,
           fulfillmentContactPhone: d.fulfillment_contact_phone ?? null,
           referencePhotos: asStringList(d.reference_photos),
-          fitNote: d.fit_note, measurements: enrichMeasurementSnapshot(d.customer_measurements_snapshot ?? null) as Measurement | null,
+          fitNote: d.fit_note, measurements: enrichMeasurementSnapshot(measurementSnapshot) as Measurement | null,
           supportMeta: parseOrderSupportMeta(d.special_note),
           customDetail: customDetail
             ? {
@@ -708,13 +834,7 @@ export default function TailorOrderDetailScreen() {
             : null,
           collectionCode: d.collection_code, videoCallUrl: d.video_call_url ?? null,
           occasion: d.occasion, deadline: d.deadline, createdAt: d.created_at,
-          stageUpdates: (Array.isArray(d.order_stage_updates) ? d.order_stage_updates : []).map((update: {
-            id: string
-            stage: string
-            note?: string | null
-            photo_url?: string | null
-            created_at: string
-          }) => ({
+          stageUpdates: (d.order_stage_updates ?? []).map((update) => ({
             id: update.id,
             stage: update.stage,
             note: update.note ?? null,
@@ -752,9 +872,14 @@ export default function TailorOrderDetailScreen() {
       setHasCustomerReview(false)
     }
     if (!silent) setLoading(false)
-  }, [id, user?.id])
+  }, [id, userId])
 
-  useEffect(() => { void fetchOrder() }, [fetchOrder])
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void fetchOrder()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [fetchOrder])
 
   useFocusEffect(
     useCallback(() => {
@@ -763,7 +888,7 @@ export default function TailorOrderDetailScreen() {
   )
 
   useEffect(() => {
-    if (!id || !user?.id) return
+    if (!id || !userId) return
     let refreshTimer: ReturnType<typeof setTimeout> | null = null
 
     const scheduleSilentRefresh = () => {
@@ -786,7 +911,7 @@ export default function TailorOrderDetailScreen() {
       clearInterval(pollTimer)
       void supabase.removeChannel(channel)
     }
-  }, [fetchOrder, id, user?.id])
+  }, [fetchOrder, id, userId])
 
   useEffect(() => {
     if (!order || !isTerminalOrderStage(order.stage)) return
@@ -1002,6 +1127,9 @@ export default function TailorOrderDetailScreen() {
     )
 
   const quotedHeadlineAmount = baseAmount(order)
+  const conversationCtaLabel = isTerminalOrderStage(order.stage)
+    ? 'View conversation'
+    : `Message ${order.customerName.split(' ')[0]}`
 
   async function confirmFabricReceived() {
     const currentOrderId = order?.id
@@ -1156,6 +1284,159 @@ export default function TailorOrderDetailScreen() {
     )
   }
 
+  function confirmDeclineOrder(title = 'Decline order', message = 'Are you sure you want to decline this order?') {
+    if (!order) return
+    Alert.alert(title, message, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Decline',
+        style: 'destructive',
+        onPress: async () => {
+          if (!order) return
+          const { error } = await invokeFunction('tailor-order-action', {
+            body: { orderId: order.id, action: 'decline-order' },
+          })
+          if (error) {
+            const message = isLikelyConnectivityIssue(error)
+              ? 'Connection looks weak. We could not decline this order yet. Retry when the signal improves.'
+              : await readFunctionErrorMessage(error, 'Could not decline this order right now. Please try again in a moment.')
+            Alert.alert('Could not decline order', message)
+            return
+          }
+          await purgeTerminalOrderClientState({
+            orderId: order.id,
+            customerId: order.customerId,
+          })
+          router.replace('/(tailor)/orders')
+        },
+      },
+    ])
+  }
+
+  function openQuoteActionMenu() {
+    if (!order) return
+    Alert.alert(
+      'Order actions',
+      'Choose one clear next step for this request.',
+      [
+        {
+          text: 'Request consultation',
+          onPress: () => {
+            setConsultationModalAction('request-consultation')
+            setShowConsultationModal(true)
+          },
+        },
+        {
+          text: 'Decline order',
+          style: 'destructive',
+          onPress: () => confirmDeclineOrder(),
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    )
+  }
+
+  async function declineConsultationRequest() {
+    if (!order) return
+    const { error } = await invokeFunction('tailor-order-action', {
+      body: { orderId: order.id, action: 'decline-consultation-request' },
+    })
+    if (error) {
+      const message = isLikelyConnectivityIssue(error)
+        ? 'Connection looks weak. We could not decline the consultation yet. Retry when the signal improves.'
+        : await readFunctionErrorMessage(error, 'Could not decline this consultation right now.')
+      Alert.alert('Consultation unavailable', message)
+      return
+    }
+    fetchOrder()
+  }
+
+  function openCustomerConsultationMenu() {
+    Alert.alert(
+      'Consultation options',
+      'Use this only if the requested time or consultation is not right for this order.',
+      [
+        {
+          text: 'Decline consultation',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              'Decline consultation?',
+              'The order returns to quote review so you can still send a quote or decline the full order.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Decline consultation',
+                  style: 'destructive',
+                  onPress: () => { void declineConsultationRequest() },
+                },
+              ],
+            )
+          },
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    )
+  }
+
+  function openConsultationCallMenu() {
+    if (!order) return
+    if (consultationPaymentRequired && !consultationPaymentPaid) {
+      Alert.alert(
+        'Payment still needed',
+        'The customer needs to pay the consultation fee before the call can begin.',
+      )
+      return
+    }
+    if (startingCall) return
+    const title = order.videoCallUrl ? 'Rejoin consultation' : 'Start consultation'
+    const message = order.videoCallUrl
+      ? 'Open the current Drape consultation call.'
+      : 'Choose the call type for this consultation. Drape keeps phone numbers private.'
+    Alert.alert(title, message, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Video call', onPress: () => { void startCall('video') } },
+      { text: 'Audio only', onPress: () => { void startCall('audio') } },
+    ])
+  }
+
+  function openConsultationNextMenu() {
+    Alert.alert(
+      'After consultation',
+      'Choose the next step once you have enough information to proceed.',
+      [
+        { text: 'Send quote', onPress: () => setShowQuoteModal(true) },
+        {
+          text: 'Decline order',
+          style: 'destructive',
+          onPress: () => confirmDeclineOrder('Decline order', 'Are you sure you want to decline this order after consultation?'),
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    )
+  }
+
+  function openFlexibleStageMenu() {
+    if (!order || !flexibleNextStages?.length) return
+    if (flexibleNextStages.length === 1) {
+      openStageModal(flexibleNextStages[0])
+      return
+    }
+    Alert.alert(
+      'Choose next stage',
+      order.orderKind === 'READY_MADE'
+        ? 'Move this item to its next handoff step.'
+        : 'Design and sourcing can happen in a flexible order. Pick the real next stage for this order.',
+      [
+        ...flexibleNextStages.map((target) => ({
+          text: displayStageChoiceLabel(target, order.orderKind),
+          onPress: () => openStageModal(target),
+        })),
+        { text: 'Cancel', style: 'cancel' as const },
+      ],
+    )
+  }
+
   async function markHandoffIssueResolved() {
     if (!handoffIssue || resolvingHandoffIssue) return
     setResolvingHandoffIssue(true)
@@ -1168,8 +1449,30 @@ export default function TailorOrderDetailScreen() {
     await fetchOrder()
   }
 
-  function openCustomerReview() {
+  async function openCustomerReview() {
     if (!order) return
+    const { count, error } = await supabase
+      .from('customer_reviews')
+      .select('id', { count: 'exact', head: true })
+      .eq('order_id', order.id)
+
+    if (error) {
+      Sentry.captureException(error, {
+        extra: { context: 'open_customer_review_preflight', orderId: order.id },
+      })
+      Alert.alert('Review unavailable', 'We could not check this review yet. Reopen the order and try again.')
+      return
+    }
+
+    if ((count ?? 0) > 0) {
+      setHasCustomerReview(true)
+      Alert.alert(
+        'Review already saved',
+        'Drape keeps one internal customer review per order. You can review this customer again after a future order.',
+      )
+      return
+    }
+
     router.push({
       pathname: '/(tailor)/clients/review/[orderId]',
       params: {
@@ -1179,13 +1482,19 @@ export default function TailorOrderDetailScreen() {
     })
   }
 
+  const successfulPaymentExists = hasSuccessfulPaymentEvent(order.stageUpdates)
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <TouchableOpacity style={styles.back} onPress={goBack}>
         <Text style={styles.backText}>← Back</Text>
       </TouchableOpacity>
 
-      <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
+      <ScrollView
+        style={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom + 172, 212) }}
+      >
         <View style={styles.content}>
 
           {/* Header */}
@@ -1245,43 +1554,10 @@ export default function TailorOrderDetailScreen() {
                     Review the order details below and send your quote. You can also request a consultation first.
                   </Text>
                   <Button label="Send quote" onPress={() => setShowQuoteModal(true)} testID="tailor-send-quote-btn" />
-                  <Button
-                    label="Request consultation"
-                    variant="secondary"
-                    onPress={() => {
-                      setConsultationModalAction('request-consultation')
-                      setShowConsultationModal(true)
-                    }}
-                  />
-                  <Button
-                    label="Decline this order"
-                    variant="ghost"
-                    onPress={() => {
-                      Alert.alert('Decline order', 'Are you sure you want to decline this order?', [
-                        { text: 'Cancel', style: 'cancel' },
-                        {
-                          text: 'Decline', style: 'destructive',
-                          onPress: async () => {
-                            const { error } = await invokeFunction('tailor-order-action', {
-                              body: { orderId: order.id, action: 'decline-order' },
-                            })
-                            if (error) {
-                              const message = isLikelyConnectivityIssue(error)
-                                ? 'Connection looks weak. We could not decline this order yet. Retry when the signal improves.'
-                                : await readFunctionErrorMessage(error, 'Could not decline this order right now. Please try again in a moment.')
-                              Alert.alert('Could not decline order', message)
-                              return
-                            }
-                            await purgeTerminalOrderClientState({
-                              orderId: order.id,
-                              customerId: order.customerId,
-                            })
-                            router.replace('/(tailor)/orders')
-                          },
-                        },
-                      ])
-                    }}
-                  />
+                  <TouchableOpacity style={styles.compactActionMenuButton} onPress={openQuoteActionMenu}>
+                    <Text style={styles.compactActionMenuText}>Consultation or decline</Text>
+                    <Feather name="chevron-down" size={16} color={Colors.needleGreen} />
+                  </TouchableOpacity>
                 </>
               )}
             </View>
@@ -1319,86 +1595,25 @@ export default function TailorOrderDetailScreen() {
                       setShowConsultationModal(true)
                     }}
                   />
-                  <Button
-                    label="Decline consultation"
-                    variant="secondary"
-                    onPress={() => {
-                      Alert.alert('Decline consultation?', 'The order returns to quote review so you can still send a quote or decline the full order.', [
-                        { text: 'Cancel', style: 'cancel' },
-                        {
-                          text: 'Decline consultation',
-                          style: 'destructive',
-                          onPress: async () => {
-                            const { error } = await invokeFunction('tailor-order-action', {
-                              body: { orderId: order.id, action: 'decline-consultation-request' },
-                            })
-                            if (error) {
-                              const message = isLikelyConnectivityIssue(error)
-                                ? 'Connection looks weak. We could not decline the consultation yet. Retry when the signal improves.'
-                                : await readFunctionErrorMessage(error, 'Could not decline this consultation right now.')
-                              Alert.alert('Consultation unavailable', message)
-                              return
-                            }
-                            fetchOrder()
-                          },
-                        },
-                      ])
-                    }}
-                  />
+                  <TouchableOpacity style={styles.compactActionMenuButton} onPress={openCustomerConsultationMenu}>
+                    <Text style={styles.compactActionMenuText}>Other consultation options</Text>
+                    <Feather name="chevron-down" size={16} color={Colors.needleGreen} />
+                  </TouchableOpacity>
                 </>
               ) : (
                 <>
-                  <View style={{ flexDirection: 'row', gap: Spacing.md }}>
-                    <View style={{ flex: 1 }}>
-                      <Button
-                        label={order.videoCallUrl ? 'Rejoin call' : 'Video call'}
-                        onPress={() => startCall('video')}
-                        loading={startingCall === 'video'}
-                        disabled={!!startingCall || (consultationPaymentRequired && !consultationPaymentPaid)}
-                      />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Button
-                        label="Audio call"
-                        variant="secondary"
-                        onPress={() => startCall('audio')}
-                        loading={startingCall === 'audio'}
-                        disabled={!!startingCall || (consultationPaymentRequired && !consultationPaymentPaid)}
-                      />
-                    </View>
-                  </View>
-                  <Button label="Send quote" variant="secondary" onPress={() => setShowQuoteModal(true)} />
+                  <Button
+                    label={order.videoCallUrl ? 'Rejoin consultation' : 'Start consultation call'}
+                    onPress={openConsultationCallMenu}
+                    loading={!!startingCall}
+                    disabled={!!startingCall || (consultationPaymentRequired && !consultationPaymentPaid)}
+                  />
+                  <TouchableOpacity style={styles.compactActionMenuButton} onPress={openConsultationNextMenu}>
+                    <Text style={styles.compactActionMenuText}>Quote or decline</Text>
+                    <Feather name="chevron-down" size={16} color={Colors.needleGreen} />
+                  </TouchableOpacity>
                 </>
               )}
-              <Button
-                label="Decline"
-                variant="ghost"
-                onPress={() => {
-                  Alert.alert('Decline', 'Are you sure you want to decline this order after consultation?', [
-                    { text: 'Cancel', style: 'cancel' },
-                    {
-                      text: 'Decline', style: 'destructive',
-                      onPress: async () => {
-                        const { error } = await invokeFunction('tailor-order-action', {
-                          body: { orderId: order.id, action: 'decline-order' },
-                        })
-                        if (error) {
-                          const message = isLikelyConnectivityIssue(error)
-                            ? 'Connection looks weak. We could not decline this order yet. Retry when the signal improves.'
-                            : await readFunctionErrorMessage(error, 'Could not decline this order right now. Please try again in a moment.')
-                          Alert.alert('Could not decline order', message)
-                          return
-                        }
-                        await purgeTerminalOrderClientState({
-                          orderId: order.id,
-                          customerId: order.customerId,
-                        })
-                        router.replace('/(tailor)/orders')
-                      },
-                    },
-                  ])
-                }}
-              />
             </View>
           )}
 
@@ -1535,14 +1750,15 @@ export default function TailorOrderDetailScreen() {
                   ? 'Ready-made orders skip tailoring production stages. Move this into preparation, then ship it or mark it ready for collection.'
                   : 'Choose which stage to move to next. Tailors often run design and sourcing in parallel.'}
               </Text>
-              {flexibleNextStages.map((target) => (
-                <Button
-                  key={target}
-                  label={displayStageChoiceLabel(target, order.orderKind)}
-                  variant={flexibleNextStages.indexOf(target) === 0 ? 'primary' : 'secondary'}
-                  onPress={() => openStageModal(target)}
-                />
-              ))}
+              <Button
+                label={flexibleNextStages.length === 1 ? displayStageChoiceLabel(flexibleNextStages[0], order.orderKind) : 'Choose next stage'}
+                onPress={openFlexibleStageMenu}
+              />
+              {flexibleNextStages.length > 1 ? (
+                <Text style={styles.stageCardHint}>
+                  Available next steps: {flexibleNextStages.map((target) => displayStageChoiceLabel(target, order.orderKind)).join(' · ')}
+                </Text>
+              ) : null}
             </View>
           )}
 
@@ -1641,12 +1857,14 @@ export default function TailorOrderDetailScreen() {
             <View style={styles.timeline}>
               {order.stageUpdates.length > 0 ? order.stageUpdates.map((update) => (
                 <View key={update.id} style={styles.timelineItem}>
-                  <View style={[styles.timelineDot, { backgroundColor: timelineDotColor(update) }]} />
+                  <View style={[styles.timelineDot, { backgroundColor: timelineDotColor(update, successfulPaymentExists) }]} />
                   <View style={styles.timelineContent}>
                     <Text style={styles.timelineStage}>
-                      {timelineStageLabel(update, order.orderKind)}
+                      {timelineStageLabel(update, order.orderKind, successfulPaymentExists)}
                     </Text>
-                    {update.note ? <Text style={styles.timelineNote}>{update.note}</Text> : null}
+                    {timelineNoteText(update, successfulPaymentExists) ? (
+                      <Text style={styles.timelineNote}>{timelineNoteText(update, successfulPaymentExists)}</Text>
+                    ) : null}
                     {update.photoUrl ? (
                       <StageMediaPreview
                         uri={update.photoUrl}
@@ -2284,7 +2502,7 @@ export default function TailorOrderDetailScreen() {
                 {!hasCustomerReview ? (
                   <Button
                     label="Review customer"
-                    onPress={openCustomerReview}
+                    onPress={() => { void openCustomerReview() }}
                   />
                 ) : null}
                 <Button
@@ -2300,9 +2518,9 @@ export default function TailorOrderDetailScreen() {
       </ScrollView>
 
       {/* Message CTA */}
-      <View style={styles.messageCta}>
+      <View style={[styles.messageCta, { paddingBottom: Math.max(insets.bottom + Spacing.md, Spacing.lg) }]}>
         <Button
-          label={`Message ${order.customerName.split(' ')[0]}`}
+          label={conversationCtaLabel}
           variant="secondary"
           onPress={() =>
             router.navigate({
@@ -2326,20 +2544,24 @@ export default function TailorOrderDetailScreen() {
       />
 
       {/* Quote modal */}
-      <QuoteModal
-        visible={showQuoteModal}
-        orderId={order.id}
-        defaultCurrency={(order.quotedCurrency as CurrencyCode) ?? 'USD'}
-        deliveryMethod={order.deliveryMethod}
-        customerDeadline={order.deadline}
-        onClose={() => setShowQuoteModal(false)}
-        onSent={() => { setShowQuoteModal(false); fetchOrder() }}
-      />
+      {showQuoteModal ? (
+        <QuoteModal
+          key={`quote-${order.id}`}
+          visible
+          orderId={order.id}
+          defaultCurrency={(order.quotedCurrency as CurrencyCode) ?? 'USD'}
+          deliveryMethod={order.deliveryMethod}
+          customerDeadline={order.deadline}
+          onClose={() => setShowQuoteModal(false)}
+          onSent={() => { setShowQuoteModal(false); fetchOrder() }}
+        />
+      ) : null}
 
       {/* Stage update modal */}
-      {stageModalTarget && (
+      {showStageModal && stageModalTarget ? (
         <StageUpdateModal
-          visible={showStageModal}
+          key={`stage-${order.id}-${stageModalTarget}`}
+          visible
           order={order}
           targetStage={stageModalTarget}
           onClose={() => setShowStageModal(false)}
@@ -2353,97 +2575,116 @@ export default function TailorOrderDetailScreen() {
               )
             }
           }}
-          userId={user?.id ?? ''}
         />
-      )}
+      ) : null}
 
       {/* Consultation modal */}
-      <ConsultationModal
-        visible={showConsultationModal}
-        orderId={order.id}
-        action={consultationModalAction}
-        defaultCurrency={(order.quotedCurrency as CurrencyCode) ?? 'USD'}
-        onClose={() => setShowConsultationModal(false)}
-        onSent={() => { setShowConsultationModal(false); fetchOrder() }}
-      />
+      {showConsultationModal ? (
+        <ConsultationModal
+          key={`consultation-${order.id}-${consultationModalAction}`}
+          visible
+          orderId={order.id}
+          action={consultationModalAction}
+          defaultCurrency={(order.quotedCurrency as CurrencyCode) ?? 'USD'}
+          onClose={() => setShowConsultationModal(false)}
+          onSent={() => { setShowConsultationModal(false); fetchOrder() }}
+        />
+      ) : null}
 
-      <MeasurementConfirmationRequestModal
-        visible={showMeasurementRequestModal}
-        orderId={order.id}
-        measurements={order.measurements}
-        onClose={() => setShowMeasurementRequestModal(false)}
-        onSent={() => {
-          setShowMeasurementRequestModal(false)
-          void fetchOrder()
-        }}
-      />
+      {showMeasurementRequestModal ? (
+        <MeasurementConfirmationRequestModal
+          key={`measurements-${order.id}`}
+          visible
+          orderId={order.id}
+          measurements={order.measurements}
+          onClose={() => setShowMeasurementRequestModal(false)}
+          onSent={() => {
+            setShowMeasurementRequestModal(false)
+            void fetchOrder()
+          }}
+        />
+      ) : null}
 
-      <FitReadinessModal
-        visible={showFitReadinessModal}
-        orderId={order.id}
-        onClose={() => setShowFitReadinessModal(false)}
-        onSent={() => {
-          setShowFitReadinessModal(false)
-          void fetchOrder()
-        }}
-      />
+      {showFitReadinessModal ? (
+        <FitReadinessModal
+          key={`fit-${order.id}`}
+          visible
+          orderId={order.id}
+          onClose={() => setShowFitReadinessModal(false)}
+          onSent={() => {
+            setShowFitReadinessModal(false)
+            void fetchOrder()
+          }}
+        />
+      ) : null}
 
-      <MaterialIssueModal
-        visible={showMaterialIssueModal}
-        orderId={order.id}
-        onClose={() => setShowMaterialIssueModal(false)}
-        onSent={() => {
-          setShowMaterialIssueModal(false)
-          void fetchOrder()
-        }}
-      />
+      {showMaterialIssueModal ? (
+        <MaterialIssueModal
+          key={`material-${order.id}`}
+          visible
+          orderId={order.id}
+          onClose={() => setShowMaterialIssueModal(false)}
+          onSent={() => {
+            setShowMaterialIssueModal(false)
+            void fetchOrder()
+          }}
+        />
+      ) : null}
 
-      <CancellationReviewRequestModal
-        visible={showCancellationReviewModal}
-        orderId={order.id}
-        onClose={() => setShowCancellationReviewModal(false)}
-        onSent={() => {
-          setShowCancellationReviewModal(false)
-          void fetchOrder()
-        }}
-      />
+      {showCancellationReviewModal ? (
+        <CancellationReviewRequestModal
+          key={`cancel-review-${order.id}`}
+          visible
+          orderId={order.id}
+          onClose={() => setShowCancellationReviewModal(false)}
+          onSent={() => {
+            setShowCancellationReviewModal(false)
+            void fetchOrder()
+          }}
+        />
+      ) : null}
 
-      <DeliveryReviewRequestModal
-        visible={showDeliveryReviewModal}
-        orderId={order.id}
-        onClose={() => setShowDeliveryReviewModal(false)}
-        onSent={() => {
-          setShowDeliveryReviewModal(false)
-          void fetchOrder()
-        }}
-      />
+      {showDeliveryReviewModal ? (
+        <DeliveryReviewRequestModal
+          key={`delivery-review-${order.id}`}
+          visible
+          orderId={order.id}
+          onClose={() => setShowDeliveryReviewModal(false)}
+          onSent={() => {
+            setShowDeliveryReviewModal(false)
+            void fetchOrder()
+          }}
+        />
+      ) : null}
 
       {/* Collection code modal */}
-      <CollectionCodeModal
-        visible={showCodeModal}
-        orderId={order.id}
-        expectedCode={order.collectionCode ?? ''}
-        onClose={() => setShowCodeModal(false)}
-        onConfirmed={async () => {
-          setShowCodeModal(false)
-          await fetchOrder()
-          Alert.alert(
-            'Collection confirmed',
-            hasCustomerReview
-              ? 'Pickup is complete. The customer can finish the order in Drape now.'
-              : 'Pickup is complete. You can review this customer next or head back to Orders.',
-            hasCustomerReview
-              ? [
-                  { text: 'Stay here', style: 'cancel' },
-                  { text: 'Back to orders', onPress: () => router.replace('/(tailor)/orders') },
-                ]
-              : [
-                  { text: 'Back to orders', style: 'cancel', onPress: () => router.replace('/(tailor)/orders') },
-                  { text: 'Review customer', onPress: openCustomerReview },
-                ],
-          )
-        }}
-      />
+      {showCodeModal ? (
+        <CollectionCodeModal
+          key={`code-${order.id}-${order.collectionCode ?? ''}`}
+          visible
+          orderId={order.id}
+          onClose={() => setShowCodeModal(false)}
+          onConfirmed={async () => {
+            setShowCodeModal(false)
+            await fetchOrder()
+            Alert.alert(
+              'Collection confirmed',
+              hasCustomerReview
+                ? 'Pickup is complete. The customer can finish the order in Drape now.'
+                : 'Pickup is complete. You can review this customer next or head back to Orders.',
+              hasCustomerReview
+                ? [
+                    { text: 'Stay here', style: 'cancel' },
+                    { text: 'Back to orders', onPress: () => router.replace('/(tailor)/orders') },
+                  ]
+                : [
+                    { text: 'Back to orders', style: 'cancel', onPress: () => router.replace('/(tailor)/orders') },
+                    { text: 'Review customer', onPress: () => { void openCustomerReview() } },
+                  ],
+            )
+          }}
+        />
+      ) : null}
     </SafeAreaView>
   )
 }
@@ -2607,14 +2848,6 @@ function MeasurementConfirmationRequestModal({ visible, orderId, measurements, o
     .map((key) => ({ key, label: labelMeasurementField(key), value: measurements?.[key] }))
     .concat(getAdditionalMeasurementRows(measurements).map((row) => ({ key: row.label, label: row.label, value: row.value })))
 
-  useEffect(() => {
-    if (!visible) return
-    setNote('')
-    setNoteError('')
-    setSending(false)
-    setSelectedFields([])
-  }, [visible, orderId])
-
   function toggleField(field: string) {
     setSelectedFields((previous) =>
       previous.includes(field)
@@ -2756,13 +2989,6 @@ function FitReadinessModal({ visible, orderId, onClose, onSent }: {
   const [noteError, setNoteError] = useState('')
   const [sending, setSending] = useState(false)
 
-  useEffect(() => {
-    if (!visible) return
-    setNote('')
-    setNoteError('')
-    setSending(false)
-  }, [visible, orderId])
-
   function validateNote(value: string) {
     if (value.trim().length < 10) {
       setNoteError('Explain what you reviewed before clearing this blocker.')
@@ -2862,14 +3088,6 @@ function MaterialIssueModal({ visible, orderId, onClose, onSent }: {
   const [note, setNote] = useState('')
   const [noteError, setNoteError] = useState('')
   const [sending, setSending] = useState(false)
-
-  useEffect(() => {
-    if (!visible) return
-    setReason(null)
-    setNote('')
-    setNoteError('')
-    setSending(false)
-  }, [visible, orderId])
 
   function validateNote(value: string) {
     if (value.trim().length < 10) {
@@ -3009,15 +3227,6 @@ function CancellationReviewRequestModal({ visible, orderId, onClose, onSent }: {
   const [sending, setSending] = useState(false)
   const [submitError, setSubmitError] = useState('')
 
-  useEffect(() => {
-    if (!visible) return
-    setReason(null)
-    setNote('')
-    setNoteError('')
-    setSubmitError('')
-    setSending(false)
-  }, [visible, orderId])
-
   function validateNote(value: string) {
     if (!value.trim()) {
       setNoteError('')
@@ -3152,15 +3361,6 @@ function DeliveryReviewRequestModal({ visible, orderId, onClose, onSent }: {
   const [noteError, setNoteError] = useState('')
   const [sending, setSending] = useState(false)
   const [submitError, setSubmitError] = useState('')
-
-  useEffect(() => {
-    if (!visible) return
-    setReason(null)
-    setNote('')
-    setNoteError('')
-    setSubmitError('')
-    setSending(false)
-  }, [visible, orderId])
 
   function validateNote(value: string) {
     if (!value.trim()) {
@@ -3310,23 +3510,6 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, custome
   const [note, setNote] = useState('')
   const [noteError, setNoteError] = useState('')
   const [sending, setSending] = useState(false)
-
-  useEffect(() => {
-    if (!visible) return
-    setAmount('')
-    setCompletionDate('')
-    setCompletionDateValue(null)
-    setShowDatePicker(false)
-    setLaborAmount('')
-    setSourcingAmount('')
-    setRushAmount('')
-    setIncludedText('')
-    setExcludedText('')
-    setBreakdownSummary('')
-    setNote('')
-    setNoteError('')
-    setSending(false)
-  }, [visible, orderId, defaultCurrency, deliveryMethod])
 
   function openCompletionDatePicker() {
     const next = completionDateValue ? new Date(completionDateValue) : new Date()
@@ -3581,8 +3764,8 @@ function QuoteModal({ visible, orderId, defaultCurrency, deliveryMethod, custome
 
 // ─── Stage Update Modal ───────────────────────────────────────────────────────
 
-function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, userId }: {
-  visible: boolean; order: OrderDetail; targetStage: OrderStage; onClose: () => void; onUpdated: (updatedStage: OrderStage) => void; userId: string
+function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated }: {
+  visible: boolean; order: OrderDetail; targetStage: OrderStage; onClose: () => void; onUpdated: (updatedStage: OrderStage) => void
 }) {
   const [note, setNote] = useState('')
   const [noteError, setNoteError] = useState('')
@@ -3597,20 +3780,6 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
 
   const nextStage: OrderStage = targetStage
   const finishingNeedsSecondPhoto = order.orderKind === 'CUSTOM' && nextStage === 'FINISHING'
-
-  useEffect(() => {
-    if (!visible) return
-    setNote('')
-    setNoteError('')
-    setPrimaryMedia(null)
-    setSecondMedia(null)
-    setUpdating(false)
-    setTrackingNumber('')
-    setProvider('')
-    setReference('')
-    setDeliveryContactName('')
-    setDeliveryContactPhone('')
-  }, [visible, order.id, targetStage])
 
   function validateNote(t: string) {
     if (t.trim().length < 10) { setNoteError('Tell your customer what you are working on. Use at least 10 characters.'); return false }
@@ -3826,7 +3995,11 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
                 </View>
               ) : (
                 <TouchableOpacity style={styles.photoPickBtn} onPress={() => pickStageMedia('primary')} disabled={updating}>
-                  <Text style={styles.photoPickText}>+ Add photo or video</Text>
+                  <View style={styles.photoPickIcon}>
+                    <Feather name="camera" size={20} color={Colors.needleGreen} />
+                  </View>
+                  <Text style={styles.photoPickText}>Take or add photo/video</Text>
+                  <Text style={styles.photoPickSubtext}>Fresh proof keeps the timeline trusted.</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -3849,7 +4022,11 @@ function StageUpdateModal({ visible, order, targetStage, onClose, onUpdated, use
                   </View>
                 ) : (
                   <TouchableOpacity style={styles.photoPickBtn} onPress={() => pickStageMedia('secondary')} disabled={updating}>
-                    <Text style={styles.photoPickText}>+ Add second photo or video</Text>
+                    <View style={styles.photoPickIcon}>
+                      <Feather name="camera" size={20} color={Colors.needleGreen} />
+                    </View>
+                    <Text style={styles.photoPickText}>Take or add second proof</Text>
+                    <Text style={styles.photoPickSubtext}>Use a different angle for finishing quality.</Text>
                   </TouchableOpacity>
                 )}
               </View>
@@ -3973,22 +4150,6 @@ function ConsultationModal({ visible, orderId, action, defaultCurrency, onClose,
     ? ['FEE_FORFEITED', 'ONE_REBOOK_ALLOWED', 'CASE_BY_CASE']
     : ['CASE_BY_CASE']
 
-  useEffect(() => {
-    if (!visible) return
-    setFee('')
-    setScheduledAt(defaultConsultationStart())
-    setShowPicker(false)
-    setCreditFeeTowardOrder(true)
-    setPaymentTiming('BEFORE_CALL_STARTS')
-    setReschedulePolicy('ONE_FREE_RESCHEDULE')
-    setNoShowPolicy('FEE_FORFEITED')
-    setExpiryPolicy('EXPIRES_IN_14_DAYS')
-    setReminderEnabled(true)
-    setNote('')
-    setNoteError('')
-    setSending(false)
-  }, [visible, orderId, action])
-
   function validateNote(t: string) {
     const res = filterContactInfo(t)
     if (res.blocked) { setNoteError("Contact details can't be included."); return false }
@@ -4085,7 +4246,7 @@ function ConsultationModal({ visible, orderId, action, defaultCurrency, onClose,
               <DateTimePicker
                 value={scheduledAt}
                 mode="datetime"
-                minimumDate={new Date(Date.now() + 60 * 60 * 1000)}
+                minimumDate={new Date(new Date().getTime() + 60 * 60 * 1000)}
                 onChange={(_, value) => {
                   setShowPicker(Platform.OS === 'ios')
                   if (value) setScheduledAt(value)
@@ -4228,20 +4389,13 @@ function ConsultationModal({ visible, orderId, action, defaultCurrency, onClose,
 
 // ─── Collection Code Modal ────────────────────────────────────────────────────
 
-function CollectionCodeModal({ visible, orderId, expectedCode, onClose, onConfirmed }: {
-  visible: boolean; orderId: string; expectedCode: string; onClose: () => void; onConfirmed: () => void
+function CollectionCodeModal({ visible, orderId, onClose, onConfirmed }: {
+  visible: boolean; orderId: string; onClose: () => void; onConfirmed: () => void
 }) {
   const [digits, setDigits] = useState(['', '', '', ''])
   const [error, setError] = useState('')
   const [confirming, setConfirming] = useState(false)
   const inputs = useRef<TextInput[]>([])
-
-  useEffect(() => {
-    if (!visible) return
-    setDigits(['', '', '', ''])
-    setError('')
-    setConfirming(false)
-  }, [visible, orderId, expectedCode])
 
   function handleDigit(value: string, index: number) {
     const d = [...digits]
@@ -4385,7 +4539,7 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   content: { padding: Spacing.xl, gap: Spacing.md },
 
-  heading: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  heading: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
   subheading: { fontSize: FontSize.sm, color: Colors.midGrey, marginTop: 4 },
   guideCard: {
     backgroundColor: Colors.white,
@@ -4396,7 +4550,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
-  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   stageRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, marginTop: Spacing.sm },
   stagePill: { paddingHorizontal: Spacing.md, paddingVertical: 4, borderRadius: Radius.full },
@@ -4416,16 +4570,37 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreenLight, borderRadius: Radius.lg,
     padding: Spacing.lg, gap: Spacing.sm, borderWidth: 1, borderColor: Colors.needleGreen + '40',
   },
-  alertTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  alertTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
   alertSub: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
+  compactActionMenuButton: {
+    minHeight: 48,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+  },
+  compactActionMenuText: {
+    fontSize: FontSize.sm,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+  },
 
   stageCard: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: 10, gap: 5, ...Shadow.sm,
+    padding: 14,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
   },
-  stageCardTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
-  stageCardSub: { fontSize: 11, color: Colors.inkLight, lineHeight: 17 },
-  stageCardHint: { fontSize: 10, color: Colors.midGrey, lineHeight: 15, marginTop: -3 },
+  stageCardTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
+  stageCardSub: { fontSize: 13, color: Colors.inkLight, lineHeight: 19 },
+  stageCardHint: { fontSize: 12, color: Colors.midGrey, lineHeight: 18 },
 
   consultationCard: { borderColor: Colors.kanteRust + '60', borderWidth: 1.5 },
   consultationInfo: {
@@ -4437,7 +4612,7 @@ const styles = StyleSheet.create({
   bodyCard: {
     backgroundColor: Colors.white, borderRadius: Radius.lg,
     padding: Spacing.lg, gap: Spacing.md, ...Shadow.sm,
-    borderLeftWidth: 4, borderLeftColor: Colors.kanteRust,
+    borderWidth: 1, borderColor: Colors.kanteRust + '55',
   },
   bodyCardTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   bodyCardRow: { gap: Spacing.sm },
@@ -4449,12 +4624,12 @@ const styles = StyleSheet.create({
   fitFlagText: { fontSize: FontSize.xs, color: Colors.kanteRust, fontWeight: FontWeight.semibold },
   bodyNote: {
     backgroundColor: Colors.bone, borderRadius: Radius.sm,
-    padding: Spacing.sm, borderLeftWidth: 2, borderLeftColor: Colors.kanteRust,
+    padding: Spacing.sm, borderWidth: 1, borderColor: Colors.kanteRust + '35',
   },
   bodyNoteText: { fontSize: FontSize.sm, color: Colors.inkLight, fontStyle: 'italic' },
 
   section: { gap: Spacing.sm },
-  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   fitStyleTag: { color: Colors.midGrey, fontWeight: FontWeight.regular },
 
   briefText: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 24 },
@@ -4465,8 +4640,10 @@ const styles = StyleSheet.create({
   supportCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: 10,
-    gap: 5,
+    padding: 14,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
   supportCardWarning: {
@@ -4486,7 +4663,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: Colors.needleGreenLight,
   },
-  supportCardTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  supportCardTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   supportMetaList: { gap: 6 },
   supportBadge: {
     alignSelf: 'flex-start',
@@ -4499,10 +4676,10 @@ const styles = StyleSheet.create({
   supportBadgeText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   supportBadgeTextWarning: { color: Colors.kanteRust },
   supportBadgeTextSuccess: { color: Colors.needleGreen },
-  supportBodyText: { fontSize: 11, color: Colors.inkLight, lineHeight: 17 },
-  supportHint: { fontSize: 10, color: Colors.midGrey, lineHeight: 16 },
+  supportBodyText: { fontSize: 13, color: Colors.inkLight, lineHeight: 19 },
+  supportHint: { fontSize: 12, color: Colors.midGrey, lineHeight: 18 },
   timeline: { gap: 0, paddingTop: Spacing.xs },
-  timelineItem: { flexDirection: 'row', gap: 9, paddingBottom: 10 },
+  timelineItem: { flexDirection: 'row', gap: 10, paddingBottom: 12 },
   timelineDot: {
     width: 9,
     height: 9,
@@ -4511,8 +4688,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen,
   },
   timelineContent: { flex: 1, gap: 3 },
-  timelineStage: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
-  timelineNote: { fontSize: 11, color: Colors.inkLight, fontStyle: 'italic', lineHeight: 16 },
+  timelineStage: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
+  timelineNote: { fontSize: 12, color: Colors.inkLight, fontStyle: 'italic', lineHeight: 18 },
   timelinePhoto: {
     width: '100%',
     height: 150,
@@ -4595,7 +4772,7 @@ const styles = StyleSheet.create({
 
   fitNote: {
     backgroundColor: Colors.needleGreenLight, borderRadius: Radius.md,
-    padding: Spacing.md, gap: 4, borderLeftWidth: 3, borderLeftColor: Colors.needleGreen,
+    padding: Spacing.md, gap: 4, borderWidth: 1, borderColor: Colors.needleGreen + '35',
   },
   fitNoteLabel: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
   fitNoteText: { fontSize: FontSize.sm, color: Colors.inkLight, fontStyle: 'italic' },
@@ -4607,12 +4784,16 @@ const styles = StyleSheet.create({
   measureLabel: { fontSize: FontSize.xs, color: Colors.midGrey },
   measureValue: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   additionalMeasureBlock: { gap: Spacing.sm, marginTop: Spacing.md },
-  additionalMeasureTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  additionalMeasureTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
 
   messageCta: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
-    backgroundColor: Colors.white, padding: Spacing.xl,
-    borderTopWidth: 1, borderTopColor: Colors.lightGrey, paddingBottom: Spacing.xxxl,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.xl,
+    paddingTop: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: Colors.lightGrey,
+    ...Shadow.lg,
   },
 
   backLink: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
@@ -4638,7 +4819,7 @@ const styles = StyleSheet.create({
   modalClose: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium, width: 60 },
   modalTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink },
   modalScroll: { flex: 1 },
-  modalContent: { padding: Spacing.xl, gap: Spacing.xl },
+  modalContent: { padding: Spacing.xl, gap: Spacing.xl, paddingBottom: Spacing.xxxl },
   modalSectionLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   modalHelpText: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   measurementFieldPicker: { gap: Spacing.sm },
@@ -4667,20 +4848,38 @@ const styles = StyleSheet.create({
   },
 
   nextStageRow: {
-    backgroundColor: Colors.needleGreenLight, borderRadius: Radius.md,
-    padding: Spacing.lg, flexDirection: 'row', justifyContent: 'space-between',
+    backgroundColor: Colors.needleGreenLight,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: 4,
   },
   nextStageLabel: { fontSize: FontSize.sm, color: Colors.inkLight },
-  nextStageValue: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.needleGreen },
+  nextStageValue: { fontSize: 20, fontWeight: FontWeight.bold, color: Colors.needleGreen, fontFamily: Fonts.display },
 
   photoLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: 4 },
   photoHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginBottom: Spacing.md, lineHeight: 18 },
   photoPickBtn: {
-    height: 100, borderWidth: 1.5, borderStyle: 'dashed', borderColor: Colors.lightGrey,
-    borderRadius: Radius.md, alignItems: 'center', justifyContent: 'center',
+    minHeight: 142,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: Colors.needleGreen + '55',
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+    padding: Spacing.lg,
+    gap: 6,
+  },
+  photoPickIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: Colors.white,
   },
-  photoPickText: { fontSize: FontSize.md, color: Colors.midGrey },
+  photoPickText: { fontSize: FontSize.md, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+  photoPickSubtext: { fontSize: FontSize.xs, color: Colors.inkLight, textAlign: 'center' },
   photoPreviewWrap: { gap: Spacing.sm },
   photoPreview: { width: '100%', height: 200, borderRadius: Radius.md, backgroundColor: Colors.boneDeep },
   photoRemove: { alignSelf: 'flex-start' },

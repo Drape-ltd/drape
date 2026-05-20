@@ -95,12 +95,12 @@ export const READY_MADE_FIT_FIELDS: Array<{
   { key: 'bicepCircumference', label: 'Bicep', shortLabel: 'Bicep' },
   { key: 'wristCircumference', label: 'Wrist', shortLabel: 'Wrist' },
   { key: 'headCircumference', label: 'Head circumference', shortLabel: 'Head' },
-  { key: 'hatBandLine', label: 'Hat band line', shortLabel: 'Band' },
-  { key: 'headLength', label: 'Head length', shortLabel: 'Head L' },
-  { key: 'headWidth', label: 'Head width', shortLabel: 'Head W' },
-  { key: 'earToEarOverCrown', label: 'Ear to ear over crown', shortLabel: 'Crown E-E' },
-  { key: 'frontToBackOverCrown', label: 'Front to back over crown', shortLabel: 'Crown F-B' },
-  { key: 'filaHeight', label: 'Fila height', shortLabel: 'Fila H' },
+  { key: 'hatBandLine', label: 'Hat band line', shortLabel: 'Hat band' },
+  { key: 'headLength', label: 'Head length', shortLabel: 'Head length' },
+  { key: 'headWidth', label: 'Head width', shortLabel: 'Head width' },
+  { key: 'earToEarOverCrown', label: 'Ear to ear over crown', shortLabel: 'Crown ear-to-ear' },
+  { key: 'frontToBackOverCrown', label: 'Front to back over crown', shortLabel: 'Crown front-back' },
+  { key: 'filaHeight', label: 'Fila height', shortLabel: 'Fila height' },
   { key: 'torsoLength', label: 'Torso length', shortLabel: 'Torso' },
 ]
 

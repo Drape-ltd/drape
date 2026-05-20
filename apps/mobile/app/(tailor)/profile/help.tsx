@@ -11,14 +11,14 @@ import {
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { CONTACTS } from '@drape/shared'
 import { goBackOrFallback } from '@/lib/navigation'
 
 const FAQ: Array<{ q: string; a: string }> = [
   {
-    q: "How do I receive my first order?",
-    a: "Once your profile is live, customers can find you in search and send a booking request. You'll receive a notification and see it in your Orders tab under 'Awaiting quote'. Respond within 48 hours to maintain your response rating.",
+    q: "How do customers book me?",
+    a: "Once your profile is live, customers can find you in search, view your portfolio, and send a booking request. You'll receive a notification and see it in your Orders tab under 'Awaiting quote'. Respond within 48 hours to maintain your response rating.",
   },
   {
     q: "How do I send a quote to a customer?",
@@ -62,6 +62,38 @@ const FAQ: Array<{ q: string; a: string }> = [
   },
 ]
 
+const GUIDE_TOPICS: Array<{
+  icon: React.ComponentProps<typeof Feather>['name']
+  title: string
+  body: string
+}> = [
+  {
+    icon: 'inbox',
+    title: 'Orders and quotes',
+    body: 'Respond quickly, quote only after reviewing the brief, and keep every agreement inside the order thread.',
+  },
+  {
+    icon: 'camera',
+    title: 'Production updates',
+    body: 'Use fresh photos or videos at each stage so customers can trust the work without chasing you.',
+  },
+  {
+    icon: 'credit-card',
+    title: 'Payouts',
+    body: 'Keep payout details verified. Drape only releases funds after the order handoff and review window are clear.',
+  },
+  {
+    icon: 'package',
+    title: 'Pickup, delivery, and shipping',
+    body: 'Mark pickup only for direct collection. Standard delivery and shipping move through Drape-managed handoff.',
+  },
+  {
+    icon: 'shield',
+    title: 'Trust and access',
+    body: 'Use Trust & access for verification, payout blockers, profile review, and any hold on your selling tools.',
+  },
+]
+
 export default function TailorHelpScreen() {
   const router = useRouter()
   const navigation = useNavigation()
@@ -90,47 +122,38 @@ export default function TailorHelpScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Get help</Text>
+        <Text style={styles.headerTitle}>Drape guide</Text>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 32, gap: Spacing.md }}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
         <View style={styles.heroCard}>
           <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Tailor support</Text>
+            <Text style={styles.heroBadgeText}>Tailor guide</Text>
           </View>
-          <Text style={styles.heroTitle}>Help with orders, payouts, verification, and client communication.</Text>
+          <Text style={styles.heroTitle}>Everything you need to work cleanly on Drape.</Text>
           <Text style={styles.heroSub}>
-            Use this space when something needs clarification or escalation. We’ll help you keep work moving and resolve issues cleanly inside Drape.
+            Start here for orders, quotes, production updates, payout readiness, verification, and support paths.
           </Text>
         </View>
 
-        <View style={styles.supportGuideCard}>
-          <View style={styles.supportGuideBadge}>
-            <Text style={styles.supportGuideBadgeText}>Best next step</Text>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Quick guide</Text>
+          <View style={styles.card}>
+            {GUIDE_TOPICS.map((topic, i) => (
+              <GuideTopic
+                key={topic.title}
+                icon={topic.icon}
+                title={topic.title}
+                body={topic.body}
+                last={i === GUIDE_TOPICS.length - 1}
+              />
+            ))}
           </View>
-          <Text style={styles.supportGuideTitle}>Keep live work inside the order and message thread whenever you can.</Text>
-          <Text style={styles.supportGuideBody}>
-            Quotes, consultations, production updates, and concerns are easiest to resolve from the active order. Come here when you need policy clarity, account help, or an escalation.
-          </Text>
-        </View>
-
-        <View style={styles.networkGuideCard}>
-          <Text style={styles.networkGuideTitle}>Weak connection?</Text>
-          <Text style={styles.networkGuideBody}>
-            Keep the active order and message thread as the source of truth. If signal drops, retry from Orders later, keep updates inside Drape, and fall back to email support when external links do not open cleanly.
-          </Text>
-        </View>
-
-        <View style={styles.contactGuideCard}>
-          <Text style={styles.contactGuideTitle}>Contact us when…</Text>
-          <Text style={styles.contactGuideBody}>
-            you need policy clarification, escalation help, verification guidance, payout-readiness help, or support once the normal order flow is no longer enough.
-          </Text>
         </View>
 
         {/* ── Visit Help Centre ── */}
@@ -143,8 +166,8 @@ export default function TailorHelpScreen() {
             <Feather name="globe" size={24} color={Colors.needleGreen} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.helpCentreTitle}>Visit Help Centre</Text>
-            <Text style={styles.helpCentreSub}>Full tailor guides and tutorials on drapeon.co</Text>
+            <Text style={styles.helpCentreTitle}>Full guide library</Text>
+            <Text style={styles.helpCentreSub}>Detailed tailor tutorials on drapeon.co</Text>
           </View>
           <Feather name="external-link" size={16} color={Colors.midGrey} />
         </TouchableOpacity>
@@ -317,6 +340,27 @@ function ContactRow({
   )
 }
 
+function GuideTopic({
+  icon, title, body, last,
+}: {
+  icon: React.ComponentProps<typeof Feather>['name']
+  title: string
+  body: string
+  last?: boolean
+}) {
+  return (
+    <View style={[styles.guideTopic, last && styles.contactRowLast]}>
+      <View style={styles.contactIcon}>
+        <Feather name={icon} size={18} color={Colors.needleGreen} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.contactTitle}>{title}</Text>
+        <Text style={styles.contactSub}>{body}</Text>
+      </View>
+    </View>
+  )
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: {
@@ -328,7 +372,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
+  body: { padding: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.md },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
@@ -348,7 +393,7 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
   },
-  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 28, fontFamily: 'Georgia' },
+  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 28, fontFamily: Fonts.display },
   heroSub: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   supportGuideCard: {
     backgroundColor: Colors.white,
@@ -375,7 +420,7 @@ const styles = StyleSheet.create({
     color: Colors.ink,
     fontWeight: FontWeight.bold,
     lineHeight: 22,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   supportGuideBody: {
     fontSize: FontSize.sm,
@@ -432,11 +477,11 @@ const styles = StyleSheet.create({
     width: 44, height: 44, borderRadius: Radius.md,
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
   },
-  helpCentreTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  helpCentreTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   helpCentreSub: { fontSize: FontSize.sm, color: Colors.inkLight, marginTop: 2, lineHeight: 18 },
 
   section: { gap: Spacing.sm },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
 
   card: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.md },
@@ -444,6 +489,14 @@ const styles = StyleSheet.create({
   contactRow: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
     padding: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.lightGrey,
+  },
+  guideTopic: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.md,
+    padding: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.lightGrey,
   },
   contactRowLast: { borderBottomWidth: 0 },
   contactIcon: {

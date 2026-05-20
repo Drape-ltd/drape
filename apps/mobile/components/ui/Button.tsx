@@ -8,7 +8,7 @@ import {
   type ViewStyle,
   type TextStyle,
 } from 'react-native'
-import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
 type Size = 'sm' | 'md' | 'lg'
@@ -62,7 +62,15 @@ export function Button({
           color={variant === 'primary' ? Colors.textInverse : Colors.needleGreen}
         />
       ) : (
-        <Text style={[styles.label, styles[`label_${variant}`], styles[`labelSize_${size}`], textStyle]}>
+        <Text
+          style={[
+            styles.label,
+            styles[`label_${variant}`],
+            styles[`labelSize_${size}`],
+            isDisabled && styles.label_disabled,
+            textStyle,
+          ]}
+        >
           {label}
         </Text>
       )}
@@ -87,36 +95,40 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen,
   },
   secondary: {
-    backgroundColor: Colors.needleGreenLight,
+    backgroundColor: Colors.white,
     borderWidth: 1,
-    borderColor: Colors.needleGreen,
+    borderColor: Colors.lightGrey,
   },
   ghost: {
     backgroundColor: 'transparent',
   },
   danger: {
-    backgroundColor: Colors.error,
+    backgroundColor: Colors.kanteRust,
   },
   disabled: {
-    opacity: 0.45,
+    backgroundColor: Colors.disabledFill,
+    borderColor: Colors.disabledFill,
+    opacity: 1,
   },
 
   // Sizes
   size_sm: { paddingVertical: 8, paddingHorizontal: Spacing.md },
   size_md: { paddingVertical: 10, paddingHorizontal: Spacing.lg },
-  size_lg: { minHeight: 52, paddingVertical: 12, paddingHorizontal: Spacing.xl },
+  size_lg: { minHeight: 56, paddingVertical: 14, paddingHorizontal: Spacing.xl },
 
   // Labels
   label: {
-    fontWeight: FontWeight.semibold,
-    letterSpacing: 0.1,
+    fontFamily: Fonts.bodyBold,
+    fontWeight: FontWeight.bold,
+    letterSpacing: 0,
   },
   label_primary: { color: Colors.textInverse },
-  label_secondary: { color: Colors.needleGreen },
+  label_secondary: { color: Colors.ink },
   label_ghost: { color: Colors.needleGreen },
   label_danger: { color: Colors.textInverse },
+  label_disabled: { color: Colors.disabledText },
 
   labelSize_sm: { fontSize: FontSize.sm },
-  labelSize_md: { fontSize: FontSize.md, lineHeight: 20 },
-  labelSize_lg: { fontSize: FontSize.md, lineHeight: 20 },
+  labelSize_md: { fontSize: 16, lineHeight: 20 },
+  labelSize_lg: { fontSize: 16, lineHeight: 20 },
 })

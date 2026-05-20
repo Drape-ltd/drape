@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useState } from 'react'
+import React, { memo, useState } from 'react'
 import { StyleProp, StyleSheet, Text, View, ViewStyle } from 'react-native'
 import { Image as ExpoImage } from 'expo-image'
 import { Feather } from '@expo/vector-icons'
@@ -26,16 +26,12 @@ function AvatarImageComponent({
   shadow = false,
   testID,
 }: AvatarImageProps) {
-  const [loaded, setLoaded] = useState(false)
-  const [failed, setFailed] = useState(false)
+  const [loadedUri, setLoadedUri] = useState<string | null>(null)
+  const [failedUri, setFailedUri] = useState<string | null>(null)
   const resolvedUri = resolveStorageImageUrl(uri, 'avatars')
 
-  useEffect(() => {
-    setLoaded(false)
-    setFailed(false)
-  }, [resolvedUri])
-
-  const hasRemoteImage = !!resolvedUri && !failed
+  const loaded = !!resolvedUri && loadedUri === resolvedUri
+  const hasRemoteImage = !!resolvedUri && failedUri !== resolvedUri
   const cleanedInitials = initials
     ?.trim()
     .split(/\s+/)
@@ -63,14 +59,15 @@ function AvatarImageComponent({
       {hasRemoteImage ? (
         <ExpoImage
           source={{ uri: resolvedUri }}
-          style={StyleSheet.absoluteFillObject}
-          contentFit="cover"
-          cachePolicy="memory-disk"
+	          style={StyleSheet.absoluteFillObject}
+	          contentFit="cover"
+	          contentPosition="top center"
+	          cachePolicy="memory-disk"
           transition={120}
           placeholder={PROFILE_IMAGE_PLACEHOLDER}
-          onLoad={() => setLoaded(true)}
+          onLoad={() => setLoadedUri(resolvedUri)}
           onError={(error) => {
-            setFailed(true)
+            setFailedUri(resolvedUri)
             captureImageLoadFailure({
               url: resolvedUri,
               bucket: 'avatars',
@@ -110,11 +107,11 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: Colors.needleGreenLight,
+    backgroundColor: Colors.needleGreen,
   },
   initials: {
-    color: Colors.needleGreenDark,
+    color: Colors.textInverse,
     fontWeight: FontWeight.semibold,
-    letterSpacing: 0.3,
+    letterSpacing: 0,
   },
 })

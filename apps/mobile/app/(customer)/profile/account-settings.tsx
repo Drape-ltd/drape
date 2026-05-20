@@ -9,20 +9,27 @@ import { Alert, View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'rea
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { goBackOrFallback } from '@/lib/navigation'
 import { useAuth } from '@/lib/auth'
 import { useCurrency } from '@/lib/currency'
 
 function NavRow({
-  icon, label, sublabel, last, onPress,
+  icon,
+  label,
+  sublabel,
+  tone = 'default',
+  last,
+  onPress,
 }: {
   icon: React.ComponentProps<typeof Feather>['name']
   label: string
   sublabel?: string
+  tone?: 'default' | 'destructive'
   last?: boolean
   onPress: () => void
 }) {
+  const destructive = tone === 'destructive'
   return (
     <TouchableOpacity
       style={[styles.row, last && styles.rowLast]}
@@ -31,10 +38,10 @@ function NavRow({
       accessibilityRole="button"
       accessibilityLabel={sublabel ? `${label}. ${sublabel}` : label}
     >
-      <Feather name={icon} size={20} color={Colors.inkLight} style={{ width: 24 }} />
-      <View style={{ flex: 1 }}>
+      <Feather name={icon} size={20} color={destructive ? Colors.error : Colors.inkLight} style={styles.rowIcon} />
+      <View style={styles.rowContent}>
         <View style={styles.rowTitleWrap}>
-          <Text style={styles.rowLabel}>{label}</Text>
+          <Text style={[styles.rowLabel, destructive && styles.rowLabelDestructive]}>{label}</Text>
         </View>
         {sublabel ? <Text style={styles.rowSub}>{sublabel}</Text> : null}
       </View>
@@ -70,7 +77,7 @@ export default function AccountSettingsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={goBack}>
@@ -80,7 +87,6 @@ export default function AccountSettingsScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
-
         {/* ── Personal & security ── */}
         <View style={styles.group}>
           <NavRow
@@ -110,7 +116,11 @@ export default function AccountSettingsScreen() {
           <NavRow
             icon="globe"
             label="Currency"
-            sublabel={currencyLoading ? 'Loading account default...' : `Browsing and new checkout default: ${currency}`}
+            sublabel={
+              currencyLoading
+                ? 'Loading account default...'
+                : `Browsing and new checkout default: ${currency}`
+            }
             onPress={() => router.push('/(customer)/profile/currency' as never)}
           />
           <View style={styles.divider} />
@@ -134,7 +144,8 @@ export default function AccountSettingsScreen() {
           <NavRow
             icon="trash-2"
             label="Delete account"
-            sublabel="Request permanent deletion from Drape"
+            sublabel="Password confirmation required"
+            tone="destructive"
             onPress={() => router.push('/(customer)/profile/delete-account' as never)}
           />
           <View style={styles.divider} />
@@ -142,6 +153,7 @@ export default function AccountSettingsScreen() {
             icon="log-out"
             label="Sign out"
             sublabel="Clear this device and return to login"
+            tone="destructive"
             last
             onPress={confirmSignOut}
           />
@@ -149,7 +161,6 @@ export default function AccountSettingsScreen() {
 
         {/* ── Version ── */}
         <Text style={styles.version}>Drape v{version}</Text>
-
       </ScrollView>
     </SafeAreaView>
   )
@@ -158,31 +169,55 @@ export default function AccountSettingsScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
   },
   backBtn: {
-    width: 44, height: 44, borderRadius: Radius.full,
-    backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
+    width: 44,
+    height: 44,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
-
-  body: { padding: Spacing.lg, paddingBottom: 32, gap: Spacing.sm },
-  group: {
-    backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm,
+  headerTitle: {
+    fontSize: FontSize.xl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    fontFamily: Fonts.display,
   },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginLeft: Spacing.lg + 24 },
+
+  body: { padding: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.sm },
+  group: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    ...Shadow.sm,
+  },
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: Colors.lightGrey,
+    marginLeft: Spacing.lg + 24,
+  },
   row: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.lg,
-    paddingHorizontal: Spacing.md, paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.lg,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 12,
     minHeight: 52,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'transparent',
   },
   rowPending: { opacity: 0.88 },
   rowLast: { borderBottomWidth: 0 },
+  rowIcon: { width: 24 },
+  rowContent: { flex: 1 },
   rowTitleWrap: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  rowLabel: { fontSize: FontSize.md, color: Colors.ink, fontFamily: 'Georgia' },
+  rowLabel: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.medium },
+  rowLabelDestructive: { color: Colors.error },
   rowSub: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
   pendingPill: {
     fontSize: FontSize.xs,
@@ -193,5 +228,10 @@ const styles = StyleSheet.create({
     borderRadius: Radius.full,
   },
 
-  version: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'center', marginTop: Spacing.xs },
+  version: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    textAlign: 'center',
+    marginTop: Spacing.xs,
+  },
 })

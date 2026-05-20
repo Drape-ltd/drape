@@ -1,17 +1,13 @@
 import { useEffect, useState } from 'react'
-import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl,
-} from 'react-native'
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
-import { Feather } from '@expo/vector-icons'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useAuth } from '@/lib/auth'
-import { Button, FeatureStateCard } from '@/components/ui'
+import { Button, FeatureStateCard, StateCard } from '@/components/ui'
 import { customerOrderHint } from '@/lib/order-flow'
 import { useCustomerOrders, useRefreshOnFocus } from '@/lib/queries'
 import { customerOrderStageLabel } from '@/lib/customer-order-copy'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 
@@ -41,8 +37,6 @@ const STAGE_COLOR: Partial<Record<OrderStage, string>> = {
 }
 
 type Tab = 'active' | 'completed'
-
-const CUSTOMER_ORDERS_GUIDE_KEY = 'drape_customer_orders_best_use_dismissed'
 
 function orderPriority(stage: OrderStage): number {
   switch (stage) {
@@ -74,36 +68,32 @@ export default function OrdersListScreen() {
   const params = useLocalSearchParams<{ tab?: string }>()
   const { user } = useAuth()
   const [tab, setTab] = useState<Tab>('active')
-  const [showGuide, setShowGuide] = useState(true)
 
   useEffect(() => {
     if (params.tab === 'completed' || params.tab === 'active') {
-      setTab(params.tab)
+      const nextTab = params.tab
+      const timer = setTimeout(() => setTab(nextTab), 0)
+      return () => clearTimeout(timer)
     }
+    return undefined
   }, [params.tab])
 
-  useEffect(() => {
-    AsyncStorage.getItem(`${CUSTOMER_ORDERS_GUIDE_KEY}:${user?.id ?? 'guest'}`)
-      .then((value) => setShowGuide(value !== '1'))
-      .catch(() => {})
-  }, [user?.id])
+  const {
+    data: orders = [],
+    isLoading: loading,
+    isFetching,
+    isError,
+    refetch,
+  } = useCustomerOrders(user?.id, tab)
 
-  async function dismissGuide() {
-    setShowGuide(false)
-    try {
-      await AsyncStorage.setItem(`${CUSTOMER_ORDERS_GUIDE_KEY}:${user?.id ?? 'guest'}`, '1')
-    } catch {}
-  }
-
-  const { data: orders = [], isLoading: loading, isFetching, isError, refetch } = useCustomerOrders(user?.id, tab)
-
-  const sortedOrders = tab === 'active'
-    ? [...orders].sort((a, b) => {
-        const priorityDiff = orderPriority(a.stage) - orderPriority(b.stage)
-        if (priorityDiff !== 0) return priorityDiff
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      })
-    : orders
+  const sortedOrders =
+    tab === 'active'
+      ? [...orders].sort((a, b) => {
+          const priorityDiff = orderPriority(a.stage) - orderPriority(b.stage)
+          if (priorityDiff !== 0) return priorityDiff
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        })
+      : orders
 
   // Refetch whenever this screen comes back into focus (e.g. returning from order detail)
   useRefreshOnFocus(refetch, 0)
@@ -116,29 +106,23 @@ export default function OrdersListScreen() {
           <TouchableOpacity
             style={[styles.tabBtn, tab === 'active' && styles.tabBtnActive]}
             onPress={() => setTab('active')}
+            accessibilityRole="button"
+            accessibilityState={{ selected: tab === 'active' }}
           >
             <Text style={[styles.tabLabel, tab === 'active' && styles.tabLabelActive]}>Active</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.tabBtn, tab === 'completed' && styles.tabBtnActive]}
             onPress={() => setTab('completed')}
+            accessibilityRole="button"
+            accessibilityState={{ selected: tab === 'completed' }}
           >
-            <Text style={[styles.tabLabel, tab === 'completed' && styles.tabLabelActive]}>Completed</Text>
+            <Text style={[styles.tabLabel, tab === 'completed' && styles.tabLabelActive]}>
+              Completed
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
-
-      {showGuide && (
-        <View style={styles.guideCard}>
-          <View style={styles.guideHeader}>
-            <Text style={styles.guideEyebrow}>Best use</Text>
-            <TouchableOpacity onPress={() => void dismissGuide()} style={styles.guideClose}>
-              <Feather name="x" size={16} color={Colors.midGrey} />
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.guideText}>Use Active for live work and Completed for finished orders you may want to revisit or review.</Text>
-        </View>
-      )}
 
       {loading ? (
         <FeatureStateCard
@@ -168,7 +152,13 @@ export default function OrdersListScreen() {
           keyExtractor={(o) => o.id}
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={isFetching && !loading} onRefresh={refetch} tintColor={Colors.needleGreen} />}
+          refreshControl={
+            <RefreshControl
+              refreshing={isFetching && !loading}
+              onRefresh={refetch}
+              tintColor={Colors.needleGreen}
+            />
+          }
           ListEmptyComponent={
             <EmptyOrdersView
               tab={tab}
@@ -180,18 +170,30 @@ export default function OrdersListScreen() {
             <TouchableOpacity
               style={styles.card}
               testID={`order-card-${item.stage}`}
-              onPress={() => router.push({
-                pathname: '/(customer)/orders/[id]',
-                params: { id: item.id, tab },
-              })}
+              activeOpacity={0.84}
+              accessibilityRole="button"
+              accessibilityLabel={`Open order ${item.reference}`}
+              onPress={() =>
+                router.push({
+                  pathname: '/(customer)/orders/[id]',
+                  params: { id: item.id, tab },
+                })
+              }
             >
               <View style={styles.cardTop}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.garment}>{item.garmentType}</Text>
                   <Text style={styles.tailor}>{item.tailorName}</Text>
                 </View>
-                <View style={[styles.stagePill, { backgroundColor: (STAGE_COLOR[item.stage] ?? Colors.midGrey) + '20' }]}>
-                  <Text style={[styles.stageText, { color: STAGE_COLOR[item.stage] ?? Colors.midGrey }]}>
+                <View
+                  style={[
+                    styles.stagePill,
+                    { backgroundColor: (STAGE_COLOR[item.stage] ?? Colors.midGrey) + '20' },
+                  ]}
+                >
+                  <Text
+                    style={[styles.stageText, { color: STAGE_COLOR[item.stage] ?? Colors.midGrey }]}
+                  >
                     {customerOrderStageLabel(item.stage, item.orderKind)}
                   </Text>
                 </View>
@@ -201,12 +203,21 @@ export default function OrdersListScreen() {
                 <Text style={styles.ref}>#{item.reference}</Text>
                 {item.estimatedDate && (
                   <Text style={styles.eta}>
-                    Est. {new Date(item.estimatedDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                    Est.{' '}
+                    {new Date(item.estimatedDate).toLocaleDateString('en-GB', {
+                      day: 'numeric',
+                      month: 'short',
+                    })}
                   </Text>
                 )}
                 {item.quotedAmount && (
                   <Text style={styles.amount}>
-                    {formatAmount(item.quotedAmount, item.quotedCurrency as CurrencyCode, item.quotedCurrency as CurrencyCode, STATIC_FALLBACK_RATES)}
+                    {formatAmount(
+                      item.quotedAmount,
+                      item.quotedCurrency as CurrencyCode,
+                      item.quotedCurrency as CurrencyCode,
+                      STATIC_FALLBACK_RATES
+                    )}
                   </Text>
                 )}
               </View>
@@ -219,7 +230,9 @@ export default function OrdersListScreen() {
               )}
               {customerOrderHint(item.stage, item.orderKind) && (
                 <View style={styles.reviewNudge}>
-                  <Text style={styles.reviewNudgeText}>{customerOrderHint(item.stage, item.orderKind)}</Text>
+                  <Text style={styles.reviewNudgeText}>
+                    {customerOrderHint(item.stage, item.orderKind)}
+                  </Text>
                 </View>
               )}
             </TouchableOpacity>
@@ -241,137 +254,63 @@ function EmptyOrdersView({
 }) {
   if (tab === 'completed') {
     return (
-      <FeatureStateCard
-        eyebrow="Completed orders"
-        title="No completed orders yet."
-        body="Orders you finish with a tailor will appear here once the full journey is closed out in the app."
-        accentColor={Colors.warning}
-        icon="archive"
-      >
-        <Button label="Explore tailors" onPress={onExplore} />
-      </FeatureStateCard>
+      <View style={emptyStyles.container}>
+        <StateCard
+          title="No completed orders yet"
+          body="Finished custom and ready-made orders will appear here once delivery or pickup is closed out."
+          tone="empty"
+          icon="archive"
+          actionLabel="Explore tailors"
+          onAction={onExplore}
+        />
+      </View>
     )
   }
 
-  const GHOST_ROWS: Array<{ icon: React.ComponentProps<typeof Feather>['name']; label: string }> = [
-    { icon: 'scissors', label: 'Custom garment' },
-    { icon: 'package', label: 'Ready to collect' },
-    { icon: 'tag', label: 'Quote received' },
-  ]
-
   return (
     <View style={emptyStyles.container}>
-      {/* Ghost preview cards — Airbnb Trips style */}
-      <View style={emptyStyles.previewStack}>
-        {GHOST_ROWS.map(({ icon }, i) => (
-          <View key={i} style={[emptyStyles.ghostCard, { opacity: 1 - i * 0.22 }]}>
-            <View style={emptyStyles.ghostImage}>
-              <Feather name={icon} size={22} color={Colors.midGrey} />
-            </View>
-            <View style={emptyStyles.ghostLines}>
-              <View style={[emptyStyles.ghostLine, { width: '65%' }]} />
-              <View style={[emptyStyles.ghostLine, { width: '45%', marginTop: 8 }]} />
-            </View>
-          </View>
-        ))}
-      </View>
-
-      {/* Heading + copy */}
-      <View style={emptyStyles.textBlock}>
-        <Text style={emptyStyles.heading}>Your orders, all in one place</Text>
-        <Text style={emptyStyles.sub}>
-          Browse tailors and book a custom garment.{'\n'}When you do, they'll show up right here.
-        </Text>
-      </View>
-
-      {/* Primary CTA */}
-      <TouchableOpacity style={emptyStyles.ctaBtn} onPress={onExplore}>
-        <Text style={emptyStyles.ctaBtnText}>Explore tailors</Text>
-      </TouchableOpacity>
-
-      {/* Secondary — view completed */}
-      <TouchableOpacity style={emptyStyles.secondaryCard} onPress={onViewCompleted}>
-        <Text style={emptyStyles.secondaryText}>Find past orders</Text>
-        <Text style={emptyStyles.secondaryChevron}>›</Text>
-      </TouchableOpacity>
+      <StateCard
+        title="No active orders yet"
+        body="When you request a quote, pay for an item, or start a custom order, it will appear here."
+        tone="empty"
+        icon="scissors"
+        actionLabel="Explore tailors"
+        onAction={onExplore}
+      >
+        <TouchableOpacity style={emptyStyles.linkButton} onPress={onViewCompleted}>
+          <Text style={emptyStyles.linkButtonText}>View completed orders</Text>
+        </TouchableOpacity>
+      </StateCard>
     </View>
   )
 }
 
 const emptyStyles = StyleSheet.create({
   container: {
-    paddingTop: Spacing.md,
-    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.xl,
     paddingBottom: Spacing.xl,
     alignItems: 'center',
-    gap: Spacing.md,
-  },
-  previewStack: { width: '100%', gap: Spacing.sm },
-  ghostCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 14,
-    ...Shadow.sm,
-  },
-  ghostImage: {
-    width: 56,
-    height: 56,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.boneDeep,
-    alignItems: 'center',
     justifyContent: 'center',
   },
-  ghostLines: { flex: 1, gap: 0 },
-  ghostLine: {
-    height: 10,
-    borderRadius: 6,
-    backgroundColor: Colors.boneDeep,
-  },
-
-  textBlock: { alignItems: 'center', gap: 4 },
-  heading: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center', fontFamily: 'Georgia' },
-  sub: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 19 },
-
-  ctaBtn: {
-    backgroundColor: Colors.needleGreen,
-    borderRadius: Radius.full,
-    paddingVertical: 10,
-    paddingHorizontal: Spacing.xxxl,
+  linkButton: {
     minHeight: 44,
-    justifyContent: 'center',
-  },
-  ctaBtnText: { color: Colors.textInverse, fontWeight: FontWeight.semibold, fontSize: FontSize.md },
-  primaryCta: {
-    backgroundColor: Colors.needleGreen,
-    borderRadius: Radius.full,
-    paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.xxxl,
-  },
-  primaryCtaText: { color: Colors.textInverse, fontWeight: FontWeight.semibold, fontSize: FontSize.md },
-
-  secondaryCard: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    width: '100%',
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
     paddingHorizontal: Spacing.lg,
-    paddingVertical: 10,
-    ...Shadow.sm,
-    minHeight: 44,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  secondaryText: { fontSize: FontSize.md, fontWeight: FontWeight.medium, color: Colors.ink },
-  secondaryChevron: { fontSize: 22, color: Colors.midGrey },
+  linkButtonText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.needleGreenDark },
 })
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: { paddingHorizontal: Spacing.lg, paddingTop: 8, paddingBottom: 6, gap: Spacing.xs },
-  title: { fontSize: 28, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  title: {
+    fontSize: 28,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    fontFamily: Fonts.display,
+  },
   guideCard: {
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.sm,
@@ -394,18 +333,41 @@ const styles = StyleSheet.create({
   },
   guideText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
   tabs: {
-    flexDirection: 'row', backgroundColor: Colors.boneDeep,
-    borderRadius: Radius.full, padding: 3,
+    flexDirection: 'row',
+    backgroundColor: Colors.boneDeep,
+    borderRadius: Radius.full,
+    padding: 3,
   },
-  tabBtn: { flex: 1, paddingVertical: 8, borderRadius: Radius.full, alignItems: 'center', minHeight: 44, justifyContent: 'center' },
+  tabBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    minHeight: 44,
+    justifyContent: 'center',
+  },
   tabBtnActive: { backgroundColor: Colors.white, ...Shadow.sm },
   tabLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.midGrey },
   tabLabelActive: { color: Colors.ink, fontWeight: FontWeight.semibold },
 
   list: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.xl },
-  card: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: Spacing.xs, ...Shadow.sm },
+  card: {
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
   cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
-  garment: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  garment: {
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
   tailor: { fontSize: FontSize.sm, color: Colors.inkLight, marginTop: 2 },
   stagePill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.full },
   stageText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
@@ -414,11 +376,22 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     backgroundColor: Colors.kanteRust + '15',
     borderRadius: Radius.full,
-    paddingHorizontal: 10, paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
   },
-  reviewNudgeText: { fontSize: FontSize.xs, color: Colors.kanteRust, fontWeight: FontWeight.semibold },
+  reviewNudgeText: {
+    fontSize: FontSize.xs,
+    color: Colors.kanteRust,
+    fontWeight: FontWeight.semibold,
+  },
   ref: { fontSize: FontSize.xs, color: Colors.midGrey },
   eta: { fontSize: FontSize.xs, color: Colors.midGrey },
-  amount: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginLeft: 'auto', fontFamily: 'Georgia' },
-
+  amount: {
+    fontFamily: Fonts.bodyBold,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    marginLeft: 'auto',
+  },
 })

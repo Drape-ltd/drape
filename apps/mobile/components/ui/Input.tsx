@@ -9,7 +9,7 @@ import {
   type ViewStyle,
 } from 'react-native'
 import { Feather } from '@expo/vector-icons'
-import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontWeight, Radius, Spacing } from '@/constants/theme'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 
 interface InputProps extends TextInputProps {
@@ -58,7 +58,7 @@ export function Input({
   return (
     <View style={[styles.container, containerStyle]}>
       {label && (
-        <Text style={styles.label}>
+        <Text style={[styles.label, hasError && styles.labelError]}>
           {label}
           {required && <Text style={styles.required}> *</Text>}
         </Text>
@@ -115,12 +115,14 @@ export function Input({
 }
 
 const styles = StyleSheet.create({
-  container: { gap: 6 },
+  container: { gap: Spacing.xs },
   label: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.medium,
-    color: Colors.midGrey,
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: 13,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
   },
+  labelError: { color: Colors.error },
   required: { color: Colors.kanteRust },
   inputWrapper: {
     flexDirection: 'row',
@@ -130,16 +132,17 @@ const styles = StyleSheet.create({
     borderRadius: Radius.lg,
     backgroundColor: Colors.white,
     paddingHorizontal: Spacing.md,
-    minHeight: 52,
+    minHeight: 58,
   },
   focused: { borderColor: Colors.needleGreen },
   errorBorder: { borderColor: Colors.error },
   input: {
     flex: 1,
-    fontSize: FontSize.md,
+    fontFamily: Fonts.body,
+    fontSize: 16,
     color: Colors.ink,
     paddingVertical: 10,
-    minHeight: 50,
+    minHeight: 56,
   },
   right: { marginLeft: Spacing.sm },
   passwordToggle: {
@@ -150,12 +153,14 @@ const styles = StyleSheet.create({
     marginRight: -Spacing.sm,
   },
   errorText: {
-    fontSize: FontSize.xs,
+    fontFamily: Fonts.body,
+    fontSize: 13,
     color: Colors.error,
     lineHeight: 18,
   },
   hint: {
-    fontSize: FontSize.xs,
+    fontFamily: Fonts.body,
+    fontSize: 13,
     color: Colors.midGrey,
     lineHeight: 18,
   },

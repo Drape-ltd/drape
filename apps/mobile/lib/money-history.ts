@@ -887,7 +887,7 @@ export async function fetchCustomerPaymentHistory(userId: string, accountCurrenc
           .in('order_id', orderIds)
           .order('created_at', { ascending: false })
       : Promise.resolve({ data: [], error: null }),
-    fetchTailorNames(Array.from(new Set(orders.map((row: any) => (row as any).tailor_id).filter((value): value is string => !!value)))),
+    fetchTailorNames(Array.from(new Set(orders.map((row) => row.tailor_id).filter((value): value is string => !!value)))),
   ])
 
   if (paymentError) throw paymentError

@@ -26,8 +26,15 @@ Everything here should be treated as launch-critical unless explicitly moved out
   - biometrics
 - Reviewer-ready demo path and review notes
 - No misleading "coming soon" claims in critical flows
-- Confirm login compliance:
-  - Sign in with Apple remains available anywhere third-party sign-in is offered
+- Social sign-in launch signoff:
+  - Google OAuth works on Android and iOS release builds
+  - Sign in with Apple works on a real iPhone release/TestFlight build
+  - Sign in with Apple remains available anywhere third-party sign-in is offered on iOS
+  - Supabase Auth provider settings are configured for Google and Apple in the target project
+  - Supabase redirect allow-list includes the native callback used by the app, including `drape://callback`
+  - iOS build includes the Apple Sign In capability / entitlement before App Store submission
+  - First-time Google/Apple users land in role selection, then the correct customer/tailor setup flow
+  - Returning Google/Apple users land on the correct side of the app without stale state
 - Final metadata pack:
   - screenshots
   - descriptions

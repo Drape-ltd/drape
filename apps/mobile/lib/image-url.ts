@@ -8,7 +8,7 @@ export type StorageImageBucket =
   | 'message-media'
   | 'seller-item-media'
 
-export const PROFILE_IMAGE_PLACEHOLDER = { blurhash: '|rF?hV%2WCj[ayj[a|j[az_Naej[' } as const
+export const PROFILE_IMAGE_PLACEHOLDER = { blurhash: 'L6PZfSi_.AyE_3t7t7R**0o#DgR4' } as const
 export const PORTFOLIO_IMAGE_PLACEHOLDER = { blurhash: 'L6PZfSi_.AyE_3t7t7R**0o#DgR4' } as const
 
 function isAbsoluteImageUrl(value: string) {

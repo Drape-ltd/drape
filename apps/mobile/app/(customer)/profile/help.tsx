@@ -15,7 +15,7 @@ import {
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { goBackOrFallback } from '@/lib/navigation'
 
 // ─── FAQ data ─────────────────────────────────────────────────────────────────
@@ -59,6 +59,38 @@ const FAQ: Array<{ q: string; a: string }> = [
   },
 ]
 
+const GUIDE_TOPICS: Array<{
+  icon: React.ComponentProps<typeof Feather>['name']
+  title: string
+  body: string
+}> = [
+  {
+    icon: 'search',
+    title: 'Finding a tailor',
+    body: 'Compare portfolio media, reviews, location, availability, and fulfillment before starting an order.',
+  },
+  {
+    icon: 'edit-3',
+    title: 'Measurements and fit',
+    body: 'Keep your fit profile current. Tailors can use your measurements and order notes to reduce back-and-forth.',
+  },
+  {
+    icon: 'credit-card',
+    title: 'Payments and protection',
+    body: 'Custom orders are paid after quote approval. Payment stays protected while the order is active.',
+  },
+  {
+    icon: 'package',
+    title: 'Pickup, delivery, and shipping',
+    body: 'Pickup is direct collection. Standard delivery and shipping are Drape-managed and may need final confirmation.',
+  },
+  {
+    icon: 'alert-triangle',
+    title: 'Concerns and aftercare',
+    body: 'Raise concerns from the live order before closing it, and keep evidence and communication inside Drape.',
+  },
+]
+
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function HelpScreen() {
@@ -89,48 +121,39 @@ export default function HelpScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Get help</Text>
+        <Text style={styles.headerTitle}>Drape guide</Text>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 32, gap: Spacing.md }}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
         <View style={styles.heroCard}>
           <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Customer support</Text>
+            <Text style={styles.heroBadgeText}>Customer guide</Text>
           </View>
-          <Text style={styles.heroTitle}>Help with quotes, orders, delivery, and account questions.</Text>
+          <Text style={styles.heroTitle}>Everything you need to order with confidence.</Text>
           <Text style={styles.heroSub}>
-            If something feels unclear, start here. We’ll help you understand the flow, contact the right team, and resolve issues without guesswork.
+            Start here for finding tailors, fit setup, protected payments, handoff, and support paths.
           </Text>
         </View>
 
-        <View style={styles.supportGuideCard}>
-          <View style={styles.supportGuideBadge}>
-            <Text style={styles.supportGuideBadgeText}>Best next step</Text>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Quick guide</Text>
+          <View style={styles.card}>
+            {GUIDE_TOPICS.map((topic, i) => (
+              <GuideTopic
+                key={topic.title}
+                icon={topic.icon}
+                title={topic.title}
+                body={topic.body}
+                last={i === GUIDE_TOPICS.length - 1}
+              />
+            ))}
           </View>
-          <Text style={styles.supportGuideTitle}>Use the live order first when something is actively happening.</Text>
-          <Text style={styles.supportGuideBody}>
-            Quotes, delivery updates, collection handoff, and concerns are usually easiest to manage from the order itself. Come here when you need policy clarity or extra support.
-          </Text>
-        </View>
-
-        <View style={styles.networkGuideCard}>
-          <Text style={styles.networkGuideTitle}>Weak connection?</Text>
-          <Text style={styles.networkGuideBody}>
-            Drape works best when you keep the order thread as the source of truth. If signal drops, keep your draft, retry from the live order, and use email support when links or pages do not open cleanly.
-          </Text>
-        </View>
-
-        <View style={styles.contactGuideCard}>
-          <Text style={styles.contactGuideTitle}>Contact us when…</Text>
-          <Text style={styles.contactGuideBody}>
-            you need policy clarification, help resolving a concern, or support after the normal order flow no longer answers what happens next.
-          </Text>
         </View>
 
         {/* ── Visit Help Centre ── */}
@@ -143,7 +166,7 @@ export default function HelpScreen() {
             <Feather name="globe" size={24} color={Colors.needleGreen} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.helpCentreTitle}>Visit Help Centre</Text>
+            <Text style={styles.helpCentreTitle}>Full guide library</Text>
             <Text style={styles.helpCentreSub}>Browse our full guides and tutorials on drapeon.co</Text>
           </View>
           <Feather name="external-link" size={16} color={Colors.midGrey} />
@@ -285,6 +308,27 @@ function ContactRow({
   )
 }
 
+function GuideTopic({
+  icon, title, body, last,
+}: {
+  icon: React.ComponentProps<typeof Feather>['name']
+  title: string
+  body: string
+  last?: boolean
+}) {
+  return (
+    <View style={[styles.guideTopic, last && styles.contactRowLast]}>
+      <View style={styles.contactIcon}>
+        <Feather name={icon} size={18} color={Colors.needleGreen} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.contactTitle}>{title}</Text>
+        <Text style={styles.contactSub}>{body}</Text>
+      </View>
+    </View>
+  )
+}
+
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
@@ -298,7 +342,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
+  body: { padding: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.md },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
@@ -318,7 +363,7 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
   },
-  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 28, fontFamily: 'Georgia' },
+  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 28, fontFamily: Fonts.display },
   heroSub: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   supportGuideCard: {
     backgroundColor: Colors.white,
@@ -345,7 +390,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     color: Colors.ink,
     lineHeight: 22,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   supportGuideBody: {
     fontSize: FontSize.sm,
@@ -403,11 +448,11 @@ const styles = StyleSheet.create({
     width: 44, height: 44, borderRadius: Radius.md,
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
   },
-  helpCentreTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  helpCentreTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   helpCentreSub: { fontSize: FontSize.sm, color: Colors.inkLight, marginTop: 2, lineHeight: 18 },
 
   section: { gap: Spacing.sm },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
 
   card: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.md },
@@ -416,6 +461,14 @@ const styles = StyleSheet.create({
   contactRow: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
     padding: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.lightGrey,
+  },
+  guideTopic: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.md,
+    padding: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.lightGrey,
   },
   contactRowLast: { borderBottomWidth: 0 },
   contactIcon: {
