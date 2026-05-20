@@ -26,7 +26,7 @@ import {
 } from '@/lib/biometric'
 import { issueReauthProof } from '@/lib/reauth-proof'
 import { Input } from '@/components/ui'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import {
   MAX_PASSWORD_LENGTH,
   PASSWORD_POLICY_HINT,
@@ -35,6 +35,7 @@ import {
 import { validateEmail } from '@drape/shared'
 
 type Step = 'reauth' | 'change'
+type ActivePanel = 'email' | 'password' | null
 
 export default function LoginSecurityScreen() {
   const router = useRouter()
@@ -57,6 +58,7 @@ export default function LoginSecurityScreen() {
   const [newEmail, setNewEmail] = useState('')
   const [emailPassword, setEmailPassword] = useState('')
   const [savingEmail, setSavingEmail] = useState(false)
+  const [activePanel, setActivePanel] = useState<ActivePanel>(null)
 
   // ── Biometric toggle ─────────────────────────────────────────────────────
   const [biometricAvailable, setBiometricAvailable] = useState(false)
@@ -82,6 +84,7 @@ export default function LoginSecurityScreen() {
       setReauthPassword('')
       setPasswordReauthProof(null)
       setPasswordProofExpiresAt(null)
+      setActivePanel(null)
       async function checkBiometric() {
         const available = await isBiometricAvailable()
         setBiometricAvailable(available)
@@ -162,6 +165,7 @@ export default function LoginSecurityScreen() {
       setPasswordReauthProof(null)
       setPasswordProofExpiresAt(null)
       setStep('reauth') // reset gate after success
+      setActivePanel(null)
     }
   }
 
@@ -217,6 +221,7 @@ export default function LoginSecurityScreen() {
     )
     setNewEmail('')
     setEmailPassword('')
+    setActivePanel(null)
   }
 
   // ── Biometric toggle ─────────────────────────────────────────────────────
@@ -236,27 +241,12 @@ export default function LoginSecurityScreen() {
     }
   }
 
-  function handleDeleteAccount() {
-    Alert.alert(
-      'Delete account',
-      'This opens the deletion request flow. You will need to type DELETE and confirm your current password before Drape queues the request.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Continue',
-          style: 'destructive',
-          onPress: () => router.push('/(tailor)/profile/delete-account' as never),
-        },
-      ],
-    )
-  }
-
   function goBack() {
     goBackOrFallback(router, navigation, '/(tailor)/profile/account-settings')
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
@@ -265,12 +255,6 @@ export default function LoginSecurityScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
-        <View style={styles.guideCard}>
-          <Text style={styles.guideEyebrow}>Account protection</Text>
-          <Text style={styles.guideTitle}>Protect your payout and client work with a cleaner security routine.</Text>
-          <Text style={styles.guideCopy}>Use biometric unlock if it fits your device. Email, password, and deletion requests still require your current password so an unlocked phone cannot change the account.</Text>
-        </View>
-
         {/* ── Biometric toggle (always visible) ── */}
         {biometricAvailable && (
           <View style={styles.section}>
@@ -301,78 +285,100 @@ export default function LoginSecurityScreen() {
           </View>
         )}
 
-        {/* ── Change email ── */}
+        {/* ── Account access ── */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Email address</Text>
+          <Text style={styles.sectionTitle}>Access</Text>
           <View style={styles.card}>
-            <View style={styles.currentEmailBox}>
-              <Text style={styles.currentEmailLabel}>Current email</Text>
-              <Text style={styles.currentEmailText}>{currentEmail || 'Unavailable'}</Text>
-            </View>
+            <TouchableOpacity
+              style={styles.actionRow}
+              activeOpacity={0.7}
+              onPress={() => setActivePanel(activePanel === 'email' ? null : 'email')}
+            >
+              <View style={styles.actionIcon}>
+                <Feather name="mail" size={18} color={Colors.needleGreen} />
+              </View>
+              <View style={styles.actionCopy}>
+                <Text style={styles.actionTitle}>Email address</Text>
+                <Text style={styles.actionSub}>{currentEmail || 'Unavailable'}</Text>
+              </View>
+              <Text style={styles.actionLink}>{activePanel === 'email' ? 'Close' : 'Change'}</Text>
+            </TouchableOpacity>
             <View style={styles.divider} />
-            <View style={styles.field}>
-              <Text style={styles.label}>New email address</Text>
-              <Input
-                value={newEmail}
-                onChangeText={setNewEmail}
-                placeholder="name@example.com"
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoCorrect={false}
-                textContentType="emailAddress"
-                autoComplete="email"
-                returnKeyType="next"
-                error={newEmailError}
-              />
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.field}>
-              <Text style={styles.label}>Current password</Text>
-              <Input
-                value={emailPassword}
-                onChangeText={setEmailPassword}
-                placeholder="Confirm current password"
-                secureTextEntry
-                textContentType="password"
-                autoComplete="current-password"
-                maxLength={MAX_PASSWORD_LENGTH}
-                returnKeyType="done"
-                onSubmitEditing={changeEmail}
-              />
-            </View>
-            <View style={styles.emailNotice}>
-              <Feather name="mail" size={16} color={Colors.needleGreen} />
-              <Text style={styles.emailNoticeText}>
-                Drape uses secure email change. Confirmation is required before the account email updates.
-              </Text>
-            </View>
+            <TouchableOpacity
+              style={styles.actionRow}
+              activeOpacity={0.7}
+              onPress={() => setActivePanel(activePanel === 'password' ? null : 'password')}
+            >
+              <View style={styles.actionIcon}>
+                <Feather name="lock" size={18} color={Colors.needleGreen} />
+              </View>
+              <View style={styles.actionCopy}>
+                <Text style={styles.actionTitle}>Password</Text>
+                <Text style={styles.actionSub}>Confirm current password before changing it.</Text>
+              </View>
+              <Text style={styles.actionLink}>{activePanel === 'password' ? 'Close' : 'Change'}</Text>
+            </TouchableOpacity>
           </View>
-          <TouchableOpacity
-            style={[styles.saveBtn, (savingEmail || !normalizedNewEmail || !!newEmailError || !emailPassword) && { opacity: 0.6 }]}
-            onPress={changeEmail}
-            disabled={savingEmail || !normalizedNewEmail || !!newEmailError || !emailPassword}
-          >
-            {savingEmail
-              ? <ActivityIndicator color={Colors.textInverse} size="small" />
-              : <Text style={styles.saveBtnText}>Send confirmation emails</Text>
-            }
-          </TouchableOpacity>
         </View>
 
-        {/* ── Change password ── */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Change password</Text>
+        {activePanel === 'email' ? (
+          <View style={styles.revealSection}>
+            <View style={styles.card}>
+              <View style={styles.field}>
+                <Text style={styles.label}>New email address</Text>
+                <Input
+                  value={newEmail}
+                  onChangeText={setNewEmail}
+                  placeholder="name@example.com"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  textContentType="emailAddress"
+                  autoComplete="email"
+                  returnKeyType="next"
+                  error={newEmailError}
+                />
+              </View>
+              <View style={styles.divider} />
+              <View style={styles.field}>
+                <Text style={styles.label}>Current password</Text>
+                <Input
+                  value={emailPassword}
+                  onChangeText={setEmailPassword}
+                  placeholder="Confirm current password"
+                  secureTextEntry
+                  textContentType="password"
+                  autoComplete="current-password"
+                  maxLength={MAX_PASSWORD_LENGTH}
+                  returnKeyType="done"
+                  onSubmitEditing={changeEmail}
+                />
+              </View>
+              <View style={styles.emailNotice}>
+                <Feather name="mail" size={16} color={Colors.needleGreen} />
+                <Text style={styles.emailNoticeText}>We will confirm the change before your account email updates.</Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              style={[styles.saveBtn, (savingEmail || !normalizedNewEmail || !!newEmailError || !emailPassword) && { opacity: 0.6 }]}
+              onPress={changeEmail}
+              disabled={savingEmail || !normalizedNewEmail || !!newEmailError || !emailPassword}
+            >
+              {savingEmail
+                ? <ActivityIndicator color={Colors.textInverse} size="small" />
+                : <Text style={styles.saveBtnText}>Send confirmation</Text>
+              }
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {activePanel === 'password' ? (
+          <View style={styles.revealSection}>
 
           {step === 'reauth' ? (
             // Re-auth gate — must verify identity before seeing the form
-            <View style={styles.card}>
-              <View style={styles.gateWrap}>
-                <Feather name="lock" size={28} color={Colors.needleGreen} style={{ marginBottom: Spacing.md }} />
-                <Text style={styles.gateTitle}>Verify your identity</Text>
-                <Text style={styles.gateSub}>
-                  To protect your account, confirm who you are before changing your password.
-                </Text>
-
+            <>
+              <View style={styles.card}>
                 <View style={styles.field}>
                   <Text style={styles.label}>Current password</Text>
                   <Input
@@ -387,31 +393,30 @@ export default function LoginSecurityScreen() {
                     onSubmitEditing={reauthWithPassword}
                   />
                 </View>
-
-                <TouchableOpacity
-                  style={[styles.saveBtn, reauthLoading && { opacity: 0.6 }]}
-                  onPress={reauthWithPassword}
-                  disabled={reauthLoading}
-                >
-                  {reauthLoading
-                    ? <ActivityIndicator color={Colors.textInverse} size="small" />
-                    : <Text style={styles.saveBtnText}>Continue</Text>
-                  }
-                </TouchableOpacity>
               </View>
-            </View>
+              <TouchableOpacity
+                style={[styles.saveBtn, reauthLoading && { opacity: 0.6 }]}
+                onPress={reauthWithPassword}
+                disabled={reauthLoading}
+              >
+                {reauthLoading
+                  ? <ActivityIndicator color={Colors.textInverse} size="small" />
+                  : <Text style={styles.saveBtnText}>Continue</Text>
+                }
+              </TouchableOpacity>
+            </>
           ) : (
             // Identity confirmed — show the change-password form
             <>
               <View style={styles.card}>
-                <View style={styles.verifiedBanner}>
-                  <Feather name="check-circle" size={16} color={Colors.success} />
-                  <Text style={styles.verifiedText}>
-                    {passwordProofExpiresAt ? 'Password confirmed for 5 minutes' : 'Identity verified'}
+                <View style={styles.confirmedRow}>
+                  <View style={styles.confirmedIcon}>
+                    <Feather name="check" size={13} color={Colors.needleGreen} />
+                  </View>
+                  <Text style={styles.confirmedText}>
+                    {passwordProofExpiresAt ? 'Password confirmed for 5 minutes' : 'Identity confirmed'}
                   </Text>
                 </View>
-
-                <View style={styles.divider} />
 
                 <View style={styles.field}>
                   <Text style={styles.label}>New password</Text>
@@ -459,29 +464,8 @@ export default function LoginSecurityScreen() {
               </TouchableOpacity>
             </>
           )}
-        </View>
-
-        <Text style={styles.infoNote}>
-          Drape uses Supabase Auth — passwords are hashed and never stored in plain text.
-        </Text>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account</Text>
-          <View style={styles.card}>
-            <View style={styles.dangerWrap}>
-              <Text style={styles.dangerTitle}>Delete your account</Text>
-              <Text style={styles.dangerCopy}>
-                Start a permanent deletion request for your Drape account if you no longer want to operate on the platform.
-              </Text>
-              <TouchableOpacity
-                style={styles.deleteBtn}
-                onPress={handleDeleteAccount}
-              >
-                <Text style={styles.deleteBtnText}>Request account deletion</Text>
-              </TouchableOpacity>
-            </View>
           </View>
-        </View>
+        ) : null}
 
       </ScrollView>
     </SafeAreaView>
@@ -499,8 +483,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
-  body: { padding: Spacing.lg, paddingBottom: 32, gap: Spacing.sm },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
+  body: { padding: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.sm },
   guideCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
@@ -530,10 +514,30 @@ const styles = StyleSheet.create({
   },
 
   section: { gap: 8 },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
+  revealSection: { gap: 8, marginTop: -2 },
 
   card: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.md },
+  actionRow: {
+    minHeight: 72,
+    padding: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  actionIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreen + '12',
+  },
+  actionCopy: { flex: 1, gap: 2 },
+  actionTitle: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.semibold },
+  actionSub: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
+  actionLink: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   field: { padding: Spacing.md, gap: 6 },
   label: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.inkLight },
   fieldHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
@@ -561,7 +565,9 @@ const styles = StyleSheet.create({
 
   // Re-auth gate
   gateWrap: { padding: Spacing.lg, alignItems: 'center', gap: Spacing.sm },
-  gateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  gateField: { width: '100%' },
+  gateSaveBtn: { alignSelf: 'stretch' },
+  gateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   gateSub: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 20, marginBottom: Spacing.md },
   biometricBtn: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
@@ -571,11 +577,22 @@ const styles = StyleSheet.create({
   },
   biometricBtnText: { fontSize: FontSize.md, color: Colors.needleGreen, fontWeight: FontWeight.medium },
 
-  verifiedBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    padding: Spacing.md, backgroundColor: Colors.success + '12',
+  confirmedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.md,
   },
-  verifiedText: { fontSize: FontSize.sm, color: Colors.success, fontWeight: FontWeight.medium },
+  confirmedIcon: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  confirmedText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.semibold },
 
   saveBtn: {
     backgroundColor: Colors.needleGreen, borderRadius: Radius.lg,
@@ -589,7 +606,7 @@ const styles = StyleSheet.create({
 
   infoNote: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'center', lineHeight: 18 },
   dangerWrap: { padding: Spacing.md },
-  dangerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.error, fontFamily: 'Georgia' },
+  dangerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.error, fontFamily: Fonts.display },
   dangerCopy: { marginTop: Spacing.sm, fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   deleteBtn: {
     marginTop: Spacing.lg,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   View,
   Text,
@@ -46,11 +46,16 @@ function money(amount: number, currency: string) {
   return formatAmount(amount, currency as CurrencyCode, currency as CurrencyCode, {})
 }
 
-function convertMinorUnits(amountMinor: number, fromCurrency: string, toCurrency: CurrencyCode, rates: Record<string, number>) {
+function convertMinorUnits(
+  amountMinor: number,
+  fromCurrency: string,
+  toCurrency: CurrencyCode,
+  rates: Record<string, number>
+) {
   const fromRate = rates[fromCurrency] ?? 1
   const toRate = rates[toCurrency] ?? 1
   const amount = amountMinor / 100
-  return Math.round(((amount / fromRate) * toRate) * 100)
+  return Math.round((amount / fromRate) * toRate * 100)
 }
 
 function withinRange(date: string, range: RangeFilter) {
@@ -116,8 +121,14 @@ function FilterChip({
   onPress: () => void
 }) {
   return (
-    <TouchableOpacity style={[styles.filterChip, active ? styles.filterChipActive : null]} onPress={onPress} activeOpacity={0.72}>
-      <Text style={[styles.filterChipText, active ? styles.filterChipTextActive : null]}>{label}</Text>
+    <TouchableOpacity
+      style={[styles.filterChip, active ? styles.filterChipActive : null]}
+      onPress={onPress}
+      activeOpacity={0.72}
+    >
+      <Text style={[styles.filterChipText, active ? styles.filterChipTextActive : null]}>
+        {label}
+      </Text>
     </TouchableOpacity>
   )
 }
@@ -126,6 +137,7 @@ export default function CustomerPaymentHistoryScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
+  const userId = user?.id
   const { currency, rates, loading: currencyLoading } = useCurrency()
   const [data, setData] = useState<CustomerPaymentHistoryData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -135,31 +147,34 @@ export default function CustomerPaymentHistoryScreen() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL')
   const [rangeFilter, setRangeFilter] = useState<RangeFilter>('90D')
 
-  async function load() {
-    if (!user?.id) {
+  const load = useCallback(async () => {
+    if (!userId) {
       setData(null)
       setLoading(false)
       return
     }
 
     try {
-      const result = await fetchCustomerPaymentHistory(user.id, currency)
+      const result = await fetchCustomerPaymentHistory(userId, currency)
       setData(result)
       setError(null)
     } catch (fetchError) {
       setError(
         isLikelyConnectivityIssue(fetchError)
           ? 'Connection looks weak. We could not refresh your payment history yet.'
-          : 'We could not load your payment history right now. Your orders are still protected, so try again in a moment.',
+          : 'We could not load your payment history right now. Your orders are still protected, so try again in a moment.'
       )
     }
-  }
+  }, [currency, userId])
 
   useEffect(() => {
     if (currencyLoading) return
-    setLoading(true)
-    void load().finally(() => setLoading(false))
-  }, [user?.id, currency, currencyLoading])
+    const timer = setTimeout(() => {
+      setLoading(true)
+      void load().finally(() => setLoading(false))
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [currencyLoading, load])
 
   useRefreshOnFocus(() => {
     if (!currencyLoading) void load()
@@ -181,12 +196,9 @@ export default function CustomerPaymentHistoryScreen() {
       if (statusFilter !== 'ALL' && row.status !== statusFilter) return false
       if (!withinRange(row.date, rangeFilter)) return false
       if (!needle) return true
-      return [
-        row.reference,
-        row.orderId,
-        row.tailorName,
-        row.title,
-      ].some((value) => value.toLowerCase().includes(needle))
+      return [row.reference, row.orderId, row.tailorName, row.title].some((value) =>
+        value.toLowerCase().includes(needle)
+      )
     })
   }, [data?.transactions, rangeFilter, search, statusFilter])
 
@@ -196,7 +208,9 @@ export default function CustomerPaymentHistoryScreen() {
       const date = row.completedAt ?? row.requestedAt ?? ''
       if (!withinRange(date, rangeFilter)) return false
       if (!needle) return true
-      return [row.reference, row.orderId, row.providerReference ?? ''].some((value) => value.toLowerCase().includes(needle))
+      return [row.reference, row.orderId, row.providerReference ?? ''].some((value) =>
+        value.toLowerCase().includes(needle)
+      )
     })
   }, [data?.refunds, rangeFilter, search])
 
@@ -234,7 +248,13 @@ export default function CustomerPaymentHistoryScreen() {
         style={styles.scroll}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={Colors.needleGreen}
+          />
+        }
       >
         <View style={styles.header}>
           <TouchableOpacity onPress={goBack}>
@@ -248,13 +268,22 @@ export default function CustomerPaymentHistoryScreen() {
           <Text style={styles.summaryEyebrow}>Summary</Text>
           <Text style={styles.summaryValue}>{summary.totalSpentDisplay}</Text>
           <Text style={styles.summaryHint}>
-            Totals are shown in your current account currency. Each order below keeps the exact currency you paid with.
+            Totals are shown in your current account currency. Each order below keeps the exact
+            currency you paid with.
           </Text>
         </View>
 
         <View style={styles.statsGrid}>
-          <StatCard label="Protected orders" value={String(data?.activeEscrowOrders ?? 0)} hint="Paid orders still in progress" />
-          <StatCard label="Closed orders" value={String(data?.completedOrders ?? 0)} hint="Delivered or fully wrapped up" />
+          <StatCard
+            label="Protected orders"
+            value={String(data?.activeEscrowOrders ?? 0)}
+            hint="Paid orders still in progress"
+          />
+          <StatCard
+            label="Closed orders"
+            value={String(data?.completedOrders ?? 0)}
+            hint="Delivered or fully wrapped up"
+          />
         </View>
 
         <View style={styles.controlsCard}>
@@ -317,7 +346,8 @@ export default function CustomerPaymentHistoryScreen() {
                     <View style={{ flex: 1 }}>
                       <Text style={styles.rowTitle}>{row.title}</Text>
                       <Text style={styles.rowMeta}>
-                        #{row.reference} · {row.tailorName} · {new Date(row.date).toLocaleDateString('en-GB', {
+                        #{row.reference} · {row.tailorName} ·{' '}
+                        {new Date(row.date).toLocaleDateString('en-GB', {
                           day: 'numeric',
                           month: 'short',
                           year: 'numeric',
@@ -325,15 +355,30 @@ export default function CustomerPaymentHistoryScreen() {
                       </Text>
                     </View>
                     <View style={[styles.statusPill, { backgroundColor: tone.bg }]}>
-                      <Text style={[styles.statusPillText, { color: tone.fg }]}>{statusLabel(row.status)}</Text>
+                      <Text style={[styles.statusPillText, { color: tone.fg }]}>
+                        {statusLabel(row.status)}
+                      </Text>
                     </View>
                   </View>
 
                   <View style={styles.moneyBreakdown}>
-                    <MoneyLine label={row.phase === 'CONSULTATION' ? 'Consultation payment' : row.phase === 'FULFILLMENT' ? 'Fulfillment payment' : 'Amount paid'} value={money(row.amount, row.currency)} strong />
+                    <MoneyLine
+                      label={
+                        row.phase === 'CONSULTATION'
+                          ? 'Consultation payment'
+                          : row.phase === 'FULFILLMENT'
+                            ? 'Fulfillment payment'
+                            : 'Amount paid'
+                      }
+                      value={money(row.amount, row.currency)}
+                      strong
+                    />
                     <MoneyLine label="Tax" value={money(row.taxAmount, row.currency)} />
                     {row.refundedAmount > 0 ? (
-                      <MoneyLine label="Refunded so far" value={money(row.refundedAmount, row.currency)} />
+                      <MoneyLine
+                        label="Refunded so far"
+                        value={money(row.refundedAmount, row.currency)}
+                      />
                     ) : null}
                   </View>
 
@@ -370,13 +415,18 @@ export default function CustomerPaymentHistoryScreen() {
                       </Text>
                     </View>
                     <View style={[styles.statusPill, { backgroundColor: tone.bg }]}>
-                      <Text style={[styles.statusPillText, { color: tone.fg }]}>{row.status === 'COMPLETED' ? 'Completed' : 'Processing'}</Text>
+                      <Text style={[styles.statusPillText, { color: tone.fg }]}>
+                        {row.status === 'COMPLETED' ? 'Completed' : 'Processing'}
+                      </Text>
                     </View>
                   </View>
-                  <Text style={styles.rowMeta}>{row.partial ? 'Partial refund' : 'Full refund'}</Text>
+                  <Text style={styles.rowMeta}>
+                    {row.partial ? 'Partial refund' : 'Full refund'}
+                  </Text>
                   {row.requestedAt ? (
                     <Text style={styles.rowMeta}>
-                      Requested {new Date(row.requestedAt).toLocaleDateString('en-GB', {
+                      Requested{' '}
+                      {new Date(row.requestedAt).toLocaleDateString('en-GB', {
                         day: 'numeric',
                         month: 'short',
                         year: 'numeric',
@@ -385,7 +435,8 @@ export default function CustomerPaymentHistoryScreen() {
                   ) : null}
                   {row.completedAt ? (
                     <Text style={styles.rowMeta}>
-                      Completed {new Date(row.completedAt).toLocaleDateString('en-GB', {
+                      Completed{' '}
+                      {new Date(row.completedAt).toLocaleDateString('en-GB', {
                         day: 'numeric',
                         month: 'short',
                         year: 'numeric',
@@ -433,7 +484,12 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.7,
   },
-  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  stateTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    textAlign: 'center',
+  },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
   header: {
     flexDirection: 'row',
@@ -442,7 +498,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
   },
-  back: { width: 60, color: Colors.needleGreen, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
+  back: {
+    width: 60,
+    color: Colors.needleGreen,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.medium,
+  },
   title: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
   summaryCard: {
     marginHorizontal: Spacing.lg,
@@ -458,7 +519,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.7,
     fontWeight: FontWeight.semibold,
   },
-  summaryValue: { fontSize: 34, fontWeight: FontWeight.bold, color: Colors.textInverse, letterSpacing: -0.8 },
+  summaryValue: {
+    fontSize: 34,
+    fontWeight: FontWeight.bold,
+    color: Colors.textInverse,
+    letterSpacing: -0.8,
+  },
   summaryHint: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.84)', lineHeight: 20 },
   statsGrid: {
     marginHorizontal: Spacing.lg,
@@ -474,7 +540,12 @@ const styles = StyleSheet.create({
     gap: 6,
     ...Shadow.sm,
   },
-  statLabel: { fontSize: FontSize.xs, color: Colors.midGrey, textTransform: 'uppercase', letterSpacing: 0.6 },
+  statLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
   statValue: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
   statHint: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 16 },
   controlsCard: {
@@ -556,9 +627,18 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.sm,
     gap: 8,
   },
-  moneyLine: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: Spacing.md },
+  moneyLine: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
   moneyLabel: { fontSize: FontSize.sm, color: Colors.inkLight, flex: 1 },
   moneyValue: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.medium },
-  moneyValueStrong: { fontSize: FontSize.md, color: Colors.needleGreenDark, fontWeight: FontWeight.bold },
+  moneyValueStrong: {
+    fontSize: FontSize.md,
+    color: Colors.needleGreenDark,
+    fontWeight: FontWeight.bold,
+  },
   reasonText: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
 })

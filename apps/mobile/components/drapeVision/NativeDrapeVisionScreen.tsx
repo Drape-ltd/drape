@@ -83,7 +83,7 @@ import {
   isDrapeVisionMode,
   type DrapeVisionMode,
 } from '@/constants/drapeVision'
-import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 
 type VisionParams = {
   mode?: string
@@ -394,6 +394,13 @@ function returnTargetForVisionParams(mode: DrapeVisionMode, params: VisionParams
     return `/(tailor)/clients/diary/${params.diaryId}`
   }
   return defaultReturnForMode(mode)
+}
+
+function primaryLabelForVisionParams(mode: DrapeVisionMode, params: VisionParams) {
+  if (mode !== 'garment_qc') return DRAPE_VISION_MODE_META[mode].primaryLabel
+  if (params.orderId?.trim()) return 'Return to order'
+  if (params.returnTo?.includes('(tailor)')) return 'Back to dashboard'
+  return 'Open orders'
 }
 
 function emptySegments() {
@@ -1192,24 +1199,31 @@ export default function DrapeVisionScreen() {
     if (phase !== 'scan' || scanCountdown == null) return undefined
 
     if (scanCountdown <= 0) {
-      const armedAt = Date.now()
-      scanArmedAtRef.current = armedAt
-      lastScanCaptureAtRef.current = armedAt
-      captureArmedValue.value = 1
-      setCaptureArmed(true)
-      setScanCountdown(null)
-      setInstruction('Face the phone, then turn slowly right')
-      setCaptureNotice('Capturing now')
-      if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
-      captureNoticeTimerRef.current = setTimeout(() => setCaptureNotice(null), 900)
-      trigger('impactHeavy', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
-      return undefined
+      const timer = setTimeout(() => {
+        const armedAt = Date.now()
+        scanArmedAtRef.current = armedAt
+        lastScanCaptureAtRef.current = armedAt
+        captureArmedValue.value = 1
+        setCaptureArmed(true)
+        setScanCountdown(null)
+        setInstruction('Face the phone, then turn slowly right')
+        setCaptureNotice('Capturing now')
+        if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
+        captureNoticeTimerRef.current = setTimeout(() => setCaptureNotice(null), 900)
+        trigger('impactHeavy', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+      }, 0)
+      return () => clearTimeout(timer)
     }
 
     trigger('impactLight', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
-    setInstruction(`Step back. Capture starts in ${scanCountdown}`)
+    const instructionTimer = setTimeout(() => {
+      setInstruction(`Step back. Capture starts in ${scanCountdown}`)
+    }, 0)
     const timeout = setTimeout(() => setScanCountdown((current) => current == null ? null : current - 1), 1000)
-    return () => clearTimeout(timeout)
+    return () => {
+      clearTimeout(instructionTimer)
+      clearTimeout(timeout)
+    }
   }, [captureArmedValue, phase, scanCountdown])
 
   useEffect(() => {
@@ -1271,6 +1285,7 @@ export default function DrapeVisionScreen() {
   }, [mode, params.itemId])
 
   const returnTarget = useMemo(() => returnTargetForVisionParams(mode, params), [mode, params])
+  const primaryActionLabel = useMemo(() => primaryLabelForVisionParams(mode, params), [mode, params])
 
   const closeVision = useCallback(() => {
     router.replace(returnTarget as never)
@@ -1454,9 +1469,9 @@ export default function DrapeVisionScreen() {
     Alert.alert(
       'Quality check saved',
       'This Drape Vision QC entry is now on the order timeline for you, the customer, and ops.',
-      [{ text: 'Return to order', onPress: openPrimary }],
+      [{ text: primaryActionLabel, onPress: openPrimary }],
     )
-  }, [garmentQcChecks, garmentQcDraft, garmentQcNote, garmentQcPhotoUrl, garmentQcUnit, openPrimary, params.orderId])
+  }, [garmentQcChecks, garmentQcDraft, garmentQcNote, garmentQcPhotoUrl, garmentQcUnit, openPrimary, params.orderId, primaryActionLabel])
 
   const saveSizeGuideWorkflow = useCallback(async () => {
     if (!params.itemId || !sizeGuideItem?.id) {
@@ -2207,8 +2222,8 @@ export default function DrapeVisionScreen() {
   const resultPrimaryLabel = useMemo(() => {
     if (mode === 'customer_scan') return 'Save to my profile'
     if (hasDiaryTarget) return 'Save to Diary'
-    return meta.primaryLabel
-  }, [hasDiaryTarget, meta.primaryLabel, mode])
+    return primaryActionLabel
+  }, [hasDiaryTarget, mode, primaryActionLabel])
 
   const resetScanState = useCallback(() => {
     capturesRef.current = []
@@ -4520,7 +4535,7 @@ export default function DrapeVisionScreen() {
 
         <View style={styles.ctaBar}>
           <TouchableOpacity accessibilityRole="button" onPress={openPrimary} style={styles.primaryButton}>
-            <Text style={styles.primaryText}>{meta.primaryLabel}</Text>
+            <Text style={styles.primaryText}>{primaryActionLabel}</Text>
             <Feather name="arrow-right" size={18} color={Colors.textInverse} />
           </TouchableOpacity>
           {canRunLiveBodyScan && frontCamera ? (
@@ -4696,14 +4711,14 @@ const styles = StyleSheet.create({
     lineHeight: 48,
     color: DRAPE_VISION_COLORS.text,
     fontWeight: FontWeight.bold,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   titleSmall: {
     fontSize: FontSize.xxxl,
     lineHeight: 38,
     color: DRAPE_VISION_COLORS.text,
     fontWeight: FontWeight.bold,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   tagline: {
     fontSize: FontSize.lg,
@@ -5093,7 +5108,7 @@ const styles = StyleSheet.create({
     lineHeight: 60,
     color: DRAPE_VISION_COLORS.text,
     fontWeight: FontWeight.bold,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   scanRoot: {
     flex: 1,

@@ -14,6 +14,10 @@ interface TailorProfileContextValue {
   setAvatarUrl: (url: string | null) => void
 }
 
+type TailorAvatarRow = {
+  avatar_url: string | null
+}
+
 const TailorProfileContext = createContext<TailorProfileContextValue>({
   avatarUrl: null,
   setAvatarUrl: () => {},
@@ -22,12 +26,11 @@ const TailorProfileContext = createContext<TailorProfileContextValue>({
 export function TailorProfileProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth()
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
+  const isTailor = !!user?.id && user.user_metadata?.role === 'TAILOR'
+  const visibleAvatarUrl = isTailor ? avatarUrl : null
 
   useEffect(() => {
-    if (!user?.id || user.user_metadata?.role !== 'TAILOR') {
-      setAvatarUrl(null)
-      return
-    }
+    if (!user?.id || !isTailor) return
 
     let cancelled = false
 
@@ -41,16 +44,17 @@ export function TailorProfileProvider({ children }: { children: React.ReactNode 
         if (error) {
           return
         }
-        setAvatarUrl((data as any)?.avatar_url ?? null)
+        const profile = data as TailorAvatarRow | null
+        setAvatarUrl(profile?.avatar_url ?? null)
       })
 
     return () => {
       cancelled = true
     }
-  }, [user?.id, user?.user_metadata?.role])
+  }, [isTailor, user?.id])
 
   return (
-    <TailorProfileContext.Provider value={{ avatarUrl, setAvatarUrl }}>
+    <TailorProfileContext.Provider value={{ avatarUrl: visibleAvatarUrl, setAvatarUrl }}>
       {children}
     </TailorProfileContext.Provider>
   )

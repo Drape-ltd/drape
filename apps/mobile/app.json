@@ -53,7 +53,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#1D9E75"
+        "backgroundColor": "#2D6A4F"
       },
       "package": "com.drape.app",
       "permissions": [
@@ -96,7 +96,7 @@
         "expo-notifications",
         {
           "icon": "./assets/notification-icon.png",
-          "color": "#1D9E75",
+          "color": "#2D6A4F",
           "sounds": []
         }
       ],
@@ -106,6 +106,7 @@
           "microphonePermission": "Drape uses your microphone to record voice note messages."
         }
       ],
+      "expo-apple-authentication",
       [
         "@stripe/stripe-react-native",
         {}

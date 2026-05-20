@@ -16,6 +16,18 @@ type CurrencyCode = AccountCurrencyCode
 
 export type { CurrencyCode }
 
+type CurrencyContextResponse = {
+  currency?: unknown
+  source?: unknown
+  regionCode?: unknown
+}
+
+type UserCurrencyPreferenceRow = {
+  default_currency: string | null
+  currency_source: CurrencySource | null
+  region_code: string | null
+}
+
 export const SUPPORTED_CURRENCIES: Array<{ code: CurrencyCode; symbol: string; name: string }> =
   SUPPORTED_ACCOUNT_CURRENCIES.map((code) => ({
     code,
@@ -74,12 +86,15 @@ export async function fetchCurrencyPreferenceContext(input?: {
 
     if (error) return fallback
 
-    const currency = normalizeAccountCurrency((data as any)?.currency)
-    const source = typeof (data as any)?.source === 'string'
-      ? ((data as any).source.trim().toUpperCase() as CurrencySource)
+    const payload = data as CurrencyContextResponse | null
+    const currency = normalizeAccountCurrency(
+      typeof payload?.currency === 'string' ? payload.currency : null
+    )
+    const source = typeof payload?.source === 'string'
+      ? (payload.source.trim().toUpperCase() as CurrencySource)
       : fallback.source
-    const regionCode = typeof (data as any)?.regionCode === 'string' && (data as any).regionCode.trim().length > 0
-      ? (data as any).regionCode.trim().toUpperCase()
+    const regionCode = typeof payload?.regionCode === 'string' && payload.regionCode.trim().length > 0
+      ? payload.regionCode.trim().toUpperCase()
       : fallback.regionCode
 
     if (!currency) return fallback
@@ -192,10 +207,11 @@ export function useCurrency() {
         return
       }
 
-      const nextCurrency = normalizeAccountCurrency((data as any)?.default_currency) ?? resolvedDetection.currency
-      const nextSource = ((data as any)?.currency_source as CurrencySource | null) ?? resolvedDetection.source
-      const nextRegionCode = typeof (data as any)?.region_code === 'string'
-        ? (data as any).region_code.trim().toUpperCase() || resolvedDetection.regionCode
+      const preference = data as UserCurrencyPreferenceRow | null
+      const nextCurrency = normalizeAccountCurrency(preference?.default_currency) ?? resolvedDetection.currency
+      const nextSource = preference?.currency_source ?? resolvedDetection.source
+      const nextRegionCode = typeof preference?.region_code === 'string'
+        ? preference.region_code.trim().toUpperCase() || resolvedDetection.regionCode
         : resolvedDetection.regionCode
 
       setCurrencyState(nextCurrency)

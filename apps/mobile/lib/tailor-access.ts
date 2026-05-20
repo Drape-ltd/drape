@@ -14,7 +14,6 @@ export type TailorAccessGuidance = {
   supportLabel: string | null
   supportSubject: string | null
   appealCopy: string | null
-  caution: string | null
 }
 
 function sharedBlockedCapabilities(readiness: ReturnType<typeof deriveTailorReadiness>) {
@@ -53,7 +52,6 @@ export function deriveTailorAccessGuidance(input: TailorReadinessInput | null | 
       supportLabel: 'Tailor support',
       supportSubject: 'Drape tailor setup help',
       appealCopy: null,
-      caution: 'Drape will use this screen for broader review or restriction states later. Right now it reflects live onboarding, verification, and payout access only.',
     }
   }
 
@@ -69,7 +67,6 @@ export function deriveTailorAccessGuidance(input: TailorReadinessInput | null | 
       supportLabel: 'Verification team',
       supportSubject: 'Drape verification review follow-up',
       appealCopy: 'Appeals are usually unnecessary while review is still active. Use support to add missing context instead.',
-      caution: null,
     }
   }
 
@@ -85,7 +82,6 @@ export function deriveTailorAccessGuidance(input: TailorReadinessInput | null | 
       supportLabel: 'Verification team',
       supportSubject: 'Drape verification follow-up',
       appealCopy: 'Use support for factual-error correction or new evidence. A simple disagreement is usually not enough by itself.',
-      caution: null,
     }
   }
 
@@ -101,7 +97,6 @@ export function deriveTailorAccessGuidance(input: TailorReadinessInput | null | 
       supportLabel: 'Payouts',
       supportSubject: 'Drape payout readiness question',
       appealCopy: 'Operational payout holds are usually solved by fixing the requirement rather than filing a formal appeal.',
-      caution: null,
     }
   }
 
@@ -109,22 +104,21 @@ export function deriveTailorAccessGuidance(input: TailorReadinessInput | null | 
     return {
       state: 'CLEAR',
       title: 'Access is open, with higher-risk work kept conservative',
-      body: 'Your current setup supports standard paid work. Cross-border or higher-risk flows should still stay more ops-visible while Drape is learning.',
+      body: 'Your current setup supports standard paid work. Keep international orders especially clear in the order thread so support can help quickly if anything changes.',
       reasonCategory: 'Higher-risk capability',
       blockedCapabilities,
-      nextStep: 'Keep your storefront, payout setup, and communication clean. If Drape ever limits a higher-risk capability later, this screen should explain the reason and next step.',
+      nextStep: 'Keep your storefront, payout setup, and communication clean. If support asks for extra context on a higher-risk order, keep the response inside Drape.',
       supportEmail: CONTACTS.tailors,
       supportLabel: 'Tailor support',
       supportSubject: 'Drape tailor trust question',
       appealCopy: null,
-      caution: 'No broader trust restriction is shown right now. This screen is still a visibility-first layer around the signals Drape already stores.',
     }
   }
 
   return {
     state: 'CLEAR',
     title: 'Your standard seller access looks healthy',
-    body: 'Profile, identity, and payout signals currently support normal paid work. This is the calm state we want before more advanced trust controls land.',
+    body: 'Profile, identity, and payout signals currently support normal paid work.',
     reasonCategory: 'Normal access',
     blockedCapabilities,
     nextStep: 'Keep your storefront honest, your communication in Drape, and your payout details up to date.',
@@ -132,6 +126,5 @@ export function deriveTailorAccessGuidance(input: TailorReadinessInput | null | 
     supportLabel: 'Tailor support',
     supportSubject: 'Drape tailor trust question',
     appealCopy: null,
-    caution: 'If Drape later limits discovery, intake, payouts, or higher-risk work, this screen should become the place that explains why and what clears it.',
   }
 }

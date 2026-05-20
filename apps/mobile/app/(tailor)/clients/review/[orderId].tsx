@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, KeyboardAvoidingView, Platform,
 } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
@@ -21,6 +21,26 @@ const REVIEW_TAGS = [
 ]
 const REVIEW_WINDOW_DAYS = 14
 
+type CustomerProfileJoinRow = {
+  display_name: string | null
+}
+
+type CustomerReviewOrderRow = {
+  customer_id: string
+  stage: string | null
+  stage_updated_at: string | null
+  customer_profiles: CustomerProfileJoinRow | CustomerProfileJoinRow[] | null
+}
+
+type ExistingCustomerReviewRow = {
+  id: string
+}
+
+function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
 function reviewWindowClosed(stageUpdatedAt: string | null) {
   if (!stageUpdatedAt) return false
   const reviewClock = new Date(stageUpdatedAt).getTime()
@@ -32,7 +52,9 @@ export default function TailorCustomerReviewScreen() {
   const { orderId, returnTo } = useLocalSearchParams<{ orderId: string; returnTo?: string }>()
   const router = useRouter()
   const navigation = useNavigation()
+  const insets = useSafeAreaInsets()
   const { user } = useAuth()
+  const userId = user?.id ?? null
   const [customerName, setCustomerName] = useState('Customer')
   const [customerId, setCustomerId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -43,10 +65,11 @@ export default function TailorCustomerReviewScreen() {
   const [tags, setTags] = useState<string[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
+  const [alreadyReviewed, setAlreadyReviewed] = useState(false)
 
-  function goBack() {
+  const goBack = useCallback(() => {
     goBackOrReturnTo(router, navigation, returnTo, '/(tailor)/clients')
-  }
+  }, [navigation, returnTo, router])
 
   function readPayloadString(payload: Record<string, unknown> | null, key: string) {
     const value = payload?.[key]
@@ -55,7 +78,7 @@ export default function TailorCustomerReviewScreen() {
 
   async function resolveReviewFailure(error: Error | null) {
     const payload = error ? await readFunctionErrorPayload(error) : null
-    const code = readPayloadString(payload, 'code')
+    const code = readPayloadString(payload, 'code') ?? readPayloadString(payload, 'reason')
     const payloadMessage = readPayloadString(payload, 'error')
 
     if (code === 'UNAUTHORIZED') {
@@ -78,9 +101,17 @@ export default function TailorCustomerReviewScreen() {
       }
     }
 
-    if (code === 'ORDER_NOT_READY_FOR_REVIEW' || code === 'ORDER_NOT_FOUND' || code === 'FORBIDDEN') {
+    if (code === 'ORDER_NOT_READY_FOR_REVIEW' || code === 'ORDER_NOT_FOUND' || code === 'FORBIDDEN' || code === 'REVIEW_FORBIDDEN') {
       return {
         message: payloadMessage ?? 'This customer review is not available right now. Reopen the order and try again.',
+        bodyError: '',
+        showAlert: true,
+      }
+    }
+
+    if (code === 'REVIEW_ALREADY_SUBMITTED') {
+      return {
+        message: payloadMessage ?? 'You already reviewed this customer for this order.',
         bodyError: '',
         showAlert: true,
       }
@@ -109,21 +140,22 @@ export default function TailorCustomerReviewScreen() {
     }
   }
 
-  async function load() {
-    if (!orderId || !user?.id) {
+  const load = useCallback(async () => {
+    if (!orderId || !userId) {
       setLoading(false)
       setLoadError('')
       return
     }
     setLoading(true)
     setLoadError('')
+    setAlreadyReviewed(false)
 
     try {
       const { data: order, error: orderError } = await supabase
         .from('orders')
         .select('customer_id, stage, stage_updated_at, customer_profiles!customer_id(display_name)')
         .eq('id', orderId)
-        .eq('tailor_id', user.id)
+        .eq('tailor_id', userId)
         .maybeSingle()
 
       if (orderError) throw orderError
@@ -133,8 +165,9 @@ export default function TailorCustomerReviewScreen() {
         return
       }
 
-      const row = order as any
-      if (!['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(row.stage)) {
+      const row = order as CustomerReviewOrderRow
+      const currentStage = row.stage ?? ''
+      if (!['DELIVERED', 'COLLECTED', 'COMPLETE'].includes(currentStage)) {
         setLoading(false)
         Alert.alert('Review unavailable', 'You can review a customer after the order is delivered or collected.')
         goBack()
@@ -147,18 +180,17 @@ export default function TailorCustomerReviewScreen() {
       }
 
       setCustomerId(row.customer_id)
-      setCustomerName(row.customer_profiles?.display_name ?? 'Customer')
+      setCustomerName(firstJoinedRow(row.customer_profiles)?.display_name ?? 'Customer')
 
       const { data: existing } = await supabase
         .from('customer_reviews')
-        .select('rating, body, tags')
+        .select('id')
         .eq('order_id', orderId)
         .maybeSingle()
 
-      if (existing) {
-        setRating((existing as any).rating ?? 0)
-        setBody((existing as any).body ?? '')
-        setTags(Array.isArray((existing as any).tags) ? (existing as any).tags : [])
+      const existingReview = existing as ExistingCustomerReviewRow | null
+      if (existingReview) {
+        setAlreadyReviewed(true)
       }
     } catch (error) {
       setLoadError(
@@ -169,11 +201,14 @@ export default function TailorCustomerReviewScreen() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [goBack, orderId, userId])
 
   useEffect(() => {
-    void load()
-  }, [orderId, user?.id])
+    const timer = setTimeout(() => {
+      void load()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [load])
 
   function validateBody(text: string) {
     const result = filterContactInfo(text)
@@ -234,7 +269,7 @@ export default function TailorCustomerReviewScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.stateWrap}>
           <Text style={styles.stateTitle}>Preparing review…</Text>
         </View>
@@ -244,7 +279,7 @@ export default function TailorCustomerReviewScreen() {
 
   if (loadError) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.stateWrap}>
           <View style={styles.headerCard}>
             <Text style={styles.eyebrow}>Customer review</Text>
@@ -262,8 +297,32 @@ export default function TailorCustomerReviewScreen() {
     )
   }
 
+  if (alreadyReviewed) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        <View style={styles.stateWrap}>
+          <View style={styles.headerCard}>
+            <Text style={styles.eyebrow}>Customer review</Text>
+            <Text style={styles.title}>Review already saved.</Text>
+            <Text style={styles.stateHint}>
+              Drape keeps one internal customer review per order. You can review this customer again after a future order if the working relationship changes.
+            </Text>
+            <TouchableOpacity style={styles.secondaryBtn} onPress={goBack}>
+              <Text style={styles.secondaryBtnText}>Back</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <View style={styles.topBar}>
+        <TouchableOpacity style={styles.backLink} onPress={goBack}>
+          <Text style={styles.backLinkText}>← Clients</Text>
+        </TouchableOpacity>
+      </View>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.headerCard}>
@@ -315,7 +374,7 @@ export default function TailorCustomerReviewScreen() {
           />
         </ScrollView>
 
-        <View style={styles.cta}>
+        <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom + Spacing.sm, Spacing.xl) }]}>
           {submitError ? <Text style={styles.submitError}>{submitError}</Text> : null}
           <Button label="Save review" onPress={submit} loading={submitting} disabled={submitting} />
         </View>
@@ -326,7 +385,15 @@ export default function TailorCustomerReviewScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
-  content: { padding: Spacing.xl, gap: Spacing.xl, paddingBottom: 120 },
+  topBar: {
+    paddingHorizontal: Spacing.xl,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.xs,
+    backgroundColor: Colors.bone,
+  },
+  backLink: { alignSelf: 'flex-start', paddingVertical: Spacing.xs, paddingRight: Spacing.md },
+  backLinkText: { color: Colors.needleGreen, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  content: { paddingHorizontal: Spacing.xl, paddingTop: Spacing.md, gap: Spacing.xl, paddingBottom: 120 },
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
   stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },

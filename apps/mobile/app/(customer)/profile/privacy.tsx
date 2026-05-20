@@ -21,7 +21,7 @@ import { supabase } from '@/lib/supabase'
 import { setAnalyticsConsent } from '@/lib/analytics'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { goBackOrFallback } from '@/lib/navigation'
 
 type PrivacyPrefs = {
@@ -45,7 +45,9 @@ export default function PrivacyScreen() {
 
   useEffect(() => {
     const stored = user?.user_metadata?.privacy_prefs
-    if (stored) setPrefs({ ...DEFAULT_PREFS, ...stored })
+    if (!stored) return undefined
+    const timer = setTimeout(() => setPrefs({ ...DEFAULT_PREFS, ...stored }), 0)
+    return () => clearTimeout(timer)
   }, [user?.user_metadata?.privacy_prefs])
 
   async function toggle(key: keyof PrivacyPrefs, value: boolean) {
@@ -93,7 +95,7 @@ export default function PrivacyScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={goBack}>
@@ -103,7 +105,7 @@ export default function PrivacyScreen() {
         {saving && <ActivityIndicator size="small" color={Colors.midGrey} style={{ marginLeft: 'auto' }} />}
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 32, gap: Spacing.md }}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.md }}>
         <View style={styles.heroCard}>
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Privacy control</Text>
@@ -260,7 +262,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
@@ -287,14 +289,14 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     color: Colors.ink,
     lineHeight: 28,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   intro: {
     fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20,
   },
 
   section: { gap: Spacing.sm },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
 
   card: { backgroundColor: Colors.white, borderRadius: Radius.lg, overflow: 'hidden', ...Shadow.sm },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginHorizontal: Spacing.md },

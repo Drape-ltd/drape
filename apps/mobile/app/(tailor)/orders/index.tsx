@@ -5,7 +5,6 @@ import {
 } from 'react-native'
 import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Feather } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
 import { Button, FeatureStateCard } from '@/components/ui'
@@ -15,14 +14,25 @@ import { deriveTailorReadiness, type TailorReadinessInput } from '@/lib/tailor-r
 import { supabase } from '@/lib/supabase'
 import { useTailorOrders, useRefreshOnFocus } from '@/lib/queries'
 import { shareTailorProfile } from '@/lib/invite'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { stageColor } from '@/lib/stageColors'
 
 type Tab = 'active' | 'completed'
-
-const TAILOR_ORDERS_GUIDE_KEY = 'drape_tailor_orders_best_use_dismissed'
+type TailorOrdersProfileRow = {
+  id: string
+  display_name: string | null
+  total_orders: number | null
+  is_live: boolean | null
+  id_verification_status: string | null
+  profile_completed: boolean | null
+  payout_currency: string | null
+  payout_provider: string | null
+  payout_reverification_required: boolean | null
+  payout_account_verified: boolean | null
+  payout_account_type: 'PAYSTACK' | 'STRIPE_CONNECT' | null
+}
 
 function orderHintForItem(item: { stage: OrderStage; orderKind?: 'CUSTOM' | 'READY_MADE' }): string | null {
   return tailorOrderHint(item.stage, item.orderKind ?? 'CUSTOM')
@@ -32,6 +42,7 @@ export default function TailorOrdersScreen() {
   const router = useRouter()
   const params = useLocalSearchParams<{ tab?: string }>()
   const { user } = useAuth()
+  const userId = user?.id
   const [tab, setTab] = useState<Tab>('active')
   const [completedSearch, setCompletedSearch] = useState('')
   const [openingCallOrderId, setOpeningCallOrderId] = useState<string | null>(null)
@@ -48,27 +59,30 @@ export default function TailorOrdersScreen() {
     payoutReverificationRequired: boolean | null
     payoutAccountVerified: boolean | null
     payoutAccountType: 'PAYSTACK' | 'STRIPE_CONNECT' | null
+    totalOrders: number
   } | null>(null)
-  const [showGuide, setShowGuide] = useState(true)
 
   useEffect(() => {
     if (params.tab === 'completed' || params.tab === 'active') {
-      setTab(params.tab)
+      const timer = setTimeout(() => {
+        setTab(params.tab as Tab)
+      }, 0)
+      return () => clearTimeout(timer)
     }
   }, [params.tab])
 
-  const { data: orders = [], isLoading: loading, isFetching, isError, refetch } = useTailorOrders(user?.id, tab)
+  const { data: orders = [], isLoading: loading, isFetching, isError, refetch } = useTailorOrders(userId, tab)
 
-  async function loadTailorProfile() {
-    if (!user?.id) {
+  const loadTailorProfile = useCallback(async () => {
+    if (!userId) {
       setTailorProfile(null)
       return
     }
 
     const { data, error } = await supabase
       .from('tailor_profiles')
-      .select('id, display_name, is_live, id_verification_status, profile_completed, payout_currency, payout_provider, payout_reverification_required, payout_account_verified, payout_account_type')
-      .eq('user_id', user.id)
+      .select('id, display_name, total_orders, is_live, id_verification_status, profile_completed, payout_currency, payout_provider, payout_reverification_required, payout_account_verified, payout_account_type')
+      .eq('user_id', userId)
       .maybeSingle()
 
     if (error || !data) {
@@ -76,38 +90,27 @@ export default function TailorOrdersScreen() {
       return
     }
 
+    const profile = data as TailorOrdersProfileRow
     setTailorProfile({
-      id: (data as any).id,
-      displayName: (data as any).display_name,
-      isLive: (data as any).is_live,
-      idVerificationStatus: (data as any).id_verification_status ?? 'NOT_SUBMITTED',
-      profileCompleted: (data as any).profile_completed ?? false,
+      id: profile.id,
+      displayName: profile.display_name ?? '',
+      isLive: profile.is_live ?? false,
+      idVerificationStatus: profile.id_verification_status ?? 'NOT_SUBMITTED',
+      profileCompleted: profile.profile_completed ?? false,
       stripeAccountId: null,
       paystackAccountId: null,
-      payoutCurrency: (data as any).payout_currency ?? null,
-      payoutProvider: (data as any).payout_provider ?? null,
-      payoutReverificationRequired: (data as any).payout_reverification_required ?? null,
-      payoutAccountVerified: (data as any).payout_account_verified ?? null,
-      payoutAccountType: (data as any).payout_account_type ?? null,
+      payoutCurrency: profile.payout_currency ?? null,
+      payoutProvider: profile.payout_provider ?? null,
+      payoutReverificationRequired: profile.payout_reverification_required ?? null,
+      payoutAccountVerified: profile.payout_account_verified ?? null,
+      payoutAccountType: profile.payout_account_type ?? null,
+      totalOrders: profile.total_orders ?? 0,
     })
-  }
+  }, [userId])
 
   useFocusEffect(useCallback(() => {
     void loadTailorProfile()
-  }, [user?.id]))
-
-  useFocusEffect(useCallback(() => {
-    AsyncStorage.getItem(`${TAILOR_ORDERS_GUIDE_KEY}:${user?.id ?? 'guest'}`)
-      .then((value) => setShowGuide(value !== '1'))
-      .catch(() => {})
-  }, [user?.id]))
-
-  async function dismissGuide() {
-    setShowGuide(false)
-    try {
-      await AsyncStorage.setItem(`${TAILOR_ORDERS_GUIDE_KEY}:${user?.id ?? 'guest'}`, '1')
-    } catch {}
-  }
+  }, [loadTailorProfile]))
 
   // Refetch whenever this screen comes back into focus (e.g. returning from order detail)
   useRefreshOnFocus(refetch, 0)
@@ -152,6 +155,14 @@ export default function TailorOrdersScreen() {
     })
   }
 
+  function openRecoveryMenu() {
+    Alert.alert('Where do you want to go?', 'Open a stable tailor area while Orders refreshes.', [
+      { text: 'Dashboard', onPress: () => router.push('/(tailor)') },
+      { text: 'Profile', onPress: () => router.push('/(tailor)/profile') },
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
@@ -162,6 +173,8 @@ export default function TailorOrdersScreen() {
               key={t}
               style={[styles.tabBtn, tab === t && styles.tabBtnActive]}
               onPress={() => setTab(t)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: tab === t }}
             >
               <Text style={[styles.tabLabel, tab === t && styles.tabLabelActive]}>
                 {t.charAt(0).toUpperCase() + t.slice(1)}
@@ -170,18 +183,6 @@ export default function TailorOrdersScreen() {
           ))}
         </View>
       </View>
-
-      {showGuide && (
-        <View style={styles.guideCard}>
-          <View style={styles.guideHeader}>
-            <Text style={styles.guideEyebrow}>Best use</Text>
-            <TouchableOpacity onPress={() => void dismissGuide()} style={styles.guideClose}>
-              <Feather name="x" size={16} color={Colors.midGrey} />
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.guideText}>Use Active for quotes and production, then switch to Completed when you need finished work and past client history.</Text>
-        </View>
-      )}
 
       {tab === 'completed' && (
         <View style={styles.searchWrap}>
@@ -213,16 +214,10 @@ export default function TailorOrdersScreen() {
           icon="alert-circle"
         >
           <Button label="Try again" onPress={() => refetch()} />
-          <Button
-            label="Open dashboard"
-            variant="secondary"
-            onPress={() => router.push('/(tailor)')}
-          />
-          <Button
-            label="Open profile"
-            variant="ghost"
-            onPress={() => router.push('/(tailor)/profile')}
-          />
+          <TouchableOpacity style={styles.compactActionMenuButton} onPress={openRecoveryMenu}>
+            <Text style={styles.compactActionMenuText}>Open dashboard or profile</Text>
+            <Feather name="chevron-down" size={16} color={Colors.needleGreen} />
+          </TouchableOpacity>
         </FeatureStateCard>
       ) : (
         <FlatList
@@ -237,9 +232,11 @@ export default function TailorOrdersScreen() {
                 readinessInput={tailorProfile}
                 profileId={tailorProfile?.id ?? null}
                 displayName={tailorProfile?.displayName ?? ''}
+                totalOrders={tailorProfile?.totalOrders ?? 0}
                 onSetupPress={() => router.navigate('/(tailor)/profile/setup')}
                 onPayoutPress={() => router.navigate({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/orders' } } as never)}
                 onReviewProfilePress={() => router.navigate('/(tailor)/profile/edit')}
+                onCompletedPress={() => setTab('completed')}
               />
             ) : (
               <FeatureStateCard
@@ -260,6 +257,9 @@ export default function TailorOrdersScreen() {
               <TouchableOpacity
                 style={[styles.card, isPending && styles.cardPending, isConsultation && styles.cardConsultation]}
                 testID={`tailor-order-card-${item.stage}`}
+                activeOpacity={0.84}
+                accessibilityRole="button"
+                accessibilityLabel={`Open order ${item.reference}`}
                 onPress={() => router.push({
                   pathname: '/(tailor)/orders/[id]',
                   params: { id: item.id, returnTo: '/(tailor)/orders' },
@@ -333,48 +333,44 @@ export default function TailorOrdersScreen() {
 
 // ─── Active orders empty state ────────────────────────────────────────────────
 
-function GhostCard({ opacity }: { opacity: number }) {
-  return (
-    <View style={[ghostStyles.card, { opacity }]}>
-      <View style={ghostStyles.iconBox} />
-      <View style={{ flex: 1, gap: 8 }}>
-        <View style={[ghostStyles.line, { width: '60%' }]} />
-        <View style={[ghostStyles.line, { width: '40%' }]} />
-      </View>
-      <View style={[ghostStyles.pill, { width: 64 }]} />
-    </View>
-  )
-}
-
 function ActiveEmptyState({
-  readinessInput, profileId, displayName, onSetupPress, onPayoutPress, onReviewProfilePress,
+  readinessInput, profileId, displayName, totalOrders, onSetupPress, onPayoutPress, onReviewProfilePress, onCompletedPress,
 }: {
   readinessInput: (TailorReadinessInput & { isLive?: boolean | null }) | null
   profileId: string | null
   displayName: string
+  totalOrders: number
   onSetupPress: () => void
   onPayoutPress: () => void
   onReviewProfilePress: () => void
+  onCompletedPress: () => void
 }) {
   const readiness = deriveTailorReadiness(readinessInput)
   const isLive = readinessInput?.isLive === true
+  const hasOrderHistory = totalOrders > 0
 
   return (
     <View style={emptyStyles.wrap}>
-      <View style={{ gap: 10, width: '100%', marginBottom: Spacing.xl }}>
-        <GhostCard opacity={0.5} />
-        <GhostCard opacity={0.3} />
-        <GhostCard opacity={0.15} />
+      <View style={emptyStyles.illustration}>
+        <Feather name={isLive ? 'send' : 'clipboard'} size={30} color={Colors.needleGreen} />
       </View>
-      <Text style={emptyStyles.heading}>No active orders yet</Text>
+      <Text style={emptyStyles.heading}>{hasOrderHistory ? 'No active orders right now' : 'No active orders yet'}</Text>
       {isLive ? (
         <>
-          <Text style={emptyStyles.sub}>Share your profile to attract your first clients.</Text>
-          {profileId && (
-            <TouchableOpacity style={emptyStyles.cta} onPress={() => shareTailorProfile(profileId, displayName)}>
-              <Text style={emptyStyles.ctaText}>Share my profile</Text>
+          <Text style={emptyStyles.sub}>
+            {hasOrderHistory
+              ? 'Your live work queue is clear. Completed jobs stay in your archive, and new quote requests will appear here.'
+              : 'Your profile is live. Share it with a client or keep your shop stocked so the first request has a clear path.'}
+          </Text>
+          {hasOrderHistory ? (
+            <TouchableOpacity style={emptyStyles.cta} onPress={onCompletedPress}>
+              <Text style={emptyStyles.ctaText}>View completed orders</Text>
             </TouchableOpacity>
-          )}
+          ) : profileId ? (
+            <TouchableOpacity style={emptyStyles.cta} onPress={() => shareTailorProfile(profileId, displayName)}>
+              <Text style={emptyStyles.ctaText}>Share live profile</Text>
+            </TouchableOpacity>
+          ) : null}
         </>
       ) : !readiness.payoutReady && readiness.identityVerified ? (
         <>
@@ -404,20 +400,20 @@ function ActiveEmptyState({
   )
 }
 
-const ghostStyles = StyleSheet.create({
-  card: {
-    backgroundColor: Colors.white, borderRadius: Radius.md,
-    padding: 12, flexDirection: 'row', alignItems: 'center', gap: 12,
-    ...Shadow.sm,
-  },
-  iconBox: { width: 42, height: 42, borderRadius: Radius.md, backgroundColor: Colors.lightGrey },
-  line: { height: 10, borderRadius: 5, backgroundColor: Colors.lightGrey },
-  pill: { height: 24, borderRadius: Radius.full, backgroundColor: Colors.lightGrey },
-})
-
 const emptyStyles = StyleSheet.create({
   wrap: { paddingTop: Spacing.lg, paddingHorizontal: Spacing.lg, alignItems: 'center' },
-  heading: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center', fontFamily: 'Georgia' },
+  illustration: {
+    width: 78,
+    height: 78,
+    borderRadius: 39,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Spacing.lg,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '24',
+  },
+  heading: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center', fontFamily: Fonts.display },
   sub: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 19, marginTop: 4 },
   cta: {
     marginTop: Spacing.xl,
@@ -434,7 +430,7 @@ const emptyStyles = StyleSheet.create({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
   header: { paddingHorizontal: Spacing.lg, paddingTop: 8, paddingBottom: 6, gap: Spacing.xs },
-  title: { fontSize: 28, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  title: { fontSize: 28, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
   guideCard: {
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.sm,
@@ -475,17 +471,38 @@ const styles = StyleSheet.create({
   },
 
   list: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.xl },
-  card: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: Spacing.xs, ...Shadow.sm },
+  card: {
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+    ...Shadow.sm,
+  },
   cardPending: { borderWidth: 1.5, borderColor: Colors.warning },
   cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
-  garment: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  garment: {
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
   customer: { fontSize: FontSize.sm, color: Colors.inkLight, marginTop: 2 },
   stagePill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.full },
   stageText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   cardMeta: { flexDirection: 'row', gap: 12, alignItems: 'center' },
   ref: { fontSize: FontSize.xs, color: Colors.midGrey },
   due: { fontSize: FontSize.xs, color: Colors.midGrey },
-  amount: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginLeft: 'auto', fontFamily: 'Georgia' },
+  amount: {
+    fontFamily: Fonts.bodyBold,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    marginLeft: 'auto',
+  },
   pendingCta: { fontSize: FontSize.sm, color: Colors.warning, fontWeight: FontWeight.medium },
   statusHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   statusHintDispute: { fontSize: FontSize.xs, color: Colors.kanteRust, lineHeight: 18 },
@@ -497,6 +514,23 @@ const styles = StyleSheet.create({
   },
   callChipText: { fontSize: FontSize.xs, color: Colors.textInverse, fontWeight: FontWeight.semibold },
   consultationHint: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  compactActionMenuButton: {
+    minHeight: 46,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: Spacing.xs,
+  },
+  compactActionMenuText: {
+    color: Colors.needleGreen,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+  },
 
   empty: { flex: 1, paddingTop: 80, alignItems: 'center', gap: Spacing.md, paddingHorizontal: Spacing.xl },
   emptyText: { fontSize: FontSize.md, color: Colors.inkLight },

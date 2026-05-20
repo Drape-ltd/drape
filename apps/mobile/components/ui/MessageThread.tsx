@@ -4,7 +4,7 @@
  * Supports text, camera/library photo, and voice note messages.
  * Contact filter applied inline before send.
  */
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   TextInput, Alert, ActivityIndicator, Keyboard,
@@ -17,7 +17,8 @@ import { stripExif } from '@/lib/stripExif'
 import { createValidatedUploadPayload, uploadPublicStorageImage } from '@/lib/storage-upload'
 import { readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import { filterContactInfo } from '@drape/shared/contact-filter'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { AvatarImage } from '@/components/ui/AvatarImage'
 import { RemoteImage } from '@/components/ui/RemoteImage'
 
 type MessageType = 'TEXT' | 'PHOTO' | 'VOICE'
@@ -43,7 +44,9 @@ interface Props {
   currentUserId: string
   currentUserRole: 'CUSTOMER' | 'TAILOR'
   tailorName: string
+  tailorAvatarUrl?: string | null
   customerName: string
+  customerAvatarUrl?: string | null
   locked?: boolean
   lockedMessage?: string
 }
@@ -195,11 +198,14 @@ export function MessageThread({
   currentUserId,
   currentUserRole,
   tailorName,
+  tailorAvatarUrl,
   customerName,
+  customerAvatarUrl,
   locked = false,
   lockedMessage,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([])
+  const messagesRef = useRef<Message[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshingThread, setRefreshingThread] = useState(false)
   const [hasEarlier, setHasEarlier] = useState(false)
@@ -218,7 +224,7 @@ export function MessageThread({
   const insets = useSafeAreaInsets()
   const composerBottomPadding = Math.max(insets.bottom + Spacing.sm, Spacing.md)
 
-  async function fetchMessages(options?: { silent?: boolean }) {
+  const fetchMessages = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent === true
     if (silent) setRefreshingThread(true)
     else setLoading(true)
@@ -235,12 +241,14 @@ export function MessageThread({
       if (error) throw error
 
       const nextMessages = data ? ([...data].reverse() as Message[]) : []
+      messagesRef.current = nextMessages
       setMessages(nextMessages)
       setHasEarlier((data?.length ?? 0) === MSG_PAGE_SIZE)
       setThreadNotice(null)
     } catch (error) {
-      const message = resolveThreadLoadError(error, messages.length > 0)
-      if (messages.length > 0) {
+      const hasCachedMessages = messagesRef.current.length > 0
+      const message = resolveThreadLoadError(error, hasCachedMessages)
+      if (hasCachedMessages) {
         setThreadNotice({ tone: 'warning', text: message })
       } else {
         setLoadError(message)
@@ -249,7 +257,7 @@ export function MessageThread({
       setRefreshingThread(false)
       setLoading(false)
     }
-  }
+  }, [orderId])
 
   async function loadEarlier() {
     if (!hasEarlier || loadingEarlierRef.current || messages.length === 0) return
@@ -281,7 +289,9 @@ export function MessageThread({
   }
 
   useEffect(() => {
-    fetchMessages()
+    const initialLoad = setTimeout(() => {
+      void fetchMessages()
+    }, 0)
 
     // Realtime subscription
     const channel = supabase
@@ -292,7 +302,9 @@ export function MessageThread({
         (payload) => {
           setMessages((prev) => {
             if (prev.find((m) => m.id === payload.new.id)) return prev
-            return [...prev, payload.new as Message]
+            const nextMessages = [...prev, payload.new as Message]
+            messagesRef.current = nextMessages
+            return nextMessages
           })
           setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100)
         }
@@ -301,15 +313,22 @@ export function MessageThread({
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'messages', filter: `order_id=eq.${orderId}` },
         (payload) => {
-          setMessages((prev) => prev.map((message) =>
-            message.id === payload.new.id ? { ...message, ...(payload.new as Partial<Message>) } : message
-          ))
+          setMessages((prev) => {
+            const nextMessages = prev.map((message) =>
+              message.id === payload.new.id ? { ...message, ...(payload.new as Partial<Message>) } : message
+            )
+            messagesRef.current = nextMessages
+            return nextMessages
+          })
         }
       )
       .subscribe()
 
-    return () => { supabase.removeChannel(channel) }
-  }, [orderId])
+    return () => {
+      clearTimeout(initialLoad)
+      supabase.removeChannel(channel)
+    }
+  }, [fetchMessages, orderId])
 
   // Mark incoming messages as read
   useEffect(() => {
@@ -536,6 +555,7 @@ export function MessageThread({
   }
 
   const otherName = currentUserRole === 'CUSTOMER' ? tailorName : customerName
+  const otherAvatarUrl = currentUserRole === 'CUSTOMER' ? tailorAvatarUrl : customerAvatarUrl
 
   if (loading) return <ActivityIndicator style={{ flex: 1 }} color={Colors.needleGreen} size="large" />
 
@@ -587,7 +607,11 @@ export function MessageThread({
           </View>
         }
         renderItem={({ item }) => (
-          <MessageBubble message={item} isOwn={item.sender_id === currentUserId} />
+          <MessageBubble
+            message={item}
+            isOwn={item.sender_id === currentUserId}
+            avatarUrl={item.sender_id === currentUserId ? null : otherAvatarUrl}
+          />
         )}
       />
 
@@ -694,7 +718,15 @@ export function MessageThread({
   )
 }
 
-function MessageBubble({ message, isOwn }: { message: Message; isOwn: boolean }) {
+function MessageBubble({
+  message,
+  isOwn,
+  avatarUrl,
+}: {
+  message: Message
+  isOwn: boolean
+  avatarUrl?: string | null
+}) {
   const [sound, setSound] = useState<Audio.Sound | null>(null)
   const [playing, setPlaying] = useState(false)
 
@@ -730,6 +762,16 @@ function MessageBubble({ message, isOwn }: { message: Message; isOwn: boolean })
 
   return (
     <View style={[styles.bubbleRow, isOwn && styles.bubbleRowOwn]}>
+      {!isOwn ? (
+        <AvatarImage
+          uri={avatarUrl}
+          initials={message.sender_name}
+          size={32}
+          style={styles.messageAvatar}
+          borderColor={Colors.white}
+          borderWidth={2}
+        />
+      ) : null}
       <View style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther]}>
         {!isOwn && <Text style={styles.senderName}>{message.sender_name}</Text>}
 
@@ -812,7 +854,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.8,
   },
-  emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   emptyText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 21 },
   retryThreadBtn: {
     marginTop: Spacing.sm,
@@ -898,8 +940,9 @@ const styles = StyleSheet.create({
   voiceBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22 },
   voiceBtnActive: { backgroundColor: Colors.needleGreenLight },
 
-  bubbleRow: { flexDirection: 'row', justifyContent: 'flex-start' },
+  bubbleRow: { flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'flex-end', gap: Spacing.xs },
   bubbleRowOwn: { justifyContent: 'flex-end' },
+  messageAvatar: { marginBottom: 2 },
   bubble: {
     maxWidth: '78%', borderRadius: Radius.lg, padding: Spacing.md,
     gap: Spacing.xs,
@@ -909,7 +952,7 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   bubbleOwn: { backgroundColor: Colors.needleGreen, borderBottomRightRadius: 4 },
-  senderName: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen, fontFamily: 'Georgia' },
+  senderName: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen, fontFamily: Fonts.display },
   bubbleText: { fontSize: FontSize.md, color: Colors.ink, lineHeight: 22 },
   bubbleTextOwn: { color: Colors.textInverse },
   bubblePhoto: { width: 200, height: 200, borderRadius: Radius.md },

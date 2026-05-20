@@ -4,6 +4,7 @@ export const TAILOR_SETUP_VALIDATION = {
   ID_DOCUMENT_REQUIRED_MESSAGE: 'Please upload a valid ID document to continue',
   DISPLAY_NAME_REQUIRED_MESSAGE: 'Add your public display name to continue',
   PHONE_REQUIRED_MESSAGE: 'Add a valid phone number for order updates and account recovery',
+  PROFILE_PHOTO_REQUIRED_MESSAGE: 'Add a clear profile photo so customers know who they are booking',
   LOCATION_REQUIRED_MESSAGE: 'Add your location to continue',
   BIO_REQUIRED_MESSAGE: 'Add at least 80 characters about your work to continue',
   LANGUAGE_REQUIRED_MESSAGE: 'Choose at least one language to continue',
@@ -88,6 +89,7 @@ export type TailorSetupStep = 0 | 1 | 2 | 3
 export type TailorSetupField =
   | 'displayName'
   | 'phone'
+  | 'profilePhoto'
   | 'location'
   | 'bio'
   | 'languages'
@@ -106,6 +108,7 @@ export type TailorSetupProgressInput = {
   nameError?: string | null
   phone: string
   phoneError?: string | null
+  profilePhotoPresent: boolean
   location: string
   bio: string
   bioError?: string | null
@@ -182,6 +185,10 @@ export function deriveTailorSetupProgress(input: TailorSetupProgressInput): Tail
     pushError(stepErrors[0], 'phone', TAILOR_SETUP_VALIDATION.PHONE_REQUIRED_MESSAGE)
   } else if (phoneError) {
     pushError(stepErrors[0], 'phone', phoneError)
+  }
+
+  if (!input.profilePhotoPresent) {
+    pushError(stepErrors[0], 'profilePhoto', TAILOR_SETUP_VALIDATION.PROFILE_PHOTO_REQUIRED_MESSAGE)
   }
 
   if (!input.location.trim()) {

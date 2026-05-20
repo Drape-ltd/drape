@@ -1,16 +1,27 @@
 import React from 'react'
 import { View, Text, StyleSheet } from 'react-native'
-import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 
-type TierBadge = 'VERIFIED' | 'RISING' | 'MASTER'
+export type TierBadge = 'VERIFIED' | 'RISING' | 'MASTER'
 
 const TIER_CONFIG: Record<TierBadge, { label: string; emoji: string; bg: string; text: string }> = {
-  VERIFIED: { label: 'Verified', emoji: '✓', bg: Colors.needleGreenLight, text: Colors.needleGreen },
+  VERIFIED: {
+    label: 'Verified',
+    emoji: '✓',
+    bg: Colors.needleGreenLight,
+    text: Colors.needleGreenDark,
+  },
   RISING: { label: 'Rising', emoji: '★', bg: Colors.statusPendingBg, text: Colors.statusPending },
   MASTER: { label: 'Master', emoji: '◆', bg: Colors.boneDeep, text: Colors.needleGreenDark },
 }
 
-export function TierBadgeChip({ tier, size = 'md' }: { tier: TierBadge | null | undefined; size?: 'sm' | 'md' | 'lg' }) {
+export function TierBadgeChip({
+  tier,
+  size = 'md',
+}: {
+  tier: TierBadge | null | undefined
+  size?: 'sm' | 'md' | 'lg'
+}) {
   const config = tier ? TIER_CONFIG[tier] : null
   if (!config) return null
   const fontSize = size === 'lg' ? 13 : size === 'sm' ? 10 : 12
@@ -50,6 +61,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   chipText: {
+    fontFamily: Fonts.bodySemiBold,
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
   },
@@ -63,11 +75,13 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
   },
   ratingText: {
+    fontFamily: Fonts.bodySemiBold,
     fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
   },
   countText: {
+    fontFamily: Fonts.body,
     fontSize: FontSize.sm,
     color: Colors.midGrey,
   },
@@ -79,6 +93,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   tagText: {
+    fontFamily: Fonts.bodyMedium,
     fontSize: FontSize.xs,
     color: Colors.inkLight,
     fontWeight: FontWeight.medium,

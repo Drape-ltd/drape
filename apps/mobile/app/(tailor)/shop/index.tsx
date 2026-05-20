@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
-import { SafeAreaView } from 'react-native-safe-area-context'
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, RefreshControl } from 'react-native'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, RefreshControl, Modal, Platform } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { buildTailorStockAlert, formatSizeInventorySummary, normalizeSizeInventory, type SizeInventory } from '@/lib/ready-made-stock'
 import { Button, RemoteImage } from '@/components/ui'
-import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 
 type SellerItem = {
   id: string
@@ -29,13 +29,47 @@ type SellerProfile = {
   supportsReadyMade: boolean
 }
 
+type SupabaseErrorLike = {
+  message?: unknown
+  details?: unknown
+  hint?: unknown
+}
+
+type SellerItemRow = {
+  id: string
+  title: string
+  category: string | null
+  sizes: unknown
+  price_amount: number
+  currency: string
+  stock_status: string | null
+  inventory_quantity: number | null
+  size_inventory?: unknown
+  is_live: boolean | null
+  photo_urls: unknown
+}
+
 const FILTERS = ['LIVE', 'DRAFTS', 'SOLD'] as const
 type Filter = typeof FILTERS[number]
+type SellerItemAction = 'publish-item' | 'hide-item' | 'mark-sold' | 'relist-item' | 'delete-item'
 
-function isMissingInventoryColumnError(error: any) {
-  const message = typeof error?.message === 'string' ? error.message.toLowerCase() : ''
-  const details = typeof error?.details === 'string' ? error.details.toLowerCase() : ''
-  const hint = typeof error?.hint === 'string' ? error.hint.toLowerCase() : ''
+type ShopEmptyAction = 'ADD' | Filter
+
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  CAD: 'CA$',
+  EUR: '€',
+  GBP: '£',
+  GHS: 'GH₵',
+  KES: 'KSh',
+  NGN: '₦',
+  USD: '$',
+}
+
+function isMissingInventoryColumnError(error: unknown) {
+  const candidate = error as SupabaseErrorLike | null
+  const message = typeof candidate?.message === 'string' ? candidate.message.toLowerCase() : ''
+  const details = typeof candidate?.details === 'string' ? candidate.details.toLowerCase() : ''
+  const hint = typeof candidate?.hint === 'string' ? candidate.hint.toLowerCase() : ''
   return [message, details, hint].some((value) => value.includes('inventory_quantity') || value.includes('size_inventory'))
 }
 
@@ -66,6 +100,16 @@ function stockSummary(item: SellerItem) {
   return formatSizeInventorySummary(item.sizes, item.sizeInventory, item.inventoryQuantity)
 }
 
+function formatItemPrice(amountInMinorUnits: number, currency: string) {
+  const amount = amountInMinorUnits / 100
+  const hasCents = Math.abs(amount % 1) > 0
+  const formattedAmount = amount.toLocaleString('en-US', {
+    minimumFractionDigits: hasCents ? 2 : 0,
+    maximumFractionDigits: hasCents ? 2 : 0,
+  })
+  return `${CURRENCY_SYMBOLS[currency] ?? `${currency} `}${formattedAmount}`
+}
+
 function stockPillStyles(item: SellerItem) {
   const status = effectiveStockStatus(item)
   if (status === 'SOLD_OUT' && item.inventoryQuantity > 0) {
@@ -83,26 +127,83 @@ function stockPillStyles(item: SellerItem) {
   return { container: styles.statusLive, text: styles.statusLiveText }
 }
 
+function getShopEmptyState(
+  filter: Filter,
+  counts: { liveCount: number; draftCount: number; soldCount: number },
+): { title: string; hint: string; ctaLabel: string; action: ShopEmptyAction } {
+  if (filter === 'LIVE') {
+    if (counts.draftCount > 0) {
+      return {
+        title: 'No live items yet',
+        hint: 'You have drafts ready to review. Publish one when photos, stock, and pickup details are set.',
+        ctaLabel: 'Review drafts',
+        action: 'DRAFTS',
+      }
+    }
+
+    if (counts.soldCount > 0) {
+      return {
+        title: 'No live items right now',
+        hint: 'Sold items are archived here. Restock one or add a new ready-made piece when you are ready.',
+        ctaLabel: 'Add item',
+        action: 'ADD',
+      }
+    }
+
+    return {
+      title: 'Your shop is empty',
+      hint: 'Add a ready-made piece when you want customers to buy without starting a custom order.',
+      ctaLabel: 'Add item',
+      action: 'ADD',
+    }
+  }
+
+  if (filter === 'DRAFTS') {
+    return {
+      title: 'No drafts right now',
+      hint: counts.liveCount > 0 || counts.soldCount > 0
+        ? 'Drafts appear here when you save an item before publishing it.'
+        : 'Start a draft when you want to prepare item details before buyers can see them.',
+      ctaLabel: 'Add draft',
+      action: 'ADD',
+    }
+  }
+
+  return {
+    title: 'No sold items yet',
+    hint: counts.liveCount > 0 || counts.draftCount > 0
+      ? 'Marked sold items appear here so you can restock or relist them later.'
+      : 'Sold items will appear here once customers start buying from your shop.',
+    ctaLabel: counts.liveCount > 0 || counts.draftCount > 0 ? 'View live items' : 'Add item',
+    action: counts.liveCount > 0 || counts.draftCount > 0 ? 'LIVE' : 'ADD',
+  }
+}
+
 export default function TailorShopScreen() {
   const router = useRouter()
   const params = useLocalSearchParams<{ filter?: string }>()
   const { user } = useAuth()
+  const userId = user?.id
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<Filter>('LIVE')
   const [profile, setProfile] = useState<SellerProfile | null>(null)
   const [items, setItems] = useState<SellerItem[]>([])
   const [updatingItemId, setUpdatingItemId] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [actionSheetItem, setActionSheetItem] = useState<SellerItem | null>(null)
 
   useEffect(() => {
     const requestedFilter = typeof params.filter === 'string' ? params.filter.toUpperCase() : ''
     if (requestedFilter && FILTERS.includes(requestedFilter as Filter)) {
-      setFilter(requestedFilter as Filter)
+      const timer = setTimeout(() => {
+        setFilter(requestedFilter as Filter)
+      }, 0)
+      return () => clearTimeout(timer)
     }
   }, [params.filter])
 
   const loadShop = useCallback(async (showSpinner = true) => {
-    if (!user?.id) {
+    if (!userId) {
       setProfile(null)
       setItems([])
       setLoading(false)
@@ -113,7 +214,7 @@ export default function TailorShopScreen() {
     const { data: profileData } = await supabase
       .from('tailor_profiles')
       .select('id, supports_ready_made')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .maybeSingle()
 
     if (!profileData?.id) {
@@ -134,8 +235,8 @@ export default function TailorShopScreen() {
       .eq('tailor_profile_id', profileData.id)
       .order('updated_at', { ascending: false })
 
-    let itemsData: any[] | null = primary.data as any[] | null
-    let itemsError: any = primary.error
+    let itemsData = primary.data as SellerItemRow[] | null
+    let itemsError = primary.error
 
     if (itemsError && isMissingInventoryColumnError(itemsError)) {
       const fallback = await supabase
@@ -156,7 +257,7 @@ export default function TailorShopScreen() {
     }
 
     setItems(
-      (itemsData ?? []).map((row: any) => ({
+      (itemsData ?? []).map((row) => ({
         id: row.id,
         title: row.title,
         category: row.category ?? null,
@@ -170,17 +271,17 @@ export default function TailorShopScreen() {
         ),
         priceAmount: row.price_amount,
         currency: row.currency,
-        stockStatus: row.stock_status,
+        stockStatus: row.stock_status ?? 'IN_STOCK',
         inventoryQuantity:
           typeof row.inventory_quantity === 'number'
             ? row.inventory_quantity
             : fallbackInventoryQuantity(row),
-        isLive: row.is_live,
+        isLive: row.is_live ?? false,
         photoUrls: Array.isArray(row.photo_urls) ? row.photo_urls.filter((value: unknown): value is string => typeof value === 'string' && value.length > 0) : [],
       }))
     )
     setLoading(false)
-  }, [user?.id])
+  }, [userId])
 
   useFocusEffect(
     useCallback(() => {
@@ -200,6 +301,13 @@ export default function TailorShopScreen() {
     if (filter === 'DRAFTS') return status === 'HIDDEN'
     return status === 'SOLD_OUT'
   })
+  const liveCount = items.filter((item) => {
+    const status = effectiveStockStatus(item)
+    return item.isLive && status !== 'SOLD_OUT' && status !== 'HIDDEN'
+  }).length
+  const draftCount = items.filter((item) => effectiveStockStatus(item) === 'HIDDEN').length
+  const soldCount = items.filter((item) => effectiveStockStatus(item) === 'SOLD_OUT').length
+  const shopEmptyState = getShopEmptyState(filter, { liveCount, draftCount, soldCount })
   const stockAlerts = items
     .map((item) =>
       buildTailorStockAlert({
@@ -217,7 +325,7 @@ export default function TailorShopScreen() {
 
   async function updateItemState(
     itemId: string,
-    action: 'publish-item' | 'hide-item' | 'mark-sold' | 'relist-item' | 'delete-item'
+    action: SellerItemAction,
   ) {
     if (updatingItemId) return
     setUpdatingItemId(itemId)
@@ -249,7 +357,7 @@ export default function TailorShopScreen() {
             : item
         )
       )
-    } catch (error: any) {
+    } catch (error) {
       const message = isLikelyConnectivityIssue(error)
         ? 'Connection looks weak. We could not update this item yet. Retry when the signal improves.'
         : await readFunctionErrorMessage(error, 'Could not update this item right now.')
@@ -266,7 +374,7 @@ export default function TailorShopScreen() {
     }
   }
 
-  function confirmItemAction(item: SellerItem, action: 'publish-item' | 'hide-item' | 'mark-sold' | 'relist-item' | 'delete-item') {
+  function confirmItemAction(item: SellerItem, action: SellerItemAction) {
     if (action === 'publish-item') {
       Alert.alert(
         'Go live now?',
@@ -320,6 +428,31 @@ export default function TailorShopScreen() {
     void updateItemState(item.id, action)
   }
 
+  function openItemEditor(item: SellerItem, fallbackFilter: Filter, intent?: 'restock') {
+    setActionSheetItem(null)
+    router.push({
+      pathname: '/(tailor)/shop/new',
+      params: {
+        itemId: item.id,
+        filter: fallbackFilter,
+        ...(intent ? { intent } : {}),
+      },
+    })
+  }
+
+  function runSheetAction(item: SellerItem, action: SellerItemAction) {
+    setActionSheetItem(null)
+    confirmItemAction(item, action)
+  }
+
+  function handleEmptyAction(action: ShopEmptyAction) {
+    if (action === 'ADD') {
+      router.push('/(tailor)/shop/new')
+      return
+    }
+    setFilter(action)
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView
@@ -336,16 +469,11 @@ export default function TailorShopScreen() {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.bestUseCard}>
-          <Text style={styles.bestUseEyebrow}>Best use</Text>
-          <Text style={styles.bestUseText}>Keep ready-made items simple: clear photo, clear size, clear price, real stock by size, and clear delivery choice.</Text>
-        </View>
-
         {stockAlerts.length > 0 ? (
           <View style={styles.stockAlertCard}>
             <View style={styles.stockAlertHeader}>
-              <Text style={styles.stockAlertEyebrow}>Stock watch</Text>
-              <Text style={styles.stockAlertHint}>Top up popular sizes before buyers hit sold out.</Text>
+              <Text style={styles.stockAlertEyebrow}>Inventory attention</Text>
+              <Text style={styles.stockAlertHint}>Low stock and sold-out items that need a decision.</Text>
             </View>
             {stockAlerts.map((alert) => (
               <View key={alert.itemId} style={styles.stockAlertRow}>
@@ -387,7 +515,13 @@ export default function TailorShopScreen() {
                   style={[styles.filterPill, filter === value && styles.filterPillActive]}
                   onPress={() => setFilter(value)}
                 >
-                  <Text style={[styles.filterText, filter === value && styles.filterTextActive]}>{value === 'LIVE' ? 'Live' : value === 'DRAFTS' ? 'Drafts' : 'Sold'}</Text>
+                  <Text style={[styles.filterText, filter === value && styles.filterTextActive]}>
+                    {value === 'LIVE'
+                      ? `Live ${liveCount}`
+                      : value === 'DRAFTS'
+                        ? `Drafts ${draftCount}`
+                        : `Sold ${soldCount}`}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -397,15 +531,9 @@ export default function TailorShopScreen() {
                 <View style={styles.emptyIcon}>
                   <Feather name="package" size={24} color={Colors.needleGreen} />
                 </View>
-                <Text style={styles.emptyTitle}>No items here yet</Text>
-                <Text style={styles.emptyHint}>
-                  {filter === 'LIVE'
-                    ? 'Add your first ready-made piece so customers can shop directly from your profile.'
-                    : filter === 'DRAFTS'
-                      ? 'Draft items will show here until you publish them.'
-                      : 'Sold items will show here once you mark them sold.'}
-                </Text>
-                <Button label="Add item" onPress={() => router.push('/(tailor)/shop/new')} />
+                <Text style={styles.emptyTitle}>{shopEmptyState.title}</Text>
+                <Text style={styles.emptyHint}>{shopEmptyState.hint}</Text>
+                <Button label={shopEmptyState.ctaLabel} onPress={() => handleEmptyAction(shopEmptyState.action)} />
               </View>
             ) : (
               <View style={styles.itemList}>
@@ -413,128 +541,59 @@ export default function TailorShopScreen() {
                   const pillStyles = stockPillStyles(item)
                   const status = effectiveStockStatus(item)
                   const canRelist = status === 'SOLD_OUT' && item.inventoryQuantity > 0
+                  const manageLabel =
+                    status === 'HIDDEN'
+                      ? 'Manage draft'
+                      : status === 'SOLD_OUT'
+                        ? canRelist ? 'Relist item' : 'Add stock'
+                        : 'Manage item'
 
                   return (
                     <View key={item.id} style={styles.itemCard}>
-                    {item.photoUrls[0] ? (
-                      <RemoteImage
-                        uri={item.photoUrls[0]}
-                        bucket="seller-item-media"
-                        style={styles.itemThumb}
-                        contentFit="cover"
-                        transition={180}
-                        surface="tailor_shop_item_thumb"
-                        fallback={(
+                      <View style={styles.itemMediaWrap}>
+                        {item.photoUrls[0] ? (
+                          <RemoteImage
+                            uri={item.photoUrls[0]}
+                            bucket="seller-item-media"
+                            style={styles.itemThumb}
+                            contentFit="cover"
+                            transition={180}
+                            surface="tailor_shop_item_thumb"
+                            fallback={(
+                              <View style={[styles.itemThumb, styles.itemThumbPlaceholder]}>
+                                <Feather name="image" size={22} color={Colors.midGrey} />
+                              </View>
+                            )}
+                          />
+                        ) : (
                           <View style={[styles.itemThumb, styles.itemThumbPlaceholder]}>
-                            <Feather name="image" size={18} color={Colors.midGrey} />
+                            <Feather name="image" size={22} color={Colors.midGrey} />
                           </View>
                         )}
-                      />
-                    ) : (
-                      <View style={[styles.itemThumb, styles.itemThumbPlaceholder]}>
-                        <Feather name="image" size={18} color={Colors.midGrey} />
+                        <View style={[styles.statusPill, styles.statusPillOverlay, pillStyles.container]}>
+                          <Text style={[styles.statusText, pillStyles.text]}>
+                            {stockLabel(item)}
+                          </Text>
+                        </View>
                       </View>
-                    )}
-                    <View style={styles.itemBody}>
-                      <Text style={styles.itemTitle}>{item.title}</Text>
-                      <Text style={styles.itemMeta}>
-                        {item.category ? `${item.category} · ` : ''}{item.currency} {(item.priceAmount / 100).toFixed(2)} · {stockSummary(item)}
-                      </Text>
-                      <View style={styles.itemActions}>
-                        {status === 'HIDDEN' ? (
-                          <>
-                            <TouchableOpacity
-                              style={[styles.itemActionBtn, styles.itemActionBtnGhost]}
-                              onPress={() => router.push({
-                                pathname: '/(tailor)/shop/new',
-                                params: { itemId: item.id, filter: 'DRAFTS' },
-                              })}
-                            >
-                              <Text style={styles.itemActionGhostText}>Edit draft</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={[styles.itemActionBtn, styles.itemActionBtnDangerGhost]}
-                              onPress={() => confirmItemAction(item, 'delete-item')}
-                              disabled={updatingItemId === item.id}
-                            >
-                              <Text style={styles.itemActionDangerGhostText}>Delete draft</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={styles.itemActionBtn}
-                              onPress={() => confirmItemAction(item, 'publish-item')}
-                              disabled={updatingItemId === item.id}
-                            >
-                              <Text style={styles.itemActionText}>
-                                {updatingItemId === item.id ? 'Saving…' : 'Move to live'}
-                              </Text>
-                            </TouchableOpacity>
-                          </>
-                        ) : item.isLive && status !== 'SOLD_OUT' ? (
-                          <>
-                            <TouchableOpacity
-                              style={[styles.itemActionBtn, styles.itemActionBtnGhost]}
-                              onPress={() => confirmItemAction(item, 'hide-item')}
-                              disabled={updatingItemId === item.id}
-                            >
-                              <Text style={styles.itemActionGhostText}>
-                                {updatingItemId === item.id ? 'Saving…' : 'Move to draft'}
-                              </Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={styles.itemActionBtn}
-                              onPress={() => confirmItemAction(item, 'mark-sold')}
-                              disabled={updatingItemId === item.id}
-                            >
-                              <Text style={styles.itemActionText}>Mark sold</Text>
-                            </TouchableOpacity>
-                          </>
-                        ) : status === 'SOLD_OUT' ? (
-                          <>
-                            <TouchableOpacity
-                              style={[styles.itemActionBtn, styles.itemActionBtnGhost]}
-                              onPress={() => router.push({
-                                pathname: '/(tailor)/shop/new',
-                                params: { itemId: item.id, filter: 'SOLD' },
-                              })}
-                            >
-                              <Text style={styles.itemActionGhostText}>Edit item</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={styles.itemActionBtn}
-                              onPress={() =>
-                                canRelist
-                                  ? confirmItemAction(item, 'relist-item')
-                                  : router.push({
-                                      pathname: '/(tailor)/shop/new',
-                                      params: { itemId: item.id, filter: 'SOLD', intent: 'restock' },
-                                    })
-                              }
-                              disabled={updatingItemId === item.id}
-                            >
-                              <Text style={styles.itemActionText}>
-                                {updatingItemId === item.id ? 'Saving…' : canRelist ? 'Relist item' : 'Add stock'}
-                              </Text>
-                            </TouchableOpacity>
-                          </>
-                        ) : (
+                      <View style={styles.itemBody}>
+                        <Text style={styles.itemTitle}>{item.title}</Text>
+                        <Text style={styles.itemMeta}>
+                          {item.category ? `${item.category} · ` : ''}{formatItemPrice(item.priceAmount, item.currency)} · {stockSummary(item)}
+                        </Text>
+                        <View style={styles.itemActions}>
                           <TouchableOpacity
-                            style={styles.itemActionBtn}
-                            onPress={() => confirmItemAction(item, 'publish-item')}
+                            style={[styles.itemActionBtn, updatingItemId === item.id && styles.itemActionBtnDisabled]}
+                            onPress={() => setActionSheetItem(item)}
                             disabled={updatingItemId === item.id}
                           >
                             <Text style={styles.itemActionText}>
-                              {updatingItemId === item.id ? 'Saving…' : 'Move to live'}
+                              {updatingItemId === item.id ? 'Saving…' : manageLabel}
                             </Text>
                           </TouchableOpacity>
-                        )}
+                        </View>
                       </View>
                     </View>
-                    <View style={[styles.statusPill, pillStyles.container]}>
-                      <Text style={[styles.statusText, pillStyles.text]}>
-                        {stockLabel(item)}
-                      </Text>
-                    </View>
-                  </View>
                   )
                 })}
               </View>
@@ -542,7 +601,174 @@ export default function TailorShopScreen() {
           </>
         )}
       </ScrollView>
+      <ItemActionsSheet
+        item={actionSheetItem}
+        updating={!!actionSheetItem && updatingItemId === actionSheetItem.id}
+        onClose={() => setActionSheetItem(null)}
+        onEdit={(item, fallbackFilter, intent) => openItemEditor(item, fallbackFilter, intent)}
+        onAction={(item, action) => runSheetAction(item, action)}
+      />
     </SafeAreaView>
+  )
+}
+
+function ItemActionsSheet({
+  item,
+  updating,
+  onClose,
+  onEdit,
+  onAction,
+}: {
+  item: SellerItem | null
+  updating: boolean
+  onClose: () => void
+  onEdit: (item: SellerItem, fallbackFilter: Filter, intent?: 'restock') => void
+  onAction: (item: SellerItem, action: SellerItemAction) => void
+}) {
+  const insets = useSafeAreaInsets()
+  const status = item ? effectiveStockStatus(item) : 'HIDDEN'
+  const sheetBottomPadding =
+    Platform.OS === 'android'
+      ? Math.max(insets.bottom + 52, 76)
+      : Math.max(insets.bottom + Spacing.lg, Spacing.xxl)
+
+  return (
+    <Modal visible={!!item} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.sheetOverlay}>
+        <TouchableOpacity style={styles.sheetScrim} activeOpacity={1} onPress={onClose} />
+        <View style={[styles.sheet, { paddingBottom: sheetBottomPadding }]}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.sheetHeader}>
+            <View style={styles.sheetTitleWrap}>
+              <Text style={styles.sheetTitle}>{item?.title ?? 'Item options'}</Text>
+              <Text style={styles.sheetSubtitle}>Update status, stock, and listing details for this item.</Text>
+            </View>
+            <TouchableOpacity style={styles.sheetClose} onPress={onClose}>
+              <Feather name="x" size={18} color={Colors.ink} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView
+            style={styles.sheetOptions}
+            contentContainerStyle={styles.sheetOptionsContent}
+            showsVerticalScrollIndicator={false}
+          >
+            {item && status === 'HIDDEN' ? (
+              <>
+                <ItemSheetOption
+                  icon="upload-cloud"
+                  title="Move to live"
+                  body="Publish this draft once photos, fit guide, stock, and fulfillment look right."
+                  disabled={updating}
+                  onPress={() => onAction(item, 'publish-item')}
+                />
+                <ItemSheetOption
+                  icon="edit-3"
+                  title="Edit draft"
+                  body="Adjust photos, sizes, stock, or fulfillment before publishing."
+                  disabled={updating}
+                  onPress={() => onEdit(item, 'DRAFTS')}
+                />
+                <ItemSheetOption
+                  icon="trash-2"
+                  title="Delete draft"
+                  body="Remove this draft before it goes live."
+                  destructive
+                  disabled={updating}
+                  onPress={() => onAction(item, 'delete-item')}
+                />
+              </>
+            ) : null}
+
+            {item && item.isLive && status !== 'SOLD_OUT' ? (
+              <>
+                <ItemSheetOption
+                  icon="check-circle"
+                  title="Mark sold"
+                  body="Move this item to Sold and stop showing it to buyers."
+                  disabled={updating}
+                  onPress={() => onAction(item, 'mark-sold')}
+                />
+                <ItemSheetOption
+                  icon="edit-3"
+                  title="Edit item"
+                  body="Update listing details without changing order history."
+                  disabled={updating}
+                  onPress={() => onEdit(item, 'LIVE')}
+                />
+                <ItemSheetOption
+                  icon="eye-off"
+                  title="Move to draft"
+                  body="Hide this item from buyers while you revise it."
+                  disabled={updating}
+                  onPress={() => onAction(item, 'hide-item')}
+                />
+              </>
+            ) : null}
+
+            {item && status === 'SOLD_OUT' ? (
+              <>
+                <ItemSheetOption
+                  icon={item.inventoryQuantity > 0 ? 'refresh-cw' : 'plus-circle'}
+                  title={item.inventoryQuantity > 0 ? 'Relist item' : 'Add stock'}
+                  body={
+                    item.inventoryQuantity > 0
+                      ? 'Put this item back in the live shop with the current stock.'
+                      : 'Add units by size before this item can go live again.'
+                  }
+                  disabled={updating}
+                  onPress={() =>
+                    item.inventoryQuantity > 0
+                      ? onAction(item, 'relist-item')
+                      : onEdit(item, 'SOLD', 'restock')
+                  }
+                />
+                <ItemSheetOption
+                  icon="edit-3"
+                  title="Edit sold item"
+                  body="Update details or prepare this item for restock."
+                  disabled={updating}
+                  onPress={() => onEdit(item, 'SOLD')}
+                />
+              </>
+            ) : null}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  )
+}
+
+function ItemSheetOption({
+  icon,
+  title,
+  body,
+  destructive,
+  disabled,
+  onPress,
+}: {
+  icon: keyof typeof Feather.glyphMap
+  title: string
+  body: string
+  destructive?: boolean
+  disabled?: boolean
+  onPress: () => void
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.sheetOption, disabled && styles.sheetOptionDisabled]}
+      onPress={onPress}
+      disabled={disabled}
+    >
+      <View style={[styles.sheetOptionIcon, destructive && styles.sheetOptionIconDanger]}>
+        <Feather name={icon} size={18} color={destructive ? Colors.error : Colors.needleGreen} />
+      </View>
+      <View style={styles.sheetOptionText}>
+        <Text style={[styles.sheetOptionTitle, destructive && styles.sheetOptionTitleDanger]}>{title}</Text>
+        <Text style={styles.sheetOptionBody}>{body}</Text>
+      </View>
+      <Feather name="chevron-right" size={18} color={Colors.midGrey} />
+    </TouchableOpacity>
   )
 }
 
@@ -551,7 +777,7 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   content: { padding: Spacing.lg, gap: Spacing.md, paddingBottom: Spacing.xxl },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  title: { fontSize: 28, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  title: { fontSize: 28, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
   addBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -563,9 +789,6 @@ const styles = StyleSheet.create({
     minHeight: 44,
   },
   addBtnText: { color: Colors.textInverse, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
-  bestUseCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 14, gap: 4, ...Shadow.sm },
-  bestUseEyebrow: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.6 },
-  bestUseText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
   stockAlertCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
@@ -612,18 +835,27 @@ const styles = StyleSheet.create({
   emptyHint: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18, textAlign: 'center' },
   itemList: { gap: Spacing.sm },
   itemCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: 12,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 12,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 14,
     ...Shadow.sm,
   },
+  itemMediaWrap: {
+    width: 116,
+    height: 156,
+    borderRadius: Radius.md,
+    overflow: 'hidden',
+    backgroundColor: Colors.needleGreenLight,
+  },
   itemThumb: {
-    width: 60,
-    height: 60,
-    borderRadius: Radius.sm,
+    width: '100%',
+    height: '100%',
+    borderRadius: Radius.md,
     backgroundColor: Colors.lightGrey,
   },
   itemThumbPlaceholder: {
@@ -632,23 +864,26 @@ const styles = StyleSheet.create({
   },
   itemBody: {
     flex: 1,
-    gap: 6,
+    minWidth: 0,
+    minHeight: 156,
+    gap: 8,
+    justifyContent: 'space-between',
   },
-  itemTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  itemTitle: { fontSize: 17, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display, lineHeight: 22 },
   itemMeta: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 1, lineHeight: 18 },
   itemActions: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: Spacing.xs,
   },
   itemActionBtn: {
     backgroundColor: Colors.needleGreen,
-    borderRadius: Radius.full,
+    borderRadius: Radius.md,
     paddingHorizontal: 14,
     paddingVertical: 8,
     minHeight: 44,
     alignItems: 'center',
     justifyContent: 'center',
+    flex: 1,
   },
   itemActionBtnGhost: {
     backgroundColor: Colors.white,
@@ -659,6 +894,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.error + '40',
+  },
+  itemActionBtnDisabled: {
+    opacity: 0.55,
   },
   itemActionText: {
     fontSize: FontSize.xs,
@@ -676,6 +914,13 @@ const styles = StyleSheet.create({
     color: Colors.error,
   },
   statusPill: { borderRadius: Radius.full, paddingHorizontal: Spacing.sm, paddingVertical: 5 },
+  statusPillOverlay: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    borderWidth: 1,
+    borderColor: Colors.white + 'AA',
+  },
   statusLive: { backgroundColor: Colors.needleGreenLight },
   statusWarning: { backgroundColor: Colors.kanteRust + '15' },
   statusMuted: { backgroundColor: Colors.bone },
@@ -683,4 +928,111 @@ const styles = StyleSheet.create({
   statusLiveText: { color: Colors.needleGreen },
   statusWarningText: { color: Colors.warning },
   statusMutedText: { color: Colors.midGrey },
+  sheetOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  sheetScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: Colors.ink + '66',
+  },
+  sheet: {
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    paddingHorizontal: Spacing.xl,
+    paddingTop: Spacing.md,
+    gap: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    maxHeight: '82%',
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 4,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.lightGrey,
+    marginBottom: Spacing.sm,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+    marginBottom: Spacing.xs,
+  },
+  sheetTitleWrap: {
+    flex: 1,
+    gap: 4,
+  },
+  sheetTitle: {
+    fontFamily: Fonts.display,
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 24,
+  },
+  sheetSubtitle: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+  },
+  sheetClose: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.bone,
+  },
+  sheetOptions: {
+    flexGrow: 0,
+  },
+  sheetOptionsContent: {
+    gap: Spacing.sm,
+    paddingBottom: Spacing.xs,
+  },
+  sheetOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    minHeight: 70,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    padding: Spacing.md,
+  },
+  sheetOptionDisabled: {
+    opacity: 0.55,
+  },
+  sheetOptionIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  sheetOptionIconDanger: {
+    backgroundColor: Colors.errorLight,
+  },
+  sheetOptionText: {
+    flex: 1,
+    gap: 2,
+  },
+  sheetOptionTitle: {
+    fontSize: FontSize.sm,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+  },
+  sheetOptionTitleDanger: {
+    color: Colors.error,
+  },
+  sheetOptionBody: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    lineHeight: 18,
+  },
 })

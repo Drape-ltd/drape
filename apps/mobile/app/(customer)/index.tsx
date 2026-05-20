@@ -1,32 +1,45 @@
-import { useCallback, useState, useRef, useEffect } from 'react'
+import { useCallback, useMemo, useState, useRef, useEffect } from 'react'
 import {
-  View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  RefreshControl, TextInput, ActivityIndicator,
-  Keyboard, FlatList, useWindowDimensions,
-  Modal, KeyboardAvoidingView, Platform,
-  type StyleProp, type ViewStyle,
+  View,
+  Text,
+  ScrollView,
+  StyleSheet,
+  TouchableOpacity,
+  RefreshControl,
+  TextInput,
+  ActivityIndicator,
+  Keyboard,
+  FlatList,
+  useWindowDimensions,
+  Modal,
+  KeyboardAvoidingView,
+  Platform,
+  type StyleProp,
+  type ViewStyle,
 } from 'react-native'
 import { useRouter, useFocusEffect } from 'expo-router'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Feather } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
 import { customerOrderStageLabel } from '@/lib/customer-order-copy'
 import { supabase } from '@/lib/supabase'
+import {
+  loadRecentlyViewedTailors,
+  saveRecentlyViewedTailor,
+  type RecentlyViewedTailor,
+} from '@/lib/recently-viewed-tailors'
 import { RemoteImage, TierBadgeChip, StarRating } from '@/components/ui'
-import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import type { TierBadge } from '@/components/ui'
 import type { OrderStage } from '@drape/shared/order-machine'
 import type { StorageImageBucket } from '@/lib/image-url'
 
-const RECENTLY_VIEWED_KEY  = 'drape_recently_viewed_tailors'
-const RECENT_SEARCHES_KEY  = 'drape_recent_searches'
-const LAST_SEARCH_KEY      = 'drape_last_search'
-const DISCOVER_GUIDE_KEY   = 'drape_customer_discover_best_use_dismissed'
+const RECENT_SEARCHES_KEY = 'drape_recent_searches'
+const LAST_SEARCH_KEY = 'drape_last_search'
 const CUSTOMER_ONBOARDING_KEY = 'drape_customer_onboarding_seen'
-const MAX_RECENTLY_VIEWED  = 10
-const MAX_RECENT_SEARCHES  = 5
-const PAGE_SIZE            = 20
+const MAX_RECENT_SEARCHES = 5
+const PAGE_SIZE = 20
 const HOME_BG = Colors.bone
 const PRIMARY_GREEN = Colors.needleGreen
 const CHARCOAL = Colors.ink
@@ -35,18 +48,25 @@ const MUTED_GREY = Colors.midGrey
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const STAGE_PILL_COLOR: Partial<Record<OrderStage, { bg: string; text: string }>> = {
-  PENDING_QUOTE:   { bg: Colors.boneDeep, text: PRIMARY_GREEN },
-  CONSULTATION:    { bg: Colors.boneDeep, text: PRIMARY_GREEN },
-  QUOTE_SENT:      { bg: Colors.needleGreenLight, text: PRIMARY_GREEN },
+  PENDING_QUOTE: { bg: Colors.boneDeep, text: PRIMARY_GREEN },
+  CONSULTATION: { bg: Colors.boneDeep, text: PRIMARY_GREEN },
+  QUOTE_SENT: { bg: Colors.needleGreenLight, text: PRIMARY_GREEN },
   PAYMENT_PENDING: { bg: Colors.needleGreenLight, text: PRIMARY_GREEN },
-  PAYMENT_FAILED:  { bg: Colors.kanteRustLight, text: Colors.kanteRust },
-  IN_DISPUTE:      { bg: Colors.kanteRustLight, text: Colors.kanteRust },
+  PAYMENT_FAILED: { bg: Colors.kanteRustLight, text: Colors.kanteRust },
+  IN_DISPUTE: { bg: Colors.kanteRustLight, text: Colors.kanteRust },
 }
 
-// Ordered by broadest appeal first. Globally understandable.
-// Future: replace with dynamic categories derived from search frequency or personalisation.
-const BROWSE_STYLES = ['Suits', 'Bridal', 'Casual', 'Traditional', 'Bespoke']
-const FILTER_SPECIALTIES = ['Agbada', 'Ankara', 'Suits', 'Saree', 'Kaftan', 'Trousers', 'Dresses', 'Gele', 'Other']
+const FILTER_SPECIALTIES = [
+  'Agbada',
+  'Ankara',
+  'Suits',
+  'Saree',
+  'Kaftan',
+  'Trousers',
+  'Dresses',
+  'Gele',
+  'Other',
+]
 
 type AvailFilter = 'ALL' | 'OPEN' | 'LIMITED'
 type MinRatingFilter = null | 4 | 4.5 | 5
@@ -61,6 +81,16 @@ type ActiveOrder = {
   stage: OrderStage
   tailorName: string
   estimatedDate: string | null
+}
+
+type ActiveOrderRow = {
+  id: string
+  reference: string
+  garment_type: string
+  order_kind?: 'CUSTOM' | 'READY_MADE' | null
+  stage: OrderStage
+  quoted_completion_date: string | null
+  tailor_profiles?: { display_name?: string | null } | null
 }
 
 type TailorCard = {
@@ -83,6 +113,8 @@ type TailorCard = {
   avgResponseHours?: number | null
   rankingScore: number
 }
+
+type TailorCardWithRecent = TailorCard & RecentlyViewedTailor
 
 type LastSearch = {
   query: string
@@ -137,13 +169,18 @@ function orderPriority(stage: OrderStage): number {
 }
 
 function asStringList(value: unknown): string[] {
-  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+  if (Array.isArray(value))
+    return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
   if (typeof value === 'string' && value.length > 0) return [value]
   return []
 }
 
-function resolveFallbackExploreImage(t: TailorDiscoveryRow): { uri: string | null; bucket: StorageImageBucket | null } {
-  const avatarUrl = typeof t.avatar_url === 'string' && t.avatar_url.trim().length > 0 ? t.avatar_url : null
+function resolveFallbackExploreImage(t: TailorDiscoveryRow): {
+  uri: string | null
+  bucket: StorageImageBucket | null
+} {
+  const avatarUrl =
+    typeof t.avatar_url === 'string' && t.avatar_url.trim().length > 0 ? t.avatar_url : null
   if (avatarUrl) return { uri: avatarUrl, bucket: 'avatars' }
 
   const portfolioPhotos = asStringList(t.portfolio_photo_urls)
@@ -152,17 +189,33 @@ function resolveFallbackExploreImage(t: TailorDiscoveryRow): { uri: string | nul
 
 function availabilityHint(tailor: TailorCard): string | null {
   if (tailor.availability === 'LIMITED') return 'Taking a limited number of orders'
-  if (tailor.avgResponseHours != null) return `Usually replies in about ${Math.round(tailor.avgResponseHours)}h`
+  if (tailor.avgResponseHours != null)
+    return `Usually replies in about ${Math.round(tailor.avgResponseHours)}h`
   return null
 }
 
+function serviceLabel(tailor: TailorCard): string | null {
+  const services = [
+    tailor.supportsCustomOrders ? 'Custom orders' : null,
+    tailor.supportsReadyMade ? 'Ready-made shop' : null,
+  ].filter(Boolean)
+  return services.length > 0 ? services.join(' · ') : null
+}
+
 function initials(name: string) {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join('') || 'D'
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase())
+      .join('') || 'D'
+  )
+}
+
+function toTierBadge(tier: string): TierBadge | null {
+  if (tier === 'VERIFIED' || tier === 'RISING' || tier === 'MASTER') return tier
+  return null
 }
 
 function ExploreMediaPlaceholder({
@@ -190,60 +243,65 @@ function storageKey(base: string, userId: string | undefined) {
   return `${base}:${userId ?? 'guest'}`
 }
 
-async function saveRecentlyViewed(userId: string | undefined, tailor: TailorCard) {
-  try {
-    const raw = await AsyncStorage.getItem(storageKey(RECENTLY_VIEWED_KEY, userId))
-    const existing: TailorCard[] = raw ? JSON.parse(raw) : []
-    const updated = [tailor, ...existing.filter((t) => t.id !== tailor.id)].slice(0, MAX_RECENTLY_VIEWED)
-    await AsyncStorage.setItem(storageKey(RECENTLY_VIEWED_KEY, userId), JSON.stringify(updated))
-  } catch {}
-}
-
-async function loadRecentlyViewed(userId: string | undefined): Promise<TailorCard[]> {
-  try {
-    const raw = await AsyncStorage.getItem(storageKey(RECENTLY_VIEWED_KEY, userId))
-    return raw ? JSON.parse(raw) : []
-  } catch { return [] }
-}
-
 async function saveRecentSearch(userId: string | undefined, q: string) {
   try {
     const raw = await AsyncStorage.getItem(storageKey(RECENT_SEARCHES_KEY, userId))
     const existing: string[] = raw ? JSON.parse(raw) : []
-    const updated = [q, ...existing.filter((s) => s.toLowerCase() !== q.toLowerCase())].slice(0, MAX_RECENT_SEARCHES)
+    const updated = [q, ...existing.filter((s) => s.toLowerCase() !== q.toLowerCase())].slice(
+      0,
+      MAX_RECENT_SEARCHES
+    )
     await AsyncStorage.setItem(storageKey(RECENT_SEARCHES_KEY, userId), JSON.stringify(updated))
-  } catch {}
+  } catch {
+    // Recent searches are a local convenience cache; never block Explore on it.
+  }
 }
 
 async function loadRecentSearches(userId: string | undefined): Promise<string[]> {
   try {
     const raw = await AsyncStorage.getItem(storageKey(RECENT_SEARCHES_KEY, userId))
     return raw ? JSON.parse(raw) : []
-  } catch { return [] }
+  } catch {
+    return []
+  }
 }
 
 async function clearRecentSearches(userId: string | undefined) {
-  try { await AsyncStorage.removeItem(storageKey(RECENT_SEARCHES_KEY, userId)) } catch {}
+  try {
+    await AsyncStorage.removeItem(storageKey(RECENT_SEARCHES_KEY, userId))
+  } catch {
+    // Non-critical local cache cleanup.
+  }
 }
 
 async function saveLastSearch(userId: string | undefined, ls: LastSearch) {
-  try { await AsyncStorage.setItem(storageKey(LAST_SEARCH_KEY, userId), JSON.stringify(ls)) } catch {}
+  try {
+    await AsyncStorage.setItem(storageKey(LAST_SEARCH_KEY, userId), JSON.stringify(ls))
+  } catch {
+    // Non-critical local cache write.
+  }
 }
 
 async function clearLastSearch(userId: string | undefined) {
-  try { await AsyncStorage.removeItem(storageKey(LAST_SEARCH_KEY, userId)) } catch {}
+  try {
+    await AsyncStorage.removeItem(storageKey(LAST_SEARCH_KEY, userId))
+  } catch {
+    // Non-critical local cache cleanup.
+  }
 }
 
 async function loadLastSearch(userId: string | undefined): Promise<LastSearch | null> {
   try {
     const raw = await AsyncStorage.getItem(storageKey(LAST_SEARCH_KEY, userId))
-    const parsed = raw ? JSON.parse(raw) as LastSearch : null
+    const parsed = raw ? (JSON.parse(raw) as LastSearch) : null
     if (!parsed?.query?.trim() || parsed.count <= 0) {
       await clearLastSearch(userId)
       return null
     }
     return parsed
-  } catch { return null }
+  } catch {
+    return null
+  }
 }
 
 // ─── Query helpers ─────────────────────────────────────────────────────────────
@@ -288,7 +346,8 @@ async function hydrateTailorCardsWithExploreCovers(tailors: TailorCard[]): Promi
   const coverByTailor = new Map<string, string>()
   for (const row of (data ?? []) as PortfolioCoverRow[]) {
     const tailorId = typeof row.tailor_profile_id === 'string' ? row.tailor_profile_id : null
-    const imageUrl = typeof row.image_url === 'string' && row.image_url.trim().length > 0 ? row.image_url : null
+    const imageUrl =
+      typeof row.image_url === 'string' && row.image_url.trim().length > 0 ? row.image_url : null
     if (!tailorId || !imageUrl || coverByTailor.has(tailorId)) continue
     coverByTailor.set(tailorId, imageUrl)
   }
@@ -346,43 +405,43 @@ function applyLocationBoost(tailors: TailorCard[], location: string): TailorCard
 export default function CustomerHomeScreen() {
   const router = useRouter()
   const { user } = useAuth()
+  const insets = useSafeAreaInsets()
+  const userId = user?.id
 
   // Browse data
-  const [activeOrders, setActiveOrders]     = useState<ActiveOrder[]>([])
-  const [hasOrderHistory, setHasOrderHistory] = useState(false)
-  const [allTailors, setAllTailors]         = useState<TailorCard[]>([])
+  const [activeOrders, setActiveOrders] = useState<ActiveOrder[]>([])
+  const [allTailors, setAllTailors] = useState<TailorCard[]>([])
   const [recentlyViewed, setRecentlyViewed] = useState<TailorCard[]>([])
-  const [refreshing, setRefreshing]         = useState(false)
-  const [fetchError, setFetchError]         = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const [fetchError, setFetchError] = useState(false)
 
   // Search state
-  const [query, setQuery]                   = useState('')
-  const [searchFocused, setSearchFocused]   = useState(false)
-  const [searchResults, setSearchResults]   = useState<TailorCard[]>([])
-  const [searching, setSearching]           = useState(false)
-  const [searchPending, setSearchPending]   = useState(false)
-  const [loadingMore, setLoadingMore]       = useState(false)
+  const [query, setQuery] = useState('')
+  const [searchFocused, setSearchFocused] = useState(false)
+  const [searchResults, setSearchResults] = useState<TailorCard[]>([])
+  const [searching, setSearching] = useState(false)
+  const [searchPending, setSearchPending] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [searchFetchError, setSearchFetchError] = useState(false)
-  const [hasMore, setHasMore]               = useState(false)
-  const [resultOffset, setResultOffset]     = useState(0)
-  const [availFilter, setAvailFilter]       = useState<AvailFilter>('ALL')
+  const [hasMore, setHasMore] = useState(false)
+  const [resultOffset, setResultOffset] = useState(0)
+  const [availFilter, setAvailFilter] = useState<AvailFilter>('ALL')
   const [filterSheetOpen, setFilterSheetOpen] = useState(false)
   const [specialtyFilters, setSpecialtyFilters] = useState<string[]>([])
   const [locationFilter, setLocationFilter] = useState('')
   const [minRatingFilter, setMinRatingFilter] = useState<MinRatingFilter>(null)
   const [priceMaxFilter, setPriceMaxFilter] = useState('')
   const [recentSearches, setRecentSearches] = useState<string[]>([])
-  const [lastSearch, setLastSearch]         = useState<LastSearch | null>(null)
-  const [showGuide, setShowGuide]           = useState(true)
+  const [lastSearch, setLastSearch] = useState<LastSearch | null>(null)
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [onboardingStep, setOnboardingStep] = useState(0)
 
   // In-memory result cache: query key → first-page results
   const resultCacheRef = useRef<Map<string, TailorCard[]>>(new Map())
-  const debounceRef    = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const inputRef       = useRef<TextInput>(null)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const inputRef = useRef<TextInput>(null)
 
-  const isSearchActive  = query.trim().length > 0
+  const isSearchActive = query.trim().length > 0
   const showSuggestions = searchFocused && !isSearchActive
 
   const activeFilterCount =
@@ -399,7 +458,10 @@ export default function CustomerHomeScreen() {
       const tags = tailor.specialtyTags.map((tag) => tag.toLowerCase())
       const matchesSpecialty = specialtyFilters.some((specialty) => {
         const lower = specialty.toLowerCase()
-        return tags.some((tag) => tag.includes(lower)) || tailor.displayName.toLowerCase().includes(lower)
+        return (
+          tags.some((tag) => tag.includes(lower)) ||
+          tailor.displayName.toLowerCase().includes(lower)
+        )
       })
       if (!matchesSpecialty) return false
     }
@@ -413,89 +475,63 @@ export default function CustomerHomeScreen() {
     }
     return true
   })
+  const recentlyViewedIds = useMemo(
+    () => new Set(recentlyViewed.map((tailor) => tailor.id)),
+    [recentlyViewed],
+  )
 
   // ── Persistence load on focus ─────────────────────────────────────────────
 
-  useFocusEffect(useCallback(() => {
-    Promise.all([
-      loadRecentlyViewed(user?.id),
-      loadRecentSearches(user?.id),
-      loadLastSearch(user?.id),
-      AsyncStorage.getItem(storageKey(DISCOVER_GUIDE_KEY, user?.id)).catch(() => null),
-      AsyncStorage.getItem(storageKey(CUSTOMER_ONBOARDING_KEY, user?.id)).catch(() => null),
-    ]).then(([rv, rs, ls, guideValue, onboardingValue]) => {
-      setRecentlyViewed(rv)
-      setRecentSearches(rs)
-      setLastSearch(ls)
-      setShowGuide(guideValue !== '1')
-      setShowOnboarding(onboardingValue !== '1')
-    })
-  }, [user?.id]))
-
-  async function dismissGuide() {
-    setShowGuide(false)
-    try {
-      await AsyncStorage.setItem(storageKey(DISCOVER_GUIDE_KEY, user?.id), '1')
-    } catch {}
-  }
+  useFocusEffect(
+    useCallback(() => {
+      Promise.all([
+        loadRecentlyViewedTailors<TailorCardWithRecent>(user?.id),
+        loadRecentSearches(user?.id),
+        loadLastSearch(user?.id),
+        AsyncStorage.getItem(storageKey(CUSTOMER_ONBOARDING_KEY, user?.id)).catch(() => null),
+      ]).then(([rv, rs, ls, onboardingValue]) => {
+        setRecentlyViewed(rv)
+        setRecentSearches(rs)
+        setLastSearch(ls)
+        setShowOnboarding(onboardingValue !== '1')
+      })
+    }, [user?.id])
+  )
 
   async function dismissOnboarding() {
     setShowOnboarding(false)
     setOnboardingStep(0)
     try {
       await AsyncStorage.setItem(storageKey(CUSTOMER_ONBOARDING_KEY, user?.id), '1')
-    } catch {}
-  }
-
-  useFocusEffect(useCallback(() => {
-    if (!user?.id) return undefined
-    void fetchData()
-    return undefined
-  }, [user?.id]))
-
-  // ── Debounced live search — resets pagination on new query ─────────────────
-
-  useEffect(() => {
-    if (!isSearchActive) {
-      setSearchResults([])
-      setSearchFetchError(false)
-      setHasMore(false)
-      setResultOffset(0)
-      setSearchPending(false)
-      return
+    } catch {
+      // Onboarding dismissal is local preference only.
     }
-    setSearchPending(true)
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => {
-      runSearch(query, 0)
-    }, 300)
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
-  }, [query])
+  }
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
-  async function fetchData() {
+  const fetchData = useCallback(async () => {
     setFetchError(false)
     try {
-      const [ordersRes, historyRes, tailorsRes] = await Promise.allSettled([
+      const [ordersRes, tailorsRes] = await Promise.allSettled([
         supabase
           .from('orders')
-          .select(`
+          .select(
+            `
             id, reference, garment_type, order_kind, stage,
             tailor_profiles!tailor_profile_id(display_name),
             quoted_completion_date
-          `)
-          .eq('customer_id', user?.id)
+          `
+          )
+          .eq('customer_id', userId)
           .not('stage', 'in', '("COMPLETE","DECLINED","EXPIRED","REFUNDED","CANCELLED")')
           .order('created_at', { ascending: false })
           .limit(3),
         supabase
-          .from('orders')
-          .select('id', { count: 'exact', head: true })
-          .eq('customer_id', user?.id),
-        supabase
           .from('tailor_profiles')
-          .select('id, display_name, location, seller_type, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, availability, avg_response_hours, supports_custom_orders, supports_ready_made, ranking_score')
+          .select(
+            'id, display_name, location, seller_type, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, availability, avg_response_hours, supports_custom_orders, supports_ready_made, ranking_score'
+          )
           .eq('is_live', true)
           .order('ranking_score', { ascending: false })
           .limit(30),
@@ -511,27 +547,22 @@ export default function CustomerHomeScreen() {
       if (ordersFailed && tailorsFailed) {
         setFetchError(true)
         setActiveOrders([])
-        setHasOrderHistory(false)
         setAllTailors([])
         return
       }
 
-      const orderRows =
+      const orderRows: ActiveOrderRow[] =
         ordersRes.status === 'fulfilled' && !ordersRes.value.error
-          ? ((ordersRes.value.data ?? []) as any[])
+          ? ((ordersRes.value.data ?? []) as ActiveOrderRow[])
           : []
-      const historyCount =
-        historyRes.status === 'fulfilled' && !historyRes.value.error
-          ? (historyRes.value.count ?? 0)
-          : 0
-      const tailorRows =
+      const tailorRows: TailorDiscoveryRow[] | null =
         tailorsRes.status === 'fulfilled' && !tailorsRes.value.error
-          ? ((tailorsRes.value.data ?? []) as any[])
+          ? ((tailorsRes.value.data ?? []) as TailorDiscoveryRow[])
           : null
 
       setActiveOrders(
         orderRows
-          .map((o: any) => ({
+          .map((o) => ({
             id: o.id,
             reference: o.reference,
             garmentType: o.garment_type,
@@ -542,7 +573,6 @@ export default function CustomerHomeScreen() {
           }))
           .sort((a, b) => orderPriority(a.stage) - orderPriority(b.stage))
       )
-      setHasOrderHistory(historyCount > 0)
 
       if (tailorRows) {
         setAllTailors(await hydrateTailorCardsWithExploreCovers(tailorRows.map(mapTailor)))
@@ -552,14 +582,22 @@ export default function CustomerHomeScreen() {
     } catch {
       setFetchError(true)
     }
-  }
+  }, [userId])
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!userId) return undefined
+      void fetchData()
+      return undefined
+    }, [fetchData, userId])
+  )
 
   /**
    * runSearch — handles both fresh searches (offset=0) and pagination.
    * offset=0: show cached results immediately, fetch fresh in parallel.
    * offset>0: append results to existing list.
    */
-  async function runSearch(q: string, offset: number) {
+  const runSearch = useCallback(async (q: string, offset: number) => {
     const { specialty, location, general } = parseQuery(q)
 
     // For fresh searches, show cached results instantly while fetching fresh
@@ -576,7 +614,9 @@ export default function CustomerHomeScreen() {
     try {
       const baseQuery = supabase
         .from('tailor_profiles')
-        .select('id, display_name, location, seller_type, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, availability, avg_response_hours, supports_custom_orders, supports_ready_made, ranking_score')
+        .select(
+          'id, display_name, location, seller_type, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, availability, avg_response_hours, supports_custom_orders, supports_ready_made, ranking_score'
+        )
         .eq('is_live', true)
 
       let sq = baseQuery
@@ -585,7 +625,9 @@ export default function CustomerHomeScreen() {
       if (specialty) {
         sq = sq.or(`display_name.ilike.%${specialty}%,specialty_tags.cs.{${specialty}}`)
       } else if (general) {
-        sq = sq.or(`display_name.ilike.%${general}%,location.ilike.%${general}%,specialty_tags.cs.{${general}}`)
+        sq = sq.or(
+          `display_name.ilike.%${general}%,location.ilike.%${general}%,specialty_tags.cs.{${general}}`
+        )
       }
       // "Sellers in London" or location-only: try strict location matches first.
 
@@ -595,7 +637,9 @@ export default function CustomerHomeScreen() {
       if (location) {
         let strictQuery = baseQuery.ilike('location', `%${location}%`)
         if (specialty) {
-          strictQuery = strictQuery.or(`display_name.ilike.%${specialty}%,specialty_tags.cs.{${specialty}}`)
+          strictQuery = strictQuery.or(
+            `display_name.ilike.%${specialty}%,specialty_tags.cs.{${specialty}}`
+          )
         }
 
         const { data: strictData, error: strictError } = await strictQuery
@@ -633,7 +677,7 @@ export default function CustomerHomeScreen() {
         resultCacheRef.current.set(q, page)
         setResultOffset(page.length)
 
-        saveRecentSearch(user?.id, q)
+        saveRecentSearch(userId, q)
         if (page.length > 0) {
           const ls: LastSearch = {
             query: q,
@@ -641,13 +685,13 @@ export default function CustomerHomeScreen() {
             thumbnail: page[0]?.portfolioPhoto ?? null,
             thumbnailBucket: page[0]?.exploreImageBucket ?? null,
           }
-          saveLastSearch(user?.id, ls)
+          saveLastSearch(userId, ls)
           setLastSearch(ls)
         } else {
-          clearLastSearch(user?.id)
+          clearLastSearch(userId)
           setLastSearch(null)
         }
-        loadRecentSearches(user?.id).then(setRecentSearches)
+        loadRecentSearches(userId).then(setRecentSearches)
       } else {
         setSearchResults((prev) => [...prev, ...page])
         setResultOffset((prev) => prev + page.length)
@@ -668,18 +712,44 @@ export default function CustomerHomeScreen() {
         setLoadingMore(false)
       }
     }
-  }
+  }, [userId])
+
+  // ── Debounced live search — resets pagination on new query ─────────────────
+
+  useEffect(() => {
+    if (!isSearchActive) {
+      const resetTimer = setTimeout(() => {
+        setSearchResults([])
+        setSearchFetchError(false)
+        setHasMore(false)
+        setResultOffset(0)
+        setSearchPending(false)
+      }, 0)
+      return () => clearTimeout(resetTimer)
+    }
+    const pendingTimer = setTimeout(() => {
+      setSearchPending(true)
+    }, 0)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      void runSearch(query, 0)
+    }, 300)
+    return () => {
+      clearTimeout(pendingTimer)
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [isSearchActive, query, runSearch])
 
   function loadMoreResults() {
     if (!hasMore || loadingMore || searching) return
-    runSearch(query, resultOffset)
+    void runSearch(query, resultOffset)
   }
 
   async function onRefresh() {
     setRefreshing(true)
     await fetchData()
     const [rv, rs, ls] = await Promise.all([
-      loadRecentlyViewed(user?.id),
+      loadRecentlyViewedTailors<TailorCardWithRecent>(user?.id),
       loadRecentSearches(user?.id),
       loadLastSearch(user?.id),
     ])
@@ -690,7 +760,7 @@ export default function CustomerHomeScreen() {
   }
 
   function navigateToTailor(tailor: TailorCard) {
-    saveRecentlyViewed(user?.id, tailor)
+    saveRecentlyViewedTailor(user?.id, tailor)
     router.navigate(`/(customer)/tailor/${tailor.id}`)
   }
 
@@ -705,13 +775,6 @@ export default function CustomerHomeScreen() {
     setSearchFocused(false)
     setAvailFilter('ALL')
     Keyboard.dismiss()
-  }
-
-  function openDrapeVision() {
-    router.push({
-      pathname: DRAPE_VISION_ROUTE,
-      params: { mode: 'customer_scan', returnTo: '/(customer)' },
-    } as never)
   }
 
   function handleBlur() {
@@ -763,7 +826,10 @@ export default function CustomerHomeScreen() {
               onBlur={handleBlur}
               returnKeyType="search"
               onSubmitEditing={() => {
-                if (query.trim()) { setSearchFocused(false); runSearch(query, 0) }
+                if (query.trim()) {
+                  setSearchFocused(false)
+                  runSearch(query, 0)
+                }
               }}
               autoCorrect={false}
               autoCapitalize="none"
@@ -798,19 +864,19 @@ export default function CustomerHomeScreen() {
               <Text style={styles.cancelText}>Cancel</Text>
             </TouchableOpacity>
           )}
-          {!searchFocused && !isSearchActive && (
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel="Open Drape Vision"
-              onPress={openDrapeVision}
-              style={styles.visionIconBtn}
-            >
-              <Feather name="aperture" size={18} color={PRIMARY_GREEN} />
-              <View style={styles.visionStatusDot} />
-            </TouchableOpacity>
-          )}
         </View>
-
+        {!searchFocused && !isSearchActive ? (
+          <View style={styles.exploreHeader}>
+            <View style={styles.exploreHeaderText}>
+              <Text style={styles.exploreTitle}>Find your tailor</Text>
+              <Text style={styles.exploreSubtitle}>
+                {allTailors.length === 1
+                  ? '1 vetted profile ready to browse'
+                  : `${allTailors.length} vetted profiles ready to browse`}
+              </Text>
+            </View>
+          </View>
+        ) : null}
       </View>
 
       <SearchFilterSheet
@@ -834,7 +900,10 @@ export default function CustomerHomeScreen() {
       {showSuggestions ? (
         <ScrollView
           style={styles.scroll}
-          contentContainerStyle={styles.suggestionsContent}
+          contentContainerStyle={[
+            styles.suggestionsContent,
+            { paddingBottom: Math.max(insets.bottom + 104, 140) },
+          ]}
           keyboardShouldPersistTaps="always"
           showsVerticalScrollIndicator={false}
         >
@@ -842,19 +911,31 @@ export default function CustomerHomeScreen() {
             <View style={styles.suggestSection}>
               <View style={styles.suggestHeader}>
                 <Text style={styles.suggestTitle}>Recent searches</Text>
-                <TouchableOpacity onPress={() => { clearRecentSearches(user?.id); setRecentSearches([]) }}>
+                <TouchableOpacity
+                  onPress={() => {
+                    clearRecentSearches(user?.id)
+                    setRecentSearches([])
+                  }}
+                >
                   <Text style={styles.suggestClear}>Clear</Text>
                 </TouchableOpacity>
               </View>
               {recentSearches.map((s, i) => (
-                <TouchableOpacity key={i} style={styles.recentSearchRow} onPress={() => applyQuery(s)}>
+                <TouchableOpacity
+                  key={i}
+                  style={styles.recentSearchRow}
+                  onPress={() => applyQuery(s)}
+                >
                   <Feather name="clock" size={16} color={Colors.midGrey} />
                   <Text style={styles.recentSearchText}>{s}</Text>
                   <TouchableOpacity
                     onPress={() => {
                       const updated = recentSearches.filter((_, j) => j !== i)
                       setRecentSearches(updated)
-                      AsyncStorage.setItem(storageKey(RECENT_SEARCHES_KEY, user?.id), JSON.stringify(updated))
+                      AsyncStorage.setItem(
+                        storageKey(RECENT_SEARCHES_KEY, user?.id),
+                        JSON.stringify(updated)
+                      )
                     }}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                     accessibilityRole="button"
@@ -884,13 +965,15 @@ export default function CustomerHomeScreen() {
             </View>
           </View>
         </ScrollView>
-
       ) : isSearchActive ? (
         // ── Search results — FlatList for lazy load ──
         <FlatList
           data={filteredResults}
           keyExtractor={(t) => t.id}
-          contentContainerStyle={styles.resultsList}
+          contentContainerStyle={[
+            styles.resultsList,
+            { paddingBottom: Math.max(insets.bottom + 104, 140) },
+          ]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           onEndReached={loadMoreResults}
@@ -898,7 +981,10 @@ export default function CustomerHomeScreen() {
           ListHeaderComponent={
             <View style={styles.resultsHeader}>
               {searching || searchPending ? (
-                <ActivityIndicator color={Colors.needleGreen} style={{ marginVertical: Spacing.lg }} />
+                <ActivityIndicator
+                  color={Colors.needleGreen}
+                  style={{ marginVertical: Spacing.lg }}
+                />
               ) : (
                 <>
                   <Text style={styles.resultsCount}>
@@ -910,24 +996,6 @@ export default function CustomerHomeScreen() {
                       <Text style={styles.clearFiltersText}>Clear all filters</Text>
                     </TouchableOpacity>
                   ) : null}
-                  {/* Availability filter chips */}
-                  <View style={styles.availRow}>
-                    {([
-                      { key: 'ALL',     label: 'All' },
-                      { key: 'OPEN',    label: 'Available' },
-                      { key: 'LIMITED', label: 'Limited' },
-                    ] as { key: AvailFilter; label: string }[]).map(({ key, label }) => (
-                      <TouchableOpacity
-                        key={key}
-                        style={[styles.availChip, availFilter === key && styles.availChipActive]}
-                        onPress={() => setAvailFilter(key)}
-                      >
-                        <Text style={[styles.availLabel, availFilter === key && styles.availLabelActive]}>
-                          {label}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
                 </>
               )}
             </View>
@@ -938,7 +1006,9 @@ export default function CustomerHomeScreen() {
                 <View style={styles.emptyStateBadge}>
                   <Text style={styles.emptyStateBadgeText}>Search</Text>
                 </View>
-                <View style={[styles.emptyStateIcon, searchFetchError && styles.emptyStateIconError]}>
+                <View
+                  style={[styles.emptyStateIcon, searchFetchError && styles.emptyStateIconError]}
+                >
                   <Feather
                     name={searchFetchError ? 'alert-circle' : 'search'}
                     size={26}
@@ -946,7 +1016,9 @@ export default function CustomerHomeScreen() {
                   />
                 </View>
                 <Text style={styles.emptyStateTitle}>
-                  {searchFetchError ? "Couldn't load search results" : 'No tailors match your search'}
+                  {searchFetchError
+                    ? "Couldn't load search results"
+                    : 'No tailors match your search'}
                 </Text>
                 <Text style={styles.emptyStateHint}>
                   {searchFetchError
@@ -966,9 +1038,13 @@ export default function CustomerHomeScreen() {
                     Keyboard.dismiss()
                   }}
                   accessibilityRole="button"
-                  accessibilityLabel={searchFetchError ? 'Try search again' : 'Clear search filters'}
+                  accessibilityLabel={
+                    searchFetchError ? 'Try search again' : 'Clear search filters'
+                  }
                 >
-                  <Text style={styles.searchRetryBtnText}>{searchFetchError ? 'Try again' : 'Clear filters'}</Text>
+                  <Text style={styles.searchRetryBtnText}>
+                    {searchFetchError ? 'Try again' : 'Clear filters'}
+                  </Text>
                 </TouchableOpacity>
                 {searchFetchError && (
                   <TouchableOpacity
@@ -987,40 +1063,39 @@ export default function CustomerHomeScreen() {
             ) : null
           }
           ListFooterComponent={
-            loadingMore ? <ActivityIndicator color={Colors.needleGreen} style={styles.loadMoreSpinner} /> : null
+            loadingMore ? (
+              <ActivityIndicator color={Colors.needleGreen} style={styles.loadMoreSpinner} />
+            ) : null
           }
           renderItem={({ item }) => (
             <SearchResultCard tailor={item} onPress={() => navigateToTailor(item)} />
           )}
         />
-
       ) : (
         // ── Default browse ──
         <ScrollView
           style={styles.scroll}
-          contentContainerStyle={styles.content}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />}
+          contentContainerStyle={[
+            styles.content,
+            { paddingBottom: Math.max(insets.bottom + 104, 140) },
+          ]}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={Colors.needleGreen}
+            />
+          }
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
           {/* Network error banner */}
           {fetchError && (
             <View style={styles.errorBanner}>
-              <Text style={styles.errorBannerText}>Couldn't load tailors. Pull down to retry, or open Orders while discovery catches up.</Text>
-            </View>
-          )}
-
-          {showGuide && (
-            <View style={styles.guideCard}>
-              <View style={styles.guideHeader}>
-                <View style={styles.heroBadge}>
-                  <Text style={styles.heroBadgeText}>Best use</Text>
-                </View>
-                <TouchableOpacity onPress={() => void dismissGuide()} style={styles.guideClose}>
-                  <Feather name="x" size={16} color={Colors.midGrey} />
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.guideTitle}>Start with a short shortlist, then place one clear brief.</Text>
+              <Text style={styles.errorBannerText}>
+                Couldn't load tailors. Pull down to retry, or open Orders while discovery catches
+                up.
+              </Text>
             </View>
           )}
 
@@ -1034,9 +1109,11 @@ export default function CustomerHomeScreen() {
               >
                 <View style={{ flex: 1, gap: 4 }}>
                   <Text style={styles.continueLabel}>Continue searching</Text>
-                  <Text style={styles.continueQuery} numberOfLines={1}>"{lastSearch.query}"</Text>
+                  <Text style={styles.continueQuery} numberOfLines={1}>
+                    "{lastSearch.query}"
+                  </Text>
                   <Text style={styles.continueMeta}>
-                    {lastSearch.count} {lastSearch.count === 1 ? 'tailor' : 'tailors'} found  ›
+                    {lastSearch.count} {lastSearch.count === 1 ? 'tailor' : 'tailors'} found ›
                   </Text>
                 </View>
                 {lastSearch.thumbnail ? (
@@ -1047,118 +1124,36 @@ export default function CustomerHomeScreen() {
                     contentFit="cover"
                     transition={120}
                     surface="customer_continue_search"
-                    fallback={(
-                      <ExploreMediaPlaceholder style={styles.continueThumbnail} name={lastSearch.query} size={18} />
-                    )}
+                    fallback={
+                      <ExploreMediaPlaceholder
+                        style={styles.continueThumbnail}
+                        name={lastSearch.query}
+                        size={18}
+                      />
+                    }
                   />
                 ) : (
-                  <ExploreMediaPlaceholder style={styles.continueThumbnail} name={lastSearch.query} size={18} />
+                  <ExploreMediaPlaceholder
+                    style={styles.continueThumbnail}
+                    name={lastSearch.query}
+                    size={18}
+                  />
                 )}
               </TouchableOpacity>
             </View>
           )}
 
-          {/* Recently Viewed */}
-          {recentlyViewed.length > 0 && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>Recently viewed</Text>
-              </View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.recentScroll}>
-                <View style={styles.recentRow}>
-                  {recentlyViewed.slice(0, 8).map((t) => (
-                    <RecentCard key={t.id} tailor={t} onPress={() => navigateToTailor(t)} />
-                  ))}
-                </View>
-              </ScrollView>
-            </View>
-          )}
-
-          {/* Active orders */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Your orders</Text>
-              <TouchableOpacity onPress={() => router.navigate('/(customer)/orders')}>
-                <Text style={styles.sectionLink}>See all  →</Text>
-              </TouchableOpacity>
-            </View>
-            {activeOrders.length > 0 ? (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.ordersScroll}>
-                <View style={styles.ordersRow}>
-                  {activeOrders.map((order) => {
-                    const c = STAGE_PILL_COLOR[order.stage as OrderStage]
-                    return (
-                      <TouchableOpacity
-                        key={order.id}
-                        style={styles.orderCard}
-                        onPress={() => router.push({
-                          pathname: '/(customer)/orders/[id]',
-                          params: { id: order.id, returnTo: '/(customer)' },
-                        })}
-                      >
-                        <View style={[styles.orderStagePill, { backgroundColor: c?.bg ?? Colors.needleGreenLight }]}>
-                          <Text style={[styles.orderStageText, { color: c?.text ?? Colors.needleGreen }]}>
-                            {customerOrderStageLabel(order.stage as OrderStage, order.orderKind)}
-                          </Text>
-                        </View>
-                        <Text style={styles.orderGarment} numberOfLines={1}>{order.garmentType}</Text>
-                        <Text style={styles.orderTailor} numberOfLines={1}>{order.tailorName}</Text>
-                        {order.estimatedDate && (
-                          <Text style={styles.orderEta}>
-                            Ready {new Date(order.estimatedDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-                          </Text>
-                        )}
-                      </TouchableOpacity>
-                    )
-                  })}
-                </View>
-              </ScrollView>
-            ) : (
-              <TouchableOpacity
-                style={styles.firstOrderCard}
-                onPress={() => inputRef.current?.focus()}
-                activeOpacity={0.85}
-              >
-                <View style={styles.firstOrderIcon}>
-                  <Feather name="search" size={20} color={Colors.needleGreen} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.firstOrderTitle}>{hasOrderHistory ? 'No active orders right now' : 'Start your first order'}</Text>
-                  <Text style={styles.firstOrderHint}>
-                    {hasOrderHistory
-                      ? 'Search again when you are ready to place another order.'
-                      : 'Search by style, location, or tailor name to find someone you trust.'}
-                  </Text>
-                </View>
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Browse styles */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Browse styles</Text>
-            </View>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.trendingScroll}>
-              <View style={styles.trendingRow}>
-                {BROWSE_STYLES.map((label) => (
-                  <TouchableOpacity key={label} style={styles.trendingChip} onPress={() => applyQuery(label)}>
-                    <Text style={styles.trendingLabel}>{label}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </ScrollView>
-          </View>
-
           {/* Top tailors grid */}
           <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Trusted tailors to explore</Text>
-            </View>
             {allTailors.length > 0 ? (
               <View style={styles.cardsGrid}>
                 {allTailors.map((tailor) => (
-                  <GridCard key={tailor.id} tailor={tailor} onPress={() => navigateToTailor(tailor)} />
+                  <GridCard
+                    key={tailor.id}
+                    tailor={tailor}
+                    recentlyViewed={recentlyViewedIds.has(tailor.id)}
+                    onPress={() => navigateToTailor(tailor)}
+                  />
                 ))}
               </View>
             ) : (
@@ -1168,7 +1163,8 @@ export default function CustomerHomeScreen() {
                 </View>
                 <Text style={styles.emptyBrowseTitle}>Verified tailors are being refreshed</Text>
                 <Text style={styles.emptyBrowseHint}>
-                  Pull down to refresh, search by specialty, or check back shortly as vetted profiles go live.
+                  Pull down to refresh, search by specialty, or check back shortly as vetted
+                  profiles go live.
                 </Text>
                 <TouchableOpacity
                   style={styles.emptyBrowseCta}
@@ -1179,6 +1175,73 @@ export default function CustomerHomeScreen() {
               </View>
             )}
           </View>
+
+          {/* Active orders */}
+          {activeOrders.length > 0 ? (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Your orders</Text>
+                <TouchableOpacity onPress={() => router.navigate('/(customer)/orders')}>
+                  <Text style={styles.sectionLink}>See all →</Text>
+                </TouchableOpacity>
+              </View>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.ordersScroll}
+              >
+                <View style={styles.ordersRow}>
+                  {activeOrders.map((order) => {
+                    const c = STAGE_PILL_COLOR[order.stage as OrderStage]
+                    return (
+                      <TouchableOpacity
+                        key={order.id}
+                        style={styles.orderCard}
+                        onPress={() =>
+                          router.push({
+                            pathname: '/(customer)/orders/[id]',
+                            params: { id: order.id, returnTo: '/(customer)' },
+                          })
+                        }
+                      >
+                        <View
+                          style={[
+                            styles.orderStagePill,
+                            { backgroundColor: c?.bg ?? Colors.needleGreenLight },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.orderStageText,
+                              { color: c?.text ?? Colors.needleGreen },
+                            ]}
+                          >
+                            {customerOrderStageLabel(order.stage as OrderStage, order.orderKind)}
+                          </Text>
+                        </View>
+                        <Text style={styles.orderGarment} numberOfLines={1}>
+                          {order.garmentType}
+                        </Text>
+                        <Text style={styles.orderTailor} numberOfLines={1}>
+                          {order.tailorName}
+                        </Text>
+                        {order.estimatedDate && (
+                          <Text style={styles.orderEta}>
+                            Ready{' '}
+                            {new Date(order.estimatedDate).toLocaleDateString('en-GB', {
+                              day: 'numeric',
+                              month: 'short',
+                            })}
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    )
+                  })}
+                </View>
+              </ScrollView>
+            </View>
+          ) : null}
+
         </ScrollView>
       )}
     </SafeAreaView>
@@ -1187,11 +1250,30 @@ export default function CustomerHomeScreen() {
 
 // ─── Grid card ────────────────────────────────────────────────────────────────
 
-function GridCard({ tailor, onPress }: { tailor: TailorCard; onPress: () => void }) {
+function GridCard({
+  tailor,
+  onPress,
+  recentlyViewed,
+}: {
+  tailor: TailorCard
+  onPress: () => void
+  recentlyViewed?: boolean
+}) {
   const { width: screenWidth } = useWindowDimensions()
-  const CARD_WIDTH = (screenWidth - Spacing.xl * 2 - Spacing.md) / 2
+  const cardWidth = (screenWidth - Spacing.lg * 2 - 10) / 2
+  const specialty = tailor.specialtyTags[0]
+  const metaParts = [
+    tailor.avgRating > 0 ? tailor.avgRating.toFixed(1) : null,
+    specialty,
+    tailor.location,
+  ].filter(Boolean)
+
   return (
-    <TouchableOpacity style={[styles.gridCard, { width: CARD_WIDTH }]} onPress={onPress} activeOpacity={0.88}>
+    <TouchableOpacity
+      style={[styles.gridCard, { width: cardWidth }]}
+      onPress={onPress}
+      activeOpacity={0.88}
+    >
       <View style={styles.gridImageWrap}>
         {tailor.portfolioPhoto ? (
           <RemoteImage
@@ -1201,52 +1283,35 @@ function GridCard({ tailor, onPress }: { tailor: TailorCard; onPress: () => void
             contentFit="cover"
             transition={120}
             surface="customer_explore_grid"
-            fallback={(
-              <ExploreMediaPlaceholder style={styles.gridImage} name={tailor.displayName} size={28} />
-            )}
+            fallback={
+              <ExploreMediaPlaceholder
+                style={styles.gridImage}
+                name={tailor.displayName}
+                size={28}
+              />
+            }
           />
         ) : (
           <ExploreMediaPlaceholder style={styles.gridImage} name={tailor.displayName} size={28} />
         )}
-        {tailor.availability === 'OPEN' && (
-          <View style={styles.availBadge}>
-            <View style={styles.availDot} />
-            <Text style={styles.availText}>Available</Text>
+        {recentlyViewed ? (
+          <View style={styles.recentBadge}>
+            <Feather name="clock" size={11} color={Colors.textInverse} />
           </View>
-        )}
-        {tailor.availability === 'FULLY_BOOKED' && (
-          <View style={[styles.availBadge, styles.availBadgeFull]}>
-            <Text style={[styles.availText, styles.availTextFull]}>Fully booked</Text>
-          </View>
-        )}
+        ) : null}
       </View>
       <View style={styles.gridInfo}>
-        <View style={styles.gridTopRow}>
-          <Text style={styles.gridName} numberOfLines={1}>{tailor.displayName}</Text>
-          <TierBadgeChip tier={tailor.tier as any} />
-        </View>
-        <Text style={styles.gridLocation} numberOfLines={1}>{tailor.location}</Text>
-        <StarRating rating={tailor.avgRating} count={tailor.totalReviews} />
-        {tailor.specialtyTags.length > 0 && (
-          <Text style={styles.gridTags} numberOfLines={1}>
-            {tailor.specialtyTags.slice(0, 2).join(' · ')}
+        <Text style={styles.gridName} numberOfLines={1}>
+          {tailor.displayName}
+        </Text>
+        <Text style={styles.gridLocation} numberOfLines={1}>
+          {metaParts.join(' • ')}
+        </Text>
+        {tailor.availability === 'FULLY_BOOKED' ? (
+          <Text style={styles.gridUnavailableText} numberOfLines={1}>
+            Fully booked
           </Text>
-        )}
-        <View style={styles.capabilityRow}>
-          {tailor.supportsCustomOrders ? (
-            <View style={styles.capabilityChip}>
-              <Text style={styles.capabilityText}>Custom</Text>
-            </View>
-          ) : null}
-          {tailor.supportsReadyMade ? (
-            <View style={styles.capabilityChip}>
-              <Text style={styles.capabilityText}>Shop now</Text>
-            </View>
-          ) : null}
-        </View>
-        {availabilityHint(tailor) && (
-          <Text style={styles.gridHint} numberOfLines={1}>{availabilityHint(tailor)}</Text>
-        )}
+        ) : null}
       </View>
     </TouchableOpacity>
   )
@@ -1266,40 +1331,47 @@ function SearchResultCard({ tailor, onPress }: { tailor: TailorCard; onPress: ()
             contentFit="cover"
             transition={120}
             surface="customer_search_result"
-            fallback={(
-              <ExploreMediaPlaceholder style={styles.resultThumbImg} name={tailor.displayName} size={20} />
-            )}
+            fallback={
+              <ExploreMediaPlaceholder
+                style={styles.resultThumbImg}
+                name={tailor.displayName}
+                size={20}
+              />
+            }
           />
         ) : (
-          <ExploreMediaPlaceholder style={styles.resultThumbImg} name={tailor.displayName} size={20} />
+          <ExploreMediaPlaceholder
+            style={styles.resultThumbImg}
+            name={tailor.displayName}
+            size={20}
+          />
         )}
       </View>
       <View style={styles.resultInfo}>
         <View style={styles.resultNameRow}>
-          <Text style={styles.resultName} numberOfLines={1}>{tailor.displayName}</Text>
-          <TierBadgeChip tier={tailor.tier as any} />
+          <Text style={styles.resultName} numberOfLines={1}>
+            {tailor.displayName}
+          </Text>
+          <TierBadgeChip tier={toTierBadge(tailor.tier)} />
         </View>
-        <Text style={styles.resultLocation} numberOfLines={1}>{tailor.location}</Text>
+        <Text style={styles.resultLocation} numberOfLines={1}>
+          {tailor.location}
+        </Text>
         <StarRating rating={tailor.avgRating} count={tailor.totalReviews} />
         {tailor.specialtyTags.length > 0 && (
           <Text style={styles.resultTags} numberOfLines={1}>
             {tailor.specialtyTags.slice(0, 2).join(' · ')}
           </Text>
         )}
-        <View style={styles.capabilityRow}>
-          {tailor.supportsCustomOrders ? (
-            <View style={styles.capabilityChip}>
-              <Text style={styles.capabilityText}>Custom</Text>
-            </View>
-          ) : null}
-          {tailor.supportsReadyMade ? (
-            <View style={styles.capabilityChip}>
-              <Text style={styles.capabilityText}>Shop now</Text>
-            </View>
-          ) : null}
-        </View>
+        {serviceLabel(tailor) ? (
+          <Text style={styles.resultServiceText} numberOfLines={1}>
+            {serviceLabel(tailor)}
+          </Text>
+        ) : null}
         {availabilityHint(tailor) && (
-          <Text style={styles.resultHint} numberOfLines={1}>{availabilityHint(tailor)}</Text>
+          <Text style={styles.resultHint} numberOfLines={1}>
+            {availabilityHint(tailor)}
+          </Text>
         )}
         {tailor.availability === 'LIMITED' && (
           <View style={styles.limitedBadge}>
@@ -1307,34 +1379,6 @@ function SearchResultCard({ tailor, onPress }: { tailor: TailorCard; onPress: ()
           </View>
         )}
       </View>
-    </TouchableOpacity>
-  )
-}
-
-// ─── Recently viewed card ─────────────────────────────────────────────────────
-
-function RecentCard({ tailor, onPress }: { tailor: TailorCard; onPress: () => void }) {
-  return (
-    <TouchableOpacity style={styles.recentCard} onPress={onPress} activeOpacity={0.88}>
-      <View style={styles.recentImageWrap}>
-        {tailor.portfolioPhoto ? (
-          <RemoteImage
-            uri={tailor.portfolioPhoto}
-            bucket={tailor.exploreImageBucket ?? 'portfolio-photos'}
-            style={styles.recentImage}
-            contentFit="cover"
-            transition={120}
-            surface="customer_recent_tailor"
-            fallback={(
-              <ExploreMediaPlaceholder style={styles.recentImage} name={tailor.displayName} size={18} />
-            )}
-          />
-        ) : (
-          <ExploreMediaPlaceholder style={styles.recentImage} name={tailor.displayName} size={18} />
-        )}
-      </View>
-      <Text style={styles.recentName} numberOfLines={1}>{tailor.displayName}</Text>
-      <Text style={styles.recentLocation} numberOfLines={1}>{tailor.location}</Text>
     </TouchableOpacity>
   )
 }
@@ -1372,17 +1416,35 @@ function SearchFilterSheet({
 }) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.filterSheetOverlay}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.filterSheetOverlay}
+      >
         <TouchableOpacity style={styles.filterSheetScrim} activeOpacity={1} onPress={onClose} />
         <View style={styles.filterSheet}>
           <View style={styles.filterSheetHandle} />
           <View style={styles.filterSheetHeader}>
             <Text style={styles.filterSheetTitle}>Filters</Text>
-            {activeFilterCount > 0 ? (
-              <TouchableOpacity onPress={onClear} accessibilityRole="button" accessibilityLabel="Clear all filters">
-                <Text style={styles.filterSheetClear}>Clear all</Text>
+            <View style={styles.filterSheetActions}>
+              {activeFilterCount > 0 ? (
+                <TouchableOpacity
+                  onPress={onClear}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear all filters"
+                  style={styles.filterSheetClearButton}
+                >
+                  <Text style={styles.filterSheetClear}>Clear all</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity
+                onPress={onClose}
+                accessibilityRole="button"
+                accessibilityLabel="Close filters"
+                style={styles.filterSheetClose}
+              >
+                <Feather name="x" size={20} color={Colors.ink} />
               </TouchableOpacity>
-            ) : null}
+            </View>
           </View>
 
           <Text style={styles.filterSectionTitle}>Specialty</Text>
@@ -1395,7 +1457,14 @@ function SearchFilterSheet({
                   style={[styles.filterSheetChip, selected && styles.filterSheetChipActive]}
                   onPress={() => onToggleSpecialty(specialty)}
                 >
-                  <Text style={[styles.filterSheetChipText, selected && styles.filterSheetChipTextActive]}>{specialty}</Text>
+                  <Text
+                    style={[
+                      styles.filterSheetChipText,
+                      selected && styles.filterSheetChipTextActive,
+                    ]}
+                  >
+                    {specialty}
+                  </Text>
                 </TouchableOpacity>
               )
             })}
@@ -1421,7 +1490,12 @@ function SearchFilterSheet({
                   style={[styles.filterSheetChip, selected && styles.filterSheetChipActive]}
                   onPress={() => onChangeMinRating(rating)}
                 >
-                  <Text style={[styles.filterSheetChipText, selected && styles.filterSheetChipTextActive]}>
+                  <Text
+                    style={[
+                      styles.filterSheetChipText,
+                      selected && styles.filterSheetChipTextActive,
+                    ]}
+                  >
                     {rating == null ? 'Any' : `${rating}+`}
                   </Text>
                 </TouchableOpacity>
@@ -1431,11 +1505,13 @@ function SearchFilterSheet({
 
           <Text style={styles.filterSectionTitle}>Availability</Text>
           <View style={styles.filterChipWrap}>
-            {([
-              { key: 'ALL', label: 'All' },
-              { key: 'OPEN', label: 'Available now' },
-              { key: 'LIMITED', label: 'Limited' },
-            ] as { key: AvailFilter; label: string }[]).map((option) => {
+            {(
+              [
+                { key: 'ALL', label: 'All' },
+                { key: 'OPEN', label: 'Available now' },
+                { key: 'LIMITED', label: 'Limited' },
+              ] as { key: AvailFilter; label: string }[]
+            ).map((option) => {
               const selected = availFilter === option.key
               return (
                 <TouchableOpacity
@@ -1443,7 +1519,14 @@ function SearchFilterSheet({
                   style={[styles.filterSheetChip, selected && styles.filterSheetChipActive]}
                   onPress={() => onChangeAvailability(option.key)}
                 >
-                  <Text style={[styles.filterSheetChipText, selected && styles.filterSheetChipTextActive]}>{option.label}</Text>
+                  <Text
+                    style={[
+                      styles.filterSheetChipText,
+                      selected && styles.filterSheetChipTextActive,
+                    ]}
+                  >
+                    {option.label}
+                  </Text>
                 </TouchableOpacity>
               )
             })}
@@ -1531,7 +1614,9 @@ function CustomerOnboardingModal({
 
           <TouchableOpacity
             accessibilityRole="button"
-            accessibilityLabel={isLast ? 'Finish customer walkthrough' : 'Continue customer walkthrough'}
+            accessibilityLabel={
+              isLast ? 'Finish customer walkthrough' : 'Continue customer walkthrough'
+            }
             onPress={() => {
               if (isLast) {
                 onDone()
@@ -1558,16 +1643,42 @@ const styles = StyleSheet.create({
   stickyHeader: {
     backgroundColor: HOME_BG,
     paddingHorizontal: Spacing.lg,
-    paddingTop: 4,
-    paddingBottom: 4,
+    paddingTop: 10,
+    paddingBottom: 10,
     borderBottomWidth: 1,
     borderBottomColor: Colors.lightGrey,
   },
+  exploreHeader: {
+    marginTop: 14,
+  },
+  exploreHeaderText: {
+    gap: 3,
+  },
+  exploreTitle: {
+    fontFamily: Fonts.bodyBold,
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: FontWeight.bold,
+    color: CHARCOAL,
+  },
+  exploreSubtitle: {
+    fontFamily: Fonts.body,
+    fontSize: FontSize.sm,
+    lineHeight: 20,
+    color: Colors.inkLight,
+  },
   searchRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   searchBar: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    backgroundColor: Colors.white, borderRadius: Radius.full,
-    minHeight: 44, paddingVertical: 8, paddingHorizontal: 12, ...Shadow.sm,
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.full,
+    minHeight: 44,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    ...Shadow.sm,
   },
   searchInput: { flex: 1, fontSize: 14, color: CHARCOAL, padding: 0 },
   clearBtn: { minWidth: 24, minHeight: 24, alignItems: 'center', justifyContent: 'center' },
@@ -1597,27 +1708,6 @@ const styles = StyleSheet.create({
   filterBadgeText: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.textInverse },
   cancelBtn: { paddingVertical: 8, minHeight: 44, justifyContent: 'center' },
   cancelText: { fontSize: 14, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
-  visionIconBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.white,
-    position: 'relative',
-    ...Shadow.sm,
-  },
-  visionStatusDot: {
-    position: 'absolute',
-    right: 9,
-    top: 9,
-    width: 8,
-    height: 8,
-    borderRadius: Radius.full,
-    backgroundColor: PRIMARY_GREEN,
-    borderWidth: 1.5,
-    borderColor: Colors.white,
-  },
 
   // Scroll areas
   scroll: { flex: 1 },
@@ -1636,31 +1726,14 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  guideCard: {
+  errorBanner: {
     marginHorizontal: Spacing.lg,
-    marginTop: Spacing.sm,
-    marginBottom: Spacing.sm,
-    backgroundColor: Colors.white,
+    marginTop: Spacing.md,
+    backgroundColor: Colors.kanteRustLight,
     borderRadius: Radius.md,
     padding: 12,
-    gap: Spacing.xs,
     borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    ...Shadow.sm,
-  },
-  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  guideClose: {
-    width: 28,
-    height: 28,
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  guideTitle: { fontSize: 13, fontWeight: FontWeight.semibold, color: CHARCOAL, lineHeight: 17 },
-  errorBanner: {
-    marginHorizontal: Spacing.lg, marginTop: Spacing.md,
-    backgroundColor: Colors.kanteRustLight, borderRadius: Radius.md,
-    padding: 12, borderLeftWidth: 3, borderLeftColor: Colors.kanteRust,
+    borderColor: Colors.kanteRust + '35',
   },
   errorBannerText: { fontSize: 13, color: Colors.kanteRust, lineHeight: 18 },
 
@@ -1671,15 +1744,22 @@ const styles = StyleSheet.create({
   suggestTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL },
   suggestClear: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
   recentSearchRow: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.lightGrey,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.lightGrey,
   },
   recentSearchText: { flex: 1, fontSize: 14, color: CHARCOAL },
   suggestChips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   suggestChip: {
-    paddingHorizontal: 12, paddingVertical: 8,
-    borderRadius: Radius.full, backgroundColor: Colors.white,
-    borderWidth: 1, borderColor: Colors.lightGrey,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
   },
   suggestChipText: { fontSize: 13, color: CHARCOAL },
 
@@ -1688,13 +1768,20 @@ const styles = StyleSheet.create({
   resultsHeader: { gap: Spacing.sm, marginBottom: 6 },
   resultsCount: { fontSize: 16, fontWeight: FontWeight.semibold, color: CHARCOAL },
   clearFiltersRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, minHeight: 32 },
-  clearFiltersText: { fontSize: FontSize.sm, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
+  clearFiltersText: {
+    fontSize: FontSize.sm,
+    color: PRIMARY_GREEN,
+    fontWeight: FontWeight.semibold,
+  },
   availRow: { flexDirection: 'row', gap: Spacing.sm },
   availChip: {
     minHeight: 44,
-    paddingHorizontal: 12, paddingVertical: 6,
-    borderRadius: Radius.full, backgroundColor: Colors.white,
-    borderWidth: 1, borderColor: Colors.lightGrey,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
     justifyContent: 'center',
   },
   availChipActive: { backgroundColor: CHARCOAL, borderColor: CHARCOAL },
@@ -1704,13 +1791,20 @@ const styles = StyleSheet.create({
 
   // Result card
   resultCard: {
-    flexDirection: 'row', gap: Spacing.sm,
-    backgroundColor: Colors.white, borderRadius: Radius.md,
-    padding: 10, ...Shadow.sm,
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    padding: 10,
+    ...Shadow.sm,
   },
   resultThumb: { width: 76, height: 86, borderRadius: Radius.md, overflow: 'hidden' },
   resultThumbImg: { width: '100%', height: '100%' },
-  resultThumbPlaceholder: { backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center' },
+  resultThumbPlaceholder: {
+    backgroundColor: Colors.boneDeep,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   exploreMediaPlaceholder: {
     backgroundColor: Colors.needleGreenLight,
     alignItems: 'center',
@@ -1735,9 +1829,22 @@ const styles = StyleSheet.create({
   },
   resultInfo: { flex: 1, gap: 3, justifyContent: 'center' },
   resultNameRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  resultName: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, flex: 1, marginRight: 4, fontFamily: 'Georgia' },
+  resultName: {
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: 14,
+    fontWeight: FontWeight.semibold,
+    color: CHARCOAL,
+    flex: 1,
+    marginRight: 4,
+  },
   resultLocation: { fontSize: 12, color: MUTED_GREY },
   resultTags: { fontSize: 12, color: Colors.inkLight },
+  resultServiceText: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: Colors.inkLight,
+    marginTop: 1,
+  },
   resultHint: { fontSize: 12, color: PRIMARY_GREEN, marginTop: 3, fontWeight: FontWeight.medium },
   capabilityRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs, marginTop: 2 },
   capabilityChip: {
@@ -1750,8 +1857,12 @@ const styles = StyleSheet.create({
   },
   capabilityText: { fontSize: 11, color: Colors.inkLight, fontWeight: FontWeight.medium },
   limitedBadge: {
-    backgroundColor: Colors.statusPendingBg, paddingHorizontal: Spacing.sm,
-    paddingVertical: 2, borderRadius: Radius.full, alignSelf: 'flex-start', marginTop: 2,
+    backgroundColor: Colors.statusPendingBg,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 2,
+    borderRadius: Radius.full,
+    alignSelf: 'flex-start',
+    marginTop: 2,
   },
   limitedText: { fontSize: 10, color: Colors.statusPending, fontWeight: FontWeight.medium },
   filterSheetOverlay: { flex: 1, justifyContent: 'flex-end' },
@@ -1763,11 +1874,50 @@ const styles = StyleSheet.create({
     padding: Spacing.xl,
     gap: Spacing.sm,
   },
-  filterSheetHandle: { alignSelf: 'center', width: 42, height: 4, borderRadius: 2, backgroundColor: Colors.lightGrey },
-  filterSheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  filterSheetTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
-  filterSheetClear: { fontSize: FontSize.sm, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
-  filterSectionTitle: { marginTop: Spacing.sm, fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  filterSheetHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: Colors.lightGrey,
+  },
+  filterSheetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  filterSheetTitle: {
+    fontSize: FontSize.xl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    fontFamily: Fonts.display,
+  },
+  filterSheetClear: {
+    fontSize: FontSize.sm,
+    color: PRIMARY_GREEN,
+    fontWeight: FontWeight.semibold,
+  },
+  filterSheetActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  filterSheetClearButton: {
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  filterSheetClose: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.bone,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  filterSectionTitle: {
+    marginTop: Spacing.sm,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
   filterChipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   filterSheetChip: {
     minHeight: 40,
@@ -1780,7 +1930,11 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
   },
   filterSheetChipActive: { backgroundColor: Colors.needleGreen, borderColor: Colors.needleGreen },
-  filterSheetChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
+  filterSheetChipText: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    fontWeight: FontWeight.medium,
+  },
   filterSheetChipTextActive: { color: Colors.textInverse },
   filterInput: {
     minHeight: 48,
@@ -1800,7 +1954,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: Colors.needleGreen,
   },
-  filterApplyButtonText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
+  filterApplyButtonText: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textInverse,
+  },
   onboardingOverlay: {
     flex: 1,
     backgroundColor: 'rgba(26,26,24,0.52)',
@@ -1825,7 +1983,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  onboardingSkipText: { fontSize: FontSize.sm, color: Colors.midGrey, fontWeight: FontWeight.medium },
+  onboardingSkipText: {
+    fontSize: FontSize.sm,
+    color: Colors.midGrey,
+    fontWeight: FontWeight.medium,
+  },
   onboardingIcon: {
     width: 72,
     height: 72,
@@ -1835,7 +1997,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   onboardingTitle: {
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
     fontSize: FontSize.xl,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
@@ -1872,107 +2034,146 @@ const styles = StyleSheet.create({
   // Section
   section: { paddingTop: Spacing.md },
   sectionHeader: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: Spacing.lg, marginBottom: Spacing.sm,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
   },
-  sectionTitle: { fontSize: 16, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
+  sectionTitleBlock: {
+    flex: 1,
+    gap: 2,
+  },
+  sectionTitle: {
+    fontFamily: Fonts.bodyBold,
+    fontSize: 17,
+    lineHeight: 24,
+    fontWeight: FontWeight.semibold,
+    color: CHARCOAL,
+  },
+  sectionSubtitle: {
+    fontFamily: Fonts.body,
+    fontSize: FontSize.sm,
+    lineHeight: 20,
+    color: Colors.inkLight,
+  },
   sectionLink: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
 
   // Continue searching card
   continueCard: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    marginHorizontal: Spacing.lg, backgroundColor: Colors.white,
-    borderRadius: Radius.md, padding: 12, ...Shadow.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    marginHorizontal: Spacing.lg,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    padding: 12,
+    ...Shadow.sm,
   },
   continueLabel: { fontSize: 11, color: MUTED_GREY, fontWeight: FontWeight.medium },
-  continueQuery: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
+  continueQuery: {
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: 15,
+    fontWeight: FontWeight.semibold,
+    color: CHARCOAL,
+  },
   continueMeta: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
   continueThumbnail: { width: 52, height: 52, borderRadius: Radius.md, overflow: 'hidden' },
-
-  // Recently viewed
-  recentScroll: { marginLeft: Spacing.lg },
-  recentRow: { flexDirection: 'row', gap: Spacing.sm, paddingRight: Spacing.lg },
-  recentCard: { width: 88, gap: 4 },
-  recentImageWrap: { width: 88, height: 98, borderRadius: Radius.md, overflow: 'hidden' },
-  recentImage: { width: '100%', height: '100%' },
-  recentImagePlaceholder: { backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center' },
-  recentName: { fontSize: 12, fontWeight: FontWeight.semibold, color: CHARCOAL },
-  recentLocation: { fontSize: 10, color: Colors.midGrey },
 
   // Orders
   ordersScroll: { marginLeft: Spacing.lg },
   ordersRow: { flexDirection: 'row', gap: Spacing.sm, paddingRight: Spacing.lg },
   orderCard: {
-    width: 126, backgroundColor: Colors.white, borderRadius: Radius.md,
-    padding: 10, gap: 4, ...Shadow.sm,
-  },
-  orderStagePill: {
-    alignSelf: 'flex-start', paddingHorizontal: Spacing.sm,
-    paddingVertical: 3, borderRadius: Radius.full, marginBottom: Spacing.xs,
-  },
-  orderStageText: { fontSize: 10, fontWeight: FontWeight.bold },
-  orderGarment: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
-  orderTailor: { fontSize: 12, color: MUTED_GREY },
-  orderEta: { fontSize: 12, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
-  firstOrderCard: {
-    marginHorizontal: Spacing.lg,
+    width: 126,
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
     padding: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
+    gap: 4,
     ...Shadow.sm,
-    minHeight: 88,
   },
-  firstOrderIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.needleGreenLight,
-    alignItems: 'center',
-    justifyContent: 'center',
+  orderStagePill: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 3,
+    borderRadius: Radius.full,
+    marginBottom: Spacing.xs,
   },
-  firstOrderTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
-  firstOrderHint: { fontSize: 13, color: MUTED_GREY, lineHeight: 18, marginTop: 2 },
-
-  // Browse styles
-  trendingScroll: { marginLeft: Spacing.lg },
-  trendingRow: { flexDirection: 'row', gap: Spacing.sm, paddingRight: Spacing.lg },
-  trendingChip: {
-    paddingHorizontal: 14, paddingVertical: 10,
-    borderRadius: Radius.full, backgroundColor: Colors.white,
-    borderWidth: 1, borderColor: Colors.lightGrey, ...Shadow.sm,
-    minHeight: 44,
-    justifyContent: 'center',
+  orderStageText: { fontSize: 10, fontWeight: FontWeight.bold },
+  orderGarment: {
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: 14,
+    fontWeight: FontWeight.semibold,
+    color: CHARCOAL,
   },
-  trendingLabel: { fontSize: 13, fontWeight: FontWeight.medium, color: CHARCOAL },
-
+  orderTailor: { fontSize: 12, color: MUTED_GREY },
+  orderEta: { fontSize: 12, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
   // Tailor grid
   cardsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingHorizontal: Spacing.lg },
-  gridCard: { backgroundColor: Colors.white, borderRadius: Radius.md, overflow: 'hidden', ...Shadow.sm },
-  gridImageWrap: { width: '100%', aspectRatio: 0.9, position: 'relative' },
-  gridImage: { width: '100%', height: '100%' },
-  gridImagePlaceholder: { backgroundColor: Colors.boneDeep, alignItems: 'center', justifyContent: 'center' },
-  availBadge: {
-    position: 'absolute', bottom: 8, left: 8,
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: 'rgba(255,255,255,0.92)', borderRadius: Radius.full,
-    paddingHorizontal: 8, paddingVertical: 3,
+  gridCard: {
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.md,
+    overflow: 'hidden',
+    ...Shadow.sm,
   },
-  availBadgeFull: { backgroundColor: 'rgba(0,0,0,0.55)' },
-  availDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: Colors.success },
-  availText: { fontSize: 10, fontWeight: FontWeight.semibold, color: Colors.ink },
-  availTextFull: { color: Colors.textInverse },
-  gridInfo: { padding: 10, gap: 4 },
-  gridTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  gridName: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, flex: 1, marginRight: 4, fontFamily: 'Georgia' },
-  gridLocation: { fontSize: 12, color: MUTED_GREY },
+  gridImageWrap: { width: '100%', aspectRatio: 1.12, position: 'relative' },
+  gridImage: { width: '100%', height: '100%' },
+  gridImagePlaceholder: {
+    backgroundColor: Colors.boneDeep,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recentBadge: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    backgroundColor: 'rgba(26,26,24,0.72)',
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.24)',
+  },
+  recentBadgeText: {
+    fontSize: 10,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textInverse,
+  },
+  gridInfo: { paddingHorizontal: 10, paddingVertical: 10, gap: 4, minHeight: 66 },
+  gridName: {
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: 14,
+    fontWeight: FontWeight.semibold,
+    color: CHARCOAL,
+    flex: 1,
+    marginRight: 4,
+  },
+  gridLocation: { fontSize: 12, lineHeight: 17, color: MUTED_GREY },
   gridTags: { fontSize: 12, color: Colors.inkLight, marginTop: 2 },
+  gridServiceText: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: Colors.inkLight,
+    marginTop: 1,
+  },
   gridHint: { fontSize: 12, color: PRIMARY_GREEN, marginTop: 3, fontWeight: FontWeight.medium },
+  gridUnavailableText: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: Colors.kanteRust,
+    fontWeight: FontWeight.semibold,
+  },
 
   // Empty state
-  emptyState: { alignItems: 'center', gap: Spacing.sm, paddingVertical: 48, paddingHorizontal: Spacing.lg },
+  emptyState: {
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingVertical: 48,
+    paddingHorizontal: Spacing.lg,
+  },
   emptyStateBadge: {
     paddingHorizontal: 10,
     paddingVertical: 4,
@@ -2008,7 +2209,11 @@ const styles = StyleSheet.create({
     minHeight: 44,
     justifyContent: 'center',
   },
-  searchRetryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
+  searchRetryBtnText: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textInverse,
+  },
   searchSecondaryBtn: {
     marginTop: Spacing.sm,
     backgroundColor: Colors.white,
@@ -2020,7 +2225,11 @@ const styles = StyleSheet.create({
     minHeight: 44,
     justifyContent: 'center',
   },
-  searchSecondaryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: CHARCOAL },
+  searchSecondaryBtnText: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: CHARCOAL,
+  },
   emptyBrowseCard: {
     marginHorizontal: Spacing.lg,
     backgroundColor: Colors.white,
@@ -2055,5 +2264,9 @@ const styles = StyleSheet.create({
     minHeight: 44,
     justifyContent: 'center',
   },
-  emptyBrowseCtaText: { fontSize: FontSize.sm, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
+  emptyBrowseCtaText: {
+    fontSize: FontSize.sm,
+    color: PRIMARY_GREEN,
+    fontWeight: FontWeight.semibold,
+  },
 })

@@ -28,8 +28,10 @@ export function CustomerProfileProvider({ children }: { children: React.ReactNod
 
   useEffect(() => {
     if (!user?.id || user.user_metadata?.role !== 'CUSTOMER') {
-      setAvatarUrl(null)
-      return
+      const timer = setTimeout(() => {
+        setAvatarUrl(null)
+      }, 0)
+      return () => clearTimeout(timer)
     }
 
     let cancelled = false

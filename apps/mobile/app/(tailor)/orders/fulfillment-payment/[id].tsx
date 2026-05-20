@@ -35,6 +35,35 @@ type OrderDetail = {
   fulfillmentPaymentPaidAt: string | null
 }
 
+type CustomerProfileJoinRow = {
+  display_name: string | null
+}
+
+type FulfillmentPaymentOrderRow = {
+  id: string
+  reference: string | null
+  garment_type: string | null
+  order_kind: 'CUSTOM' | 'READY_MADE' | null
+  stage: OrderStage | null
+  delivery_method: string | null
+  quoted_amount: number | null
+  item_subtotal: number | null
+  fulfillment_fee: number | null
+  currency: CurrencyCode | null
+  quoted_currency: CurrencyCode | null
+  delivery_address: string | null
+  recipient_name: string | null
+  recipient_phone: string | null
+  fulfillment_payment_requested_at: string | null
+  fulfillment_payment_paid_at: string | null
+  customer_profiles: CustomerProfileJoinRow | CustomerProfileJoinRow[] | null
+}
+
+function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
 function baseAmount(order: Pick<OrderDetail, 'orderKind' | 'itemSubtotal' | 'quotedAmount' | 'fulfillmentFee'>) {
   if (order.orderKind === 'READY_MADE') {
     return order.itemSubtotal ?? (order.quotedAmount != null ? Math.max(order.quotedAmount - order.fulfillmentFee, 0) : null)
@@ -87,15 +116,16 @@ export default function FulfillmentPaymentRequestScreen() {
         return
       }
 
-      const row: any = data
+      const row = data as FulfillmentPaymentOrderRow
+      const customerProfile = firstJoinedRow(row.customer_profiles)
       const nextOrder = {
         id: row.id,
-        reference: row.reference,
-        garmentType: row.garment_type,
-        customerName: row.customer_profiles?.display_name ?? 'Customer',
+        reference: row.reference ?? 'Order',
+        garmentType: row.garment_type ?? 'Order',
+        customerName: customerProfile?.display_name ?? 'Customer',
         orderKind: row.order_kind ?? 'CUSTOM',
-        stage: row.stage,
-        deliveryMethod: row.delivery_method,
+        stage: row.stage ?? 'PENDING_QUOTE',
+        deliveryMethod: row.delivery_method ?? 'SHIPPING',
         quotedAmount: row.quoted_amount ?? null,
         itemSubtotal: row.item_subtotal ?? null,
         fulfillmentFee: row.fulfillment_fee ?? 0,

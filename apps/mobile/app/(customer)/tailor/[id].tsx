@@ -2,28 +2,35 @@ import { useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   FlatList, Alert, Dimensions, NativeSyntheticEvent, NativeScrollEvent, Modal,
-  TextInput, KeyboardAvoidingView, Platform, ActivityIndicator,
+  Image as RNImage,
 } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { ResizeMode, Video } from 'expo-av'
 import { useRefreshOnFocus, useTailorPublic, useWishlistCollections } from '@/lib/queries'
-import { supabase, invokeFunction } from '@/lib/supabase'
+import { invokeFunction } from '@/lib/supabase'
 import { useAuth, useUserRole } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { useCurrency, formatAmount, type CurrencyCode } from '@/lib/currency'
-import { RemoteImage, TierBadgeChip, StarRating, Tag, Button, SkeletonBlock } from '@/components/ui'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { RemoteImage, TierBadgeChip, StarRating, Tag, Button, SkeletonBlock, SaveToWishlistSheet } from '@/components/ui'
+import type { TierBadge } from '@/components/ui'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { goBackOrFallback } from '@/lib/navigation'
 import { hapticLight } from '@/lib/haptics'
 import { getTailorPriceMinMajor } from '@drape/shared/tailor-setup'
+import {
+  captureImageLoadFailure,
+  resolveStorageImageUrl,
+  type StorageImageBucket,
+} from '@/lib/image-url'
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window')
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window')
 const HERO_HEIGHT = 264
 const PORTFOLIO_COLS = 3
 const PORTFOLIO_SIZE = (SCREEN_WIDTH - Spacing.lg * 2 - Spacing.sm * 2) / PORTFOLIO_COLS
+const PREVIEW_MEDIA_HEIGHT = Math.min(SCREEN_HEIGHT * 0.76, 680)
 
 type TailorProfile = {
   id: string
@@ -68,6 +75,11 @@ type ReviewSummary = {
   count: number
 }
 
+type MediaPreviewItem = {
+  uri: string
+  bucket: StorageImageBucket
+}
+
 const AVAILABILITY_LABEL: Record<string, string> = {
   OPEN: 'Available now',
   LIMITED: 'Limited availability',
@@ -80,20 +92,32 @@ const AVAILABILITY_COLOR: Record<string, string> = {
   FULLY_BOOKED: Colors.error,
 }
 
+function toTierBadge(tier: string | null | undefined): TierBadge | null {
+  if (tier === 'VERIFIED' || tier === 'RISING' || tier === 'MASTER') return tier
+  return null
+}
+
+function createDraftSessionId() {
+  return `${new Date().getTime().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+}
+
 export default function TailorProfileScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
   const navigation = useNavigation()
+  const insets = useSafeAreaInsets()
   const { user } = useAuth()
   const role = useUserRole()
   const scrollRef = useRef<ScrollView | null>(null)
-  const portfolioPreviewRef = useRef<FlatList<string> | null>(null)
+  const imagePreviewRef = useRef<FlatList<MediaPreviewItem> | null>(null)
   const [savedOverride, setSavedOverride] = useState<boolean | null>(null)
   const [savingHeart, setSavingHeart] = useState(false)
   const [carouselIndex, setCarouselIndex] = useState(0)
   const [failedHeroImages, setFailedHeroImages] = useState<string[]>([])
-  const [portfolioPreviewIndex, setPortfolioPreviewIndex] = useState<number | null>(null)
-  const [portfolioViewerIndex, setPortfolioViewerIndex] = useState(0)
+  const [imagePreviewItems, setImagePreviewItems] = useState<MediaPreviewItem[]>([])
+  const [imagePreviewIndex, setImagePreviewIndex] = useState<number | null>(null)
+  const [imageViewerIndex, setImageViewerIndex] = useState(0)
+  const [failedPreviewImages, setFailedPreviewImages] = useState<string[]>([])
   const [previewVideoUrl, setPreviewVideoUrl] = useState<string | null>(null)
   const [showPortfolioModal, setShowPortfolioModal] = useState(false)
   const [showReviewsModal, setShowReviewsModal] = useState(false)
@@ -116,11 +140,17 @@ export default function TailorProfileScreen() {
   useRefreshOnFocus(() => { void refetch() }, 60_000)
 
   useEffect(() => {
-    setFailedHeroImages([])
+    const timer = setTimeout(() => {
+      setFailedHeroImages([])
+    }, 0)
+    return () => clearTimeout(timer)
   }, [id])
 
   useEffect(() => {
-    setSavedOverride(null)
+    const timer = setTimeout(() => {
+      setSavedOverride(null)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [id, data?.isSaved])
 
   async function saveToWishlist(input: { collectionId?: string; collectionName?: string }) {
@@ -195,10 +225,28 @@ export default function TailorProfileScreen() {
     setShowPortfolioModal(true)
   }
 
-  function openPortfolioPreview(index: number) {
+  function openImagePreview(items: MediaPreviewItem[], index: number) {
+    const validItems = items.filter((item) => item.uri.trim().length > 0)
+    if (validItems.length === 0) return
+    const safeIndex = Math.min(Math.max(index, 0), validItems.length - 1)
+    setFailedPreviewImages([])
+    validItems.forEach((item) => {
+      const resolvedUri = resolveStorageImageUrl(item.uri, item.bucket)
+      if (resolvedUri) void RNImage.prefetch(resolvedUri).catch(() => undefined)
+    })
+    setImagePreviewItems(validItems)
+    setImageViewerIndex(safeIndex)
+    setImagePreviewIndex(safeIndex)
+  }
+
+  function closeImagePreview() {
+    setImagePreviewIndex(null)
+    setImagePreviewItems([])
+  }
+
+  function openPortfolioPreview(items: MediaPreviewItem[], index: number) {
+    openImagePreview(items, index)
     setShowPortfolioModal(false)
-    setPortfolioViewerIndex(index)
-    setTimeout(() => setPortfolioPreviewIndex(index), 150)
   }
 
   function openVideoPreview(url: string) {
@@ -241,7 +289,7 @@ export default function TailorProfileScreen() {
               This page should help you judge whether this seller feels right before you place an order.
             </Text>
             <View style={styles.stateGuideCard}>
-              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
+              <Text style={styles.stateGuideTitle}>Recovery</Text>
               <Text style={styles.stateGuideText}>
                 Refresh here first. If it still fails, go back to discovery and compare a few other live profiles.
               </Text>
@@ -266,7 +314,7 @@ export default function TailorProfileScreen() {
               This profile may have moved, or it may no longer be available to browse right now.
             </Text>
             <View style={styles.stateGuideCard}>
-              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
+              <Text style={styles.stateGuideTitle}>Recovery</Text>
               <Text style={styles.stateGuideText}>
                 Head back to discovery and reopen a live seller from there. If this was an older saved link, your wishlist or search results should point you to the current profile.
               </Text>
@@ -285,6 +333,14 @@ export default function TailorProfileScreen() {
     ? portfolioImages
     : (profile.avatarUrl ? [profile.avatarUrl] : [])
   const heroImages = heroSourceImages.filter((url) => !failedHeroImages.includes(url))
+  const portfolioImageItems: MediaPreviewItem[] = portfolioImages.map((uri) => ({
+    uri,
+    bucket: 'portfolio-photos',
+  }))
+  const heroSlides: MediaPreviewItem[] = heroImages.map((uri) => ({
+    uri,
+    bucket: portfolioImages.includes(uri) ? 'portfolio-photos' : 'avatars',
+  }))
   const pricingCurrency = (profile.currency ?? 'USD') as CurrencyCode
   const minimumUsefulPriceMinor = getTailorPriceMinMajor(pricingCurrency) * 100
   const priceRangeMin = profile.priceRangeMin
@@ -314,45 +370,58 @@ export default function TailorProfileScreen() {
   })
 
   return (
-      <SafeAreaView style={styles.safe} edges={[]}>
-      <ScrollView ref={scrollRef} style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
+      <SafeAreaView style={styles.safe} edges={['top']}>
+      <ScrollView
+        ref={scrollRef}
+        style={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: Math.max(140, insets.bottom + 112) }}
+      >
         {isFetching ? <Text style={styles.refreshingText}>Refreshing profile…</Text> : null}
 
         {/* Swipeable Hero Carousel */}
         <View style={styles.heroContainer}>
-          {heroImages.length > 0 ? (
+          {heroSlides.length > 0 ? (
             <>
               <FlatList
-                data={heroImages}
-                keyExtractor={(_, i) => String(i)}
+                data={heroSlides}
+                keyExtractor={(item, i) => `${item.uri}-${i}`}
                 horizontal
                 pagingEnabled
                 showsHorizontalScrollIndicator={false}
                 onScroll={onCarouselScroll}
                 scrollEventThrottle={16}
-                renderItem={({ item }) => (
-                  <RemoteImage
-                    uri={item}
-                    bucket="portfolio-photos"
-                    style={styles.heroImage}
-                    contentFit="cover"
-                    transition={150}
-                    surface="customer_tailor_profile_hero"
-                    onLoadError={() => {
-                      setFailedHeroImages((prev) => (prev.includes(item) ? prev : [...prev, item]))
-                    }}
-                    fallback={(
-                      <View style={[styles.heroImage, styles.heroPlaceholder]}>
-                        <Feather name="image" size={42} color={Colors.needleGreen} />
-                      </View>
-                    )}
-                  />
+                renderItem={({ item, index }) => (
+                  <TouchableOpacity
+                    activeOpacity={0.94}
+                    onPress={() => openImagePreview(heroSlides, index)}
+                    accessibilityRole="imagebutton"
+                    accessibilityLabel="Open tailor photo"
+                  >
+                    <RemoteImage
+                      uri={item.uri}
+                      bucket={item.bucket}
+                      style={styles.heroImage}
+                      contentFit="cover"
+                      contentPosition="top center"
+                      transition={150}
+                      surface="customer_tailor_profile_hero"
+                      onLoadError={() => {
+                        setFailedHeroImages((prev) => (prev.includes(item.uri) ? prev : [...prev, item.uri]))
+                      }}
+                      fallback={(
+                        <View style={[styles.heroImage, styles.heroPlaceholder]}>
+                          <Feather name="image" size={42} color={Colors.needleGreen} />
+                        </View>
+                      )}
+                    />
+                  </TouchableOpacity>
                 )}
               />
               {/* Dot indicators */}
-              {heroImages.length > 1 && (
+              {heroSlides.length > 1 && (
                 <View style={styles.dotRow}>
-                  {heroImages.map((_, i) => (
+                  {heroSlides.map((_, i) => (
                     <View key={i} style={[styles.dot, i === carouselIndex && styles.dotActive]} />
                   ))}
                 </View>
@@ -366,8 +435,14 @@ export default function TailorProfileScreen() {
 
           {/* Overlay controls */}
           <View style={styles.heroOverlay}>
-            <TouchableOpacity style={styles.backBtn} onPress={goBack}>
-              <Text style={styles.backBtnText}>←</Text>
+            <TouchableOpacity
+              style={styles.backBtn}
+              onPress={goBack}
+              accessibilityRole="button"
+              accessibilityLabel="Back to discovery"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Feather name="chevron-left" size={24} color={Colors.textInverse} />
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.heartBtn, isSaved && styles.heartBtnSaved]}
@@ -379,14 +454,15 @@ export default function TailorProfileScreen() {
               accessibilityRole="button"
               accessibilityLabel={isSaved ? 'Remove tailor from saved' : 'Save tailor'}
             >
-              <Feather name="heart" size={19} color={isSaved ? Colors.textInverse : Colors.midGrey} />
+              <Feather name="heart" size={19} color={isSaved ? Colors.textInverse : Colors.ink} />
             </TouchableOpacity>
           </View>
 
           {/* Photo count badge */}
-          {heroImages.length > 1 && (
+          {heroSlides.length > 1 && (
             <View style={styles.photoCount}>
-              <Text style={styles.photoCountText}>{carouselIndex + 1} / {heroImages.length}</Text>
+              <Feather name="image" size={12} color={Colors.textInverse} />
+              <Text style={styles.photoCountText}>{carouselIndex + 1} of {heroSlides.length}</Text>
             </View>
           )}
         </View>
@@ -405,7 +481,7 @@ export default function TailorProfileScreen() {
                 </View>
               </View>
             </View>
-            <TierBadgeChip tier={profile.tier as any} size="lg" />
+            <TierBadgeChip tier={toTierBadge(profile.tier)} size="lg" />
           </View>
 
           {profile.bio && (
@@ -418,26 +494,29 @@ export default function TailorProfileScreen() {
           {/* Stats row */}
           <View style={styles.statsRow}>
             <StatPill
-              label={reviewSummary.count > 0 ? `${reviewSummary.count} review${reviewSummary.count === 1 ? '' : 's'}` : 'No reviews yet'}
-              value={reviewSummary.count > 0 ? reviewSummary.average.toFixed(1) : 'No rating'}
-              subvalue={reviewSummary.count > 0 ? '★'.repeat(Math.round(reviewSummary.average)).padEnd(5, '☆') : '☆☆☆☆☆'}
+              label="Reviews"
+              value={reviewSummary.count > 0 ? reviewSummary.average.toFixed(1) : 'New'}
+              subvalue={reviewSummary.count > 0 ? `${reviewSummary.count} review${reviewSummary.count === 1 ? '' : 's'}` : 'No reviews yet'}
+              actionLabel={reviewSummary.count > 0 ? 'See' : undefined}
               onPress={() => setShowReviewsModal(true)}
             />
             <StatPill
               label="Orders"
               value={`${profile.totalOrders}+`}
-              subvalue={isFullyBooked ? 'Fully booked' : (AVAILABILITY_LABEL[profile.availability] ?? profile.availability)}
+              subvalue={isFullyBooked ? 'Fully booked' : 'Taking new work'}
             />
             <StatPill
-              label="Portfolio"
+              label="Photos"
               value={String(portfolioCount)}
-              subvalue={portfolioCount > 0 ? 'View work' : 'No uploads yet'}
+              subvalue={portfolioCount > 0 ? 'Portfolio' : 'No uploads yet'}
+              actionLabel={portfolioCount > 0 ? 'Open' : undefined}
               onPress={openPortfolio}
             />
             <StatPill
               label="Styles"
               value={String(profile.specialtyTags.length)}
-              subvalue={profile.specialtyTags.length > 0 ? 'What they make' : 'No styles listed'}
+              subvalue={profile.specialtyTags.length > 0 ? 'Specialties' : 'No styles listed'}
+              actionLabel={profile.specialtyTags.length > 0 ? 'View' : undefined}
               onPress={profile.specialtyTags.length > 0 ? () => setShowStylesModal(true) : undefined}
             />
           </View>
@@ -511,7 +590,7 @@ export default function TailorProfileScreen() {
       </ScrollView>
 
       {/* Sticky CTA */}
-      <View style={styles.cta}>
+      <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom + Spacing.sm, 14) }]}>
         {profile.supportsReadyMade ? (
           <Button
             label="Shop now"
@@ -545,10 +624,11 @@ export default function TailorProfileScreen() {
                   {
                     text: 'Custom order',
                     onPress: () => router.push({
-                      pathname: `/(customer)/brief/${profile.id}` as any,
+                      pathname: '/(customer)/brief/[tailorId]',
                       params: {
+                        tailorId: profile.id,
                         returnTo: `/(customer)/tailor/${profile.id}`,
-                        draftSession: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+                        draftSession: createDraftSessionId(),
                         freshStart: '1',
                       },
                     }),
@@ -564,10 +644,11 @@ export default function TailorProfileScreen() {
           <Button
             label={isFullyBooked ? 'Fully booked' : 'Custom order'}
             onPress={() => router.push({
-              pathname: `/(customer)/brief/${profile.id}` as any,
+              pathname: '/(customer)/brief/[tailorId]',
               params: {
+                tailorId: profile.id,
                 returnTo: `/(customer)/tailor/${profile.id}`,
-                draftSession: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+                draftSession: createDraftSessionId(),
                 freshStart: '1',
               },
             })}
@@ -599,47 +680,73 @@ export default function TailorProfileScreen() {
       />
 
       <Modal
-        visible={portfolioPreviewIndex !== null}
+        visible={imagePreviewIndex !== null}
         transparent
         animationType="fade"
-        onRequestClose={() => setPortfolioPreviewIndex(null)}
+        onRequestClose={closeImagePreview}
       >
         <View style={styles.previewBackdrop}>
-          <TouchableOpacity style={styles.previewClose} onPress={() => setPortfolioPreviewIndex(null)}>
+          <TouchableOpacity style={styles.previewClose} onPress={closeImagePreview}>
             <Text style={styles.previewCloseText}>Close</Text>
           </TouchableOpacity>
-          {portfolioPreviewIndex !== null && portfolioImages.length > 0 ? (
+          {imagePreviewIndex !== null && imagePreviewItems.length > 0 ? (
             <>
               <FlatList
-                ref={portfolioPreviewRef}
-                key={`portfolio-preview-${portfolioPreviewIndex}`}
-                data={portfolioImages}
+                ref={imagePreviewRef}
+                key={`image-preview-${imagePreviewIndex}`}
+                data={imagePreviewItems}
                 horizontal
                 pagingEnabled
-                initialScrollIndex={Math.min(portfolioPreviewIndex, Math.max(portfolioImages.length - 1, 0))}
+                initialScrollIndex={Math.min(imagePreviewIndex, Math.max(imagePreviewItems.length - 1, 0))}
                 getItemLayout={(_, index) => ({ length: SCREEN_WIDTH, offset: SCREEN_WIDTH * index, index })}
                 showsHorizontalScrollIndicator={false}
                 onMomentumScrollEnd={(event) => {
                   const nextIndex = Math.round(event.nativeEvent.contentOffset.x / SCREEN_WIDTH)
-                  setPortfolioViewerIndex(nextIndex)
+                  setImageViewerIndex(nextIndex)
                 }}
-                renderItem={({ item }) => (
-                  <View style={styles.previewSlide}>
-                    <RemoteImage
-                      uri={item}
-                      bucket="portfolio-photos"
-                      style={styles.previewImage}
-                      contentFit="contain"
-                      transition={150}
-                      surface="customer_tailor_portfolio_preview"
-                    />
-                  </View>
-                )}
+                initialNumToRender={imagePreviewItems.length}
+                windowSize={Math.max(3, imagePreviewItems.length)}
+                removeClippedSubviews={false}
+                renderItem={({ item }) => {
+                  const resolvedUri = resolveStorageImageUrl(item.uri, item.bucket)
+                  const showFallback = !resolvedUri || failedPreviewImages.includes(resolvedUri)
+
+                  return (
+                    <View style={styles.previewSlide}>
+                      {showFallback ? (
+                        <View style={[styles.previewImage, styles.previewImageFallback]}>
+                          <Feather name="image" size={34} color={Colors.needleGreen} />
+                          <Text style={styles.previewImageFallbackText}>
+                            This photo could not be loaded.
+                          </Text>
+                        </View>
+                      ) : (
+                        <RNImage
+                          key={resolvedUri}
+                          source={{ uri: resolvedUri }}
+                          style={styles.previewImage}
+                          resizeMode="contain"
+                          onError={(error) => {
+                            setFailedPreviewImages((current) =>
+                              current.includes(resolvedUri) ? current : [...current, resolvedUri]
+                            )
+                            captureImageLoadFailure({
+                              url: resolvedUri,
+                              bucket: item.bucket,
+                              surface: 'customer_tailor_portfolio_preview',
+                              error,
+                            })
+                          }}
+                        />
+                      )}
+                    </View>
+                  )
+                }}
               />
-              {portfolioImages.length > 1 ? (
+              {imagePreviewItems.length > 1 ? (
                 <View style={styles.previewCount}>
                   <Text style={styles.previewCountText}>
-                    {portfolioViewerIndex + 1} / {portfolioImages.length}
+                    {imageViewerIndex + 1} / {imagePreviewItems.length}
                   </Text>
                 </View>
               ) : null}
@@ -682,16 +789,16 @@ export default function TailorProfileScreen() {
           <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
             {portfolioCount > 0 ? (
               <View style={styles.portfolioGrid}>
-                {portfolioImages.map((url) => (
+                {portfolioImageItems.map((item, index) => (
                   <TouchableOpacity
-                    key={`${url}`}
+                    key={`${item.uri}`}
                     style={styles.portfolioTile}
                     activeOpacity={0.9}
-                    onPress={() => openPortfolioPreview(portfolioImages.indexOf(url))}
+                    onPress={() => openPortfolioPreview(portfolioImageItems, index)}
                   >
                     <RemoteImage
-                      uri={url}
-                      bucket="portfolio-photos"
+                      uri={item.uri}
+                      bucket={item.bucket}
                       style={styles.portfolioTileImage}
                       contentFit="cover"
                       transition={120}
@@ -798,17 +905,29 @@ export default function TailorProfileScreen() {
   )
 }
 
-function StatPill({ label, value, subvalue, onPress }: { label: string; value: string; subvalue?: string; onPress?: () => void }) {
+function StatPill({
+  label,
+  value,
+  subvalue,
+  actionLabel,
+  onPress,
+}: {
+  label: string
+  value: string
+  subvalue?: string
+  actionLabel?: string
+  onPress?: () => void
+}) {
   const content = (
     <View style={styles.statContent}>
-      {onPress ? (
-        <View style={styles.statTapHintWrap}>
-          <Text style={styles.statTapHint}>Open</Text>
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
+      {subvalue ? <Text style={styles.statSubvalue}>{subvalue}</Text> : null}
+      {actionLabel ? (
+        <View style={styles.statActionBadge}>
+          <Text style={styles.statActionText}>{actionLabel}</Text>
         </View>
       ) : null}
-      <Text style={styles.statValue}>{value}</Text>
-      {subvalue ? <Text style={styles.statSubvalue}>{subvalue}</Text> : null}
-      <Text style={styles.statLabel}>{label}</Text>
     </View>
   )
 
@@ -819,6 +938,8 @@ function StatPill({ label, value, subvalue, onPress }: { label: string; value: s
         onPress={onPress}
         activeOpacity={0.82}
         hitSlop={8}
+        accessibilityRole="button"
+        accessibilityLabel={actionLabel ? `${actionLabel} ${label.toLowerCase()}` : label}
       >
         {content}
       </TouchableOpacity>
@@ -890,57 +1011,17 @@ function WishlistPickerModal({
   onCreate: () => void
 }) {
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.wishlistSheetOverlay}>
-        <TouchableOpacity style={styles.wishlistSheetScrim} activeOpacity={1} onPress={onClose} />
-        <View style={styles.wishlistSheet}>
-          <View style={styles.wishlistSheetHandle} />
-          <Text style={styles.wishlistSheetTitle}>
-            {collections.length === 0 ? 'Create a wishlist to save this' : 'Save to wishlist'}
-          </Text>
-          {collections.length > 0 ? (
-            <View style={styles.wishlistOptions}>
-              {collections.map((collection) => (
-                <TouchableOpacity
-                  key={collection.id}
-                  style={styles.wishlistOption}
-                  onPress={() => onSelect(collection.id)}
-                  disabled={saving}
-                >
-                  <View style={styles.wishlistOptionIcon}>
-                    <Feather name="heart" size={17} color={Colors.needleGreen} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.wishlistOptionTitle}>{collection.name}</Text>
-                    <Text style={styles.wishlistOptionMeta}>{collection.itemCount} item{collection.itemCount === 1 ? '' : 's'}</Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </View>
-          ) : null}
-          <View style={styles.wishlistCreateBox}>
-            <TextInput
-              value={newWishlistName}
-              onChangeText={onChangeNewWishlistName}
-              placeholder="e.g. December Wedding"
-              placeholderTextColor={Colors.midGrey}
-              style={styles.wishlistInput}
-              autoFocus={collections.length === 0}
-              maxLength={80}
-              returnKeyType="done"
-              onSubmitEditing={onCreate}
-            />
-            <TouchableOpacity
-              style={[styles.wishlistCreateButton, (!newWishlistName.trim() || saving) && styles.wishlistCreateButtonDisabled]}
-              onPress={onCreate}
-              disabled={!newWishlistName.trim() || saving}
-            >
-              {saving ? <ActivityIndicator color={Colors.textInverse} /> : <Text style={styles.wishlistCreateButtonText}>Create and save</Text>}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
+    <SaveToWishlistSheet
+      visible={visible}
+      collections={collections}
+      newWishlistName={newWishlistName}
+      saving={saving}
+      createPlaceholder="e.g. December Wedding"
+      onChangeNewWishlistName={onChangeNewWishlistName}
+      onClose={onClose}
+      onSelect={onSelect}
+      onCreate={onCreate}
+    />
   )
 }
 
@@ -1032,7 +1113,7 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.lightGrey,
   },
   modalClose: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
-  modalTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  modalTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   modalScroll: { flex: 1 },
   modalContent: { padding: Spacing.lg, gap: Spacing.xs, paddingBottom: Spacing.xl },
   portfolioGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
@@ -1094,17 +1175,16 @@ const styles = StyleSheet.create({
   heroOverlay: {
     position: 'absolute', top: 0, left: 0, right: 0,
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start',
-    paddingTop: 52, paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md, paddingHorizontal: Spacing.lg,
   },
   backBtn: {
     width: 40, height: 40, borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    backgroundColor: Colors.needleGreen,
     alignItems: 'center', justifyContent: 'center',
   },
-  backBtnText: { fontSize: 18, color: Colors.ink },
   heartBtn: {
     width: 40, height: 40, borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    backgroundColor: Colors.surfaceElevated,
     alignItems: 'center', justifyContent: 'center',
   },
   heartBtnSaved: {
@@ -1120,6 +1200,9 @@ const styles = StyleSheet.create({
     position: 'absolute', bottom: 12, right: Spacing.lg,
     backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: Radius.full,
     paddingHorizontal: 10, paddingVertical: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
   },
   photoCountText: { fontSize: FontSize.xs, color: Colors.textInverse, fontWeight: FontWeight.semibold },
 
@@ -1133,7 +1216,7 @@ const styles = StyleSheet.create({
     padding: 14,
     ...Shadow.md,
   },
-  name: { fontSize: 24, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia', lineHeight: 28 },
+  name: { fontSize: 24, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display, lineHeight: 28 },
   location: { fontSize: FontSize.sm, color: Colors.midGrey, marginTop: 2 },
   identityMetaRow: { marginTop: Spacing.sm, flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
   availRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginTop: -Spacing.md, marginBottom: -Spacing.sm },
@@ -1150,55 +1233,57 @@ const styles = StyleSheet.create({
   },
   availabilityPillText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
 
-  statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  statPill: {
-    width: '48%',
+  statsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    alignItems: 'center',
-    gap: 2,
+    padding: 8,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
+  statPill: {
+    width: '50%',
+    backgroundColor: 'transparent',
+    borderRadius: Radius.sm,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    alignItems: 'stretch',
+    gap: 2,
+  },
   statContent: {
     width: '100%',
-    minHeight: 72,
-    alignItems: 'center',
+    minHeight: 50,
+    alignItems: 'flex-start',
     justifyContent: 'center',
     gap: 2,
   },
   statPillInteractive: {
-    borderColor: Colors.needleGreen,
+    backgroundColor: 'transparent',
   },
   statPillPressed: {
     transform: [{ scale: 0.98 }],
     backgroundColor: Colors.needleGreenLight,
   },
-  statTapHintWrap: {
-    position: 'absolute',
-    top: Spacing.sm,
-    right: Spacing.sm,
-    backgroundColor: Colors.needleGreenLight,
+  statValue: { fontSize: 16, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'left' },
+  statSubvalue: { fontSize: 11, color: Colors.midGrey, fontWeight: FontWeight.medium, textAlign: 'left' },
+  statLabel: { fontSize: 11, color: Colors.ink, fontWeight: FontWeight.semibold, textAlign: 'left' },
+  statActionBadge: {
+    marginTop: 1,
     borderRadius: Radius.full,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingVertical: 0,
+    backgroundColor: 'transparent',
   },
-  statTapHint: {
-    fontSize: 10,
+  statActionText: {
+    fontSize: 11,
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
+    letterSpacing: 0,
   },
-  statValue: { fontSize: 15, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
-  statSubvalue: { fontSize: FontSize.xs, color: Colors.warning, fontWeight: FontWeight.semibold, textAlign: 'center' },
-  statLabel: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'center' },
 
   section: { gap: Spacing.xs },
-  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.bodySemiBold },
   styleGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1272,7 +1357,7 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
     ...Shadow.sm,
   },
-  ratingBreakdownValue: { fontSize: 34, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  ratingBreakdownValue: { fontSize: 34, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
   ratingBreakdownRows: { gap: 6 },
   ratingBreakdownRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   ratingBreakdownLabel: { width: 14, fontSize: FontSize.xs, color: Colors.ink, fontWeight: FontWeight.semibold },
@@ -1283,8 +1368,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreenLight,
     borderRadius: Radius.md,
     padding: 12,
-    borderLeftWidth: 3,
-    borderLeftColor: Colors.needleGreen,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '35',
     gap: 4,
   },
   responseLabel: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.needleGreen },
@@ -1321,58 +1406,6 @@ const styles = StyleSheet.create({
     borderTopWidth: 1, borderTopColor: Colors.lightGrey,
     paddingBottom: 8,
   },
-  wishlistSheetOverlay: { flex: 1, justifyContent: 'flex-end' },
-  wishlistSheetScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.35)' },
-  wishlistSheet: {
-    backgroundColor: Colors.white,
-    borderTopLeftRadius: Radius.xl,
-    borderTopRightRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
-  },
-  wishlistSheetHandle: { alignSelf: 'center', width: 42, height: 4, borderRadius: 2, backgroundColor: Colors.lightGrey },
-  wishlistSheetTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
-  wishlistOptions: { gap: Spacing.sm },
-  wishlistOption: {
-    minHeight: 52,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    padding: Spacing.sm,
-  },
-  wishlistOptionIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.needleGreenLight,
-  },
-  wishlistOptionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-  wishlistOptionMeta: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
-  wishlistCreateBox: { gap: Spacing.sm },
-  wishlistInput: {
-    minHeight: 52,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    paddingHorizontal: Spacing.md,
-    fontSize: FontSize.md,
-    color: Colors.ink,
-    backgroundColor: Colors.bone,
-  },
-  wishlistCreateButton: {
-    minHeight: 52,
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.needleGreen,
-  },
-  wishlistCreateButtonDisabled: { opacity: 0.5 },
-  wishlistCreateButtonText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   previewBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.92)',
@@ -1381,12 +1414,36 @@ const styles = StyleSheet.create({
   },
   previewSlide: {
     width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: Spacing.lg,
+    paddingTop: 96,
+    paddingBottom: 96,
   },
-  previewImage: { width: SCREEN_WIDTH - Spacing.lg * 2, height: '82%' },
-  previewVideo: { width: SCREEN_WIDTH - Spacing.lg * 2, height: '72%' },
+  previewImage: {
+    width: SCREEN_WIDTH - Spacing.lg * 2,
+    height: PREVIEW_MEDIA_HEIGHT,
+    borderRadius: Radius.md,
+    overflow: 'hidden',
+  },
+  previewImageFallback: {
+    backgroundColor: Colors.bone,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    padding: Spacing.lg,
+  },
+  previewImageFallbackText: {
+    color: Colors.ink,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    textAlign: 'center',
+  },
+  previewVideo: {
+    width: SCREEN_WIDTH - Spacing.lg * 2,
+    height: PREVIEW_MEDIA_HEIGHT,
+  },
   refreshingText: { fontSize: FontSize.xs, color: Colors.midGrey, paddingHorizontal: Spacing.xl, marginBottom: Spacing.sm },
   previewClose: {
     position: 'absolute',

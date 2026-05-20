@@ -9,7 +9,7 @@ import { Feather } from '@expo/vector-icons'
 import { CONTACTS } from '@drape/shared'
 import { useAuth } from '@/lib/auth'
 import { requestSellerAccessReview } from '@/lib/seller-access-review'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { goBackOrFallback } from '@/lib/navigation'
 
 export default function TailorAccessReviewScreen() {
@@ -64,7 +64,7 @@ export default function TailorAccessReviewScreen() {
 
   if (submitted) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.backBtn} onPress={goBack}>
             <Feather name="arrow-left" size={20} color={Colors.ink} />
@@ -97,7 +97,7 @@ export default function TailorAccessReviewScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
@@ -141,7 +141,7 @@ export default function TailorAccessReviewScreen() {
         </View>
 
         <View style={styles.noteCard}>
-          <Text style={styles.noteTitle}>Best use</Text>
+          <Text style={styles.noteTitle}>Before review</Text>
           <Text style={styles.noteCopy}>Use this for a real review request. If you only need to finish setup, fix the requirement first and come back only if the state still looks wrong.</Text>
         </View>
 
@@ -185,8 +185,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
-  body: { padding: Spacing.lg, paddingBottom: 32, gap: Spacing.md, flexGrow: 1 },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
+  body: { padding: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.md, flexGrow: 1 },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
@@ -206,7 +206,7 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
   },
-  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 28, fontFamily: 'Georgia' },
+  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 28, fontFamily: Fonts.display },
   heroCopy: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
   card: {
     backgroundColor: Colors.white,
@@ -215,7 +215,7 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
     ...Shadow.sm,
   },
-  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   sectionCopy: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
   accountValue: { fontSize: FontSize.md, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey },

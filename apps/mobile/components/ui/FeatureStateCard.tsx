@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
-import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 
 type FeatureStateCardProps = {
   eyebrow: string
@@ -29,9 +29,6 @@ export function FeatureStateCard({
   return (
     <View style={styles.wrap}>
       <View style={styles.card}>
-        <View style={[styles.accentWash, { backgroundColor: `${accentColor}16` }]} />
-        <View style={[styles.accentOrb, { backgroundColor: `${accentColor}12` }]} />
-
         <View style={[styles.eyebrowPill, { borderColor: `${accentColor}24`, backgroundColor: `${accentColor}10` }]}>
           <Text style={[styles.eyebrowText, { color: accentColor }]}>{eyebrow}</Text>
         </View>
@@ -70,28 +67,14 @@ const styles = StyleSheet.create({
   card: {
     width: '100%',
     maxWidth: 440,
-    overflow: 'hidden',
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
     padding: Spacing.lg,
     gap: Spacing.sm,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
     ...Shadow.md,
-  },
-  accentWash: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 84,
-  },
-  accentOrb: {
-    position: 'absolute',
-    top: -18,
-    right: -12,
-    width: 76,
-    height: 76,
-    borderRadius: 38,
   },
   eyebrowPill: {
     borderWidth: 1,
@@ -117,7 +100,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     color: Colors.ink,
     textAlign: 'center',
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   body: {
     fontSize: FontSize.xs,

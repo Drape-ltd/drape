@@ -1,19 +1,18 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback } from 'react'
 import {
   View, Text, StyleSheet, TouchableOpacity, Pressable, FlatList, ScrollView, ActivityIndicator,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { Input, TierBadgeChip, StarRating, Tag, RemoteImage } from '@/components/ui'
+import type { TierBadge } from '@/components/ui'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 const GARMENT_FILTERS = ['All', 'Agbada', 'Suits', 'Ankara', 'Bridal', 'Crochet', 'Knitwear', 'Ready-made']
 const TIER_FILTERS = ['All', 'MASTER', 'RISING', 'VERIFIED']
-const SEARCH_GUIDE_KEY = 'drape_search_best_use_dismissed'
 
 type TailorResult = {
   id: string
@@ -33,10 +32,53 @@ type TailorResult = {
   supportsReadyMade: boolean
 }
 
+type TailorResultRow = {
+  id: string
+  display_name: string | null
+  location: string | null
+  seller_type: 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP' | null
+  specialty_tags: unknown
+  avg_rating: number | null
+  total_reviews: number | null
+  tier: string | null
+  availability: string | null
+  avg_response_hours: number | null
+  price_range_min: number | null
+  currency: CurrencyCode | null
+  avatar_url: string | null
+  supports_custom_orders: boolean | null
+  supports_ready_made: boolean | null
+}
+
 function asStringList(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
   if (typeof value === 'string' && value.length > 0) return [value]
   return []
+}
+
+function toTierBadge(tier: string | null | undefined): TierBadge | null {
+  if (tier === 'VERIFIED' || tier === 'RISING' || tier === 'MASTER') return tier
+  return null
+}
+
+function mapTailorResult(row: TailorResultRow): TailorResult {
+  return {
+    id: row.id,
+    displayName: row.display_name ?? 'Drape seller',
+    location: row.location ?? 'Location not added',
+    sellerType: row.seller_type ?? 'TAILOR',
+    specialtyTags: asStringList(row.specialty_tags),
+    avgRating: row.avg_rating ?? 0,
+    totalReviews: row.total_reviews ?? 0,
+    tier: row.tier ?? '',
+    availability: row.availability ?? 'OPEN',
+    avgResponseHours: row.avg_response_hours,
+    priceRangeMin: row.price_range_min,
+    currency: row.currency ?? 'USD',
+    avatarUrl: row.avatar_url ?? null,
+    supportsCustomOrders: row.supports_custom_orders ?? true,
+    supportsReadyMade: row.supports_ready_made ?? false,
+  }
 }
 
 function availabilityHint(tailor: TailorResult): string | null {
@@ -88,15 +130,6 @@ export default function SearchScreen() {
   const [loading, setLoading] = useState(false)
   const [searched, setSearched] = useState(false)
   const [fetchError, setFetchError] = useState(false)
-  const [showGuide, setShowGuide] = useState(true)
-
-  useEffect(() => {
-    AsyncStorage.getItem(SEARCH_GUIDE_KEY)
-      .then((value) => {
-        if (value === '1') setShowGuide(false)
-      })
-      .catch(() => {})
-  }, [])
 
   const search = useCallback(async (q: string, g: string, t: string) => {
     setLoading(true)
@@ -142,23 +175,7 @@ export default function SearchScreen() {
 
         const { data: strictData, error: strictError } = await strictQuery.order('ranking_score', { ascending: false }).limit(30)
         if (strictError) throw strictError
-        strictResults = (strictData ?? []).map((d: any) => ({
-          id: d.id,
-          displayName: d.display_name,
-          location: d.location,
-          sellerType: d.seller_type ?? 'TAILOR',
-          specialtyTags: asStringList(d.specialty_tags),
-          avgRating: d.avg_rating,
-          totalReviews: d.total_reviews,
-          tier: d.tier,
-          availability: d.availability,
-          avgResponseHours: d.avg_response_hours,
-          priceRangeMin: d.price_range_min,
-          currency: (d.currency ?? 'USD') as CurrencyCode,
-          avatarUrl: d.avatar_url ?? null,
-          supportsCustomOrders: d.supports_custom_orders ?? true,
-          supportsReadyMade: d.supports_ready_made ?? false,
-        }))
+        strictResults = ((strictData ?? []) as TailorResultRow[]).map(mapTailorResult)
       }
 
       let mappedResults = strictResults
@@ -167,23 +184,7 @@ export default function SearchScreen() {
         const { data, error } = await query.order('ranking_score', { ascending: false }).limit(30)
         if (error) throw error
 
-        mappedResults = (data ?? []).map((d: any) => ({
-          id: d.id,
-          displayName: d.display_name,
-          location: d.location,
-          sellerType: d.seller_type ?? 'TAILOR',
-          specialtyTags: asStringList(d.specialty_tags),
-          avgRating: d.avg_rating,
-          totalReviews: d.total_reviews,
-          tier: d.tier,
-          availability: d.availability,
-          avgResponseHours: d.avg_response_hours,
-          priceRangeMin: d.price_range_min,
-          currency: (d.currency ?? 'USD') as CurrencyCode,
-          avatarUrl: d.avatar_url ?? null,
-          supportsCustomOrders: d.supports_custom_orders ?? true,
-          supportsReadyMade: d.supports_ready_made ?? false,
-        }))
+        mappedResults = ((data ?? []) as TailorResultRow[]).map(mapTailorResult)
         if (location) {
           mappedResults = applyLocationBoost(mappedResults, location)
         }
@@ -205,33 +206,10 @@ export default function SearchScreen() {
     search(query, g, tier)
   }
 
-  async function dismissGuide() {
-    setShowGuide(false)
-    try {
-      await AsyncStorage.setItem(SEARCH_GUIDE_KEY, '1')
-    } catch {}
-  }
-
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
         <Text style={styles.title}>Find a tailor</Text>
-        {showGuide ? (
-          <View style={styles.guideCard}>
-            <View style={styles.guideHeader}>
-              <Text style={styles.guideEyebrow}>Best use</Text>
-              <TouchableOpacity
-                onPress={() => { void dismissGuide() }}
-                hitSlop={8}
-                accessibilityRole="button"
-                accessibilityLabel="Dismiss search tips"
-              >
-                <Feather name="x" size={16} color={Colors.midGrey} />
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.guideTitle}>Search by name, city, style, or craft, then narrow only if needed.</Text>
-          </View>
-        ) : null}
         <Input
           placeholder="Name, city, style, or craft..."
           value={query}
@@ -363,7 +341,7 @@ export default function SearchScreen() {
                 <View style={styles.info}>
                   <View style={styles.nameRow}>
                     <Text style={styles.name}>{item.displayName}</Text>
-                    <TierBadgeChip tier={item.tier as any} />
+                    <TierBadgeChip tier={toTierBadge(item.tier)} />
                   </View>
                   <Text style={styles.location}>{item.location}</Text>
                   <View style={styles.metaRow}>
@@ -443,7 +421,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   header: { padding: Spacing.xl, gap: Spacing.md, backgroundColor: Colors.bone },
-  title: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  title: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,
@@ -470,7 +448,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     color: Colors.ink,
     lineHeight: 28,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   heroSub: {
     fontSize: FontSize.sm,
@@ -492,7 +470,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
   searchInput: { marginBottom: -Spacing.sm },
   filterRow: { gap: Spacing.sm, paddingRight: Spacing.xl },
@@ -546,7 +524,7 @@ const styles = StyleSheet.create({
   },
   info: { flex: 1, gap: 4 },
   nameRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  name: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  name: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   location: { fontSize: FontSize.sm, color: Colors.midGrey },
   metaRow: { flexDirection: 'row', gap: Spacing.md, alignItems: 'center' },
   response: { fontSize: FontSize.xs, color: Colors.midGrey },

@@ -17,7 +17,7 @@ import {
   isDrapeVisionMode,
   type DrapeVisionMode,
 } from '@/constants/drapeVision'
-import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 import { Sentry } from '@/lib/sentry'
 
 type VisionParams = {
@@ -58,6 +58,7 @@ function loadNativeVisionScreen() {
   if (isAndroidLiveScanPausedForLaunch()) return null
 
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- native module must stay lazy so Expo Go and Android fallback do not crash.
     return require('@/components/drapeVision/NativeDrapeVisionScreen') as NativeVisionScreenModule
   } catch (error) {
     Sentry.addBreadcrumb({
@@ -101,10 +102,19 @@ function primaryFallbackTargetForParams(mode: DrapeVisionMode, params: VisionPar
   }
 
   if (mode === 'garment_qc') {
-    return params.orderId?.trim() ? `/(tailor)/orders/${params.orderId}` : '/(tailor)/orders'
+    if (params.orderId?.trim()) return `/(tailor)/orders/${params.orderId}`
+    if (params.returnTo?.trim()) return params.returnTo
+    return '/(tailor)/orders'
   }
 
   return returnRouteForParams(mode, params)
+}
+
+function primaryFallbackLabelForParams(mode: DrapeVisionMode, params: VisionParams) {
+  if (mode !== 'garment_qc') return DRAPE_VISION_MODE_META[mode].primaryLabel
+  if (params.orderId?.trim()) return 'Return to order'
+  if (params.returnTo?.includes('(tailor)')) return 'Back to dashboard'
+  return 'Open orders'
 }
 
 export default function DrapeVisionRoute() {
@@ -122,6 +132,7 @@ export default function DrapeVisionRoute() {
   const NativeVisionScreen = useMemo(() => loadNativeVisionScreen()?.default ?? null, [])
   const returnRoute = useMemo(() => returnRouteForParams(mode, params), [mode, params])
   const primaryFallbackTarget = useMemo(() => primaryFallbackTargetForParams(mode, params), [mode, params])
+  const primaryFallbackLabel = useMemo(() => primaryFallbackLabelForParams(mode, params), [mode, params])
   const androidPaused = isAndroidLiveScanPausedForLaunch()
 
   useEffect(() => {
@@ -175,7 +186,7 @@ export default function DrapeVisionRoute() {
 
       <View style={styles.ctaBar}>
         <TouchableOpacity accessibilityRole="button" onPress={openPrimaryFallback} style={styles.primaryButton}>
-          <Text style={styles.primaryText}>{meta.primaryLabel}</Text>
+          <Text style={styles.primaryText}>{primaryFallbackLabel}</Text>
           <Feather name="arrow-right" size={18} color={Colors.textInverse} />
         </TouchableOpacity>
         {params.returnTo?.trim() ? (
@@ -227,7 +238,7 @@ const styles = StyleSheet.create({
     lineHeight: 38,
     color: DRAPE_VISION_COLORS.text,
     fontWeight: FontWeight.bold,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   body: {
     fontSize: FontSize.md,

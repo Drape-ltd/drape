@@ -2,13 +2,13 @@
  * Edit Profile — single source of truth for all tailor profile data.
  * Onboarding writes here; this screen reads and updates the same row.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
-  TouchableOpacity, ActivityIndicator, Alert,
+  TouchableOpacity, ActivityIndicator, Alert, Modal, Platform,
 } from 'react-native'
 import { useNavigation, useRouter } from 'expo-router'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import * as ImageManipulator from 'expo-image-manipulator'
 import { supabase, invokeFunction } from '@/lib/supabase'
@@ -22,7 +22,7 @@ import { AddressAutocompleteInput, TagSelector } from '@/components/ui'
 import type { TagGroup } from '@/components/ui'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-filter'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { Availability } from '@/lib/shared-types'
 
 // ─── Specialty options ────────────────────────────────────────────────────────
@@ -47,10 +47,48 @@ type VerificationStatus = 'NOT_SUBMITTED' | 'PENDING' | 'VERIFIED' | 'REJECTED'
 type Currency = 'GBP' | 'USD' | 'EUR' | 'NGN' | 'GHS' | 'KES' | 'CAD'
 type SellerType = 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP'
 
+type TailorEditProfileRow = {
+  id: string
+  display_name: string | null
+  location: string | null
+  bio: string | null
+  specialty_tags: unknown
+  availability: Availability | null
+  currency: Currency | null
+  id_verification_status: VerificationStatus | 'APPROVED' | null
+  seller_type: SellerType | null
+  supports_custom_orders: boolean | null
+  supports_ready_made: boolean | null
+  pickup_available: boolean | null
+  delivery_available: boolean | null
+  shipping_available: boolean | null
+}
+
+type PickupDetailsRow = {
+  pickup_address: string | null
+  pickup_instructions: string | null
+}
+
+type NominatimSuggestion = {
+  display_name?: string
+  address?: {
+    city?: string
+    town?: string
+    village?: string
+    county?: string
+    country?: string
+  }
+}
+
 function asStringList(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
   if (typeof value === 'string' && value.length > 0) return [value]
   return []
+}
+
+function normalizeVerificationStatus(value: TailorEditProfileRow['id_verification_status']): VerificationStatus {
+  if (value === 'APPROVED') return 'VERIFIED'
+  return value ?? 'NOT_SUBMITTED'
 }
 
 const CURRENCY_OPTIONS: { value: Currency; label: string }[] = [
@@ -70,10 +108,10 @@ const AVAIL_OPTIONS: { value: Availability; label: string; hint: string }[] = [
 ]
 
 const VERIFY_LABEL: Record<VerificationStatus, string> = {
-  NOT_SUBMITTED: 'Verification not submitted',
-  PENDING:       'ID under review. Verified within 24 hours.',
-  VERIFIED:      'Identity verified',
-  REJECTED:      'Verification failed. Please re-submit.',
+  NOT_SUBMITTED: 'Setup still needed',
+  PENDING:       'Review in progress',
+  VERIFIED:      'Identity confirmed',
+  REJECTED:      'Needs attention',
 }
 const VERIFY_COLOR: Record<VerificationStatus, string> = {
   NOT_SUBMITTED: Colors.midGrey,
@@ -88,6 +126,7 @@ export default function EditProfileScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
+  const userId = user?.id ?? null
   const { avatarUrl, setAvatarUrl } = useTailorProfile()
 
   function goBack() {
@@ -133,6 +172,8 @@ export default function EditProfileScreen() {
   const [saving, setSaving]               = useState(false)
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const [errors, setErrors]               = useState<{ name?: string; location?: string; specialties?: string }>({})
+  const [showSpecialtySheet, setShowSpecialtySheet] = useState(false)
+  const [showCurrencySheet, setShowCurrencySheet] = useState(false)
 
   // Location autocomplete
   const [locationSuggestions, setLocationSuggestions] = useState<string[]>([])
@@ -160,33 +201,40 @@ export default function EditProfileScreen() {
     shippingAvailable !== base.shippingAvailable ||
     JSON.stringify(specialties) !== JSON.stringify(base.specialties)
   )
+  const specialtySummary =
+    specialties.length > 0
+      ? specialties.slice(0, 4).join(' · ') + (specialties.length > 4 ? ` +${specialties.length - 4} more` : '')
+      : 'Choose the styles customers can book you for.'
+  const currencyLabel = CURRENCY_OPTIONS.find((option) => option.value === currency)?.label ?? currency
 
   // ── Load ────────────────────────────────────────────────────────────────────
 
-  useEffect(() => { load() }, [])
-
-  async function load() {
-    if (!user?.id) return
+  const load = useCallback(async () => {
+    if (!userId) {
+      setLoading(false)
+      setFetchError(false)
+      return
+    }
     setFetchError(false)
     try {
       const [{ data, error }, { data: pickupData }] = await Promise.all([
         supabase
           .from('tailor_profiles')
           .select('id, display_name, location, bio, specialty_tags, availability, currency, id_verification_status, seller_type, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, delivery_fee, shipping_fee')
-          .eq('user_id', user.id)
+          .eq('user_id', userId)
           .maybeSingle(),
         supabase
           .from('tailor_pickup_details')
           .select('pickup_address, pickup_instructions')
-          .eq('user_id', user.id)
+          .eq('user_id', userId)
           .maybeSingle(),
       ])
 
       if (error) throw error
 
       if (data) {
-        const d = data as any
-        const pickup = (pickupData ?? {}) as any
+        const d = data as TailorEditProfileRow
+        const pickup = pickupData as PickupDetailsRow | null
         const snap = {
           displayName:  d.display_name    ?? '',
           location:     d.location        ?? '',
@@ -198,8 +246,8 @@ export default function EditProfileScreen() {
           supportsCustomOrders: d.supports_custom_orders ?? true,
           supportsReadyMade: d.supports_ready_made ?? false,
           pickupAvailable: d.pickup_available ?? true,
-          pickupAddress: pickup.pickup_address ?? '',
-          pickupInstructions: pickup.pickup_instructions ?? '',
+          pickupAddress: pickup?.pickup_address ?? '',
+          pickupInstructions: pickup?.pickup_instructions ?? '',
           deliveryAvailable: d.delivery_available ?? false,
           shippingAvailable: d.shipping_available ?? false,
         }
@@ -218,7 +266,7 @@ export default function EditProfileScreen() {
         setPickupInstructions(snap.pickupInstructions)
         setDeliveryAvailable(snap.deliveryAvailable)
         setShippingAvailable(snap.shippingAvailable)
-        setVerifyStatus((d.id_verification_status ?? 'NOT_SUBMITTED') as VerificationStatus)
+        setVerifyStatus(normalizeVerificationStatus(d.id_verification_status))
 
         const { count, error: countError } = await supabase
           .from('portfolio_items')
@@ -269,7 +317,14 @@ export default function EditProfileScreen() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [userId])
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void load()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [load])
 
   // ── Avatar ───────────────────────────────────────────────────────────────────
 
@@ -292,7 +347,8 @@ export default function EditProfileScreen() {
         [{ resize: { width: 800, height: 800 } }],
         { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
       )
-      const fileName = `${user!.id}/avatar.jpg`
+      if (!userId) throw new Error('Session expired. Please sign in again.')
+      const fileName = `${userId}/avatar.jpg`
       const publicUrl = await uploadPublicStorageImage({
         bucket: 'avatars',
         path: fileName,
@@ -301,7 +357,7 @@ export default function EditProfileScreen() {
         maxBytes: 5 * 1024 * 1024,
         upsert: true,
       })
-      const bustUrl = `${publicUrl}?t=${Date.now()}`
+      const bustUrl = `${publicUrl}?t=${new Date().getTime()}`
       const { error: profileError } = await invokeFunction('tailor-profile-action', {
         body: { action: 'update-avatar', avatarUrl: bustUrl },
       })
@@ -333,10 +389,10 @@ export default function EditProfileScreen() {
           `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&addressdetails=1&limit=6&featuretype=city`,
           { headers: { 'Accept-Language': 'en', 'User-Agent': 'Drape/1.0' } }
         )
-        const data: any[] = await res.json()
+        const data = (await res.json()) as NominatimSuggestion[]
         const labels = data.map((item) => {
           const a = item.address ?? {}
-          const city = a.city ?? a.town ?? a.village ?? a.county ?? item.display_name.split(',')[0]
+          const city = a.city ?? a.town ?? a.village ?? a.county ?? item.display_name?.split(',')[0]
           const country = a.country ?? ''
           return country ? `${city}, ${country}` : city
         }).filter(Boolean)
@@ -436,7 +492,7 @@ export default function EditProfileScreen() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Profile edit</Text>
+            <Text style={styles.stateEyebrow}>Storefront</Text>
             <ActivityIndicator color={Colors.needleGreen} size="large" />
             <Text style={styles.stateTitle}>Loading your storefront…</Text>
             <Text style={styles.stateHint}>
@@ -453,7 +509,7 @@ export default function EditProfileScreen() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.stateWrap}>
           <View style={styles.stateCard}>
-            <Text style={styles.stateEyebrow}>Profile edit</Text>
+            <Text style={styles.stateEyebrow}>Storefront</Text>
             <Text style={styles.stateTitle}>Couldn't load your profile.</Text>
             <Text style={styles.stateHint}>
               This screen should help you refine the storefront customers see before they decide to trust you with an order.
@@ -505,14 +561,13 @@ export default function EditProfileScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Public tailor profile</Text>
+          <View style={styles.heroIcon}>
+            <Feather name="edit-3" size={17} color={Colors.needleGreen} />
           </View>
-          <Text style={styles.heroTitle}>Shape the first impression customers book from.</Text>
-          <Text style={styles.heroSub}>
-            Your name, location, specialties, and availability all help customers decide whether
-            they trust you with their next custom order.
-          </Text>
+          <View style={styles.heroCopy}>
+            <Text style={styles.heroTitle}>Storefront details</Text>
+            <Text style={styles.heroSub}>Keep your profile clear, current, and easy to book.</Text>
+          </View>
         </View>
 
         {/* ── Avatar ───────────────────────────────────────────────────── */}
@@ -550,7 +605,7 @@ export default function EditProfileScreen() {
               style={[styles.input, errors.name && styles.inputError]}
               value={displayName}
               onChangeText={(v) => { setDisplayName(v); setErrors((e) => ({ ...e, name: undefined })) }}
-              placeholder="e.g. Emeka Obi"
+              placeholder="e.g. John Doe"
               placeholderTextColor={Colors.midGrey}
               autoCapitalize="words"
             />
@@ -611,29 +666,49 @@ export default function EditProfileScreen() {
           </Field>
 
           <Field label="Specialties" required error={errors.specialties}>
-            <TagSelector
-              label=""
-              options={SPECIALTY_GROUPS}
-              selected={specialties}
-              onChange={(v) => { setSpecialties(v); setErrors((e) => ({ ...e, specialties: undefined })) }}
-              searchable
-            />
+            <TouchableOpacity
+              style={[styles.selectorSummary, errors.specialties && styles.selectorSummaryError]}
+              activeOpacity={0.75}
+              onPress={() => setShowSpecialtySheet(true)}
+            >
+              <View style={styles.selectorSummaryText}>
+                <Text style={styles.selectorSummaryTitle}>
+                  {specialties.length > 0 ? `${specialties.length} selected` : 'Choose specialties'}
+                </Text>
+                <Text style={styles.selectorSummaryBody}>{specialtySummary}</Text>
+              </View>
+              <Feather name="chevron-right" size={18} color={Colors.midGrey} />
+            </TouchableOpacity>
+            {specialties.length > 0 ? (
+              <View style={styles.selectedPreviewRow}>
+                {specialties.slice(0, 5).map((specialty) => (
+                  <View key={specialty} style={styles.selectedPreviewChip}>
+                    <Text style={styles.selectedPreviewText}>{specialty}</Text>
+                  </View>
+                ))}
+                {specialties.length > 5 ? (
+                  <View style={styles.selectedPreviewChip}>
+                    <Text style={styles.selectedPreviewText}>+{specialties.length - 5}</Text>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
           </Field>
 
           <Field label="Pricing currency">
-            <View style={styles.currencyRow}>
-              {CURRENCY_OPTIONS.map((opt) => (
-                <TouchableOpacity
-                  key={opt.value}
-                  style={[styles.currencyChip, currency === opt.value && styles.currencyChipActive]}
-                  onPress={() => setCurrency(opt.value)}
-                >
-                  <Text style={[styles.currencyChipText, currency === opt.value && styles.currencyChipTextActive]}>
-                    {opt.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            <TouchableOpacity
+              style={styles.selectorSummary}
+              activeOpacity={0.75}
+              onPress={() => setShowCurrencySheet(true)}
+            >
+              <View style={styles.selectorSummaryText}>
+                <Text style={styles.selectorSummaryTitle}>{currencyLabel}</Text>
+                <Text style={styles.selectorSummaryBody}>
+                  Used for your profile, quotes, and ready-made listings.
+                </Text>
+              </View>
+              <Feather name="chevron-right" size={18} color={Colors.midGrey} />
+            </TouchableOpacity>
           </Field>
         </Section>
 
@@ -783,27 +858,48 @@ export default function EditProfileScreen() {
           </TouchableOpacity>
         </Section>
 
-        {/* ── Verification (read-only) ──────────────────────────────────── */}
-        <Section title="Verification">
-          <View style={[styles.verifyCard, { borderLeftColor: VERIFY_COLOR[verifyStatus] }]}>
-            <View style={[styles.verifyDot, { backgroundColor: VERIFY_COLOR[verifyStatus] }]} />
-            <Text style={[styles.verifyText, { color: VERIFY_COLOR[verifyStatus] }]}>
-              {VERIFY_LABEL[verifyStatus]}
-            </Text>
-          </View>
-          {(verifyStatus === 'NOT_SUBMITTED' || verifyStatus === 'REJECTED') && (
-            <TouchableOpacity
-              style={styles.verifyLink}
-              onPress={() => router.push('/(tailor)/profile/setup')}
-              activeOpacity={0.75}
-            >
-              <Text style={styles.verifyLinkText}>
-                {verifyStatus === 'REJECTED' ? 'Re-submit verification →' : 'Submit ID verification →'}
+        {/* ── Trust status (read-only) ──────────────────────────────────── */}
+        <Section title="Trust status">
+          <TouchableOpacity
+            style={styles.trustRow}
+            onPress={() => router.push('/(tailor)/profile/trust-access' as never)}
+            activeOpacity={0.75}
+          >
+            <View style={styles.trustIcon}>
+              <View style={[styles.verifyDot, { backgroundColor: VERIFY_COLOR[verifyStatus] }]} />
+            </View>
+            <View style={styles.trustCopy}>
+              <Text style={styles.trustTitle}>{VERIFY_LABEL[verifyStatus]}</Text>
+              <Text style={styles.trustSub}>
+                {verifyStatus === 'VERIFIED'
+                  ? 'You can manage profile and payout access from one place.'
+                  : verifyStatus === 'PENDING'
+                    ? 'We will keep this page updated as review moves.'
+                    : 'Open trust & access for the exact next step.'}
               </Text>
-            </TouchableOpacity>
-          )}
+            </View>
+            <Text style={styles.trustAction}>
+              {verifyStatus === 'NOT_SUBMITTED' || verifyStatus === 'REJECTED' ? 'Fix' : 'View'}
+            </Text>
+            <Feather name="chevron-right" size={16} color={Colors.midGrey} />
+          </TouchableOpacity>
         </Section>
       </ScrollView>
+      <SpecialtyPickerSheet
+        visible={showSpecialtySheet}
+        selected={specialties}
+        onChange={(v) => { setSpecialties(v); setErrors((e) => ({ ...e, specialties: undefined })) }}
+        onClose={() => setShowSpecialtySheet(false)}
+      />
+      <CurrencyPickerSheet
+        visible={showCurrencySheet}
+        selected={currency}
+        onSelect={(value) => {
+          setCurrency(value)
+          setShowCurrencySheet(false)
+        }}
+        onClose={() => setShowCurrencySheet(false)}
+      />
     </SafeAreaView>
   )
 }
@@ -835,6 +931,118 @@ function Field({
   )
 }
 
+function SpecialtyPickerSheet({
+  visible,
+  selected,
+  onChange,
+  onClose,
+}: {
+  visible: boolean
+  selected: string[]
+  onChange: (selected: string[]) => void
+  onClose: () => void
+}) {
+  const insets = useSafeAreaInsets()
+  const sheetBottomPadding =
+    Platform.OS === 'android'
+      ? Math.max(insets.bottom + 52, 76)
+      : Math.max(insets.bottom + Spacing.lg, Spacing.xxl)
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.sheetOverlay}>
+        <TouchableOpacity style={styles.sheetScrim} activeOpacity={1} onPress={onClose} />
+        <View style={[styles.specialtySheet, { paddingBottom: sheetBottomPadding }]}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.specialtySheetHeader}>
+            <View style={styles.selectorSummaryText}>
+              <Text style={styles.specialtySheetTitle}>Specialties</Text>
+              <Text style={styles.specialtySheetSubtitle}>
+                Pick the work you want customers to find you for. Keep it focused.
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.sheetClose} onPress={onClose}>
+              <Feather name="x" size={18} color={Colors.ink} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView
+            style={styles.specialtySheetScroll}
+            contentContainerStyle={styles.specialtySheetContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <TagSelector
+              label=""
+              options={SPECIALTY_GROUPS}
+              selected={selected}
+              onChange={onChange}
+              searchable
+            />
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  )
+}
+
+function CurrencyPickerSheet({
+  visible,
+  selected,
+  onSelect,
+  onClose,
+}: {
+  visible: boolean
+  selected: Currency
+  onSelect: (currency: Currency) => void
+  onClose: () => void
+}) {
+  const insets = useSafeAreaInsets()
+  const sheetBottomPadding =
+    Platform.OS === 'android'
+      ? Math.max(insets.bottom + 52, 76)
+      : Math.max(insets.bottom + Spacing.lg, Spacing.xxl)
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.sheetOverlay}>
+        <TouchableOpacity style={styles.sheetScrim} activeOpacity={1} onPress={onClose} />
+        <View style={[styles.currencySheet, { paddingBottom: sheetBottomPadding }]}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.specialtySheetHeader}>
+            <View style={styles.selectorSummaryText}>
+              <Text style={styles.specialtySheetTitle}>Pricing currency</Text>
+              <Text style={styles.specialtySheetSubtitle}>
+                Choose the currency customers see on your quotes and shop items.
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.sheetClose} onPress={onClose}>
+              <Feather name="x" size={18} color={Colors.ink} />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.currencyOptionList}>
+            {CURRENCY_OPTIONS.map((option) => {
+              const active = selected === option.value
+              return (
+                <TouchableOpacity
+                  key={option.value}
+                  style={[styles.currencyOptionRow, active && styles.currencyOptionRowActive]}
+                  activeOpacity={0.75}
+                  onPress={() => onSelect(option.value)}
+                >
+                  <Text style={[styles.currencyOptionText, active && styles.currencyOptionTextActive]}>
+                    {option.label}
+                  </Text>
+                  {active ? <Feather name="check" size={18} color={Colors.needleGreen} /> : null}
+                </TouchableOpacity>
+              )
+            })}
+          </View>
+        </View>
+      </View>
+    </Modal>
+  )
+}
+
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
@@ -846,39 +1054,37 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: Colors.boneDeep,
     backgroundColor: Colors.bone,
   },
-  headerTitle: { flex: 1, fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  headerTitle: { flex: 1, fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   heroCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.lg,
-    gap: Spacing.sm,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
+  heroIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  heroBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
+  heroCopy: { flex: 1, gap: 2 },
   heroTitle: {
-    fontSize: FontSize.xl,
-    fontWeight: FontWeight.bold,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
     color: Colors.ink,
-    lineHeight: 30,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   heroSub: {
-    fontSize: FontSize.sm,
+    fontSize: FontSize.xs,
     color: Colors.inkLight,
-    lineHeight: 20,
+    lineHeight: 18,
   },
   saveBtn: {
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
@@ -902,10 +1108,9 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
     color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    letterSpacing: 0,
   },
-  stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center', fontFamily: 'Georgia' },
+  stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center', fontFamily: Fonts.display },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
 
   scroll: { padding: Spacing.xl, gap: Spacing.md, paddingBottom: 48 },
@@ -954,6 +1159,52 @@ const styles = StyleSheet.create({
   },
   helperChipText: { fontSize: FontSize.xs, color: Colors.ink, fontWeight: FontWeight.medium },
 
+  selectorSummary: {
+    minHeight: 68,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  selectorSummaryError: {
+    borderColor: Colors.error,
+    backgroundColor: Colors.error + '08',
+  },
+  selectorSummaryText: { flex: 1, gap: 3 },
+  selectorSummaryTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  selectorSummaryBody: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    lineHeight: 18,
+  },
+  selectedPreviewRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.xs,
+    marginTop: Spacing.xs,
+  },
+  selectedPreviewChip: {
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 5,
+  },
+  selectedPreviewText: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.medium,
+  },
+
   // Location suggestions
   suggestBox: {
     backgroundColor: Colors.white, borderRadius: Radius.md,
@@ -967,43 +1218,35 @@ const styles = StyleSheet.create({
   suggestRowLast: { borderBottomWidth: 0 },
   suggestText: { fontSize: FontSize.sm, color: Colors.ink },
 
-  // Currency
-  currencyRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  currencyChip: {
-    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
-    borderRadius: Radius.full, borderWidth: 1, borderColor: Colors.lightGrey,
-    backgroundColor: Colors.white,
-  },
-  currencyChipActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
-  currencyChipText: { fontSize: FontSize.sm, color: Colors.inkLight, fontWeight: FontWeight.medium },
-  currencyChipTextActive: { color: Colors.needleGreen },
-
   // Availability
   availCard: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
     backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.md, borderWidth: 1, borderColor: Colors.lightGrey,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 12,
+    borderWidth: 1, borderColor: Colors.lightGrey,
   },
   availCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
   availRadio: {
-    width: 20, height: 20, borderRadius: 10, marginTop: 2,
+    width: 18, height: 18, borderRadius: 9,
     borderWidth: 2, borderColor: Colors.lightGrey, backgroundColor: Colors.white,
   },
   availRadioActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreen },
-  availLabel: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight, fontFamily: 'Georgia' },
+  availLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.inkLight },
   availLabelActive: { color: Colors.needleGreen },
-  availHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
+  availHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 1, lineHeight: 18 },
   choiceGroup: { gap: Spacing.sm },
   choiceCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
-    padding: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 12,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
-    gap: 4,
+    gap: 2,
   },
   choiceCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
-  choiceTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight, fontFamily: 'Georgia' },
+  choiceTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.inkLight },
   choiceTitleActive: { color: Colors.needleGreen },
   choiceHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   fulfillmentFeeBlock: { gap: Spacing.md, marginTop: Spacing.md },
@@ -1015,19 +1258,34 @@ const styles = StyleSheet.create({
     padding: Spacing.md, ...Shadow.sm,
   },
   portfolioLinkLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
-  portfolioLinkTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  portfolioLinkTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   portfolioLinkSub: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
 
-  // Verification
-  verifyCard: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    backgroundColor: Colors.white, borderRadius: Radius.lg,
-    padding: Spacing.md, borderLeftWidth: 4, ...Shadow.sm,
+  // Trust status
+  trustRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
   },
+  trustIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: Colors.bone,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  trustCopy: { flex: 1, gap: 2 },
+  trustTitle: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
+  trustSub: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
+  trustAction: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   verifyDot: { width: 8, height: 8, borderRadius: 4 },
-  verifyText: { flex: 1, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
-  verifyLink: { alignSelf: 'flex-start', paddingTop: Spacing.sm },
-  verifyLinkText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
   errorRetry: {
     backgroundColor: Colors.needleGreen,
     borderRadius: Radius.full,
@@ -1044,6 +1302,100 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.xxxl,
   },
   errorSecondaryText: { color: Colors.ink, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+
+  sheetOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  sheetScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.34)',
+  },
+  specialtySheet: {
+    maxHeight: '86%',
+    backgroundColor: Colors.bone,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    paddingTop: Spacing.sm,
+    paddingHorizontal: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.lg,
+  },
+  sheetHandle: {
+    width: 42,
+    height: 4,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.lightGrey,
+    alignSelf: 'center',
+  },
+  specialtySheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.md,
+  },
+  specialtySheetTitle: {
+    fontSize: FontSize.xl,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    fontFamily: Fonts.display,
+  },
+  specialtySheetSubtitle: {
+    fontSize: FontSize.sm,
+    color: Colors.midGrey,
+    lineHeight: 20,
+  },
+  sheetClose: {
+    width: 36,
+    height: 36,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  specialtySheetScroll: {
+    marginHorizontal: -Spacing.xs,
+  },
+  specialtySheetContent: {
+    paddingHorizontal: Spacing.xs,
+    paddingBottom: Spacing.md,
+  },
+  currencySheet: {
+    backgroundColor: Colors.bone,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    paddingTop: Spacing.sm,
+    paddingHorizontal: Spacing.xl,
+    gap: Spacing.md,
+    ...Shadow.lg,
+  },
+  currencyOptionList: {
+    gap: Spacing.sm,
+  },
+  currencyOptionRow: {
+    minHeight: 58,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  currencyOptionRowActive: {
+    borderColor: Colors.needleGreen,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  currencyOptionText: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  currencyOptionTextActive: {
+    color: Colors.needleGreen,
+  },
 })
 
 const sectionStyles = StyleSheet.create({

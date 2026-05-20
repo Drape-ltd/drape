@@ -6,7 +6,7 @@
  */
 import React from 'react'
 import { View, Text, StyleSheet } from 'react-native'
-import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
+import { Colors, FontWeight, Radius, Spacing } from '@/constants/theme'
 
 interface ProgressStepperProps {
   steps: string[]

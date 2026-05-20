@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import * as ExpoLinking from 'expo-linking'
 import * as WebBrowser from 'expo-web-browser'
@@ -41,7 +41,7 @@ import {
   type TailorPayoutStatus,
   verifyPaystackPayoutAccount,
 } from '@/lib/payout-setup'
-import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 
 type SetupStep = 'INTRO' | 'CURRENCY' | 'CONNECT' | 'SUCCESS'
 
@@ -203,9 +203,11 @@ function BenefitRow({ icon, title, body }: { icon: React.ComponentProps<typeof F
 export default function TailorPayoutSetupScreen() {
   const router = useRouter()
   const navigation = useNavigation()
+  const insets = useSafeAreaInsets()
   const { returnTo } = useLocalSearchParams<{ returnTo?: string }>()
   const { user } = useAuth()
-  const successScale = useRef(new Animated.Value(0.72)).current
+  const userId = user?.id ?? null
+  const [successScale] = useState(() => new Animated.Value(0.72))
 
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
@@ -272,8 +274,8 @@ export default function TailorPayoutSetupScreen() {
     status?.manualBankEntry === true
     && status.payoutAccountVerified !== true
 
-  async function load() {
-    if (!user?.id) {
+  const load = useCallback(async () => {
+    if (!userId) {
       setLoadError('Please sign in again before opening payout setup.')
       setLoading(false)
       return
@@ -294,11 +296,32 @@ export default function TailorPayoutSetupScreen() {
     setSelectedCurrency(nextStatus.payoutCurrency)
     setCountryCode(nextStatus.payoutCountryCode ?? nextOption.countryCode)
     setLoading(false)
-  }
+  }, [userId])
+
+  const handleLoadBanks = useCallback(async () => {
+    if (provider !== 'PAYSTACK') return
+    setBanksLoading(true)
+    setFieldError('')
+    const result = await listPaystackPayoutBanks({
+      payoutCurrency: selectedCurrency as 'NGN' | 'GHS' | 'KES',
+      countryCode,
+    })
+    setBanksLoading(false)
+    if (result.error || !result.directory) {
+      setFieldError(result.error ?? 'We could not load the bank list right now.')
+      return
+    }
+    setBankDirectory(result.directory)
+    setBanks(result.directory.banks)
+    setBanksLoadedFor(`${selectedCurrency}:${countryCode}`)
+  }, [countryCode, provider, selectedCurrency])
 
   useEffect(() => {
-    void load()
-  }, [user?.id])
+    const timer = setTimeout(() => {
+      void load()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [load])
 
   useEffect(() => {
     if (activeStep !== 'SUCCESS') return
@@ -312,34 +335,48 @@ export default function TailorPayoutSetupScreen() {
   }, [activeStep, successScale])
 
   useEffect(() => {
-    const option = optionForCurrency(selectedCurrency)
-    setCountryCode(option.countryCode)
-    setBankSearch('')
-    setSelectedBank(null)
-    setVerification(null)
-    setFieldError('')
-    setStripeStatus(null)
-    setBanks([])
-    setBankDirectory(null)
-    setBanksLoadedFor(null)
-    setAccountNumber('')
-    setManualBankMode(false)
-    setManualBankName('')
-    setManualBankCountryCode(option.countryCode)
-    setManualSwiftBic('')
-    setManualAccountNumber('')
-    setManualAccountName('')
-    setManualCountryOpen(false)
-    setManualFieldErrors({})
-    setFailedBankLogos({})
+    const timer = setTimeout(() => {
+      const option = optionForCurrency(selectedCurrency)
+      setCountryCode(option.countryCode)
+      setBankSearch('')
+      setSelectedBank(null)
+      setVerification(null)
+      setFieldError('')
+      setStripeStatus(null)
+      setBanks([])
+      setBankDirectory(null)
+      setBanksLoadedFor(null)
+      setAccountNumber('')
+      setManualBankMode(false)
+      setManualBankName('')
+      setManualBankCountryCode(option.countryCode)
+      setManualSwiftBic('')
+      setManualAccountNumber('')
+      setManualAccountName('')
+      setManualCountryOpen(false)
+      setManualFieldErrors({})
+      setFailedBankLogos({})
+    }, 0)
+    return () => clearTimeout(timer)
   }, [selectedCurrency])
 
   useEffect(() => {
     if (activeStep !== 'CONNECT' || provider !== 'PAYSTACK') return
     const key = `${selectedCurrency}:${countryCode}`
     if (banksLoadedFor === key || banksLoading) return
-    void handleLoadBanks()
-  }, [activeStep, provider, selectedCurrency, countryCode, banksLoadedFor, banksLoading])
+    const timer = setTimeout(() => {
+      void handleLoadBanks()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [
+    activeStep,
+    banksLoadedFor,
+    banksLoading,
+    countryCode,
+    handleLoadBanks,
+    provider,
+    selectedCurrency,
+  ])
 
   function goBack() {
     goBackOrReturnTo(router, navigation, returnTo, '/(tailor)/profile' as never)
@@ -356,24 +393,6 @@ export default function TailorPayoutSetupScreen() {
     setEditingVerifiedAccount(true)
     setActiveStep('CURRENCY')
     setFieldError('')
-  }
-
-  async function handleLoadBanks() {
-    if (provider !== 'PAYSTACK') return
-    setBanksLoading(true)
-    setFieldError('')
-    const result = await listPaystackPayoutBanks({
-      payoutCurrency: selectedCurrency as 'NGN' | 'GHS' | 'KES',
-      countryCode,
-    })
-    setBanksLoading(false)
-    if (result.error || !result.directory) {
-      setFieldError(result.error ?? 'We could not load the bank list right now.')
-      return
-    }
-    setBankDirectory(result.directory)
-    setBanks(result.directory.banks)
-    setBanksLoadedFor(`${selectedCurrency}:${countryCode}`)
   }
 
   async function handleVerifyPaystack() {
@@ -781,7 +800,7 @@ export default function TailorPayoutSetupScreen() {
                   <BenefitRow
                     icon="credit-card"
                     title="Funds go directly to your bank account"
-                    body="Your chosen payout currency determines whether Drape uses Paystack or Stripe Connect."
+                    body="Payout currency decides the provider for this account."
                   />
                   <BenefitRow
                     icon="shield"
@@ -1132,28 +1151,24 @@ export default function TailorPayoutSetupScreen() {
                             </View>
                             <Text style={styles.verifiedName}>{verification.resolvedAccountName}</Text>
                             <Text style={styles.verifiedAccountText}>{verification.maskedAccountNumber}</Text>
-                            <View style={styles.inlineActions}>
-                              <Button
-                                label="Confirm payout account"
-                                size="md"
-                                fullWidth={false}
-                                style={styles.inlineButton}
-                                loading={submitting}
-                                onPress={() => { void handleConfirmPaystack() }}
-                              />
-                              <Button
-                                label="Edit details"
-                                size="md"
-                                fullWidth={false}
-                                variant="secondary"
-                                style={styles.inlineButton}
-                                onPress={() => {
-                                  setVerification(null)
-                                  setSelectedBank(null)
-                                  setBankSearch('')
-                                }}
-                              />
-                            </View>
+                            <Button
+                              label="Confirm payout account"
+                              size="md"
+                              loading={submitting}
+                              onPress={() => { void handleConfirmPaystack() }}
+                            />
+                            <TouchableOpacity
+                              style={styles.compactActionMenuButton}
+                              onPress={() => {
+                                setVerification(null)
+                                setSelectedBank(null)
+                                setBankSearch('')
+                              }}
+                              activeOpacity={0.82}
+                            >
+                              <Text style={styles.compactActionMenuText}>Edit bank details</Text>
+                              <Feather name="edit-3" size={14} color={Colors.needleGreen} />
+                            </TouchableOpacity>
                           </View>
                         )}
                       </>
@@ -1203,13 +1218,13 @@ export default function TailorPayoutSetupScreen() {
           </ScrollView>
 
           {activeStep === 'INTRO' ? (
-            <View style={styles.footer}>
+            <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom + Spacing.lg, 84) }]}>
               <Button label="Set up payout account" onPress={() => setActiveStep('CURRENCY')} />
             </View>
           ) : null}
 
           {activeStep === 'CURRENCY' ? (
-            <View style={styles.footer}>
+            <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom + Spacing.lg, 84) }]}>
               <Button label="Continue" onPress={() => setActiveStep('CONNECT')} />
             </View>
           ) : null}
@@ -1243,7 +1258,7 @@ const styles = StyleSheet.create({
     fontSize: FontSize.lg,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   stateWrap: { flex: 1, justifyContent: 'center', padding: Spacing.xl },
   stateCard: {
@@ -1266,7 +1281,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     color: Colors.ink,
     textAlign: 'center',
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   stateHint: { fontSize: FontSize.xs, color: Colors.inkLight, textAlign: 'center', lineHeight: 18 },
   stepRow: {
@@ -1352,7 +1367,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     color: Colors.ink,
     lineHeight: 28,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   heroCopy: {
     fontSize: FontSize.xs,
@@ -1370,7 +1385,7 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md,
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   sectionCopy: {
     fontSize: FontSize.xs,
@@ -1446,7 +1461,7 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   currencyName: {
     fontSize: FontSize.sm,
@@ -1703,7 +1718,7 @@ const styles = StyleSheet.create({
     fontSize: FontSize.lg,
     color: Colors.ink,
     fontWeight: FontWeight.bold,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   verifiedAccountText: {
     fontSize: FontSize.xs,
@@ -1715,6 +1730,23 @@ const styles = StyleSheet.create({
   },
   inlineButton: {
     flex: 1,
+  },
+  compactActionMenuButton: {
+    minHeight: 46,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: Spacing.xs,
+  },
+  compactActionMenuText: {
+    color: Colors.needleGreen,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
   },
   checkRow: {
     flexDirection: 'row',
@@ -1760,7 +1792,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     color: Colors.ink,
     textAlign: 'center',
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   successBody: {
     fontSize: FontSize.sm,

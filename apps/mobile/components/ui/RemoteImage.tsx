@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useMemo, useState } from 'react'
+import React, { memo, useMemo, useState } from 'react'
 import { StyleProp, View, ViewStyle } from 'react-native'
 import { Image, type ImageProps } from 'expo-image'
 import { Colors } from '@/constants/theme'
@@ -36,11 +36,8 @@ function RemoteImageComponent({
   ...imageProps
 }: RemoteImageProps) {
   const resolvedUri = useMemo(() => resolveStorageImageUrl(uri, bucket), [bucket, uri])
-  const [failed, setFailed] = useState(false)
-
-  useEffect(() => {
-    setFailed(false)
-  }, [resolvedUri])
+  const [failedUri, setFailedUri] = useState<string | null>(null)
+  const failed = !!resolvedUri && failedUri === resolvedUri
 
   if (!resolvedUri || failed) {
     return (
@@ -61,7 +58,7 @@ function RemoteImageComponent({
         transition={transition}
         placeholder={placeholder}
         onError={(error) => {
-          setFailed(true)
+          setFailedUri(resolvedUri)
           captureImageLoadFailure({ url: resolvedUri, bucket, surface, error })
           onLoadError?.(resolvedUri)
         }}

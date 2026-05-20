@@ -31,6 +31,7 @@ function normalizeAvailability(value: z.infer<typeof AVAILABILITY> | undefined) 
 
 const BaseProfileSchema = z.object({
   displayName: z.string().trim().min(2).max(80),
+  avatarUrl: z.string().url().optional().nullable(),
   bio: z.string().trim().max(1200).optional().nullable(),
   location: z.string().trim().min(2).max(120),
   languages: z.array(z.string().trim().min(1).max(40)).max(12, TAILOR_SETUP_VALIDATION.LANGUAGE_LIMIT_MESSAGE).default([]),
@@ -163,7 +164,7 @@ Deno.serve(async (req) => {
     const existingValues = existingProfile?.id
       ? await supabase
           .from('tailor_profiles')
-          .select('languages, price_range_min, price_range_max, id_document_url, id_verification_status')
+          .select('languages, price_range_min, price_range_max, avatar_url, id_document_url, id_verification_status')
           .eq('user_id', caller.id)
           .maybeSingle()
       : { data: null, error: null }
@@ -177,8 +178,19 @@ Deno.serve(async (req) => {
       languages?: string[] | null
       price_range_min?: number | null
       price_range_max?: number | null
+      avatar_url?: string | null
       id_document_url?: string | null
       id_verification_status?: string | null
+    }
+
+    const submittedAvatarUrl =
+      typeof profile.avatarUrl === 'string' ? profile.avatarUrl.trim() : ''
+    const existingAvatarUrl =
+      typeof existingRow.avatar_url === 'string' ? existingRow.avatar_url.trim() : ''
+
+    if (body.action === 'upsert-setup' && !submittedAvatarUrl && !existingAvatarUrl) {
+      log('warn', FN, 'validation.profile_photo_missing', { actor_id: caller.id })
+      return jsonResponse({ error: TAILOR_SETUP_VALIDATION.PROFILE_PHOTO_REQUIRED_MESSAGE }, 400, cors)
     }
 
     const submittedIdDocumentUrl =
@@ -228,6 +240,10 @@ Deno.serve(async (req) => {
       delivery_fee: 0,
       shipping_fee: 0,
       updated_at: new Date().toISOString(),
+    }
+
+    if (submittedAvatarUrl.length > 0) {
+      payload.avatar_url = submittedAvatarUrl
     }
 
     if (body.action === 'upsert-setup') {

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
-import { SafeAreaView } from 'react-native-safe-area-context'
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, KeyboardAvoidingView, Platform } from 'react-native'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { useCustomerMeasurements, useRefreshOnFocus, useSellerItem, useWishlistCollections } from '@/lib/queries'
 import { buildCustomerStockSignal, isReadyMadeBuyableForCustomer, quantityForSize } from '@/lib/ready-made-stock'
@@ -17,8 +17,8 @@ import {
   READY_MADE_FIT_FIELDS,
   recommendReadyMadeSize,
 } from '@/lib/ready-made-fit'
-import { Button, RemoteImage } from '@/components/ui'
-import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
+import { Button, RemoteImage, SaveToWishlistSheet } from '@/components/ui'
+import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { hapticLight } from '@/lib/haptics'
 import { formatAmount, useCurrency, type CurrencyCode } from '@/lib/currency'
 
@@ -27,10 +27,15 @@ const PRIMARY_GREEN = Colors.needleGreen
 const CHARCOAL = Colors.ink
 const MUTED_GREY = Colors.midGrey
 
+function createDraftSessionId() {
+  return `${new Date().getTime().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+}
+
 export default function SellerItemDetailScreen() {
   const { itemId, returnTo } = useLocalSearchParams<{ itemId: string; returnTo?: string }>()
   const router = useRouter()
   const navigation = useNavigation()
+  const insets = useSafeAreaInsets()
   const { user } = useAuth()
   const { currency: accountCurrency, rates } = useCurrency()
   const [startingInquiry, setStartingInquiry] = useState(false)
@@ -113,7 +118,7 @@ export default function SellerItemDetailScreen() {
         pathname: '/(customer)/messages/[orderId]',
         params: { orderId: data.orderId, returnTo: `/(customer)/tailor/item/${item.id}` },
       })
-    } catch (error: any) {
+    } catch (error) {
       Alert.alert(
         'Could not start chat',
         isLikelyConnectivityIssue(error)
@@ -391,11 +396,6 @@ export default function SellerItemDetailScreen() {
               </View>
             ) : null}
 
-            <View style={styles.bestUseCard}>
-              <Text style={styles.bestUseEyebrow}>Best use</Text>
-              <Text style={styles.bestUseText}>If you need another size, colour, fabric, or finish, message the seller or place a custom order instead.</Text>
-            </View>
-
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Returns and remedies</Text>
               <View style={styles.policyWrap}>
@@ -412,7 +412,7 @@ export default function SellerItemDetailScreen() {
       </ScrollView>
 
       {item ? (
-        <View style={styles.footer}>
+        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom + Spacing.sm, 14) }]}>
           <View style={styles.footerRow}>
             <Button
               label={startingInquiry ? 'Opening chat...' : 'Ask a question'}
@@ -444,10 +444,11 @@ export default function SellerItemDetailScreen() {
             size="sm"
             disabled={sellerUnavailable}
             onPress={() => router.push({
-              pathname: `/(customer)/brief/${item.tailorProfileId}` as any,
+              pathname: '/(customer)/brief/[tailorId]',
               params: {
+                tailorId: item.tailorProfileId,
                 returnTo: `/(customer)/tailor/${item.tailorProfileId}`,
-                draftSession: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+                draftSession: createDraftSessionId(),
                 freshStart: '1',
               },
             })}
@@ -497,57 +498,17 @@ function ReadyMadeWishlistModal({
   onCreate: () => void
 }) {
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.wishlistSheetOverlay}>
-        <TouchableOpacity style={styles.wishlistSheetScrim} activeOpacity={1} onPress={onClose} />
-        <View style={styles.wishlistSheet}>
-          <View style={styles.wishlistSheetHandle} />
-          <Text style={styles.wishlistSheetTitle}>
-            {collections.length === 0 ? 'Create a wishlist to save this' : 'Save to wishlist'}
-          </Text>
-          {collections.length > 0 ? (
-            <View style={styles.wishlistOptions}>
-              {collections.map((collection) => (
-                <TouchableOpacity
-                  key={collection.id}
-                  style={styles.wishlistOption}
-                  onPress={() => onSelect(collection.id)}
-                  disabled={saving}
-                >
-                  <View style={styles.wishlistOptionIcon}>
-                    <Feather name="heart" size={17} color={Colors.needleGreen} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.wishlistOptionTitle}>{collection.name}</Text>
-                    <Text style={styles.wishlistOptionMeta}>{collection.itemCount} item{collection.itemCount === 1 ? '' : 's'}</Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </View>
-          ) : null}
-          <View style={styles.wishlistCreateBox}>
-            <TextInput
-              value={newWishlistName}
-              onChangeText={onChangeNewWishlistName}
-              placeholder="e.g. Ankara Inspo"
-              placeholderTextColor={Colors.midGrey}
-              style={styles.wishlistInput}
-              autoFocus={collections.length === 0}
-              maxLength={80}
-              returnKeyType="done"
-              onSubmitEditing={onCreate}
-            />
-            <TouchableOpacity
-              style={[styles.wishlistCreateButton, (!newWishlistName.trim() || saving) && styles.wishlistCreateButtonDisabled]}
-              onPress={onCreate}
-              disabled={!newWishlistName.trim() || saving}
-            >
-              {saving ? <ActivityIndicator color={Colors.textInverse} /> : <Text style={styles.wishlistCreateButtonText}>Create and save</Text>}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
+    <SaveToWishlistSheet
+      visible={visible}
+      collections={collections}
+      newWishlistName={newWishlistName}
+      saving={saving}
+      createPlaceholder="e.g. Ankara Inspo"
+      onChangeNewWishlistName={onChangeNewWishlistName}
+      onClose={onClose}
+      onSelect={onSelect}
+      onCreate={onCreate}
+    />
   )
 }
 
@@ -606,7 +567,7 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   headerHeartButtonSaved: { backgroundColor: Colors.needleGreen },
-  headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
+  headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: Fonts.display },
   loadingCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: Spacing.lg, alignItems: 'center', gap: Spacing.sm, ...Shadow.sm },
   loadingText: { fontSize: 14, color: Colors.inkLight },
   emptyCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: Spacing.lg, gap: Spacing.sm, ...Shadow.sm },
@@ -621,7 +582,7 @@ const styles = StyleSheet.create({
   thumb: { width: '100%', height: '100%', backgroundColor: Colors.boneDeep },
   summaryCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: 4, ...Shadow.sm },
   sellerName: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
-  title: { fontSize: 24, lineHeight: 28, fontWeight: FontWeight.bold, color: CHARCOAL, fontFamily: 'Georgia' },
+  title: { fontSize: 24, lineHeight: 28, fontWeight: FontWeight.bold, color: CHARCOAL, fontFamily: Fonts.display },
   category: { fontSize: 13, color: MUTED_GREY },
   availabilityPill: {
     alignSelf: 'flex-start',
@@ -639,7 +600,7 @@ const styles = StyleSheet.create({
   availabilityTextWarning: { color: Colors.statusPending },
   availabilityTextUrgent: { color: Colors.error },
   availabilityTextMuted: { color: Colors.midGrey },
-  price: { marginTop: 4, fontSize: 22, fontWeight: FontWeight.bold, color: PRIMARY_GREEN, fontFamily: 'Georgia' },
+  price: { marginTop: 4, fontSize: 22, fontWeight: FontWeight.bold, color: PRIMARY_GREEN, fontFamily: Fonts.display },
   priceApprox: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   unavailableNotice: {
     marginTop: Spacing.sm,
@@ -652,7 +613,7 @@ const styles = StyleSheet.create({
   },
   unavailableNoticeText: { flex: 1, fontSize: FontSize.xs, color: Colors.error, lineHeight: 18 },
   sectionCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 12, gap: 8, ...Shadow.sm },
-  sectionTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
+  sectionTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: Fonts.display },
   recommendationCard: {
     backgroundColor: Colors.needleGreenLight,
     borderRadius: Radius.md,
@@ -660,7 +621,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   recommendationEyebrow: { fontSize: 11, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.6 },
-  recommendationTitle: { fontSize: 22, color: CHARCOAL, fontWeight: FontWeight.bold, fontFamily: 'Georgia' },
+  recommendationTitle: { fontSize: 22, color: CHARCOAL, fontWeight: FontWeight.bold, fontFamily: Fonts.display },
   recommendationBody: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
   recommendationSecondary: { fontSize: 12, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
   fitPromptCard: {
@@ -706,58 +667,6 @@ const styles = StyleSheet.create({
   policyRow: { gap: 4 },
   policyTitle: { fontSize: 13, fontWeight: FontWeight.semibold, color: CHARCOAL },
   policyBody: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
-  wishlistSheetOverlay: { flex: 1, justifyContent: 'flex-end' },
-  wishlistSheetScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.35)' },
-  wishlistSheet: {
-    backgroundColor: Colors.white,
-    borderTopLeftRadius: Radius.xl,
-    borderTopRightRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
-  },
-  wishlistSheetHandle: { alignSelf: 'center', width: 42, height: 4, borderRadius: 2, backgroundColor: Colors.lightGrey },
-  wishlistSheetTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
-  wishlistOptions: { gap: Spacing.sm },
-  wishlistOption: {
-    minHeight: 52,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    padding: Spacing.sm,
-  },
-  wishlistOptionIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.needleGreenLight,
-  },
-  wishlistOptionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
-  wishlistOptionMeta: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
-  wishlistCreateBox: { gap: Spacing.sm },
-  wishlistInput: {
-    minHeight: 52,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    paddingHorizontal: Spacing.md,
-    fontSize: FontSize.md,
-    color: Colors.ink,
-    backgroundColor: Colors.bone,
-  },
-  wishlistCreateButton: {
-    minHeight: 52,
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.needleGreen,
-  },
-  wishlistCreateButtonDisabled: { opacity: 0.5 },
-  wishlistCreateButtonText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
   footer: {
     paddingHorizontal: Spacing.lg,
     paddingTop: 10,

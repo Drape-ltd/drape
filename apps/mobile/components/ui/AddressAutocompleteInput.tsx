@@ -35,7 +35,6 @@ export function AddressAutocompleteInput({
 
   useEffect(() => {
     const text = value.trim()
-    setShowSuggestions(false)
 
     if (suppressNextLookup.current) {
       suppressNextLookup.current = false
@@ -43,10 +42,16 @@ export function AddressAutocompleteInput({
     }
 
     if (text.length < 5) {
-      setSuggestions([])
-      return
+      const resetTimer = setTimeout(() => {
+        setSuggestions([])
+        setShowSuggestions(false)
+      }, 0)
+      return () => clearTimeout(resetTimer)
     }
 
+    const hideTimer = setTimeout(() => {
+      setShowSuggestions(false)
+    }, 0)
     const timeout = setTimeout(async () => {
       try {
         const response = await fetch(
@@ -63,7 +68,10 @@ export function AddressAutocompleteInput({
       }
     }, 350)
 
-    return () => clearTimeout(timeout)
+    return () => {
+      clearTimeout(hideTimer)
+      clearTimeout(timeout)
+    }
   }, [value])
 
   function selectSuggestion(suggestion: Suggestion) {

@@ -1,23 +1,22 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Modal, ActivityIndicator, Alert,
 } from 'react-native'
 import { useRouter } from 'expo-router'
-import { SafeAreaView } from 'react-native-safe-area-context'
-import AsyncStorage from '@react-native-async-storage/async-storage'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
-import { inviteCustomerFromTailor, shareTailorProfile } from '@/lib/invite'
 import { tailorOrderHint, tailorOrderStageLabel } from '@/lib/order-flow'
 import { deriveTailorReadiness } from '@/lib/tailor-readiness'
 import { loadPayoutAccountStatus, type TailorPayoutStatus } from '@/lib/payout-setup'
 import { formatAmount, STATIC_FALLBACK_RATES, type CurrencyCode } from '@/lib/currency'
 import { useRefreshOnFocus, useTailorDashboard } from '@/lib/queries'
+import { getTimeOfDayGreeting } from '@/lib/time-of-day'
 import type { TailorStockAlert } from '@/lib/ready-made-stock'
 import { DRAPE_VISION_ROUTE, type DrapeVisionMode } from '@/constants/drapeVision'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
 import { MANUAL_BANK_ENTRY_NOTE } from '@drape/shared/payout-setup'
 import { stageColor } from '@/lib/stageColors'
@@ -33,8 +32,6 @@ const AVAIL_OPTIONS: { value: Availability; label: string; desc: string; color: 
   { value: 'LIMITED', label: 'Limited availability', desc: 'You appear in search but with a notice. Take on select orders only.', color: Colors.warning },
   { value: 'FULLY_BOOKED', label: 'Fully booked', desc: 'Hidden from new bookings. Existing orders are unaffected.', color: Colors.error },
 ]
-const DASHBOARD_GUIDE_KEY = 'drape_tailor_dashboard_best_use_dismissed'
-
 type DashboardStats = {
   activeOrders: number
   pendingQuotes: number
@@ -78,14 +75,16 @@ type StockAlertRow = TailorStockAlert
 
 export default function TailorDashboard() {
   const router = useRouter()
-  const { user, signOut } = useAuth()
+  const insets = useSafeAreaInsets()
+  const { user } = useAuth()
+  const userId = user?.id ?? null
   const [refreshing, setRefreshing] = useState(false)
   const [availModal, setAvailModal] = useState(false)
   const [availSaving, setAvailSaving] = useState(false)
-  const [showGuide, setShowGuide] = useState(true)
   const [payoutStatus, setPayoutStatus] = useState<TailorPayoutStatus | null>(null)
   const [payoutStatusLoading, setPayoutStatusLoading] = useState(true)
   const [payoutStatusError, setPayoutStatusError] = useState('')
+  const [timeOfDay, setTimeOfDay] = useState(() => getTimeOfDayGreeting())
   const {
     data: dashboardData,
     isLoading,
@@ -97,7 +96,6 @@ export default function TailorDashboard() {
   const orders = (dashboardData?.orders ?? []) as ActiveOrderRow[]
   const stockAlerts = (dashboardData?.stockAlerts ?? []) as StockAlertRow[]
   const dashboardCurrency = (stats?.currency ?? 'GBP') as CurrencyCode
-  const monthCurrencyReviewHint = stats ? monthEarningsReviewHint(stats) : null
   const readinessInput = stats && payoutStatus
     ? {
       ...stats,
@@ -112,16 +110,8 @@ export default function TailorDashboard() {
     : stats
   const readiness = deriveTailorReadiness(readinessInput)
 
-  useEffect(() => {
-    AsyncStorage.getItem(DASHBOARD_GUIDE_KEY)
-      .then((value) => {
-        if (value === '1') setShowGuide(false)
-      })
-      .catch(() => {})
-  }, [])
-
-  async function loadPayoutSummary() {
-    if (!user?.id) {
+  const loadPayoutSummary = useCallback(async () => {
+    if (!userId) {
       setPayoutStatus(null)
       setPayoutStatusLoading(false)
       return
@@ -139,18 +129,21 @@ export default function TailorDashboard() {
     setPayoutStatus(result.profile)
     setPayoutStatusError('')
     setPayoutStatusLoading(false)
-  }
+  }, [userId])
 
   useEffect(() => {
-    void loadPayoutSummary()
-  }, [user?.id])
+    const timer = setTimeout(() => {
+      void loadPayoutSummary()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [loadPayoutSummary])
 
-  const greeting = (() => {
-    const h = new Date().getHours()
-    if (h < 12) return 'Good morning'
-    if (h < 17) return 'Good afternoon'
-    return 'Good evening'
-  })()
+  useEffect(() => {
+    const updateGreeting = () => setTimeOfDay(getTimeOfDayGreeting())
+    updateGreeting()
+    const timer = setInterval(updateGreeting, 60_000)
+    return () => clearInterval(timer)
+  }, [])
 
   function openDrapeVision(mode: Extract<DrapeVisionMode, 'tailor_client_scan' | 'garment_qc' | 'size_guide_scan'>) {
     router.push({
@@ -160,6 +153,7 @@ export default function TailorDashboard() {
   }
 
   useRefreshOnFocus(() => {
+    setTimeOfDay(getTimeOfDayGreeting())
     void refetch()
     void loadPayoutSummary()
   })
@@ -168,13 +162,6 @@ export default function TailorDashboard() {
     setRefreshing(true)
     await Promise.all([refetch(), loadPayoutSummary()])
     setRefreshing(false)
-  }
-
-  async function dismissGuide() {
-    setShowGuide(false)
-    try {
-      await AsyncStorage.setItem(DASHBOARD_GUIDE_KEY, '1')
-    } catch {}
   }
 
   async function setAvailability(value: Availability) {
@@ -202,7 +189,107 @@ export default function TailorDashboard() {
   const availColor = {
     OPEN: Colors.success, LIMITED: Colors.warning, FULLY_BOOKED: Colors.error,
   }[stats?.availability ?? 'OPEN']
+  const firstName = stats?.displayName?.split(' ')[0] ?? '…'
+  const availabilityTitle = stats?.availability === 'OPEN'
+    ? 'Available for orders'
+    : stats?.availability === 'LIMITED'
+      ? 'Limited availability'
+      : 'On a break'
+  const availabilityTileHint = stats?.availability === 'OPEN'
+    ? 'Customers can book and shop.'
+    : stats?.availability === 'LIMITED'
+      ? 'Visible with a slower-reply notice.'
+      : 'New bookings paused; active orders remain.'
+  const pendingWorkCount = (stats?.pendingQuotes ?? 0) + (stats?.itemInquiries ?? 0)
+  const payoutSnapshot = stats
+    ? payoutSummary(stats, payoutStatus, payoutStatusLoading, payoutStatusError)
+    : null
+  const payoutTileTitle = payoutSnapshot?.tone === 'verified'
+    ? 'Payout ready'
+    : payoutSnapshot?.title
+  const payoutTileHint = payoutSnapshot?.tone === 'verified'
+    ? `${payoutSnapshot.title} · ${payoutSnapshot.detail}`
+    : payoutSnapshot?.detail
+  const topStockAlert = stockAlerts[0] ?? null
+  const highlightedOrder = orders[0] ?? null
+  const todayFocus = (() => {
+    if ((stats?.pendingQuotes ?? 0) > 0) {
+      return {
+        tone: 'warning' as const,
+        eyebrow: 'Today',
+        title: `${stats?.pendingQuotes} quote${stats?.pendingQuotes === 1 ? '' : 's'} waiting`,
+        body: 'Send clear pricing or request a consultation before the customer cools off.',
+        meta: 'Orders need your reply',
+      }
+    }
+    if ((stats?.itemInquiries ?? 0) > 0) {
+      return {
+        tone: 'warning' as const,
+        eyebrow: 'Today',
+        title: `${stats?.itemInquiries} shop ${stats?.itemInquiries === 1 ? 'inquiry' : 'inquiries'}`,
+        body: 'Answer fit, pickup, delivery, or stock questions from your shop.',
+        meta: 'Messages need your reply',
+      }
+    }
+    if (highlightedOrder) {
+      return {
+        tone: 'default' as const,
+        eyebrow: 'Today',
+        title: highlightedOrder.garmentType,
+        body: tailorOrderHint(highlightedOrder.stage, highlightedOrder.orderKind) ?? tailorOrderStageLabel(highlightedOrder.stage, highlightedOrder.orderKind),
+        meta: `${highlightedOrder.customerName} · #${highlightedOrder.reference}`,
+      }
+    }
+    if (topStockAlert) {
+      return {
+        tone: topStockAlert.severity === 'sold_out' ? 'warning' as const : 'default' as const,
+        eyebrow: 'Today',
+        title: topStockAlert.headline,
+        body: topStockAlert.detail,
+        meta: 'Shop inventory signal',
+      }
+    }
+    return {
+      tone: readiness.tone,
+      eyebrow: 'Today',
+      title: readiness.title,
+      body: readiness.body,
+      meta: readiness.payoutProviderLabel ? `Payout path: ${readiness.payoutProviderLabel}` : 'No urgent work right now',
+    }
+  })()
+  const primaryActionLabel = (stats?.pendingQuotes ?? 0) > 0
+    ? 'Review quotes'
+    : (stats?.itemInquiries ?? 0) > 0
+      ? 'Reply to inquiries'
+      : (stats?.activeOrders ?? 0) > 0
+        ? 'Open active orders'
+        : topStockAlert
+          ? 'Review stock'
+          : readiness.actionLabel ?? 'Manage availability'
 
+  function openPrimaryDashboardAction() {
+    if ((stats?.pendingQuotes ?? 0) > 0 || (stats?.itemInquiries ?? 0) > 0 || (stats?.activeOrders ?? 0) > 0) {
+      router.navigate('/(tailor)/orders')
+      return
+    }
+    if (topStockAlert) {
+      router.push('/(tailor)/shop')
+      return
+    }
+    if (!readiness.payoutReady && readiness.identityVerified) {
+      router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)' } } as never)
+      return
+    }
+    if (readiness.actionLabel === 'Review live profile') {
+      router.push('/(tailor)/profile/edit')
+      return
+    }
+    if (readiness.actionLabel) {
+      router.push('/(tailor)/profile/setup')
+      return
+    }
+    setAvailModal(true)
+  }
   if (isLoading && !dashboardData) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']} testID="tailor-home-screen">
@@ -231,7 +318,7 @@ export default function TailorDashboard() {
               This screen should give you a calm, reliable view of your order book, availability, and next actions.
             </Text>
             <View style={styles.stateGuideCard}>
-              <Text style={styles.stateGuideTitle}>Best recovery move</Text>
+              <Text style={styles.stateGuideTitle}>Recovery</Text>
               <Text style={styles.stateGuideText}>
                 Refresh here first. If the dashboard still does not load, open Orders first, then Profile if needed, so you can keep working while the overview catches up.
               </Text>
@@ -259,313 +346,179 @@ export default function TailorDashboard() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.needleGreen} />}
       >
-        {showGuide ? (
-          <View style={styles.guideCard}>
-            <View style={styles.guideHeader}>
-              <Text style={styles.guideEyebrow}>Best use</Text>
-              <TouchableOpacity onPress={() => { void dismissGuide() }} hitSlop={8}>
-                <Text style={styles.guideClose}>×</Text>
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.guideTitle}>Check quotes first, then anything waiting on your reply or update.</Text>
-          </View>
-        ) : null}
-
-        {/* Header */}
-        <View style={styles.header}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.greeting}>{greeting}</Text>
-            <Text style={styles.greetingName}>{stats?.displayName?.split(' ')[0] ?? '…'}</Text>
-          </View>
-          <View style={styles.headerRight}>
-            {stats && (
-              <TouchableOpacity style={styles.availPill} onPress={() => setAvailModal(true)}>
-                <View style={[styles.availDot, { backgroundColor: availColor }]} />
-                <Text style={styles.availLabel}>
-                  {stats.availability === 'OPEN' ? 'Open' : stats.availability === 'LIMITED' ? 'Limited' : 'Fully booked'}
+        {stats ? (
+          <View style={styles.cockpitCard}>
+            <View style={styles.cockpitTop}>
+              <View style={{ flex: 1 }}>
+                <View style={styles.greetingRow}>
+                  <View style={[styles.greetingIcon, { backgroundColor: timeOfDay.iconBackground }]}>
+                    <Feather name={timeOfDay.icon} size={13} color={timeOfDay.iconColor} />
+                  </View>
+                  <Text style={styles.greeting}>Tailor cockpit</Text>
+                </View>
+                <Text style={styles.greetingName}>{timeOfDay.label}, {firstName}</Text>
+                <Text style={styles.greetingSub} numberOfLines={2}>
+                  Orders, shop signals, and payout readiness in one place.
                 </Text>
-              </TouchableOpacity>
-            )}
-            {stats && <LiveStatusBadge isLive={stats.isLive} idStatus={stats.idVerificationStatus} />}
-          </View>
-        </View>
+              </View>
+              <LiveStatusBadge isLive={stats.isLive} idStatus={stats.idVerificationStatus} />
+            </View>
 
-        {stats ? (
-          <View
-            style={[
-              styles.readinessCard,
-              readiness.tone === 'success'
-                ? styles.readinessCardSuccess
-                : readiness.tone === 'warning'
-                  ? styles.readinessCardWarning
-                  : null,
-            ]}
-          >
-            <Text style={styles.readinessTitle}>{readiness.title}</Text>
-            <Text style={styles.readinessBody}>{readiness.body}</Text>
-            {readiness.payoutProviderLabel ? (
-              <Text style={styles.readinessMeta}>Payout path detected: {readiness.payoutProviderLabel}</Text>
+            <View style={styles.cockpitMetrics}>
+              <TouchableOpacity style={styles.cockpitMetric} onPress={() => router.navigate('/(tailor)/orders')}>
+                <Text style={styles.cockpitMetricValue}>{stats.activeOrders}</Text>
+                <Text style={styles.cockpitMetricLabel}>Active</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.cockpitMetric} onPress={() => router.navigate('/(tailor)/orders')}>
+                <Text style={[styles.cockpitMetricValue, pendingWorkCount > 0 && styles.cockpitMetricValueAlert]}>
+                  {pendingWorkCount}
+                </Text>
+                <Text style={styles.cockpitMetricLabel}>Needs reply</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.cockpitMetric} onPress={() => router.navigate('/(tailor)/earnings')}>
+                <Text style={styles.cockpitMetricValue}>
+                  {formatAmount(stats.monthEarnings ?? 0, dashboardCurrency, dashboardCurrency, STATIC_FALLBACK_RATES)}
+                </Text>
+                <Text style={styles.cockpitMetricLabel}>This month</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.cockpitStatusGrid}>
+              <TouchableOpacity style={styles.cockpitStatusTile} onPress={() => setAvailModal(true)}>
+                <View style={styles.cockpitTileHeader}>
+                  <View style={[styles.availDot, { backgroundColor: availColor }]} />
+                  <Text style={styles.cockpitTileLabel}>Availability</Text>
+                </View>
+                <Text style={styles.cockpitTileTitle}>{availabilityTitle}</Text>
+                <Text style={styles.cockpitTileHint} numberOfLines={2}>{availabilityTileHint}</Text>
+              </TouchableOpacity>
+
+              {payoutSnapshot ? (
+                <TouchableOpacity
+                  style={styles.cockpitStatusTile}
+                  onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)' } } as never)}
+                >
+                  <View style={styles.cockpitTileHeader}>
+                    <View style={[styles.payoutMiniBadge, payoutSnapshot.badgeStyle]}>
+                      <Text style={[styles.payoutMiniBadgeText, payoutSnapshot.badgeTextStyle]}>{payoutSnapshot.badge}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.cockpitTileTitle}>{payoutTileTitle}</Text>
+                  <Text style={styles.cockpitTileHint} numberOfLines={2}>{payoutTileHint}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            <View
+              style={[
+                styles.nextMoveCard,
+                todayFocus.tone === 'warning' && styles.nextMoveCardWarning,
+                todayFocus.tone === 'success' && styles.nextMoveCardSuccess,
+              ]}
+            >
+              <View style={styles.nextMoveMain}>
+                <View style={styles.nextMoveCopy}>
+                  <Text style={styles.nextMoveEyebrow}>{todayFocus.eyebrow}</Text>
+                  <Text style={styles.nextMoveTitle} numberOfLines={2}>{todayFocus.title}</Text>
+                  <Text style={styles.nextMoveBody} numberOfLines={2}>{todayFocus.body}</Text>
+                  <Text style={styles.nextMoveMeta} numberOfLines={1}>{todayFocus.meta}</Text>
+                </View>
+                <TouchableOpacity style={styles.cockpitPrimaryButton} onPress={openPrimaryDashboardAction}>
+                  <Text style={styles.cockpitPrimaryButtonText}>{primaryActionLabel}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={styles.toolRail}>
+              <TouchableOpacity style={styles.toolRailItem} onPress={() => openDrapeVision('tailor_client_scan')}>
+                <Feather name="user-check" size={15} color={PRIMARY_GREEN} />
+                <Text style={styles.toolRailText}>Scan client</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.toolRailItem} onPress={() => openDrapeVision('garment_qc')}>
+                <Feather name="shield" size={15} color={PRIMARY_GREEN} />
+                <Text style={styles.toolRailText}>QC garment</Text>
+              </TouchableOpacity>
+            </View>
+
+            {orders.length > 0 ? (
+              <View style={styles.cockpitQueue}>
+                <View style={styles.cockpitQueueHeader}>
+                  <Text style={styles.cockpitQueueTitle}>Order queue</Text>
+                  <TouchableOpacity onPress={() => router.navigate('/(tailor)/orders')}>
+                    <Text style={styles.cockpitQueueLink}>See all</Text>
+                  </TouchableOpacity>
+                </View>
+                {orders.slice(0, 2).map((order) => (
+                  <TouchableOpacity
+                    key={order.id}
+                    style={styles.cockpitOrderRow}
+                    onPress={() => router.push({
+                      pathname: '/(tailor)/orders/[id]',
+                      params: { id: order.id, returnTo: '/(tailor)' },
+                    })}
+                  >
+                    <View style={styles.cockpitOrderCopy}>
+                      <Text style={styles.cockpitOrderTitle} numberOfLines={1}>{order.garmentType}</Text>
+                      <Text style={styles.cockpitOrderMeta} numberOfLines={1}>{order.customerName} · #{order.reference}</Text>
+                    </View>
+                    <View style={[styles.stagePill, { backgroundColor: stageColor(order.stage).bg }]}>
+                      <Text style={[styles.stageText, { color: stageColor(order.stage).text }]}>
+                        {tailorOrderStageLabel(order.stage, order.orderKind)}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
             ) : null}
-            {!readiness.payoutReady && readiness.identityVerified ? (
-              <TouchableOpacity style={styles.readinessLink} onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)' } } as never)}>
-                <Text style={styles.readinessLinkText}>{readiness.actionLabel ?? 'Set up payout account'}</Text>
-              </TouchableOpacity>
-            ) : readiness.actionLabel === 'Review live profile' ? (
-              <TouchableOpacity style={styles.readinessLink} onPress={() => router.push('/(tailor)/profile/edit')}>
-                <Text style={styles.readinessLinkText}>Review live profile</Text>
-              </TouchableOpacity>
-            ) : readiness.actionLabel ? (
-              <TouchableOpacity style={styles.readinessLink} onPress={() => router.push('/(tailor)/profile/setup')}>
-                <Text style={styles.readinessLinkText}>{readiness.actionLabel}</Text>
-              </TouchableOpacity>
-            ) : null}
-            <TouchableOpacity style={styles.readinessSecondaryLink} onPress={() => router.push('/(tailor)/profile/trust-access' as never)}>
-              <Text style={styles.readinessSecondaryLinkText}>See trust & access</Text>
-            </TouchableOpacity>
           </View>
         ) : null}
-
-        {stats ? (
-          <PayoutSummaryCard
-            stats={stats}
-            status={payoutStatus}
-            loading={payoutStatusLoading}
-            error={payoutStatusError}
-            onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)' } } as never)}
-          />
-        ) : null}
-
-        <View style={styles.visionPanel}>
-          <View style={styles.visionPanelHeader}>
-            <View style={styles.visionPanelIcon}>
-              <Feather name="aperture" size={18} color={PRIMARY_GREEN} />
-            </View>
-            <View style={styles.visionPanelCopy}>
-              <Text style={styles.visionPanelTitle}>Drape Vision</Text>
-              <Text style={styles.visionPanelText}>Client scans, garment QC, and ready-made size guides stay close to your daily workflow.</Text>
-            </View>
-          </View>
-          <View style={styles.visionActionRow}>
-            <TouchableOpacity style={styles.visionAction} onPress={() => openDrapeVision('tailor_client_scan')}>
-              <Feather name="user-check" size={15} color={PRIMARY_GREEN} />
-              <Text style={styles.visionActionText}>Scan client</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.visionAction} onPress={() => openDrapeVision('garment_qc')}>
-              <Feather name="shield" size={15} color={PRIMARY_GREEN} />
-              <Text style={styles.visionActionText}>QC garment</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
 
         {/* Availability modal */}
         <Modal visible={availModal} transparent animationType="slide" onRequestClose={() => setAvailModal(false)}>
           <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setAvailModal(false)}>
-            <View style={styles.modalSheet}>
+            <View
+              style={[
+                styles.modalSheet,
+                { paddingBottom: Math.max(insets.bottom + Spacing.lg, Spacing.xl) },
+              ]}
+              onStartShouldSetResponder={() => true}
+            >
               <View style={styles.modalHandle} />
               <Text style={styles.modalTitle}>Your availability</Text>
               <Text style={styles.modalSub}>This controls whether customers can book new orders with you.</Text>
-              {AVAIL_OPTIONS.map((opt) => (
-                <TouchableOpacity
-                  key={opt.value}
-                  style={[
-                    styles.availOption,
-                    stats?.availability === opt.value && styles.availOptionActive,
-                  ]}
-                  onPress={() => !availSaving && setAvailability(opt.value)}
-                  disabled={availSaving}
-                >
-                  <View style={[styles.availOptionDot, { backgroundColor: opt.color }]} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.availOptionLabel}>{opt.label}</Text>
-                    <Text style={styles.availOptionDesc}>{opt.desc}</Text>
-                  </View>
-                  {stats?.availability === opt.value && (
-                    <Text style={styles.availCheck}>✓</Text>
-                  )}
-                </TouchableOpacity>
-              ))}
+              <ScrollView
+                style={styles.modalOptions}
+                contentContainerStyle={[
+                  styles.modalOptionsContent,
+                  { paddingBottom: Math.max(insets.bottom + Spacing.xl, Spacing.xxxl) },
+                ]}
+                showsVerticalScrollIndicator={false}
+              >
+                {AVAIL_OPTIONS.map((opt) => (
+                  <TouchableOpacity
+                    key={opt.value}
+                    style={[
+                      styles.availOption,
+                      stats?.availability === opt.value && styles.availOptionActive,
+                    ]}
+                    onPress={() => !availSaving && setAvailability(opt.value)}
+                    disabled={availSaving}
+                  >
+                    <View style={[styles.availOptionDot, { backgroundColor: opt.color }]} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.availOptionLabel}>{opt.label}</Text>
+                      <Text style={styles.availOptionDesc}>{opt.desc}</Text>
+                    </View>
+                    {stats?.availability === opt.value && (
+                      <Text style={styles.availCheck}>✓</Text>
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
             </View>
           </TouchableOpacity>
         </Modal>
 
-        {/* Pending quote alert */}
-        {(stats?.pendingQuotes ?? 0) > 0 && (
-          <TouchableOpacity
-            style={styles.alertCard}
-            onPress={() => router.navigate('/(tailor)/orders')}
-          >
-            <View style={styles.alertDot} />
-            <Text style={styles.alertText}>
-              {stats!.pendingQuotes} order{stats!.pendingQuotes > 1 ? 's' : ''} waiting for your quote
-            </Text>
-            <Text style={styles.alertCta}>Review →</Text>
-          </TouchableOpacity>
-        )}
-
-        {(stats?.itemInquiries ?? 0) > 0 && (
-          <TouchableOpacity
-            style={styles.alertCard}
-            onPress={() => router.navigate('/(tailor)/orders')}
-          >
-            <View style={styles.alertDot} />
-            <Text style={styles.alertText}>
-              {stats!.itemInquiries} ready-made inquir{stats!.itemInquiries > 1 ? 'ies' : 'y'} waiting for your reply
-            </Text>
-            <Text style={styles.alertCta}>Reply →</Text>
-          </TouchableOpacity>
-        )}
-
-        {stockAlerts.length > 0 && (
-          <TouchableOpacity style={styles.stockWatchCard} onPress={() => router.push('/(tailor)/shop')}>
-            <View style={styles.stockWatchHeader}>
-              <Text style={styles.stockWatchEyebrow}>Stock watch</Text>
-              <Text style={styles.stockWatchLink}>Open shop →</Text>
-            </View>
-            {stockAlerts.map((alert) => (
-              <View key={alert.itemId} style={styles.stockWatchRow}>
-                <View
-                  style={[
-                    styles.stockWatchDot,
-                    alert.severity === 'sold_out' ? styles.stockWatchDotCritical : styles.stockWatchDotWarning,
-                  ]}
-                />
-                <View style={styles.stockWatchTextWrap}>
-                  <Text style={styles.stockWatchTitle}>{alert.headline}</Text>
-                  <Text style={styles.stockWatchDetail}>{alert.detail}</Text>
-                </View>
-              </View>
-            ))}
-          </TouchableOpacity>
-        )}
-
-        {/* Stats grid */}
-        <View style={styles.statsGrid}>
-          <View style={styles.statsRow}>
-            <TouchableOpacity onPress={() => router.push('/(tailor)/orders?tab=active' as never)} style={{ flex: 1 }}>
-              <StatCard label="Active orders" value={String(stats?.activeOrders ?? 0)} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => router.push('/(tailor)/orders?tab=active' as never)} style={{ flex: 1 }}>
-              <StatCard
-                label={(stats?.pendingQuotes ?? 0) > 0 ? 'Awaiting quote' : 'Item inquiries'}
-                value={String((stats?.pendingQuotes ?? 0) > 0 ? (stats?.pendingQuotes ?? 0) : (stats?.itemInquiries ?? 0))}
-                accent={((stats?.pendingQuotes ?? 0) > 0 ? (stats?.pendingQuotes ?? 0) : (stats?.itemInquiries ?? 0)) > 0}
-              />
-            </TouchableOpacity>
-          </View>
-          <View style={styles.statsRow}>
-            <TouchableOpacity onPress={() => router.navigate('/(tailor)/earnings')} style={{ flex: 1 }}>
-              <StatCard
-                label={monthCurrencyReviewHint ? `This month (${dashboardCurrency})` : 'This month'}
-                value={formatAmount(
-                  stats?.monthEarnings ?? 0,
-                  dashboardCurrency,
-                  dashboardCurrency,
-                  STATIC_FALLBACK_RATES
-                )}
-                hint={monthCurrencyReviewHint ?? undefined}
-              />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => router.push('/(tailor)/profile/reviews' as never)} style={{ flex: 1 }}>
-              <StatCard
-                label="Rating"
-                value={stats?.avgRating ? `${stats.avgRating.toFixed(1)} ★` : 'No rating'}
-              />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Active orders list */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Active orders</Text>
-            <TouchableOpacity onPress={() => router.navigate('/(tailor)/orders')}>
-              <Text style={styles.sectionLink}>See all →</Text>
-            </TouchableOpacity>
-          </View>
-
-          {orders.length === 0 ? (
-            <View style={styles.emptyOrders}>
-              <View style={styles.emptyOrdersBadge}>
-                <Text style={styles.emptyOrdersBadgeText}>Order book</Text>
-              </View>
-              <Text style={styles.emptyText}>No active orders yet</Text>
-              {stats?.completedOrders ? (
-                <Text style={styles.emptyHint}>You’re caught up. Finished work still lives in Orders and Earnings.</Text>
-              ) : stats?.isLive ? (
-                <>
-                  <Text style={styles.emptyHint}>Share your profile to attract your first clients.</Text>
-                  {stats.profileId && (
-                    <View style={styles.emptyActions}>
-                      <TouchableOpacity style={styles.shareBtn} onPress={() => shareTailorProfile(stats.profileId!, stats.displayName)}>
-                        <Text style={styles.shareBtnText}>Share my profile</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.shareBtn, styles.shareBtnSecondary]}
-                        onPress={() => inviteCustomerFromTailor(stats.profileId!, stats.displayName)}
-                      >
-                        <Text style={[styles.shareBtnText, styles.shareBtnTextSecondary]}>Invite a customer</Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-                </>
-              ) : !readiness.payoutReady && readiness.identityVerified ? (
-                <>
-                  <Text style={styles.emptyHint}>{readiness.body}</Text>
-                  <TouchableOpacity style={styles.shareBtn} onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)' } } as never)}>
-                    <Text style={styles.shareBtnText}>{readiness.actionLabel ?? 'Set up payout account'}</Text>
-                  </TouchableOpacity>
-                </>
-              ) : stats?.idVerificationStatus === 'PENDING' ? (
-                <Text style={styles.emptyHint}>Your profile is under review. You'll start receiving orders once verified.</Text>
-              ) : stats?.idVerificationStatus === 'REJECTED' ? (
-                <>
-                  <Text style={styles.emptyHint}>Your verification was declined. Update your ID to go live.</Text>
-                  <TouchableOpacity style={styles.shareBtn} onPress={() => router.navigate('/(tailor)/profile/setup')}>
-                    <Text style={styles.shareBtnText}>Resubmit verification</Text>
-                  </TouchableOpacity>
-                </>
-              ) : (
-                <>
-                  <Text style={styles.emptyHint}>Complete your profile and go live to start receiving orders.</Text>
-                  <TouchableOpacity style={styles.shareBtn} onPress={() => router.navigate('/(tailor)/profile/setup')}>
-                    <Text style={styles.shareBtnText}>Complete profile</Text>
-                  </TouchableOpacity>
-                </>
-              )}
-            </View>
-          ) : (
-            orders.slice(0, 5).map((order) => (
-              <TouchableOpacity
-                key={order.id}
-                style={styles.orderRow}
-                onPress={() => router.push({
-                  pathname: '/(tailor)/orders/[id]',
-                  params: { id: order.id, returnTo: '/(tailor)' },
-                })}
-              >
-                <View style={styles.orderRowLeft}>
-                  <Text style={styles.orderGarment}>{order.garmentType}</Text>
-                  <Text style={styles.orderCustomer}>{order.customerName}</Text>
-                  {tailorOrderHint(order.stage, order.orderKind) && (
-                    <Text style={styles.orderHint}>{tailorOrderHint(order.stage, order.orderKind)}</Text>
-                  )}
-                </View>
-                <View style={styles.orderRowRight}>
-                  <View style={[styles.stagePill, { backgroundColor: stageColor(order.stage).bg }]}>
-                    <Text style={[styles.stageText, { color: stageColor(order.stage).text }]}>
-                      {tailorOrderStageLabel(order.stage, order.orderKind)}
-                    </Text>
-                  </View>
-                  {order.estimatedDate && (
-                    <Text style={styles.orderDue}>
-                      Due {new Date(order.estimatedDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-                    </Text>
-                  )}
-                </View>
-              </TouchableOpacity>
-            ))
-          )}
-        </View>
       </ScrollView>
     </SafeAreaView>
   )
@@ -587,37 +540,6 @@ function LiveStatusBadge({ isLive, idStatus }: { isLive: boolean; idStatus: stri
       <Text style={[styles.availLabel, { color: cfg.color }]}>{cfg.label}</Text>
     </View>
   )
-}
-
-function StatCard({ label, value, accent, hint }: { label: string; value: string; accent?: boolean; hint?: string }) {
-  return (
-    <View style={[styles.statCard, accent && styles.statCardAccent]}>
-      <Text style={[styles.statValue, accent && styles.statValueAccent]}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
-      {hint ? <Text style={styles.statHint}>{hint}</Text> : null}
-    </View>
-  )
-}
-
-function monthEarningsReviewHint(stats: DashboardStats) {
-  const displayCurrency = stats.currency.toUpperCase()
-  const otherCurrencies = (stats.monthEarningsByCurrency ?? [])
-    .filter((row) => row.amount > 0 && row.currency.toUpperCase() !== displayCurrency)
-
-  if (otherCurrencies.length === 0) return null
-
-  const amounts = otherCurrencies
-    .map((row) =>
-      formatAmount(
-        row.amount,
-        row.currency as CurrencyCode,
-        row.currency as CurrencyCode,
-        STATIC_FALLBACK_RATES,
-      ),
-    )
-    .join(' + ')
-
-  return `Also ${amounts} under currency review`
 }
 
 function lastFour(value: string | null | undefined) {
@@ -739,56 +661,6 @@ function payoutSummary(
   }
 }
 
-function PayoutSummaryCard({
-  stats,
-  status,
-  loading,
-  error,
-  onPress,
-}: {
-  stats: DashboardStats
-  status: TailorPayoutStatus | null
-  loading: boolean
-  error: string
-  onPress: () => void
-}) {
-  const summary = payoutSummary(stats, status, loading, error)
-  const payoutCurrency = status?.payoutCurrency ?? stats.payoutCurrency
-  return (
-    <TouchableOpacity
-      style={[
-        styles.payoutSummaryCard,
-        summary.tone === 'verified'
-          ? styles.payoutSummaryVerified
-          : summary.tone === 'review'
-            ? styles.payoutSummaryReview
-            : styles.payoutSummarySetup,
-      ]}
-      onPress={onPress}
-      activeOpacity={0.78}
-    >
-      <View style={styles.payoutSummaryHeader}>
-        <View style={[styles.payoutStatusBadge, summary.badgeStyle]}>
-          <Text style={[styles.payoutStatusBadgeText, summary.badgeTextStyle]}>{summary.badge}</Text>
-        </View>
-        <Text style={styles.payoutSummaryCta}>{summary.cta} →</Text>
-      </View>
-      <View style={styles.payoutSummaryBody}>
-        <View style={styles.payoutSummaryIcon}>
-          <Text style={styles.payoutSummaryIconText}>{payoutCurrency ?? 'PAY'}</Text>
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.payoutSummaryTitle}>{summary.title}</Text>
-          <Text style={styles.payoutSummaryDetail}>{summary.detail}</Text>
-          <Text style={styles.payoutSummaryMeta}>
-            {[payoutCurrency, payoutProviderName(stats, status)].filter(Boolean).join(' · ')}
-          </Text>
-        </View>
-      </View>
-    </TouchableOpacity>
-  )
-}
-
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: HOME_BG },
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
@@ -833,104 +705,106 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   scroll: { flex: 1 },
-  content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, gap: Spacing.md, paddingBottom: Spacing.xxl },
-  heroCard: {
+  content: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md,
+    gap: Spacing.sm,
+    paddingBottom: Spacing.xxl,
+  },
+  cockpitCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
-    ...Shadow.sm,
-  },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  heroBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  heroTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: FontWeight.bold,
-    color: Colors.ink,
-    lineHeight: 38,
-  },
-  heroSub: {
-    fontSize: FontSize.md,
-    color: Colors.inkLight,
-    lineHeight: 24,
-  },
-  guideCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 12,
-    gap: 4,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: 10,
+    width: '100%',
+    maxWidth: 440,
+    alignSelf: 'center',
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
-  guideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  guideEyebrow: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: PRIMARY_GREEN,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  guideClose: { fontSize: 18, lineHeight: 18, color: MUTED_GREY, paddingHorizontal: 4, minWidth: 44, minHeight: 44, textAlign: 'center', textAlignVertical: 'center', includeFontPadding: false },
-  guideTitle: { fontSize: 13, fontWeight: FontWeight.semibold, color: CHARCOAL, lineHeight: 17 },
-  guideText: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
-  readinessCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 12,
-    gap: 5,
-    ...Shadow.sm,
-  },
-  readinessCardWarning: { borderWidth: 1, borderColor: Colors.warning + '35' },
-  readinessCardSuccess: { borderWidth: 1, borderColor: Colors.success + '30' },
-  readinessTitle: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, lineHeight: 18, fontFamily: 'Georgia' },
-  readinessBody: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
-  readinessMeta: { fontSize: 11, color: MUTED_GREY, lineHeight: 16 },
-  readinessLink: { alignSelf: 'flex-start', paddingTop: 2 },
-  readinessLinkText: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
-  readinessSecondaryLink: { alignSelf: 'flex-start' },
-  readinessSecondaryLinkText: { fontSize: 11, color: MUTED_GREY, fontWeight: FontWeight.medium },
-  payoutSummaryCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 12,
-    gap: 10,
-    borderWidth: 1,
-    ...Shadow.sm,
-  },
-  payoutSummaryVerified: {
-    borderColor: Colors.success + '35',
-  },
-  payoutSummaryReview: {
-    borderColor: Colors.error + '40',
-  },
-  payoutSummarySetup: {
-    borderColor: Colors.warning + '35',
-  },
-  payoutSummaryHeader: {
+  cockpitTop: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
+    alignItems: 'flex-start',
     gap: Spacing.md,
   },
-  payoutStatusBadge: {
-    borderRadius: Radius.full,
+  cockpitMetrics: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  cockpitMetric: {
+    flex: 1,
+    minHeight: 58,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.bone,
     paddingHorizontal: 10,
-    paddingVertical: 5,
-    minHeight: 26,
+    paddingVertical: 8,
     justifyContent: 'center',
+    gap: 1,
+  },
+  cockpitMetricValue: {
+    fontFamily: Fonts.display,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.bold,
+    color: CHARCOAL,
+    lineHeight: 22,
+  },
+  cockpitMetricValueAlert: { color: Colors.warning },
+  cockpitMetricLabel: {
+    fontSize: FontSize.xs,
+    color: MUTED_GREY,
+    lineHeight: 16,
+  },
+  cockpitStatusGrid: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  cockpitStatusTile: {
+    flex: 1,
+    minHeight: 88,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.needleGreenLight,
+    padding: 10,
+    gap: 3,
+  },
+  cockpitTileHeader: {
+    minHeight: 19,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  cockpitTileLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.needleGreenDark,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
+  },
+  cockpitTileTitle: {
+    fontFamily: Fonts.display,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.bold,
+    color: CHARCOAL,
+    lineHeight: 18,
+  },
+  cockpitTileHint: {
+    fontSize: 11,
+    color: Colors.inkLight,
+    lineHeight: 15,
+  },
+  payoutMiniBadge: {
+    borderRadius: Radius.full,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    minHeight: 24,
+    justifyContent: 'center',
+  },
+  payoutMiniBadgeText: {
+    fontSize: 10,
+    fontWeight: FontWeight.semibold,
   },
   payoutBadgeVerified: {
     backgroundColor: Colors.needleGreenLight,
@@ -954,110 +828,184 @@ const styles = StyleSheet.create({
   payoutBadgeTextReview: {
     color: Colors.error,
   },
-  payoutSummaryCta: {
-    fontSize: 12,
+  nextMoveCard: {
+    borderRadius: Radius.md,
+    padding: 10,
+    gap: 6,
+    backgroundColor: Colors.bone,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  nextMoveCardWarning: {
+    backgroundColor: Colors.warning + '12',
+    borderColor: Colors.warning + '30',
+  },
+  nextMoveCardSuccess: {
+    backgroundColor: Colors.needleGreenLight,
+    borderColor: Colors.needleGreen + '24',
+  },
+  nextMoveMain: {
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+  },
+  nextMoveCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  nextMoveEyebrow: {
+    fontSize: FontSize.xs,
     color: PRIMARY_GREEN,
     fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
   },
-  payoutSummaryBody: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-  },
-  payoutSummaryIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.boneDeep,
-  },
-  payoutSummaryIconText: {
-    fontSize: 11,
-    color: PRIMARY_GREEN,
+  nextMoveTitle: {
+    fontFamily: Fonts.display,
+    fontSize: FontSize.sm,
     fontWeight: FontWeight.bold,
-  },
-  payoutSummaryTitle: {
-    fontSize: 15,
     color: CHARCOAL,
-    fontWeight: FontWeight.semibold,
-    lineHeight: 19,
+    lineHeight: 18,
   },
-  payoutSummaryDetail: {
-    marginTop: 2,
-    fontSize: 12,
+  nextMoveBody: {
+    fontSize: 11,
     color: Colors.inkLight,
-    lineHeight: 17,
+    lineHeight: 15,
   },
-  payoutSummaryMeta: {
-    marginTop: 4,
+  nextMoveMeta: {
     fontSize: 11,
     color: MUTED_GREY,
     lineHeight: 15,
   },
-  visionPanel: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    padding: 12,
-    gap: Spacing.sm,
-    borderWidth: 1,
-    borderColor: Colors.needleGreen + '30',
-    ...Shadow.sm,
-  },
-  visionPanelHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-  },
-  visionPanelIcon: {
-    width: 40,
-    height: 40,
+  cockpitPrimaryButton: {
+    alignSelf: 'flex-start',
+    minWidth: 112,
+    maxWidth: 154,
+    minHeight: 40,
     borderRadius: Radius.full,
+    backgroundColor: PRIMARY_GREEN,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: Colors.needleGreenLight,
+    paddingHorizontal: Spacing.md,
   },
-  visionPanelCopy: { flex: 1, gap: 2 },
-  visionPanelTitle: { fontSize: 14, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
-  visionPanelText: { fontSize: 12, color: Colors.inkLight, lineHeight: 17 },
-  visionActionRow: { flexDirection: 'row', gap: Spacing.sm },
-  visionAction: {
+  cockpitPrimaryButtonText: {
+    fontSize: FontSize.sm,
+    color: Colors.textInverse,
+    fontWeight: FontWeight.semibold,
+  },
+  trustLink: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    minHeight: 26,
+  },
+  trustLinkText: {
+    fontSize: FontSize.xs,
+    color: PRIMARY_GREEN,
+    fontWeight: FontWeight.semibold,
+  },
+  toolRail: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  toolRailItem: {
     flex: 1,
-    minHeight: 44,
+    minHeight: 38,
     borderRadius: Radius.full,
+    backgroundColor: Colors.bone,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
-    backgroundColor: Colors.bone,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
     gap: 6,
   },
-  visionActionText: { fontSize: 12, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
+  toolRailText: { fontSize: 11, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
+  cockpitQueue: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.lightGrey,
+    paddingTop: 9,
+    gap: 7,
+  },
+  cockpitQueueHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  cockpitQueueTitle: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: PRIMARY_GREEN,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
+  },
+  cockpitQueueLink: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: PRIMARY_GREEN,
+  },
+  cockpitOrderRow: {
+    minHeight: 48,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.bone,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  cockpitOrderCopy: { flex: 1, minWidth: 0 },
+  cockpitOrderTitle: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: CHARCOAL,
+    lineHeight: 16,
+  },
+  cockpitOrderMeta: {
+    fontSize: 11,
+    color: MUTED_GREY,
+    lineHeight: 15,
+  },
 
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: Spacing.md },
-  headerRight: { alignItems: 'flex-end', gap: 8 },
-  greeting: { fontSize: 13, color: Colors.inkLight },
-  greetingName: { fontSize: 24, fontWeight: FontWeight.bold, color: CHARCOAL, letterSpacing: -0.3, lineHeight: 28, fontFamily: 'Georgia' },
+  greetingRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 2 },
+  greetingIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  greeting: { fontSize: 12, color: Colors.inkLight, fontWeight: FontWeight.medium },
+  greetingName: { fontSize: 21, fontWeight: FontWeight.bold, color: CHARCOAL, letterSpacing: 0, lineHeight: 25, fontFamily: Fonts.display },
+  greetingSub: { marginTop: 2, fontSize: 12, color: Colors.inkLight, lineHeight: 16, maxWidth: 280 },
 
   availPill: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: Colors.white, borderRadius: Radius.full,
-    paddingHorizontal: 12, paddingVertical: 4, minHeight: 40, ...Shadow.sm,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.full,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    minHeight: 30,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
   },
   availDot: { width: 7, height: 7, borderRadius: 4 },
-  availLabel: { fontSize: 12, fontWeight: FontWeight.medium, color: Colors.inkLight },
+  availLabel: { fontSize: 11, fontWeight: FontWeight.medium, color: Colors.inkLight },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   modalSheet: {
     backgroundColor: Colors.white, borderTopLeftRadius: Radius.md, borderTopRightRadius: Radius.md,
-    padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.xxl,
+    padding: Spacing.lg, gap: Spacing.sm, paddingBottom: Spacing.xl,
+    maxHeight: '78%',
   },
+  modalOptions: { marginHorizontal: -2 },
+  modalOptionsContent: { gap: Spacing.sm, paddingHorizontal: 2, paddingBottom: Spacing.xl },
   modalHandle: {
     width: 36, height: 4, borderRadius: 2, backgroundColor: Colors.lightGrey,
     alignSelf: 'center', marginBottom: Spacing.sm,
   },
-  modalTitle: { fontSize: 18, fontWeight: FontWeight.bold, color: CHARCOAL, fontFamily: 'Georgia' },
+  modalTitle: { fontSize: 18, fontWeight: FontWeight.bold, color: CHARCOAL, fontFamily: Fonts.display },
   modalSub: { fontSize: 13, color: Colors.inkLight, marginTop: -4, lineHeight: 18 },
   availOption: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
@@ -1070,15 +1018,6 @@ const styles = StyleSheet.create({
   availOptionDesc: { fontSize: 11, color: MUTED_GREY, marginTop: 2, lineHeight: 15 },
   availCheck: { fontSize: 18, color: PRIMARY_GREEN, fontWeight: FontWeight.bold },
 
-  alertCard: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
-    backgroundColor: Colors.warning + '15',
-    borderRadius: Radius.md, padding: 14, minHeight: 44,
-    borderWidth: 1, borderColor: Colors.warning + '40',
-  },
-  alertDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.warning, marginTop: 1 },
-  alertText: { flex: 1, fontSize: 13, fontWeight: FontWeight.medium, color: CHARCOAL, lineHeight: 18 },
-  alertCta: { fontSize: 13, fontWeight: FontWeight.semibold, color: Colors.warning },
   stockWatchCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
@@ -1130,28 +1069,9 @@ const styles = StyleSheet.create({
   },
   secondaryErrorBtnText: { color: CHARCOAL, fontSize: 13, fontWeight: FontWeight.medium },
 
-  statsGrid: { gap: 8 },
-  statsRow: { flexDirection: 'row', gap: 8 },
-  statCard: {
-    flex: 1, backgroundColor: Colors.white,
-    borderRadius: Radius.md, padding: 12, gap: 2, ...Shadow.sm,
-    minHeight: 84,
-    justifyContent: 'center',
-  },
-  statCardAccent: { backgroundColor: Colors.warning + '15', borderWidth: 1, borderColor: Colors.warning + '40' },
-  statValue: { fontSize: 20, fontWeight: FontWeight.bold, color: CHARCOAL, fontFamily: 'Georgia' },
-  statValueAccent: { color: Colors.warning },
-  statLabel: { fontSize: 11, color: MUTED_GREY, lineHeight: 15 },
-  statHint: {
-    marginTop: 4,
-    fontSize: 10,
-    color: Colors.warning,
-    lineHeight: 14,
-  },
-
   section: { gap: 8 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  sectionTitle: { fontSize: 16, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: 'Georgia' },
+  sectionTitle: { fontSize: 16, fontWeight: FontWeight.semibold, color: CHARCOAL, fontFamily: Fonts.display },
   sectionLink: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium, minHeight: 44, includeFontPadding: false },
 
   emptyOrders: { gap: 8, alignItems: 'center', paddingVertical: Spacing.lg },

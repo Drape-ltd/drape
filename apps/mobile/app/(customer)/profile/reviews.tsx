@@ -7,7 +7,7 @@ import { useNavigation, useRouter, useFocusEffect } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { goBackOrFallback } from '@/lib/navigation'
 
 type CustomerReviewRow = {
@@ -17,6 +17,15 @@ type CustomerReviewRow = {
   body: string | null
   reviewerName: string
   createdAt: string
+}
+
+type CustomerReviewQueryRow = {
+  id: string
+  rating: number | null
+  tags: string[] | null
+  body: string | null
+  reviewer_name: string | null
+  created_at: string
 }
 
 function asStringList(value: unknown): string[] {
@@ -51,9 +60,9 @@ export default function CustomerReviewsScreen() {
       }
 
       setReviews(
-        ((data ?? []) as any[]).map((row) => ({
+        ((data ?? []) as CustomerReviewQueryRow[]).map((row) => ({
           id: row.id,
-          rating: row.rating,
+          rating: row.rating ?? 0,
           tags: asStringList(row.tags),
           body: row.body ?? null,
           reviewerName: row.reviewer_name ?? 'Tailor',
@@ -80,7 +89,7 @@ export default function CustomerReviewsScreen() {
         <TouchableOpacity onPress={goBack} style={styles.backBtn}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Your reviews</Text>
+        <Text style={styles.headerTitle}>Reviews from tailors</Text>
         <View style={{ width: 36 }} />
       </View>
 
@@ -94,12 +103,6 @@ export default function CustomerReviewsScreen() {
         </View>
       ) : (
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-          <View style={styles.introCard}>
-            <Text style={styles.introEyebrow}>Reputation</Text>
-            <Text style={styles.introTitle}>This is the feedback history tailors have left on your orders.</Text>
-            <Text style={styles.introCopy}>Keep this view honest and readable. It should help you spot recurring fit or communication patterns at a glance.</Text>
-          </View>
-
           <View style={styles.summaryCard}>
             <Text style={styles.summaryValue}>{averageRating ? averageRating.toFixed(1) : 'No rating'}</Text>
             <Text style={styles.summaryLabel}>
@@ -160,7 +163,7 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.lightGrey,
   },
   backBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   content: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: 36 },
   introCard: {
     backgroundColor: Colors.white,
@@ -180,12 +183,12 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md,
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
     lineHeight: 22,
   },
   introCopy: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
   stateWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.xl },
-  stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia', textAlign: 'center' },
+  stateTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display, textAlign: 'center' },
   summaryCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
@@ -195,7 +198,7 @@ const styles = StyleSheet.create({
     gap: 4,
     ...Shadow.sm,
   },
-  summaryValue: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
+  summaryValue: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
   summaryLabel: { fontSize: FontSize.sm, color: Colors.midGrey },
   reviewCard: {
     backgroundColor: Colors.white,
@@ -214,7 +217,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   avatarText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.needleGreen },
-  reviewerName: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  reviewerName: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   reviewDate: { fontSize: FontSize.xs, color: Colors.midGrey },
   reviewStars: { fontSize: FontSize.sm, color: Colors.warning, letterSpacing: 0.4 },
   tags: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },

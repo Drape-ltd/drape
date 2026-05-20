@@ -43,8 +43,10 @@ export function useUnreadMessageCount(userId: string | null | undefined, role: R
   }, [role, userId])
 
   useEffect(() => {
-    void refresh()
-    if (!userId) return undefined
+    const timer = setTimeout(() => {
+      void refresh()
+    }, 0)
+    if (!userId) return () => clearTimeout(timer)
 
     const channel = supabase
       .channel(`unread-messages:${role.toLowerCase()}:${userId}`)
@@ -57,6 +59,7 @@ export function useUnreadMessageCount(userId: string | null | undefined, role: R
       .subscribe()
 
     return () => {
+      clearTimeout(timer)
       supabase.removeChannel(channel)
     }
   }, [refresh, role, userId])

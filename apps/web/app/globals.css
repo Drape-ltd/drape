@@ -6,8 +6,8 @@
   :root {
     --background: #F5F0E8;
     --foreground: #1A1A1A;
-    --font-body: "Avenir Next", "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
-    --font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+    --font-body: "Inter", "Avenir Next", "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --font-display: "Fraunces", "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
   }
 
   * {
@@ -33,7 +33,7 @@
   h2,
   h3,
   h4 {
-    font-family: var(--font-display), Georgia, serif;
+    font-family: var(--font-display), serif;
     letter-spacing: -0.02em;
   }
 

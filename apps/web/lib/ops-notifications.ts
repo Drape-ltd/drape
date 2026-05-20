@@ -75,7 +75,7 @@ export async function sendCriticalOpsIssueEmail(input: CriticalOpsIssueEmailInpu
 
   const subject = `Critical ops issue ${String(input.issueNumber).padStart(4, '0')}: ${input.title}`
   const html = `
-    <div style="font-family:Georgia,serif;max-width:640px;margin:0 auto;color:#2c2c2a">
+    <div style="font-family:Inter,Arial,sans-serif;max-width:640px;margin:0 auto;color:#2c2c2a">
       <p style="margin:0 0 10px;color:#d85a30;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Critical ops issue</p>
       <h1 style="margin:0 0 14px;font-size:30px;line-height:1.1">${escapeHtml(input.title)}</h1>
       <p style="margin:0 0 20px;font:16px/1.7 Calibri,Arial,sans-serif;color:#4a4a47">${escapeHtml(input.description)}</p>
@@ -90,7 +90,7 @@ export async function sendCriticalOpsIssueEmail(input: CriticalOpsIssueEmailInpu
         <tr><td style="padding:6px 0;color:#888780">Stage</td><td style="padding:6px 0">${escapeHtml(input.stage ?? '—')}</td></tr>
       </table>
       <div style="margin-top:20px;padding:16px;border-radius:16px;background:#e1f5ee;font:15px/1.7 Calibri,Arial,sans-serif">
-        <strong style="display:block;margin-bottom:8px;color:#1d9e75">Recommended action</strong>
+        <strong style="display:block;margin-bottom:8px;color:#2d6a4f">Recommended action</strong>
         ${escapeHtml(input.recommendedAction)}
       </div>
     </div>

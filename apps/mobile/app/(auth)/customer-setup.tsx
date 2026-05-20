@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, KeyboardAvoidingView, Platform, ActivityIndicator,
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ActivityIndicator,
 } from 'react-native'
 import { useRouter } from 'expo-router'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as ImageManipulator from 'expo-image-manipulator'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
@@ -13,6 +21,7 @@ import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { syncUserRow } from '@/lib/syncUserRow'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
 import { Sentry } from '@/lib/sentry'
+import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
 import {
   SUPPORTED_CURRENCIES,
   detectDeviceCurrencyPreference,
@@ -22,7 +31,11 @@ import {
 import { Button, Input } from '@/components/ui'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { validateDisplayName } from '@drape/shared/contact-filter'
-import { normalizePhoneForStorage, PHONE_STORAGE_HINT, validatePhoneForProfile } from '@drape/shared/phone'
+import {
+  normalizePhoneForStorage,
+  PHONE_STORAGE_HINT,
+  validatePhoneForProfile,
+} from '@drape/shared/phone'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 type Unit = 'in' | 'cm'
@@ -48,12 +61,21 @@ const GARMENT_OPTIONS: Array<{ value: GarmentContext; label: string; hint: strin
   { value: 'MENSWEAR', label: 'Menswear', hint: 'Suits, Agbada, kaftans, shirts, trousers' },
   { value: 'WOMENSWEAR', label: 'Womenswear', hint: 'Dresses, blouses, skirts, saree blouses' },
   { value: 'BOTH', label: 'Both', hint: 'I order menswear and womenswear' },
-  { value: 'PREFER_NOT_TO_SAY', label: 'Prefer not to say', hint: 'Tailor works from measurements only' },
+  {
+    value: 'PREFER_NOT_TO_SAY',
+    label: 'Prefer not to say',
+    hint: 'Tailor works from measurements only',
+  },
 ]
 
 function normalizeGarmentContext(value: unknown): GarmentContext | null {
   if (value === 'PREFER_NOT') return 'PREFER_NOT_TO_SAY'
-  if (value === 'MENSWEAR' || value === 'WOMENSWEAR' || value === 'BOTH' || value === 'PREFER_NOT_TO_SAY') {
+  if (
+    value === 'MENSWEAR' ||
+    value === 'WOMENSWEAR' ||
+    value === 'BOTH' ||
+    value === 'PREFER_NOT_TO_SAY'
+  ) {
     return value
   }
   return null
@@ -67,15 +89,17 @@ function customerSetupSaveMessage(error: unknown) {
 
 export default function CustomerSetupScreen() {
   const router = useRouter()
+  const insets = useSafeAreaInsets()
   const { user } = useAuth()
   const detectedCurrency = useMemo(() => detectDeviceCurrencyPreference(), [])
 
   // Pre-fill display name from OAuth metadata if available
   const oauthName = user?.user_metadata?.full_name ?? user?.user_metadata?.name ?? ''
+  const oauthPhone = typeof user?.user_metadata?.phone === 'string' ? user.user_metadata.phone : ''
 
   const [displayName, setDisplayName] = useState(oauthName)
   const [nameError, setNameError] = useState('')
-  const [phone, setPhone] = useState(user?.user_metadata?.phone ?? '')
+  const [phone, setPhone] = useState(oauthPhone)
   const [phoneError, setPhoneError] = useState('')
   const [unit, setUnit] = useState<Unit>('in')
   const [garmentContext, setGarmentContext] = useState<GarmentContext | null>(null)
@@ -110,9 +134,11 @@ export default function CustomerSetupScreen() {
         const row = data as CustomerSetupProfileRow
         const measurements = row.measurements ?? {}
         const nextDisplayName = row.display_name ?? oauthName
-        const nextPhone = row.phone ?? user.user_metadata?.phone ?? ''
+        const nextPhone = row.phone ?? oauthPhone
         const nextUnit = (row.unit_preference ?? measurements.unit) as Unit | undefined
-        const nextGarmentContext = normalizeGarmentContext(row.garment_context ?? measurements.garmentContext)
+        const nextGarmentContext = normalizeGarmentContext(
+          row.garment_context ?? measurements.garmentContext
+        )
 
         if (typeof nextDisplayName === 'string' && nextDisplayName.trim().length > 0) {
           setDisplayName(nextDisplayName)
@@ -141,9 +167,10 @@ export default function CustomerSetupScreen() {
         if (error || !data) return
 
         const row = data as UserCurrencyRow
-        const nextCurrency = typeof row.default_currency === 'string'
-          ? SUPPORTED_CURRENCIES.find((item) => item.code === row.default_currency)
-          : null
+        const nextCurrency =
+          typeof row.default_currency === 'string'
+            ? SUPPORTED_CURRENCIES.find((item) => item.code === row.default_currency)
+            : null
 
         if (nextCurrency) {
           setDefaultCurrency(nextCurrency.code)
@@ -159,7 +186,7 @@ export default function CustomerSetupScreen() {
     return () => {
       cancelled = true
     }
-  }, [user?.id, oauthName])
+  }, [user?.id, oauthName, oauthPhone])
 
   function handleAvatarPress() {
     Alert.alert('Profile photo', 'Take a photo now or choose one from your library.', [
@@ -179,7 +206,7 @@ export default function CustomerSetupScreen() {
       const compressed = await ImageManipulator.manipulateAsync(
         imageUri,
         [{ resize: { width: 800, height: 800 } }],
-        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG },
+        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
       )
 
       const publicUrl = await uploadPublicStorageImage({
@@ -238,26 +265,24 @@ export default function CustomerSetupScreen() {
 
     const normalizedPhone = normalizePhoneForStorage(phone)
 
-    const { error } = await supabase
-      .from('customer_profiles')
-      .upsert(
-        {
-          user_id: user?.id,
-          display_name: displayName.trim(),
-          phone: normalizedPhone,
-          unit_preference: unit,
-          garment_context: garmentContext,
-          avatar_url: avatarUrl,
-          // Seed garment context + unit into measurements so it's available from the start
-          measurements: {
-            unit,
-            garmentContext,
-            fitFlags: [],
-          },
-          updated_at: now,
+    const { error } = await supabase.from('customer_profiles').upsert(
+      {
+        user_id: user?.id,
+        display_name: displayName.trim(),
+        phone: normalizedPhone,
+        unit_preference: unit,
+        garment_context: garmentContext,
+        avatar_url: avatarUrl,
+        // Seed garment context + unit into measurements so it's available from the start
+        measurements: {
+          unit,
+          garmentContext,
+          fitFlags: [],
         },
-        { onConflict: 'user_id' }
-      )
+        updated_at: now,
+      },
+      { onConflict: 'user_id' }
+    )
 
     if (!error) {
       const { error: authError } = await supabase.auth.updateUser({
@@ -319,25 +344,29 @@ export default function CustomerSetupScreen() {
       return
     }
 
-    capture('customer_profile_completed', { via: 'sso_gate', garment_context: garmentContext, unit })
+    capture('customer_profile_completed', {
+      via: 'sso_gate',
+      garment_context: garmentContext,
+      unit,
+    })
     // RouteGuard will now detect the profile is complete and navigate to (customer)
     router.replace('/(customer)')
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView style={styles.scroll} contentContainerStyle={{ paddingBottom: 120 }}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoider}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
           <View style={styles.content}>
-            <View style={styles.heroCard}>
-              <View style={styles.heroBadge}>
-                <Text style={styles.heroBadgeText}>Finish your customer setup</Text>
-              </View>
-              <View style={styles.heading}>
-                <Text style={styles.title}>Set up your side of Drape.</Text>
-                <Text style={styles.subtitle}>These basics shape your fit profile and first booking.</Text>
-              </View>
-            </View>
+            <AuthEntryHeader
+              eyebrow="Finish customer setup"
+              title="Set up your side of Drape."
+              body="These basics shape your fit profile, order updates, account currency, and first booking."
+              showWordmark={false}
+            />
 
             <View style={styles.formCard}>
               <View style={styles.sectionIntro}>
@@ -347,7 +376,9 @@ export default function CustomerSetupScreen() {
 
               <View style={styles.guideCard}>
                 <Text style={styles.guideTitle}>Best use</Text>
-                <Text style={styles.guideText}>Keep this simple and accurate. You can refine the rest later.</Text>
+                <Text style={styles.guideText}>
+                  Keep this simple and accurate. You can refine the rest later.
+                </Text>
               </View>
 
               <View style={styles.photoCard}>
@@ -358,7 +389,12 @@ export default function CustomerSetupScreen() {
                   accessibilityRole="button"
                   accessibilityLabel="Add profile photo"
                 >
-                  <AvatarImage uri={avatarUrl} initials={displayName || user?.email} size={76} shadow />
+                  <AvatarImage
+                    uri={avatarUrl}
+                    initials={displayName || user?.email}
+                    size={76}
+                    shadow
+                  />
                   {uploadingAvatar ? (
                     <View style={styles.avatarUploading}>
                       <ActivityIndicator color={Colors.textInverse} size="small" />
@@ -367,14 +403,18 @@ export default function CustomerSetupScreen() {
                 </TouchableOpacity>
                 <View style={styles.photoCopy}>
                   <Text style={styles.photoTitle}>Add a profile photo</Text>
-                  <Text style={styles.photoText}>Optional, but it helps tailors recognise you in orders and messages.</Text>
+                  <Text style={styles.photoText}>
+                    Optional, but it helps tailors recognise you in orders and messages.
+                  </Text>
                   <TouchableOpacity
                     onPress={handleAvatarPress}
                     disabled={uploadingAvatar}
                     accessibilityRole="button"
                     accessibilityLabel={avatarUrl ? 'Change profile photo' : 'Add profile photo'}
                   >
-                    <Text style={styles.photoAction}>{avatarUrl ? 'Change photo' : 'Take or choose photo'}</Text>
+                    <Text style={styles.photoAction}>
+                      {avatarUrl ? 'Change photo' : 'Take or choose photo'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -383,7 +423,10 @@ export default function CustomerSetupScreen() {
                 label="Your name"
                 placeholder="John Doe"
                 value={displayName}
-                onChangeText={(v) => { setDisplayName(v); if (nameError) validateName(v) }}
+                onChangeText={(v) => {
+                  setDisplayName(v)
+                  if (nameError) validateName(v)
+                }}
                 onBlur={() => validateName(displayName)}
                 error={nameError}
                 required
@@ -395,7 +438,10 @@ export default function CustomerSetupScreen() {
                 label="Phone number"
                 placeholder="For order updates and account recovery"
                 value={phone}
-                onChangeText={(v) => { setPhone(v); if (phoneError) validatePhone(v) }}
+                onChangeText={(v) => {
+                  setPhone(v)
+                  if (phoneError) validatePhone(v)
+                }}
                 onBlur={() => validatePhone(phone)}
                 error={phoneError}
                 required
@@ -405,33 +451,50 @@ export default function CustomerSetupScreen() {
               />
 
               <View>
-                <Text style={styles.fieldLabel}>Account currency <Text style={styles.required}>*</Text></Text>
+                <Text style={styles.fieldLabel}>
+                  Account currency <Text style={styles.required}>*</Text>
+                </Text>
                 <Text style={styles.fieldHint}>
-                  This becomes the currency you see everywhere and the currency you pay in for new orders.
+                  This becomes the currency you see everywhere and the currency you pay in for new
+                  orders.
                 </Text>
                 {currencySource === 'UNSUPPORTED_FALLBACK' ? (
                   <View style={styles.currencyNotice}>
                     <Text style={styles.currencyNoticeTitle}>USD fallback</Text>
-                    <Text style={styles.currencyNoticeCopy}>Your local currency is not supported yet. Prices are shown in USD until you choose another supported currency.</Text>
+                    <Text style={styles.currencyNoticeCopy}>
+                      Your local currency is not supported yet. Prices are shown in USD until you
+                      choose another supported currency.
+                    </Text>
                   </View>
                 ) : (
                   <View style={styles.currencyNotice}>
                     <Text style={styles.currencyNoticeTitle}>Detected from your region</Text>
-                    <Text style={styles.currencyNoticeCopy}>We pre-selected {defaultCurrency} from your device region. Change it now if you want your account to use a different supported currency.</Text>
+                    <Text style={styles.currencyNoticeCopy}>
+                      We pre-selected {defaultCurrency} from your device region. Change it now if
+                      you want your account to use a different supported currency.
+                    </Text>
                   </View>
                 )}
                 <View style={styles.currencyRow}>
                   {SUPPORTED_CURRENCIES.map((option) => (
                     <TouchableOpacity
                       key={option.code}
-                      style={[styles.currencyChip, defaultCurrency === option.code && styles.currencyChipActive]}
+                      style={[
+                        styles.currencyChip,
+                        defaultCurrency === option.code && styles.currencyChipActive,
+                      ]}
                       onPress={() => {
                         setDefaultCurrency(option.code)
                         setCurrencySource('USER_SELECTED')
                         setRegionCode(regionCode || detectedCurrency.regionCode)
                       }}
                     >
-                      <Text style={[styles.currencyChipText, defaultCurrency === option.code && styles.currencyChipTextActive]}>
+                      <Text
+                        style={[
+                          styles.currencyChipText,
+                          defaultCurrency === option.code && styles.currencyChipTextActive,
+                        ]}
+                      >
                         {option.symbol} {option.code}
                       </Text>
                     </TouchableOpacity>
@@ -440,7 +503,9 @@ export default function CustomerSetupScreen() {
               </View>
 
               <View>
-                <Text style={styles.fieldLabel}>Measurement units <Text style={styles.required}>*</Text></Text>
+                <Text style={styles.fieldLabel}>
+                  Measurement units <Text style={styles.required}>*</Text>
+                </Text>
                 <View style={styles.unitRow}>
                   {(['in', 'cm'] as Unit[]).map((u) => (
                     <TouchableOpacity
@@ -460,21 +525,35 @@ export default function CustomerSetupScreen() {
             <View style={styles.formCard}>
               <View style={styles.sectionIntro}>
                 <Text style={styles.sectionEyebrow}>Fit context</Text>
-                <Text style={styles.sectionTitle}>Help tailors understand what you usually order.</Text>
+                <Text style={styles.sectionTitle}>
+                  Help tailors understand what you usually order.
+                </Text>
               </View>
 
-              <Text style={styles.fieldLabel}>What do you typically order? <Text style={styles.required}>*</Text></Text>
+              <Text style={styles.fieldLabel}>
+                What do you typically order? <Text style={styles.required}>*</Text>
+              </Text>
               <Text style={styles.fieldHint}>Helps tailors understand your fitting needs.</Text>
               <View style={styles.optionList}>
                 {GARMENT_OPTIONS.map((opt) => (
                   <TouchableOpacity
                     key={opt.value}
-                    style={[styles.optionCard, garmentContext === opt.value && styles.optionCardActive]}
+                    style={[
+                      styles.optionCard,
+                      garmentContext === opt.value && styles.optionCardActive,
+                    ]}
                     onPress={() => setGarmentContext(opt.value)}
                   >
-                    <View style={[styles.radio, garmentContext === opt.value && styles.radioActive]} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.optionLabel, garmentContext === opt.value && styles.optionLabelActive]}>
+                    <View
+                      style={[styles.radio, garmentContext === opt.value && styles.radioActive]}
+                    />
+                    <View style={styles.optionTextWrap}>
+                      <Text
+                        style={[
+                          styles.optionLabel,
+                          garmentContext === opt.value && styles.optionLabelActive,
+                        ]}
+                      >
                         {opt.label}
                       </Text>
                       <Text style={styles.optionHint}>{opt.hint}</Text>
@@ -486,7 +565,7 @@ export default function CustomerSetupScreen() {
           </View>
         </ScrollView>
 
-        <View style={styles.cta}>
+        <View style={[styles.cta, { paddingBottom: Math.max(insets.bottom + Spacing.sm, Spacing.xl) }]}>
           <View style={styles.nextCard}>
             <Text style={styles.nextEyebrow}>What happens next</Text>
             <Text style={styles.nextTitle}>You’ll land in customer home ready to start.</Text>
@@ -496,7 +575,15 @@ export default function CustomerSetupScreen() {
             label="Continue to Drape"
             onPress={save}
             loading={saving}
-            disabled={saving || uploadingAvatar || !displayName.trim() || !phone.trim() || !!nameError || !!phoneError || !garmentContext}
+            disabled={
+              saving ||
+              uploadingAvatar ||
+              !displayName.trim() ||
+              !phone.trim() ||
+              !!nameError ||
+              !!phoneError ||
+              !garmentContext
+            }
           />
         </View>
       </KeyboardAvoidingView>
@@ -506,26 +593,10 @@ export default function CustomerSetupScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bone },
+  keyboardAvoider: { flex: 1 },
   scroll: { flex: 1 },
+  scrollContent: { paddingBottom: 120 },
   content: { padding: Spacing.xl, gap: Spacing.xl },
-  heroCard: {
-    backgroundColor: Colors.white,
-    borderRadius: 28,
-    padding: Spacing.xl,
-    gap: Spacing.lg,
-  },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    borderRadius: 999,
-    backgroundColor: Colors.needleGreenLight,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 6,
-  },
-  heroBadgeText: {
-    fontSize: FontSize.xs,
-    color: Colors.needleGreen,
-    fontWeight: FontWeight.semibold,
-  },
   heroPoints: { gap: Spacing.md },
   heroPoint: {
     backgroundColor: Colors.bone,
@@ -537,7 +608,7 @@ const styles = StyleSheet.create({
   heroPointCopy: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   formCard: {
     backgroundColor: Colors.white,
-    borderRadius: 24,
+    borderRadius: Radius.xl,
     padding: Spacing.xl,
     gap: Spacing.lg,
   },
@@ -547,9 +618,14 @@ const styles = StyleSheet.create({
     color: Colors.midGrey,
     fontWeight: FontWeight.semibold,
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    letterSpacing: 0,
   },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, lineHeight: 24 },
+  sectionTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    lineHeight: 24,
+  },
   guideCard: {
     backgroundColor: Colors.bone,
     borderRadius: Radius.lg,
@@ -561,7 +637,7 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    letterSpacing: 0,
   },
   guideText: {
     fontSize: FontSize.sm,
@@ -579,11 +655,11 @@ const styles = StyleSheet.create({
   avatarTap: {
     width: 76,
     height: 76,
-    borderRadius: 38,
+    borderRadius: Radius.full,
   },
   avatarUploading: {
     ...StyleSheet.absoluteFillObject,
-    borderRadius: 38,
+    borderRadius: Radius.full,
     backgroundColor: 'rgba(26,26,24,0.42)',
     alignItems: 'center',
     justifyContent: 'center',
@@ -606,13 +682,19 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
   },
 
-  heading: { gap: Spacing.sm, paddingTop: Spacing.lg },
-  title: { fontSize: 34, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 40, letterSpacing: -0.6 },
-  subtitle: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 24 },
-
-  fieldLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: Spacing.sm },
+  fieldLabel: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    marginBottom: Spacing.sm,
+  },
   required: { color: Colors.error },
-  fieldHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginBottom: Spacing.md, lineHeight: 18 },
+  fieldHint: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    marginBottom: Spacing.md,
+    lineHeight: 18,
+  },
   currencyNotice: {
     backgroundColor: Colors.bone,
     borderRadius: Radius.lg,
@@ -625,7 +707,7 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    letterSpacing: 0,
   },
   currencyNoticeCopy: {
     fontSize: FontSize.sm,
@@ -644,13 +726,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   currencyChipActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
-  currencyChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
+  currencyChipText: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    fontWeight: FontWeight.medium,
+  },
   currencyChipTextActive: { color: Colors.needleGreen },
 
   unitRow: { gap: Spacing.sm },
   unitBtn: {
-    padding: Spacing.lg, borderRadius: Radius.md, borderWidth: 1.5,
-    borderColor: Colors.lightGrey, backgroundColor: Colors.white,
+    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    borderWidth: 1.5,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
   },
   unitBtnActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
   unitLabel: { fontSize: FontSize.md, color: Colors.inkLight, fontWeight: FontWeight.medium },
@@ -658,23 +747,37 @@ const styles = StyleSheet.create({
 
   optionList: { gap: Spacing.sm },
   optionCard: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md,
-    backgroundColor: Colors.white, borderRadius: Radius.lg, padding: Spacing.lg,
-    borderWidth: 1.5, borderColor: Colors.lightGrey, ...Shadow.sm,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.md,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    borderWidth: 1.5,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
   },
   optionCardActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
   radio: {
-    width: 20, height: 20, borderRadius: 10, marginTop: 2,
-    borderWidth: 2, borderColor: Colors.lightGrey, backgroundColor: Colors.white,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    marginTop: 2,
+    borderWidth: 2,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
   },
   radioActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreen },
   optionLabel: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.inkLight },
   optionLabelActive: { color: Colors.needleGreen },
+  optionTextWrap: { flex: 1 },
   optionHint: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2, lineHeight: 18 },
 
   cta: {
-    padding: Spacing.xl, backgroundColor: Colors.white,
-    borderTopWidth: 1, borderTopColor: Colors.lightGrey,
+    padding: Spacing.xl,
+    backgroundColor: Colors.white,
+    borderTopWidth: 1,
+    borderTopColor: Colors.lightGrey,
   },
   nextCard: {
     backgroundColor: Colors.bone,
@@ -688,7 +791,7 @@ const styles = StyleSheet.create({
     color: Colors.midGrey,
     fontWeight: FontWeight.semibold,
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    letterSpacing: 0,
   },
   nextTitle: {
     fontSize: FontSize.sm,
@@ -701,5 +804,10 @@ const styles = StyleSheet.create({
     color: Colors.inkLight,
     lineHeight: 20,
   },
-  saveError: { fontSize: FontSize.sm, color: Colors.error, marginBottom: Spacing.sm, textAlign: 'center' },
+  saveError: {
+    fontSize: FontSize.sm,
+    color: Colors.error,
+    marginBottom: Spacing.sm,
+    textAlign: 'center',
+  },
 })

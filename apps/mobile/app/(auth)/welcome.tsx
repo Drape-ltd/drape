@@ -1,8 +1,9 @@
 import { View, Text, StyleSheet, Alert, Linking } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { Feather } from '@expo/vector-icons'
 import { Button, Divider } from '@/components/ui'
-import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing } from '@/constants/theme'
 
 export default function WelcomeScreen() {
   const router = useRouter()
@@ -10,24 +11,37 @@ export default function WelcomeScreen() {
   async function openLegal(url: string) {
     const supported = await Linking.canOpenURL(url)
     if (!supported) {
-      Alert.alert('Unable to open link', `Please visit ${url.replace('https://', '')} manually. You can still continue with sign up or sign in here.`)
+      Alert.alert(
+        'Unable to open link',
+        `Please visit ${url.replace('https://', '')} manually. You can still continue with sign up or sign in here.`
+      )
       return
     }
 
     try {
       await Linking.openURL(url)
     } catch {
-      Alert.alert('Unable to open link', `Please visit ${url.replace('https://', '')} manually. You can still continue with sign up or sign in here.`)
+      Alert.alert(
+        'Unable to open link',
+        `Please visit ${url.replace('https://', '')} manually. You can still continue with sign up or sign in here.`
+      )
     }
   }
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.hero}>
-        <View style={styles.brandCard}>
+        <View style={styles.brandLockup}>
           <Text style={styles.wordmark}>drape</Text>
-          <Text style={styles.tagline}>Custom and ready-made fashion, handled clearly.</Text>
-          <Text style={styles.sub}>Find trusted tailors and boutiques, pay securely, and track every order in one place.</Text>
+        </View>
+        <Text style={styles.tagline}>Your tailor, found and protected.</Text>
+        <Text style={styles.sub}>
+          Order custom pieces, ready-made finds, and track every stitch with payment protection.
+        </Text>
+        <View style={styles.trustRail}>
+          <TrustPoint label="Vetted tailors" />
+          <TrustPoint label="Protected payments" />
+          <TrustPoint label="Tracked orders" />
         </View>
       </View>
 
@@ -41,11 +55,38 @@ export default function WelcomeScreen() {
         />
         <Text style={styles.legal}>
           By continuing you agree to our{' '}
-          <Text style={styles.link} onPress={() => { void openLegal('https://drapeon.co/terms') }}>Terms</Text> and{' '}
-          <Text style={styles.link} onPress={() => { void openLegal('https://drapeon.co/privacy') }}>Privacy Policy</Text>.
+          <Text
+            style={styles.link}
+            onPress={() => {
+              void openLegal('https://drapeon.co/terms')
+            }}
+          >
+            Terms
+          </Text>{' '}
+          and{' '}
+          <Text
+            style={styles.link}
+            onPress={() => {
+              void openLegal('https://drapeon.co/privacy')
+            }}
+          >
+            Privacy Policy
+          </Text>
+          .
         </Text>
       </View>
     </SafeAreaView>
+  )
+}
+
+function TrustPoint({ label }: { label: string }) {
+  return (
+    <View style={styles.trustPoint}>
+      <View style={styles.trustIcon}>
+        <Feather name="check" size={12} color={Colors.needleGreen} />
+      </View>
+      <Text style={styles.trustText}>{label}</Text>
+    </View>
   )
 }
 
@@ -59,36 +100,62 @@ const styles = StyleSheet.create({
   hero: {
     flex: 1,
     justifyContent: 'center',
-  },
-  brandCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xxl,
     gap: Spacing.lg,
-    ...Shadow.lg,
+  },
+  brandLockup: {
+    alignItems: 'flex-start',
   },
   wordmark: {
-    fontSize: 52,
+    fontFamily: Fonts.display,
+    fontSize: 58,
     fontWeight: FontWeight.bold,
     color: Colors.needleGreen,
-    letterSpacing: -2,
+    letterSpacing: 0,
+    lineHeight: 66,
   },
   tagline: {
-    fontSize: 32,
+    fontFamily: Fonts.display,
+    fontSize: 34,
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
-    lineHeight: 38,
+    lineHeight: 40,
+    marginTop: Spacing.lg,
   },
   sub: {
+    fontFamily: Fonts.body,
     fontSize: FontSize.md,
     color: Colors.inkLight,
     lineHeight: 24,
+  },
+  trustRail: {
+    gap: Spacing.sm,
+    marginTop: Spacing.sm,
+  },
+  trustPoint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  trustIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  trustText: {
+    fontFamily: Fonts.bodyMedium,
+    fontSize: FontSize.sm,
+    color: Colors.ink,
+    fontWeight: FontWeight.medium,
   },
   actions: {
     gap: Spacing.md,
     paddingBottom: Spacing.lg,
   },
   legal: {
+    fontFamily: Fonts.body,
     fontSize: FontSize.xs,
     color: Colors.midGrey,
     textAlign: 'center',
@@ -96,6 +163,7 @@ const styles = StyleSheet.create({
     marginTop: Spacing.sm,
   },
   link: {
+    fontFamily: Fonts.bodyMedium,
     color: Colors.needleGreen,
     fontWeight: FontWeight.medium,
   },

@@ -142,7 +142,9 @@ export function formatSizeInventorySummary(sizes: string[], sizeInventory: SizeI
     return total <= 0 ? '0 ready' : `${total} ready`
   }
 
-  return `${total} ready · ${entries.map((entry) => `${entry.size} ${entry.quantity}`).join(', ')}`
+  return `${total} ready · ${entries
+    .map((entry) => `${entry.size}: ${entry.quantity}${entry.quantity === 1 ? ' left' : ''}`)
+    .join(', ')}`
 }
 
 export function buildTailorStockAlert(input: {

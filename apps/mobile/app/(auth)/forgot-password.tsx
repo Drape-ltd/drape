@@ -1,12 +1,22 @@
 import { useState } from 'react'
-import { KeyboardAvoidingView, Platform, ScrollView, View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native'
+import {
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  View,
+  Text,
+  StyleSheet,
+  Alert,
+} from 'react-native'
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
+import { AuthBackButton } from '@/components/auth/AuthBackButton'
+import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
 import { Button, Input } from '@/components/ui'
-import { Colors, FontSize, FontWeight, Spacing } from '@/constants/theme'
+import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 
 function isValidEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
@@ -47,7 +57,7 @@ export default function ForgotPasswordScreen() {
         'Could not start reset',
         isLikelyConnectivityIssue(error)
           ? 'Connection looks weak. We could not start password reset yet. Retry when the signal improves.'
-          : 'We could not start password reset right now. Please try again in a moment.',
+          : 'We could not start password reset right now. Please try again in a moment.'
       )
     } else {
       setEmail(normalizedEmail)
@@ -62,82 +72,92 @@ export default function ForgotPasswordScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <TouchableOpacity style={styles.back} onPress={goBack}>
-        <Text style={styles.backText}>← Back</Text>
-      </TouchableOpacity>
+      <AuthBackButton style={styles.back} onPress={goBack} />
 
-      <KeyboardAvoidingView style={styles.keyboardAvoider} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        {sent ? (
-          <View style={styles.heroCard}>
-            <View style={styles.heroBadge}>
-              <Text style={styles.heroBadgeText}>Reset link sent</Text>
-            </View>
-            <View style={styles.successBlock}>
-              <View style={styles.successIcon}>
-                <Ionicons name="mail" size={32} color={Colors.needleGreen} />
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoider}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          {sent ? (
+            <View style={styles.stateCard}>
+              <Text style={styles.stateEyebrow}>Reset link sent</Text>
+              <View style={styles.successBlock}>
+                <View style={styles.successIcon}>
+                  <Ionicons name="mail" size={32} color={Colors.needleGreen} />
+                </View>
+                <Text style={styles.heading}>Check your email</Text>
+                <Text style={styles.sub}>
+                  We've sent a password reset link to{'\n'}
+                  <Text style={styles.emailHighlight}>{email}</Text>
+                </Text>
+                <Text style={styles.hint}>
+                  The link expires in 1 hour. Check your spam folder if you don't see it.
+                </Text>
               </View>
-              <Text style={styles.heading}>Check your email</Text>
-              <Text style={styles.sub}>
-                We've sent a password reset link to{'\n'}
-                <Text style={styles.emailHighlight}>{email}</Text>
-              </Text>
-              <Text style={styles.hint}>
-                The link expires in 1 hour. Check your spam folder if you don't see it.
-              </Text>
-            </View>
-            <View style={styles.nextCard}>
-              <Text style={styles.nextEyebrow}>What happens next</Text>
-              <Text style={styles.nextTitle}>Open the link from this device if you can.</Text>
-              <Text style={styles.nextCopy}>
-                We’ll bring you into a secure password-reset screen, then send you back to sign in with the same Drape account.
-              </Text>
-            </View>
-            <Button
-              label="Back to sign in"
-              variant="secondary"
-              onPress={() => router.replace('/(auth)/sign-in')}
-            />
-          </View>
-        ) : (
-          <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Account recovery</Text>
-          </View>
-          <Text style={styles.heading}>Reset your password without losing your place.</Text>
-          <Text style={styles.sub}>
-            Enter the email address on your Drape account and we'll send you a secure link to set a new password.
-          </Text>
-          <View style={styles.reassuranceCard}>
-            <Text style={styles.reassuranceTitle}>What happens next</Text>
-            <Text style={styles.reassuranceText}>We’ll send a secure recovery link to your inbox.</Text>
-            <Text style={styles.reassuranceText}>Your orders, messages, and profile stay exactly where you left them.</Text>
-            <Text style={styles.reassuranceText}>If you no longer control this inbox, support may need stronger proof before helping with account recovery.</Text>
-          </View>
-
-          <View style={styles.formCard}>
-              <Input
-                label="Email"
-                placeholder="you@example.com"
-                value={email}
-                onChangeText={setEmail}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoCorrect={false}
-                required
-                error={email && !isValidEmail(email.trim().toLowerCase()) ? 'Enter a valid email address' : ''}
-              />
-
+              <View style={styles.nextCard}>
+                <Text style={styles.nextEyebrow}>What happens next</Text>
+                <Text style={styles.nextTitle}>Open the link from this device if you can.</Text>
+                <Text style={styles.nextCopy}>
+                  We’ll bring you into a secure password-reset screen, then send you back to sign in
+                  with the same Drape account.
+                </Text>
+              </View>
               <Button
-                label="Send reset link"
-                onPress={handleReset}
-                loading={loading}
-                disabled={!email.trim() || !isValidEmail(email.trim().toLowerCase())}
+                label="Back to sign in"
+                variant="secondary"
+                onPress={() => router.replace('/(auth)/sign-in')}
               />
             </View>
-          </View>
-        )}
-      </ScrollView>
+          ) : (
+            <>
+              <AuthEntryHeader
+                eyebrow="Account recovery"
+                title="Reset your password without losing your place."
+                body="Enter the email address on your Drape account and we’ll send you a secure link to set a new password."
+                showWordmark={false}
+              />
+              <View style={styles.reassuranceCard}>
+                <Text style={styles.reassuranceTitle}>What happens next</Text>
+                <Text style={styles.reassuranceText}>
+                  We’ll send a secure recovery link to your inbox.
+                </Text>
+                <Text style={styles.reassuranceText}>
+                  Your orders, messages, and profile stay exactly where you left them.
+                </Text>
+                <Text style={styles.reassuranceText}>
+                  If you no longer control this inbox, support may need stronger proof before
+                  helping with account recovery.
+                </Text>
+              </View>
+
+              <View style={styles.formCard}>
+                <Input
+                  label="Email"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChangeText={setEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  required
+                  error={
+                    email && !isValidEmail(email.trim().toLowerCase())
+                      ? 'Enter a valid email address'
+                      : ''
+                  }
+                />
+
+                <Button
+                  label="Send reset link"
+                  onPress={handleReset}
+                  loading={loading}
+                  disabled={!email.trim() || !isValidEmail(email.trim().toLowerCase())}
+                />
+              </View>
+            </>
+          )}
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   )
@@ -147,32 +167,33 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.bone },
   keyboardAvoider: { flex: 1 },
   back: { paddingHorizontal: Spacing.xl, paddingTop: Spacing.md },
-  backText: { color: Colors.needleGreen, fontSize: FontSize.md, fontWeight: FontWeight.medium },
-  content: { padding: Spacing.xl, paddingBottom: Spacing.xxl },
-  heroCard: {
+  content: { padding: Spacing.xl, gap: Spacing.xl, paddingBottom: Spacing.xxl },
+  stateCard: {
     backgroundColor: Colors.white,
-    borderRadius: 28,
+    borderRadius: Radius.xl,
     padding: Spacing.xl,
     gap: Spacing.lg,
     marginTop: Spacing.lg,
   },
-  heroBadge: {
+  stateEyebrow: {
     alignSelf: 'flex-start',
-    borderRadius: 999,
-    backgroundColor: Colors.needleGreenLight,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 6,
-  },
-  heroBadgeText: {
     fontSize: FontSize.xs,
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
   },
-  heading: { fontSize: 34, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 40, letterSpacing: -0.6 },
+  heading: {
+    fontSize: 34,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    lineHeight: 40,
+    letterSpacing: 0,
+  },
   sub: { fontSize: FontSize.md, color: Colors.inkLight, lineHeight: 24 },
   reassuranceCard: {
     backgroundColor: Colors.bone,
-    borderRadius: 24,
+    borderRadius: Radius.xl,
     padding: Spacing.lg,
     gap: Spacing.sm,
   },
@@ -188,7 +209,7 @@ const styles = StyleSheet.create({
   },
   formCard: {
     backgroundColor: Colors.bone,
-    borderRadius: 24,
+    borderRadius: Radius.xl,
     padding: Spacing.lg,
     gap: Spacing.lg,
   },
@@ -196,7 +217,7 @@ const styles = StyleSheet.create({
   successIcon: {
     width: 64,
     height: 64,
-    borderRadius: 32,
+    borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: Colors.needleGreenLight,
@@ -205,7 +226,7 @@ const styles = StyleSheet.create({
   hint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', lineHeight: 20 },
   nextCard: {
     backgroundColor: Colors.bone,
-    borderRadius: 24,
+    borderRadius: Radius.xl,
     padding: Spacing.lg,
     gap: 4,
   },
@@ -214,7 +235,7 @@ const styles = StyleSheet.create({
     color: Colors.midGrey,
     fontWeight: FontWeight.semibold,
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    letterSpacing: 0,
   },
   nextTitle: {
     fontSize: FontSize.sm,

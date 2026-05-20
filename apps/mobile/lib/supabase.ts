@@ -188,6 +188,9 @@ async function getFreshAccessToken(forceRefresh = false): Promise<string | null>
   return session.access_token
 }
 
+// Edge Functions return endpoint-specific JSON. Callers should pass T, but the
+// default stays loose for legacy call sites that narrow response payloads inline.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function invokeFunction<T = any>(
   fn: string,
   options?: { body?: object; headers?: Record<string, string> },

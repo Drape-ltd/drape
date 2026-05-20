@@ -2,7 +2,7 @@
  * Portfolio management screen — add, edit, delete portfolio items.
  * Each item has: image, title, description, category.
  */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   TextInput, ActivityIndicator, Alert, Modal, ScrollView,
@@ -18,7 +18,7 @@ import { useAuth } from '@/lib/auth'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
 import { RemoteImage } from '@/components/ui'
 import { Sentry } from '@/lib/sentry'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { goBackOrReturnTo } from '@/lib/navigation'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 
@@ -50,10 +50,35 @@ type EditForm = {
 
 type PortfolioImageSource = 'camera' | 'library'
 
+type TailorPortfolioProfileRow = {
+  id: string | null
+  portfolio_photo_urls: unknown
+}
+
+type PortfolioItemRow = {
+  id: string
+  image_url: string | null
+  title: string | null
+  description: string | null
+  category: string | null
+  sort_order: number | null
+}
+
 function asStringList(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
   if (typeof value === 'string' && value.length > 0) return [value]
   return []
+}
+
+function mapPortfolioItem(row: PortfolioItemRow): PortfolioItem {
+  return {
+    id: row.id,
+    imageUrl: row.image_url ?? '',
+    title: row.title ?? 'Portfolio work',
+    description: row.description ?? null,
+    category: row.category ?? null,
+    sortOrder: row.sort_order ?? 0,
+  }
 }
 
 const EMPTY_EDIT: EditForm = {
@@ -65,6 +90,7 @@ export default function PortfolioScreen() {
   const navigation = useNavigation()
   const params = useLocalSearchParams<{ returnTo?: string }>()
   const { user } = useAuth()
+  const userId = user?.id ?? null
 
   const [items, setItems] = useState<PortfolioItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -77,22 +103,25 @@ export default function PortfolioScreen() {
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null)
   const [expandedViewerIndex, setExpandedViewerIndex] = useState(0)
 
-  useEffect(() => {
-    loadData()
-  }, [])
-
-  async function loadData() {
-    if (!user?.id) return
+  const loadData = useCallback(async () => {
+    if (!userId) {
+      setLoading(false)
+      setFetchError(false)
+      setItems([])
+      setTailorProfileId(null)
+      return
+    }
     setFetchError(false)
     try {
       const profileRes = await supabase
         .from('tailor_profiles')
         .select('id, portfolio_photo_urls')
-        .eq('user_id', user.id)
+        .eq('user_id', userId)
         .maybeSingle()
       if (profileRes.error) throw profileRes.error
-      const pid = (profileRes.data as any)?.id ?? null
-      const setupPhotoUrls = asStringList((profileRes.data as any)?.portfolio_photo_urls)
+      const profileRow = profileRes.data as TailorPortfolioProfileRow | null
+      const pid = profileRow?.id ?? null
+      const setupPhotoUrls = asStringList(profileRow?.portfolio_photo_urls)
       setTailorProfileId(pid)
       if (!pid) { setLoading(false); return }
 
@@ -103,14 +132,7 @@ export default function PortfolioScreen() {
         .order('sort_order', { ascending: true })
       if (error) throw error
 
-      const existing = ((data ?? []) as any[]).map((r) => ({
-        id: r.id,
-        imageUrl: r.image_url,
-        title: r.title,
-        description: r.description ?? null,
-        category: r.category ?? null,
-        sortOrder: r.sort_order,
-      }))
+      const existing = ((data ?? []) as PortfolioItemRow[]).map(mapPortfolioItem)
 
       let finalItems = existing
 
@@ -128,14 +150,7 @@ export default function PortfolioScreen() {
           .select('id, image_url, title, description, category, sort_order')
           .eq('tailor_profile_id', pid)
           .order('sort_order', { ascending: true })
-        finalItems = ((seeded ?? []) as any[]).map((r) => ({
-          id: r.id,
-          imageUrl: r.image_url,
-          title: r.title,
-          description: r.description ?? null,
-          category: r.category ?? null,
-          sortOrder: r.sort_order,
-        }))
+        finalItems = ((seeded ?? []) as PortfolioItemRow[]).map(mapPortfolioItem)
       }
 
       setItems(finalItems)
@@ -146,7 +161,14 @@ export default function PortfolioScreen() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [userId])
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void loadData()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [loadData])
 
   function openImageSourcePicker(onPicked: (uri: string) => void) {
     Alert.alert('Portfolio photo', 'Take a photo now or choose one from your library.', [
@@ -187,13 +209,14 @@ export default function PortfolioScreen() {
   }
 
   async function uploadImage(uri: string): Promise<string | null> {
+    if (!userId) return null
     try {
       const compressed = await ImageManipulator.manipulateAsync(
         uri,
         [{ resize: { width: 800 } }],
         { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
       )
-      const fileName = `portfolio/${user!.id}/${Date.now()}.jpg`
+      const fileName = `portfolio/${userId}/${new Date().getTime()}.jpg`
       return await uploadPublicStorageImage({
         bucket: 'portfolio-photos',
         path: fileName,
@@ -253,7 +276,7 @@ export default function PortfolioScreen() {
       finalImageUrl = uploaded
     }
 
-    let error: any
+    let error: Error | null = null
     if (editModal.id) {
       const res = await invokeFunction('portfolio-item-action', {
         body: {
@@ -292,7 +315,7 @@ export default function PortfolioScreen() {
       return
     }
     setEditModal(null)
-    loadData()
+    void loadData()
   }
 
   async function makeExploreCover(item: PortfolioItem) {
@@ -705,14 +728,14 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center', fontFamily: 'Georgia' },
+  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center', fontFamily: Fonts.display },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
     paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
     borderBottomWidth: 1, borderBottomColor: Colors.boneDeep,
   },
-  headerTitle: { flex: 1, fontSize: FontSize.xl, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  headerTitle: { flex: 1, fontSize: FontSize.xl, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   heroCard: {
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.md,
@@ -741,7 +764,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     color: Colors.ink,
     lineHeight: 28,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   heroSub: {
     fontSize: FontSize.sm,
@@ -770,7 +793,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
     lineHeight: 22,
-    fontFamily: 'Georgia',
+    fontFamily: Fonts.display,
   },
   guideCopy: {
     fontSize: FontSize.sm,
@@ -835,7 +858,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   emptyHint: { fontSize: FontSize.sm, color: Colors.midGrey, textAlign: 'center', maxWidth: 260 },
   emptyAddBtn: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
@@ -864,7 +887,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
     borderBottomWidth: 1, borderBottomColor: Colors.lightGrey,
   },
-  modalTitle: { flex: 1, fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  modalTitle: { flex: 1, fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   saveBtn: {
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
     paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm, minWidth: 60, alignItems: 'center',

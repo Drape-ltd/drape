@@ -8,7 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
 import { requestDataAccess } from '@/lib/data-access'
-import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { CONTACTS } from '@drape/shared'
 import { goBackOrFallback } from '@/lib/navigation'
 
@@ -81,7 +81,7 @@ export default function TailorDataRequestScreen() {
 
   if (submitted) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.backBtn} onPress={goBack}>
             <Feather name="arrow-left" size={20} color={Colors.ink} />
@@ -114,7 +114,7 @@ export default function TailorDataRequestScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
@@ -161,7 +161,7 @@ export default function TailorDataRequestScreen() {
         </View>
 
         <View style={styles.noteCard}>
-          <Text style={styles.noteTitle}>Best use</Text>
+          <Text style={styles.noteTitle}>Data export</Text>
           <Text style={styles.noteCopy}>Use this if you want a copy of your account data. If you only need to correct profile details or privacy settings, it is usually faster to update them directly in Drape.</Text>
         </View>
 
@@ -196,8 +196,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center',
     ...Shadow.sm,
   },
-  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: 'Georgia' },
-  body: { padding: Spacing.lg, paddingBottom: 32, gap: Spacing.md, flexGrow: 1 },
+  headerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, fontFamily: Fonts.display },
+  body: { padding: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.md, flexGrow: 1 },
   heroCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
@@ -217,7 +217,7 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
   },
-  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 28, fontFamily: 'Georgia' },
+  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.ink, lineHeight: 28, fontFamily: Fonts.display },
   heroCopy: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   card: {
     backgroundColor: Colors.white,
@@ -226,7 +226,7 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
     ...Shadow.sm,
   },
-  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: 'Georgia' },
+  sectionTitle: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   sectionCopy: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   accountValue: { fontSize: FontSize.md, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey },

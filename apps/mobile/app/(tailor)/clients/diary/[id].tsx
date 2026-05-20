@@ -4,7 +4,7 @@
  * Safety policy: no phone number or email stored.
  * Invite button sends a Client Passport claim link via the system share sheet.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, ActivityIndicator, Alert,
@@ -60,6 +60,68 @@ interface DiaryForm {
   measuredLocation: MeasuredLocation
 }
 
+type DiaryEntryRow = {
+  passport_id: string | null
+  invite_status: string | null
+  full_name: string | null
+  gender: Gender | null
+  client_notes: string | null
+  measurement_unit: MeasurementUnit | null
+  chest: number | null
+  shoulder: number | null
+  sleeve: number | null
+  waist: number | null
+  hip: number | null
+  trouser_length: number | null
+  neck: number | null
+  thigh: number | null
+  inseam: number | null
+  ankle: number | null
+  bicep: number | null
+  wrist: number | null
+  back_length: number | null
+  under_bust: number | null
+  fabric_preference: string | null
+  style_preference: string | null
+  event_type: EventType | null
+  special_fitting_notes: string | null
+  measured_at: string | null
+  measured_location: MeasuredLocation | null
+}
+
+type TailorDisplayNameRow = {
+  display_name: string | null
+}
+
+type DiaryEntryPayload = {
+  tailor_id: string
+  full_name: string
+  gender: Gender | null
+  client_notes: string | null
+  measurement_unit: MeasurementUnit
+  chest: number | null
+  shoulder: number | null
+  sleeve: number | null
+  waist: number | null
+  hip: number | null
+  trouser_length: number | null
+  neck: number | null
+  thigh: number | null
+  inseam: number | null
+  ankle: number | null
+  bicep: number | null
+  wrist: number | null
+  back_length: number | null
+  under_bust: number | null
+  fabric_preference: string | null
+  style_preference: string | null
+  event_type: EventType | null
+  special_fitting_notes: string | null
+  measured_at: string | null
+  measured_location: MeasuredLocation
+  updated_at: string
+}
+
 const EMPTY_FORM: DiaryForm = {
   fullName: '', gender: '', clientNotes: '',
   unit: 'cm',
@@ -79,6 +141,7 @@ export default function DiaryEntryScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
+  const userId = user?.id ?? null
 
   const [form, setForm] = useState<DiaryForm>(EMPTY_FORM)
   const [errors, setErrors] = useState<{ name?: string; measurements?: string }>({})
@@ -118,7 +181,7 @@ export default function DiaryEntryScreen() {
     } as never)
   }
 
-  async function loadEntry() {
+  const loadEntry = useCallback(async () => {
     if (isNew || !id) return
     setFetchError(false)
     setLoading(true)
@@ -139,9 +202,9 @@ export default function DiaryEntryScreen() {
       return
     }
 
-    const r = data as any
+    const r = data as DiaryEntryRow
     setPassportId(r.passport_id)
-    setInviteStatus(r.invite_status)
+    setInviteStatus(r.invite_status ?? 'NOT_INVITED')
     setForm({
       fullName: r.full_name ?? '',
       gender: r.gender ?? '',
@@ -169,25 +232,29 @@ export default function DiaryEntryScreen() {
       measuredLocation: r.measured_location ?? 'SHOP',
     })
     setLoading(false)
-  }
+  }, [id, isNew])
 
   // Load existing entry
   useEffect(() => {
-    if (!isNew && id) {
-      void loadEntry()
-    }
+    const timer = setTimeout(() => {
+      if (!isNew && id) {
+        void loadEntry()
+      }
 
-    if (user?.id) {
-      supabase
-        .from('tailor_profiles')
-        .select('display_name')
-        .eq('user_id', user.id)
-        .maybeSingle()
-        .then(({ data }) => {
-          if (data) setTailorDisplayName((data as any).display_name ?? '')
-        })
-    }
-  }, [id])
+      if (userId) {
+        supabase
+          .from('tailor_profiles')
+          .select('display_name')
+          .eq('user_id', userId)
+          .maybeSingle()
+          .then(({ data }) => {
+            const row = data as TailorDisplayNameRow | null
+            if (row) setTailorDisplayName(row.display_name ?? '')
+          })
+      }
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [id, isNew, loadEntry, userId])
 
   function set(key: keyof DiaryForm, value: string | Date | null) {
     setForm((f) => ({ ...f, [key]: value }))
@@ -237,10 +304,14 @@ export default function DiaryEntryScreen() {
   async function handleSave() {
     if (saving) return
     if (!validate()) return
+    if (!userId) {
+      Alert.alert('Session expired', 'Please sign in again before saving this diary entry.')
+      return
+    }
     setSaving(true)
 
-    const payload: Record<string, any> = {
-      tailor_id: user?.id,
+    const payload: DiaryEntryPayload = {
+      tailor_id: userId,
       full_name: form.fullName.trim(),
       gender: form.gender || null,
       client_notes: form.clientNotes.trim() || null,
@@ -268,7 +339,7 @@ export default function DiaryEntryScreen() {
       updated_at: new Date().toISOString(),
     }
 
-    let error: any
+    let error: Error | null = null
     if (isNew) {
       const res = await invokeFunction<{ ok: boolean; passportId?: string }>('diary-entry-action', {
         body: { action: 'create', entry: payload },
@@ -464,17 +535,9 @@ export default function DiaryEntryScreen() {
             <View style={styles.heroBadge}>
               <Text style={styles.heroBadgeText}>Offline client diary</Text>
             </View>
-            <Text style={styles.heroTitle}>Capture measurements and fitting context even before a client joins the app.</Text>
+            <Text style={styles.heroTitle}>New diary client</Text>
             <Text style={styles.heroSub}>
-              Use this diary to preserve session details, tailoring notes, and a clean path into a
-              future passport invite when the client is ready.
-            </Text>
-          </View>
-
-          <View style={styles.guideCard}>
-            <Text style={styles.guideTitle}>Best diary habit</Text>
-            <Text style={styles.guideText}>
-              Record the fit details you would want before the next appointment, then use the passport invite only when the client is ready to continue on Drape.
+              Save measurements, fitting notes, and consented scans here. Send a passport invite only when the client is ready to continue on Drape.
             </Text>
           </View>
 
@@ -486,7 +549,7 @@ export default function DiaryEntryScreen() {
                 style={[styles.input, errors.name ? styles.inputError : undefined]}
                 value={form.fullName}
                 onChangeText={(v) => set('fullName', v)}
-                placeholder="e.g. Amara Johnson"
+                placeholder="e.g. John Doe"
                 placeholderTextColor={Colors.midGrey}
                 autoCapitalize="words"
               />
@@ -844,9 +907,11 @@ const styles = StyleSheet.create({
   scroll: { padding: Spacing.xl, gap: Spacing.xl, paddingBottom: Spacing.xxxl },
   heroCard: {
     backgroundColor: Colors.white,
-    borderRadius: Radius.xl,
-    padding: Spacing.xl,
-    gap: Spacing.md,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
   heroBadge: {
@@ -864,27 +929,16 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   heroTitle: {
-    fontSize: FontSize.xxl,
+    fontSize: FontSize.lg,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
-    lineHeight: 38,
+    lineHeight: 25,
   },
   heroSub: {
-    fontSize: FontSize.md,
+    fontSize: FontSize.sm,
     color: Colors.inkLight,
-    lineHeight: 24,
+    lineHeight: 20,
   },
-  guideCard: {
-    backgroundColor: Colors.white,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: Spacing.xs,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    ...Shadow.sm,
-  },
-  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
 
   input: {
     backgroundColor: Colors.white, borderRadius: Radius.md,

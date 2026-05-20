@@ -14,23 +14,43 @@ import { useAuth } from '@/lib/auth'
 import { createConsultationRoom, openConsultationCallUrl } from '@/lib/consultation'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { MessageThread } from '@/components/ui/MessageThread'
+import { AvatarImage } from '@/components/ui/AvatarImage'
 import { goBackOrReturnTo } from '@/lib/navigation'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { TERMINAL_STAGES, type OrderStage } from '@drape/shared/order-machine'
 
 const SUPPORT_EMAIL = 'support@drapeon.co'
 type SafetyReportCategory = 'ABUSIVE_LANGUAGE' | 'OFF_PLATFORM_PRESSURE' | 'UNSAFE_BEHAVIOR'
+type ProfileJoinRow = {
+  display_name: string | null
+  avatar_url: string | null
+}
+type TailorMessageOrderRow = {
+  garment_type: string | null
+  stage: OrderStage
+  video_call_url: string | null
+  customer_profiles: ProfileJoinRow | ProfileJoinRow[] | null
+  tailor_profiles: ProfileJoinRow | ProfileJoinRow[] | null
+}
+
+function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
+  return Array.isArray(value) ? (value[0] ?? null) : (value ?? null)
+}
 
 export default function TailorMessagesScreen() {
   const { orderId, returnTo } = useLocalSearchParams<{ orderId: string; returnTo?: string }>()
   const router = useRouter()
   const navigation = useNavigation()
   const { user } = useAuth()
+  const userId = user?.id
+  const displayName = String(user?.user_metadata?.display_name ?? '').trim()
 
   const [orderInfo, setOrderInfo] = useState<{
     garmentType: string
     customerName: string
+    customerAvatarUrl: string | null
     tailorName: string
+    tailorAvatarUrl: string | null
     stage: OrderStage
     videoCallUrl: string | null
   } | null>(null)
@@ -38,7 +58,9 @@ export default function TailorMessagesScreen() {
   const [fetchErrorMessage, setFetchErrorMessage] = useState<string | null>(null)
   const [startingCall, setStartingCall] = useState(false)
   const [reportingSafety, setReportingSafety] = useState(false)
-  const [conversationAccess, setConversationAccess] = useState<ConversationAccessState>(getEmptyConversationAccessState())
+  const [conversationAccess, setConversationAccess] = useState<ConversationAccessState>(
+    getEmptyConversationAccessState()
+  )
   const [loadingConversationAccess, setLoadingConversationAccess] = useState(false)
 
   function goBack() {
@@ -49,7 +71,7 @@ export default function TailorMessagesScreen() {
     await openConsultationCallUrl(url, 'tailor')
   }
 
-  async function refreshConversationAccess() {
+  const refreshConversationAccess = useCallback(async () => {
     if (!orderId) return
     setLoadingConversationAccess(true)
     try {
@@ -62,7 +84,7 @@ export default function TailorMessagesScreen() {
     } finally {
       setLoadingConversationAccess(false)
     }
-  }
+  }, [orderId])
 
   async function submitSafetyReport(category: SafetyReportCategory) {
     if (reportingSafety) return
@@ -77,14 +99,14 @@ export default function TailorMessagesScreen() {
         'Report unavailable',
         isLikelyConnectivityIssue(error)
           ? `Connection looks weak. We could not send this report yet. Retry when the signal improves, or email ${SUPPORT_EMAIL} and keep the thread intact as evidence.`
-          : `Could not send this report right now. Retry in a moment, or email ${SUPPORT_EMAIL} and keep the thread intact as evidence.`,
+          : `Could not send this report right now. Retry in a moment, or email ${SUPPORT_EMAIL} and keep the thread intact as evidence.`
       )
       return
     }
 
     Alert.alert(
       'Report received',
-      'Drape logged this concern for review. Keep the conversation in Drape and leave the message thread intact as evidence.',
+      'Drape logged this concern for review. Keep the conversation in Drape and leave the message thread intact as evidence.'
     )
   }
 
@@ -96,14 +118,14 @@ export default function TailorMessagesScreen() {
       setConversationAccess(nextState)
       Alert.alert(
         'Conversation paused',
-        nextState.userMessage ?? 'This conversation is paused while Drape reviews a safety concern.',
+        nextState.userMessage ?? 'This conversation is paused while Drape reviews a safety concern.'
       )
     } catch (error) {
       Alert.alert(
         'Pause unavailable',
         isLikelyConnectivityIssue(error)
           ? `Connection looks weak. We could not pause this chat yet. Retry when the signal improves, or email ${SUPPORT_EMAIL} and keep the thread intact as evidence.`
-          : `Could not pause this chat right now. Retry in a moment, or email ${SUPPORT_EMAIL} if you need urgent help.`,
+          : `Could not pause this chat right now. Retry in a moment, or email ${SUPPORT_EMAIL} if you need urgent help.`
       )
     } finally {
       setReportingSafety(false)
@@ -113,21 +135,37 @@ export default function TailorMessagesScreen() {
   function openSafetyReportOptions() {
     if (reportingSafety) return
 
-    Alert.alert(
-      'Safety in chat',
-      'Choose what best matches this conversation.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Abusive language', onPress: () => { void submitSafetyReport('ABUSIVE_LANGUAGE') } },
-        { text: 'Move off Drape', onPress: () => { void submitSafetyReport('OFF_PLATFORM_PRESSURE') } },
-        { text: 'Unsafe behavior', onPress: () => { void submitSafetyReport('UNSAFE_BEHAVIOR') } },
-        { text: 'Pause this chat', onPress: () => { void pauseConversation('UNSAFE_BEHAVIOR') } },
-      ],
-    )
+    Alert.alert('Safety in chat', 'Choose what best matches this conversation.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Abusive language',
+        onPress: () => {
+          void submitSafetyReport('ABUSIVE_LANGUAGE')
+        },
+      },
+      {
+        text: 'Move off Drape',
+        onPress: () => {
+          void submitSafetyReport('OFF_PLATFORM_PRESSURE')
+        },
+      },
+      {
+        text: 'Unsafe behavior',
+        onPress: () => {
+          void submitSafetyReport('UNSAFE_BEHAVIOR')
+        },
+      },
+      {
+        text: 'Pause this chat',
+        onPress: () => {
+          void pauseConversation('UNSAFE_BEHAVIOR')
+        },
+      },
+    ])
   }
 
   const fetchOrder = useCallback(async () => {
-    if (!orderId || !user?.id) {
+    if (!orderId || !userId) {
       setFetchErrorMessage(null)
       setLoading(false)
       setOrderInfo(null)
@@ -139,13 +177,15 @@ export default function TailorMessagesScreen() {
     try {
       const { data, error } = await supabase
         .from('orders')
-        .select(`
+        .select(
+          `
           garment_type, stage, video_call_url,
-          customer_profiles!customer_id(display_name),
-          tailor_profiles!tailor_profile_id(display_name)
-        `)
+          customer_profiles!customer_id(display_name, avatar_url),
+          tailor_profiles!tailor_profile_id(display_name, avatar_url)
+        `
+        )
         .eq('id', orderId)
-        .eq('tailor_id', user.id)
+        .eq('tailor_id', userId)
         .maybeSingle()
 
       if (error) {
@@ -153,11 +193,15 @@ export default function TailorMessagesScreen() {
       }
 
       if (data) {
-        const d = data as any
+        const d = data as TailorMessageOrderRow
+        const customerProfile = firstJoinedRow(d.customer_profiles)
+        const tailorProfile = firstJoinedRow(d.tailor_profiles)
         setOrderInfo({
-          garmentType: d.garment_type,
-          customerName: d.customer_profiles?.display_name ?? 'Customer',
-          tailorName: d.tailor_profiles?.display_name ?? user?.user_metadata?.display_name ?? 'Tailor',
+          garmentType: d.garment_type ?? 'Order',
+          customerName: customerProfile?.display_name ?? 'Customer',
+          customerAvatarUrl: customerProfile?.avatar_url ?? null,
+          tailorName: (tailorProfile?.display_name ?? displayName) || 'Tailor',
+          tailorAvatarUrl: tailorProfile?.avatar_url ?? null,
           stage: d.stage,
           videoCallUrl: d.video_call_url ?? null,
         })
@@ -174,16 +218,26 @@ export default function TailorMessagesScreen() {
     } finally {
       setLoading(false)
     }
-  }, [orderId, user?.id, user?.user_metadata?.display_name])
+  }, [displayName, orderId, userId])
 
-  useEffect(() => { void fetchOrder() }, [fetchOrder])
-  useEffect(() => { void refreshConversationAccess() }, [orderId])
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void fetchOrder()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [fetchOrder])
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void refreshConversationAccess()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [refreshConversationAccess])
 
   useFocusEffect(
     useCallback(() => {
       void fetchOrder()
       void refreshConversationAccess()
-    }, [fetchOrder, orderId])
+    }, [fetchOrder, refreshConversationAccess])
   )
 
   async function startCall(callType: 'audio' | 'video') {
@@ -213,25 +267,37 @@ export default function TailorMessagesScreen() {
     const url = orderInfo?.videoCallUrl
     if (url) {
       // Room exists — just open it
-      Alert.alert(
-        'Join call',
-        'Rejoin your consultation call.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Video', onPress: () => { void openCallUrl(url) } },
-          { text: 'Audio only', onPress: () => { void openCallUrl(url) } },
-        ]
-      )
+      Alert.alert('Join call', 'Rejoin your consultation call.', [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Video',
+          onPress: () => {
+            void openCallUrl(url)
+          },
+        },
+        {
+          text: 'Audio only',
+          onPress: () => {
+            void openCallUrl(url)
+          },
+        },
+      ])
     } else {
-      Alert.alert(
-        'Start consultation call',
-        'Start a call with this customer.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Video call', onPress: () => { void startCall('video') } },
-          { text: 'Audio call', onPress: () => { void startCall('audio') } },
-        ]
-      )
+      Alert.alert('Start consultation call', 'Start a call with this customer.', [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Video call',
+          onPress: () => {
+            void startCall('video')
+          },
+        },
+        {
+          text: 'Audio call',
+          onPress: () => {
+            void startCall('audio')
+          },
+        },
+      ])
     }
   }
 
@@ -273,12 +339,9 @@ export default function TailorMessagesScreen() {
             <TouchableOpacity style={styles.retryBtn} onPress={() => void fetchOrder()}>
               <Text style={styles.retryBtnText}>Try again</Text>
             </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.secondaryBtn}
-            onPress={goBack}
-          >
-            <Text style={styles.secondaryBtnText}>Open orders</Text>
-          </TouchableOpacity>
+            <TouchableOpacity style={styles.secondaryBtn} onPress={goBack}>
+              <Text style={styles.secondaryBtnText}>Open orders</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               style={styles.ghostBtn}
               onPress={() => router.replace('/(tailor)/clients')}
@@ -309,12 +372,9 @@ export default function TailorMessagesScreen() {
             <Text style={styles.stateEyebrow}>Client conversation</Text>
             <Text style={styles.stateTitle}>No active order with this customer.</Text>
             <Text style={styles.stateHint}>Open orders to pick up the right thread.</Text>
-          <TouchableOpacity
-            style={styles.secondaryBtn}
-            onPress={goBack}
-          >
-            <Text style={styles.secondaryBtnText}>Open orders</Text>
-          </TouchableOpacity>
+            <TouchableOpacity style={styles.secondaryBtn} onPress={goBack}>
+              <Text style={styles.secondaryBtnText}>Open orders</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </SafeAreaView>
@@ -328,8 +388,17 @@ export default function TailorMessagesScreen() {
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={styles.headerName}>{orderInfo.customerName}</Text>
-          <Text style={styles.headerSub}>{orderInfo.garmentType}</Text>
+          <AvatarImage
+            uri={orderInfo.customerAvatarUrl}
+            initials={orderInfo.customerName}
+            size={36}
+            borderColor={Colors.lightGrey}
+            borderWidth={1}
+          />
+          <View style={styles.headerTextBlock}>
+            <Text style={styles.headerName}>{orderInfo.customerName}</Text>
+            <Text style={styles.headerSub}>{orderInfo.garmentType}</Text>
+          </View>
         </View>
         <View style={styles.headerActions}>
           {isConsultation && (
@@ -345,10 +414,12 @@ export default function TailorMessagesScreen() {
           )}
           <TouchableOpacity
             style={styles.orderBtn}
-            onPress={() => router.push({
-              pathname: '/(tailor)/orders/[id]',
-              params: { id: orderId, returnTo: `/(tailor)/messages/${orderId}` },
-            })}
+            onPress={() =>
+              router.push({
+                pathname: '/(tailor)/orders/[id]',
+                params: { id: orderId, returnTo: `/(tailor)/messages/${orderId}` },
+              })
+            }
           >
             <Text style={styles.orderBtnText}>View order</Text>
           </TouchableOpacity>
@@ -356,26 +427,39 @@ export default function TailorMessagesScreen() {
       </View>
 
       <View style={styles.safetyCard}>
-        <Text style={styles.safetyTitle}>Safety in chat</Text>
-        <Text style={styles.safetyText}>
-          If a customer becomes abusive or pressures you to move the deal off Drape, report it and keep the order thread
-          intact as evidence.
-        </Text>
-        {conversationAccess.blocked ? (
-          <Text style={styles.safetyWarning}>
-            {conversationAccess.userMessage ?? 'This conversation is paused while Drape reviews a safety concern.'}
+        <View style={styles.safetyIcon}>
+          <Feather name="shield" size={15} color={Colors.needleGreen} />
+        </View>
+        <View style={styles.safetyCopy}>
+          <Text style={styles.safetyTitle}>Protected chat</Text>
+          <Text style={styles.safetyText}>
+            Keep approvals, pickup details, and payments inside Drape.
           </Text>
-        ) : null}
-        <TouchableOpacity style={styles.safetyBtn} onPress={openSafetyReportOptions} disabled={reportingSafety}>
+          {conversationAccess.blocked ? (
+            <Text style={styles.safetyWarning}>
+              {conversationAccess.userMessage ??
+                'This conversation is paused while Drape reviews a safety concern.'}
+            </Text>
+          ) : null}
+          {loadingConversationAccess && !conversationAccess.blocked ? (
+            <Text style={styles.safetyMeta}>Checking safety status…</Text>
+          ) : null}
+        </View>
+        <TouchableOpacity
+          style={styles.safetyBtn}
+          onPress={openSafetyReportOptions}
+          disabled={reportingSafety}
+        >
           <Text style={styles.safetyBtnText}>
             {reportingSafety
-              ? conversationAccess.blocked ? 'Pausing chat…' : 'Sending report…'
-              : conversationAccess.blocked ? 'Conversation paused' : 'Report abuse or pressure'}
+              ? conversationAccess.blocked
+                ? 'Pausing chat…'
+                : 'Sending report…'
+              : conversationAccess.blocked
+                ? 'Conversation paused'
+                : 'Report'}
           </Text>
         </TouchableOpacity>
-        {loadingConversationAccess && !conversationAccess.blocked ? (
-          <Text style={styles.safetyMeta}>Checking conversation safety status…</Text>
-        ) : null}
       </View>
 
       <MessageThread
@@ -383,11 +467,14 @@ export default function TailorMessagesScreen() {
         currentUserId={user?.id ?? ''}
         currentUserRole="TAILOR"
         tailorName={orderInfo.tailorName}
+        tailorAvatarUrl={orderInfo.tailorAvatarUrl}
         customerName={orderInfo.customerName}
+        customerAvatarUrl={orderInfo.customerAvatarUrl}
         locked={TERMINAL_STAGES.includes(orderInfo.stage) || conversationAccess.blocked}
         lockedMessage={
           conversationAccess.blocked
-            ? conversationAccess.userMessage ?? 'This conversation is paused while Drape reviews a safety concern.'
+            ? (conversationAccess.userMessage ??
+              'This conversation is paused while Drape reviews a safety concern.')
             : undefined
         }
       />
@@ -415,15 +502,31 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  stateTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink, textAlign: 'center' },
+  stateTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.ink,
+    textAlign: 'center',
+  },
   stateHint: { fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center', lineHeight: 21 },
   header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: Spacing.lg, paddingVertical: 8,
-    backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.lightGrey,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 8,
+    backgroundColor: Colors.white,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.lightGrey,
   },
-  backText: { color: Colors.needleGreen, fontSize: FontSize.sm, fontWeight: FontWeight.medium, width: 56 },
-  headerCenter: { alignItems: 'center' },
+  backText: {
+    color: Colors.needleGreen,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.medium,
+    width: 56,
+  },
+  headerCenter: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm },
+  headerTextBlock: { alignItems: 'center', maxWidth: 176 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
   headerName: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.ink },
   headerSub: { fontSize: FontSize.xs, color: Colors.midGrey },
@@ -468,38 +571,62 @@ const styles = StyleSheet.create({
     borderColor: Colors.lightGrey,
     ...Shadow.sm,
   },
-  guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: Spacing.xs },
+  guideTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+    marginBottom: Spacing.xs,
+  },
   guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   safetyCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: Colors.white,
     marginHorizontal: Spacing.lg,
     marginTop: Spacing.sm,
     marginBottom: Spacing.sm,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    borderRadius: Radius.md,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
-    gap: 8,
+    gap: Spacing.sm,
     ...Shadow.sm,
   },
+  safetyIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  safetyCopy: { flex: 1, gap: 2 },
   safetyTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  safetyText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  safetyText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 16 },
   safetyWarning: { fontSize: FontSize.xs, color: Colors.kanteRust, lineHeight: 18 },
   safetyBtn: {
-    alignSelf: 'flex-start',
+    alignSelf: 'center',
     backgroundColor: Colors.kanteRustLight,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: Radius.full,
-    minHeight: 44,
+    minHeight: 34,
     justifyContent: 'center',
   },
-  safetyBtnText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.kanteRust },
+  safetyBtnText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.kanteRust,
+  },
   safetyMeta: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   callBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: Colors.needleGreen, alignItems: 'center', justifyContent: 'center',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.needleGreen,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   orderBtn: {
     backgroundColor: Colors.white,
@@ -518,7 +645,11 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     borderRadius: 999,
   },
-  retryBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textInverse },
+  retryBtnText: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textInverse,
+  },
   secondaryBtn: {
     backgroundColor: Colors.white,
     borderColor: Colors.lightGrey,
