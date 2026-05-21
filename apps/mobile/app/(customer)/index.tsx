@@ -24,6 +24,7 @@ import { Feather } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
 import { customerOrderStageLabel } from '@/lib/customer-order-copy'
 import { supabase } from '@/lib/supabase'
+import { fetchReadGateway } from '@/lib/read-gateway'
 import {
   loadRecentlyViewedTailors,
   saveRecentlyViewedTailor,
@@ -141,11 +142,8 @@ type TailorDiscoveryRow = {
   supports_ready_made?: boolean | null
   avg_response_hours?: number | null
   ranking_score?: number | null
-}
-
-type PortfolioCoverRow = {
-  tailor_profile_id?: string | null
-  image_url?: string | null
+  explore_image_url?: string | null
+  explore_image_bucket?: StorageImageBucket | null
 }
 
 function orderPriority(stage: OrderStage): number {
@@ -179,6 +177,12 @@ function resolveFallbackExploreImage(t: TailorDiscoveryRow): {
   uri: string | null
   bucket: StorageImageBucket | null
 } {
+  const gatewayCover =
+    typeof t.explore_image_url === 'string' && t.explore_image_url.trim().length > 0
+      ? t.explore_image_url
+      : null
+  if (gatewayCover) return { uri: gatewayCover, bucket: t.explore_image_bucket ?? 'portfolio-photos' }
+
   const avatarUrl =
     typeof t.avatar_url === 'string' && t.avatar_url.trim().length > 0 ? t.avatar_url : null
   if (avatarUrl) return { uri: avatarUrl, bucket: 'avatars' }
@@ -329,40 +333,6 @@ function mapTailor(t: TailorDiscoveryRow): TailorCard {
     avgResponseHours: t.avg_response_hours ?? null,
     rankingScore: t.ranking_score ?? 0,
   }
-}
-
-async function hydrateTailorCardsWithExploreCovers(tailors: TailorCard[]): Promise<TailorCard[]> {
-  const ids = tailors.map((tailor) => tailor.id)
-  if (ids.length === 0) return tailors
-
-  const { data, error } = await supabase
-    .from('portfolio_items')
-    .select('tailor_profile_id, image_url, sort_order')
-    .in('tailor_profile_id', ids)
-    .order('sort_order', { ascending: true })
-
-  if (error) return tailors
-
-  const coverByTailor = new Map<string, string>()
-  for (const row of (data ?? []) as PortfolioCoverRow[]) {
-    const tailorId = typeof row.tailor_profile_id === 'string' ? row.tailor_profile_id : null
-    const imageUrl =
-      typeof row.image_url === 'string' && row.image_url.trim().length > 0 ? row.image_url : null
-    if (!tailorId || !imageUrl || coverByTailor.has(tailorId)) continue
-    coverByTailor.set(tailorId, imageUrl)
-  }
-
-  if (coverByTailor.size === 0) return tailors
-
-  return tailors.map((tailor) => {
-    const cover = coverByTailor.get(tailor.id)
-    if (!cover) return tailor
-    return {
-      ...tailor,
-      portfolioPhoto: cover,
-      exploreImageBucket: 'portfolio-photos',
-    }
-  })
 }
 
 /**
@@ -527,22 +497,14 @@ export default function CustomerHomeScreen() {
           .not('stage', 'in', '("COMPLETE","DECLINED","EXPIRED","REFUNDED","CANCELLED")')
           .order('created_at', { ascending: false })
           .limit(3),
-        supabase
-          .from('tailor_profiles')
-          .select(
-            'id, display_name, location, seller_type, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, availability, avg_response_hours, supports_custom_orders, supports_ready_made, ranking_score'
-          )
-          .eq('is_live', true)
-          .order('ranking_score', { ascending: false })
-          .limit(30),
+        fetchReadGateway<TailorDiscoveryRow[]>({ action: 'explore-tailors', limit: 30 }),
       ])
 
       const ordersFailed =
         ordersRes.status === 'rejected' ||
         (ordersRes.status === 'fulfilled' && !!ordersRes.value.error)
       const tailorsFailed =
-        tailorsRes.status === 'rejected' ||
-        (tailorsRes.status === 'fulfilled' && !!tailorsRes.value.error)
+        tailorsRes.status === 'rejected'
 
       if (ordersFailed && tailorsFailed) {
         setFetchError(true)
@@ -556,8 +518,8 @@ export default function CustomerHomeScreen() {
           ? ((ordersRes.value.data ?? []) as ActiveOrderRow[])
           : []
       const tailorRows: TailorDiscoveryRow[] | null =
-        tailorsRes.status === 'fulfilled' && !tailorsRes.value.error
-          ? ((tailorsRes.value.data ?? []) as TailorDiscoveryRow[])
+        tailorsRes.status === 'fulfilled'
+          ? tailorsRes.value
           : null
 
       setActiveOrders(
@@ -575,7 +537,7 @@ export default function CustomerHomeScreen() {
       )
 
       if (tailorRows) {
-        setAllTailors(await hydrateTailorCardsWithExploreCovers(tailorRows.map(mapTailor)))
+        setAllTailors(tailorRows.map(mapTailor))
       } else {
         setFetchError(true)
       }
@@ -612,61 +574,38 @@ export default function CustomerHomeScreen() {
       setLoadingMore(true)
     }
     try {
-      const baseQuery = supabase
-        .from('tailor_profiles')
-        .select(
-          'id, display_name, location, seller_type, specialty_tags, avg_rating, total_reviews, tier, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, availability, avg_response_hours, supports_custom_orders, supports_ready_made, ranking_score'
-        )
-        .eq('is_live', true)
-
-      let sq = baseQuery
-
-      // Apply content filter — no hard location filter (location is a boost, not a gate)
-      if (specialty) {
-        sq = sq.or(`display_name.ilike.%${specialty}%,specialty_tags.cs.{${specialty}}`)
-      } else if (general) {
-        sq = sq.or(
-          `display_name.ilike.%${general}%,location.ilike.%${general}%,specialty_tags.cs.{${general}}`
-        )
-      }
-      // "Sellers in London" or location-only: try strict location matches first.
-
       const fetchSize = location ? PAGE_SIZE * 3 : PAGE_SIZE
 
       let strictPage: TailorCard[] = []
       if (location) {
-        let strictQuery = baseQuery.ilike('location', `%${location}%`)
-        if (specialty) {
-          strictQuery = strictQuery.or(
-            `display_name.ilike.%${specialty}%,specialty_tags.cs.{${specialty}}`
-          )
-        }
-
-        const { data: strictData, error: strictError } = await strictQuery
-          .order('ranking_score', { ascending: false })
-          .range(offset, offset + PAGE_SIZE - 1)
-
-        if (strictError) throw strictError
-        strictPage = (strictData ?? []).map(mapTailor)
+        const strictData = await fetchReadGateway<TailorDiscoveryRow[]>({
+          action: 'explore-tailors',
+          limit: PAGE_SIZE,
+          offset,
+          specialty,
+          location,
+          strictLocation: true,
+        })
+        strictPage = strictData.map(mapTailor)
       }
 
       let page = strictPage
 
       if (page.length === 0) {
-        const { data, error } = await sq
-          .order('ranking_score', { ascending: false })
-          .range(offset, offset + fetchSize - 1)
+        const data = await fetchReadGateway<TailorDiscoveryRow[]>({
+          action: 'explore-tailors',
+          limit: fetchSize,
+          offset,
+          specialty,
+          general,
+        })
 
-        if (error) throw error
-
-        page = (data ?? []).map(mapTailor)
+        page = data.map(mapTailor)
 
         if (location) {
           page = applyLocationBoost(page, location).slice(0, PAGE_SIZE)
         }
       }
-
-      page = await hydrateTailorCardsWithExploreCovers(page)
 
       if (offset === 0) {
         setSearchResults(page)

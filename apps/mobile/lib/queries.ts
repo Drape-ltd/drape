@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useFocusEffect } from 'expo-router'
 import { supabase } from '@/lib/supabase'
+import { fetchReadGateway } from '@/lib/read-gateway'
 import type { OrderStage } from '@drape/shared/order-machine'
 import type { CurrencyCode } from '@/lib/currency'
 import {
@@ -83,18 +84,6 @@ function fallbackInventoryQuantity(stockStatus: string | null | undefined, isLiv
   if (!isLive || stockStatus === 'SOLD_OUT' || stockStatus === 'HIDDEN') return 0
   if (stockStatus === 'LOW_STOCK') return 1
   return 1
-}
-
-async function fetchReadGateway<T>(body: Record<string, unknown>): Promise<T> {
-  const { data, error } = await supabase.functions.invoke('read-gateway', { body })
-  if (error) throw error
-
-  const payload = data as { ok?: boolean; data?: unknown; message?: string } | null
-  if (!payload?.ok) {
-    throw new Error(payload?.message ?? 'Could not load this data right now.')
-  }
-
-  return payload.data as T
 }
 
 /**
@@ -1277,6 +1266,13 @@ async function fetchWishlistCollections(userId: string): Promise<WishlistCollect
 }
 
 async function fetchTailorPublic(tailorId: string, userId?: string): Promise<TailorPublicData> {
+  try {
+    return await fetchReadGateway<TailorPublicData>({ action: 'tailor-profile', tailorId })
+  } catch {
+    // Public profile media and reviews should come from the read gateway first.
+    // Keep the direct path as a resilience fallback during edge deploys.
+  }
+
   const queries = [
     supabase
       .from('tailor_profiles')
@@ -1284,6 +1280,7 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
         'id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, bio, specialty_tags, languages, currency, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, portfolio_video_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available'
       )
       .eq('id', tailorId)
+      .eq('is_live', true)
       .maybeSingle(),
     supabase
       .from('reviews')
