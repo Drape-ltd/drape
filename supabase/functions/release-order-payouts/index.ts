@@ -143,7 +143,7 @@ async function refreshFailedPayoutIssue(
     dedupeKey: `payout-failed:${order.id}`,
     metadata: {
       error,
-      payout_currency: tailorProfile?.payout_currency ?? order.currency ?? null,
+      payout_currency: fallbackBlockedCurrency(order, tailorProfile),
       payout_provider: fallbackBlockedProvider(order, tailorProfile),
       ...extra,
     },
@@ -188,6 +188,32 @@ function jsonResponse(body: Record<string, unknown>, status: number, cors: Heade
     status,
     headers: { ...cors, 'Content-Type': 'application/json' },
   })
+}
+
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>
+    const candidate = [
+      record.message,
+      record.error,
+      record.error_description,
+      record.details,
+      record.hint,
+      record.code,
+    ].find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+
+    if (candidate) return candidate
+
+    try {
+      return JSON.stringify(error).slice(0, 1000)
+    } catch {
+      return '[unserializable error object]'
+    }
+  }
+
+  return String(error)
 }
 
 function fallbackBlockedCurrency(order: PayoutCandidateOrder, tailorProfile: TailorPayoutProfile | null) {
@@ -809,7 +835,7 @@ Deno.serve(async (req) => {
               amount: payoutMoney.amount,
             })
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
+            const message = errorMessage(error)
             await recordPayoutProviderEvent(supabase, {
               provider: payoutMoney.provider,
               succeeded: false,
@@ -857,7 +883,7 @@ Deno.serve(async (req) => {
               amount: payoutMoney.amount,
             })
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
+            const message = errorMessage(error)
             await recordPayoutProviderEvent(supabase, {
               provider: payoutMoney.provider,
               succeeded: false,
@@ -910,7 +936,7 @@ Deno.serve(async (req) => {
         results.push({ orderId: order.id, result: 'released', payoutId, provider: payoutMoney.provider, currency: payoutMoney.currency, amount: payoutMoney.amount })
       } catch (error) {
         skipped += 1
-        const message = error instanceof Error ? error.message : String(error)
+        const message = errorMessage(error)
         log('error', FN, 'release.failed', { order_id: order.id, error: message })
         if (payoutIdForFailure) {
           await updatePayoutRow(supabase, payoutIdForFailure, {
@@ -925,7 +951,7 @@ Deno.serve(async (req) => {
             log('error', FN, 'payout_status_update_failed', {
               order_id: order.id,
               payout_id: payoutIdForFailure,
-              error: updateError instanceof Error ? updateError.message : String(updateError),
+              error: errorMessage(updateError),
             })
           })
         }
@@ -950,7 +976,8 @@ Deno.serve(async (req) => {
 
     return jsonResponse({ ok: true, released, blocked, skipped, results }, 200, cors)
   } catch (error) {
-    log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return jsonResponse({ ok: false, error: error instanceof Error ? error.message : 'Internal server error' }, 500, cors)
+    const message = errorMessage(error)
+    log('error', FN, 'unhandled', { error: message })
+    return jsonResponse({ ok: false, error: message || 'Internal server error' }, 500, cors)
   }
 })
