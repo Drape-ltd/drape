@@ -29,14 +29,12 @@ import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.
 import { log, audit } from '../_shared/logger.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
-import { sendPushToUser } from '../_shared/notify.ts'
-import { sendOrderEventEmail } from '../_shared/order-email.ts'
+import { enqueueOrderEventEmailJob, enqueuePushJob, enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
 import {
   customerFulfillmentPaymentRequestedNotification,
   fulfillmentPaymentRequestedStageNote,
 } from '../_shared/payment-copy.ts'
 import { normalizeStoredPhone, validateDispatchPhone, validateRecipientPhone } from '../_shared/phone.ts'
-import { sendSmsToUser } from '../_shared/sms.ts'
 import {
   buildTailorOrderDeclineTerminalRequest,
 } from '../../../packages/shared/src/order-terminal.ts'
@@ -450,15 +448,59 @@ function queueCustomerOrderEmail(
 ) {
   if (!order.customer_id) return
   EdgeRuntime.waitUntil(
-    sendOrderEventEmail(supabase, {
+    enqueueOrderEventEmailJob(supabase, {
       order,
       recipientUserId: order.customer_id.toString(),
       audience: 'CUSTOMER',
       subject,
       body,
       evidenceImageUrl,
+      source: FN,
+      idempotencyKey: `${FN}:${order.id}:customer-email:${subject}`,
     }),
   )
+}
+
+async function sendPushToUser(
+  supabase: any,
+  userId: string,
+  notification: {
+    title: string
+    body: string
+    data?: Record<string, string>
+    preferenceKey?: string
+  },
+) {
+  const orderId = notification.data?.orderId ?? notification.data?.order_id ?? null
+  const eventKey = notification.data?.event ?? notification.data?.type ?? notification.data?.stage ?? notification.preferenceKey ?? notification.title
+  await enqueuePushJob(supabase, {
+    userId,
+    notification,
+    source: FN,
+    orderId,
+    idempotencyKey: `${FN}:${userId}:${orderId ?? 'user'}:${eventKey}:${notification.body}`,
+  })
+}
+
+async function sendSmsToUser(input: {
+  supabase: any
+  userId: string | null | undefined
+  audience: 'CUSTOMER' | 'TAILOR'
+  orderId?: string | null
+  event: string
+  body: string
+  fallbackPhone?: string | null
+}) {
+  await enqueueSmsJob(input.supabase, {
+    userId: input.userId,
+    audience: input.audience,
+    orderId: input.orderId ?? null,
+    event: input.event,
+    body: input.body,
+    fallbackPhone: input.fallbackPhone ?? null,
+    source: FN,
+    idempotencyKey: `${FN}:${input.userId ?? 'unknown'}:${input.orderId ?? 'user'}:${input.event}`,
+  })
 }
 
 /** Cryptographically random 4-digit collection code (1000–9999). */

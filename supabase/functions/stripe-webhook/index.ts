@@ -11,7 +11,7 @@ import {
 import { markInitialOrderPaymentFailed } from '../_shared/payment-failure.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
-import { sendOrderConfirmationEmails } from '../_shared/order-email.ts'
+import { enqueueOrderConfirmationEmailJob } from '../_shared/payment-side-effects.ts'
 import { notifyTailorAboutReadyMadeStockChange } from '../_shared/ready-made-stock-alert.ts'
 import { sendSmsToUser } from '../_shared/sms.ts'
 import { parseOrderSupportMeta, serializeOrderSupportMeta } from '../_shared/order-support.ts'
@@ -280,7 +280,12 @@ async function markOrderConfirmed(supabase: any, order: OrderRow, paymentIntent:
       )
     }
 
-    EdgeRuntime.waitUntil(sendOrderConfirmationEmails(supabase, order, phase))
+    await enqueueOrderConfirmationEmailJob(supabase, {
+      order,
+      phase,
+      source: FN,
+      provider: 'STRIPE',
+    })
 
     return true
   }
@@ -360,7 +365,12 @@ async function markOrderConfirmed(supabase: any, order: OrderRow, paymentIntent:
       )
     }
 
-    EdgeRuntime.waitUntil(sendOrderConfirmationEmails(supabase, order, phase))
+    await enqueueOrderConfirmationEmailJob(supabase, {
+      order,
+      phase,
+      source: FN,
+      provider: 'STRIPE',
+    })
 
     return true
   }
@@ -449,7 +459,12 @@ async function markOrderConfirmed(supabase: any, order: OrderRow, paymentIntent:
     )
   }
 
-  EdgeRuntime.waitUntil(sendOrderConfirmationEmails(supabase, order, phase))
+  await enqueueOrderConfirmationEmailJob(supabase, {
+    order,
+    phase,
+    source: FN,
+    provider: 'STRIPE',
+  })
 
   return true
 }

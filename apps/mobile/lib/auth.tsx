@@ -9,6 +9,7 @@ import { validatePasswordStrength } from '@drape/shared/auth-security'
 import { supabase } from './supabase'
 import { clearRecentReauth } from './recent-reauth'
 import { queryClient } from './queryClient'
+import { clearPersistedQueryCache } from './queryPersistence'
 
 // Required for expo-web-browser OAuth redirect handling on Android
 WebBrowser.maybeCompleteAuthSession()
@@ -273,6 +274,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       lastSessionUserIdRef.current !== nextUserId
     ) {
       queryClient.clear()
+      clearPersistedQueryCache().catch(() => {})
     }
 
     lastSessionUserIdRef.current = nextUserId
@@ -408,6 +410,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
     }
     queryClient.clear()
+    await clearPersistedQueryCache()
     await clearUserScopedLocalState(currentUserId)
     setSession(null)
   }

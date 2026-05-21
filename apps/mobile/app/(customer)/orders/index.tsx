@@ -95,8 +95,8 @@ export default function OrdersListScreen() {
         })
       : orders
 
-  // Refetch whenever this screen comes back into focus (e.g. returning from order detail)
-  useRefreshOnFocus(refetch, 0)
+  // Refetch on focus, but keep a short freshness window so tab hops do not hammer Supabase.
+  useRefreshOnFocus(refetch, 30_000)
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>

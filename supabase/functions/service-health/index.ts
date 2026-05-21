@@ -23,6 +23,8 @@ const REQUIRED_CRON_JOBS = [
   'release-order-payouts',
   'escalate-production-stalls',
   'send-consultation-reminders',
+  'process-notification-jobs',
+  'process-ops-jobs',
 ] as const
 
 function jsonResponse(body: unknown, status: number, cors: Record<string, string>) {
@@ -146,6 +148,105 @@ async function cronCheck(supabase: any): Promise<Check> {
   }
 }
 
+async function jobQueueCheck(supabase: any): Promise<Check> {
+  const startedAt = performance.now()
+  const { data, error } = await supabase.rpc('get_job_queue_health')
+  const latencyMs = Math.round(performance.now() - startedAt)
+
+  if (error) {
+    return {
+      ok: false,
+      status: 'fail',
+      message: `Job queue health RPC failed: ${error.message}`,
+      latencyMs,
+    }
+  }
+
+  const payload = data && typeof data === 'object' ? data as Record<string, unknown> : {}
+  const deadCount = typeof payload.deadCount === 'number' ? payload.deadCount : 0
+  const retryableCount = typeof payload.retryableCount === 'number' ? payload.retryableCount : 0
+  const oldestPendingAt = typeof payload.oldestPendingAt === 'string' ? payload.oldestPendingAt : null
+  const oldestPendingAgeMs = oldestPendingAt ? Date.now() - new Date(oldestPendingAt).getTime() : 0
+
+  if (deadCount > 0) {
+    return {
+      ok: false,
+      status: 'fail',
+      message: `${deadCount} background job(s) are dead-lettered and need ops review`,
+      latencyMs,
+    }
+  }
+
+  if (oldestPendingAgeMs > 10 * 60 * 1000) {
+    return {
+      ok: true,
+      status: 'warn',
+      message: 'Background jobs are queued for longer than 10 minutes',
+      latencyMs,
+    }
+  }
+
+  if (retryableCount > 10) {
+    return {
+      ok: true,
+      status: 'warn',
+      message: `${retryableCount} background job(s) are retrying`,
+      latencyMs,
+    }
+  }
+
+  return {
+    ok: true,
+    status: 'ok',
+    message: 'Job queue healthy',
+    latencyMs,
+  }
+}
+
+async function providerHealthCheck(supabase: any): Promise<Check> {
+  const startedAt = performance.now()
+  const { data, error } = await supabase.rpc('get_provider_health')
+  const latencyMs = Math.round(performance.now() - startedAt)
+
+  if (error) {
+    return {
+      ok: false,
+      status: 'fail',
+      message: `Provider health RPC failed: ${error.message}`,
+      latencyMs,
+    }
+  }
+
+  const rows = Array.isArray(data) ? data as Array<Record<string, unknown>> : []
+  const open = rows.filter((row) => row.status === 'OPEN')
+  const degraded = rows.filter((row) => row.status === 'DEGRADED')
+
+  if (open.length > 0) {
+    return {
+      ok: false,
+      status: 'fail',
+      message: `Provider circuit open: ${open.map((row) => `${row.provider}:${row.operation}`).join(', ')}`,
+      latencyMs,
+    }
+  }
+
+  if (degraded.length > 0) {
+    return {
+      ok: true,
+      status: 'warn',
+      message: `Provider degraded: ${degraded.map((row) => `${row.provider}:${row.operation}`).join(', ')}`,
+      latencyMs,
+    }
+  }
+
+  return {
+    ok: true,
+    status: 'ok',
+    message: 'Provider health clear',
+    latencyMs,
+  }
+}
+
 function providerSecretChecks() {
   return {
     stripeSecret: anyEnvCheck(['STRIPE_SECRET_KEY', 'STRIPE_SECRET_KEY_SANDBOX'], 'STRIPE_SECRET_KEY'),
@@ -201,15 +302,17 @@ Deno.serve(async (req) => {
     edge: { ok: true, status: 'ok', message: 'Edge runtime reachable' },
     supabaseUrl: envCheck('SUPABASE_URL'),
     serviceRoleKey: {
-      ok: !!(Deno.env.get('DRAPE_SERVICE_ROLE_JWT') ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')),
-      status: Deno.env.get('DRAPE_SERVICE_ROLE_JWT') ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ? 'ok' : 'fail',
-      message: Deno.env.get('DRAPE_SERVICE_ROLE_JWT') ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+      ok: !!(Deno.env.get('DRAPE_SERVICE_ROLE_JWT') ?? Deno.env.get('DRAPE_SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')),
+      status: Deno.env.get('DRAPE_SERVICE_ROLE_JWT') ?? Deno.env.get('DRAPE_SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ? 'ok' : 'fail',
+      message: Deno.env.get('DRAPE_SERVICE_ROLE_JWT') ?? Deno.env.get('DRAPE_SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
         ? 'Configured'
         : 'Missing required service role environment variable',
     },
     ...providerSecretChecks(),
     database: await databaseCheck(supabase),
     cron: await cronCheck(supabase),
+    jobQueue: await jobQueueCheck(supabase),
+    providers: await providerHealthCheck(supabase),
   }
 
   const failed = Object.values(checks).filter((item) => item.status === 'fail')

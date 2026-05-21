@@ -23,8 +23,7 @@ import { hasBlockedContact, rejectIfBlockedContact } from '../_shared/contact-by
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
-import { sendPushToUser } from '../_shared/notify.ts'
-import { sendOrderEventEmail } from '../_shared/order-email.ts'
+import { enqueueOrderEventEmailJob, enqueuePushJob } from '../_shared/side-effect-jobs.ts'
 import {
   buildCustomerOrderCancellationTerminalRequest,
   buildCustomerQuoteDeclineTerminalRequest,
@@ -230,14 +229,37 @@ function queueTailorOrderEmail(
 ) {
   if (!order.tailor_id) return
   EdgeRuntime.waitUntil(
-    sendOrderEventEmail(supabase, {
+    enqueueOrderEventEmailJob(supabase, {
       order,
       recipientUserId: order.tailor_id.toString(),
       audience: 'TAILOR',
       subject,
       body,
+      source: FN,
+      idempotencyKey: `${FN}:${order.id}:tailor-email:${subject}`,
     }),
   )
+}
+
+async function sendPushToUser(
+  supabase: any,
+  userId: string,
+  notification: {
+    title: string
+    body: string
+    data?: Record<string, string>
+    preferenceKey?: string
+  },
+) {
+  const orderId = notification.data?.orderId ?? notification.data?.order_id ?? null
+  const eventKey = notification.data?.event ?? notification.data?.type ?? notification.data?.stage ?? notification.preferenceKey ?? notification.title
+  await enqueuePushJob(supabase, {
+    userId,
+    notification,
+    source: FN,
+    orderId,
+    idempotencyKey: `${FN}:${userId}:${orderId ?? 'user'}:${eventKey}:${notification.body}`,
+  })
 }
 
 function jsonResponse(body: Record<string, unknown>, status: number, cors: HeadersInit) {

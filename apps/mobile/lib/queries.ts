@@ -85,6 +85,18 @@ function fallbackInventoryQuantity(stockStatus: string | null | undefined, isLiv
   return 1
 }
 
+async function fetchReadGateway<T>(body: Record<string, unknown>): Promise<T> {
+  const { data, error } = await supabase.functions.invoke('read-gateway', { body })
+  if (error) throw error
+
+  const payload = data as { ok?: boolean; data?: unknown; message?: string } | null
+  if (!payload?.ok) {
+    throw new Error(payload?.message ?? 'Could not load this data right now.')
+  }
+
+  return payload.data as T
+}
+
 /**
  * Refetches whenever the screen comes back into focus (after the first mount).
  * Drop-in replacement for `useFocusEffect` + manual setState pattern.
@@ -1387,6 +1399,13 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
 }
 
 async function fetchTailorShop(tailorId: string): Promise<TailorShopData> {
+  try {
+    return await fetchReadGateway<TailorShopData>({ action: 'tailor-shop', tailorId })
+  } catch {
+    // Public shop data is served through the read gateway when available.
+    // Direct Supabase remains the fallback so browsing does not break if the edge cache is cold or redeploying.
+  }
+
   const [{ data: profileData, error: profileError }, { data: itemsData, error: itemsError }] =
     await Promise.all([
       supabase
@@ -1464,6 +1483,12 @@ async function fetchTailorShop(tailorId: string): Promise<TailorShopData> {
 }
 
 async function fetchSellerItem(itemId: string): Promise<SellerItemDetail | null> {
+  try {
+    return await fetchReadGateway<SellerItemDetail | null>({ action: 'seller-item', itemId })
+  } catch {
+    // Keep checkout entry resilient if the read gateway is unavailable.
+  }
+
   const { data, error } = await supabase
     .from('seller_items')
     .select(
@@ -1988,8 +2013,8 @@ export function useCustomerOrders(userId: string | undefined, tab: 'active' | 'c
     queryKey: qk.customerOrders(userId ?? '', tab),
     queryFn: () => fetchCustomerOrders(userId!, tab),
     enabled: !!userId,
-    staleTime: 0,
-    refetchOnMount: 'always',
+    staleTime: 45_000,
+    refetchOnMount: false,
     refetchOnReconnect: true,
   })
 }
@@ -1999,8 +2024,8 @@ export function useTailorOrders(userId: string | undefined, tab: 'active' | 'com
     queryKey: qk.tailorOrders(userId ?? '', tab),
     queryFn: () => fetchTailorOrders(userId!, tab),
     enabled: !!userId,
-    staleTime: 0,
-    refetchOnMount: 'always',
+    staleTime: 45_000,
+    refetchOnMount: false,
     refetchOnReconnect: true,
   })
 }
@@ -2064,9 +2089,9 @@ export function useTailorShop(tailorId: string | undefined) {
     queryKey: qk.tailorShop(tailorId ?? ''),
     queryFn: () => fetchTailorShop(tailorId!),
     enabled: !!tailorId,
-    staleTime: 0,
-    refetchOnMount: 'always',
-    refetchInterval: 10_000,
+    staleTime: 60_000,
+    refetchOnMount: false,
+    refetchInterval: 60_000,
     refetchIntervalInBackground: false,
   })
 }
@@ -2076,9 +2101,9 @@ export function useSellerItem(itemId: string | undefined) {
     queryKey: qk.sellerItem(itemId ?? ''),
     queryFn: () => fetchSellerItem(itemId!),
     enabled: !!itemId,
-    staleTime: 0,
-    refetchOnMount: 'always',
-    refetchInterval: 10_000,
+    staleTime: 60_000,
+    refetchOnMount: false,
+    refetchInterval: 60_000,
     refetchIntervalInBackground: false,
   })
 }

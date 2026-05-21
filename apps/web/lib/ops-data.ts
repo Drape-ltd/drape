@@ -454,6 +454,28 @@ export type OpsDashboardData = {
     pendingPayoutCount: number
     pendingPayoutValueLabel: string
     flaggedContentCount: number
+    deadJobs: number
+    retryableJobs: number
+    providersDegraded: number
+  }
+  systemHealth: {
+    jobQueue: {
+      pending: number
+      retryable: number
+      processing: number
+      dead: number
+      oldestPendingAt: string | null
+      oldestProcessingAt: string | null
+    }
+    providers: Array<{
+      provider: string
+      operation: string
+      status: string
+      failureCount: number
+      circuitOpenUntil: string | null
+      lastError: string | null
+      updatedAt: string | null
+    }>
   }
   disputes: OpsDispute[]
   bypassLogs: OpsBypassLog[]
@@ -494,7 +516,20 @@ function emptySummary() {
     pendingPayoutCount: 0,
     pendingPayoutValueLabel: '—',
     flaggedContentCount: 0,
+    deadJobs: 0,
+    retryableJobs: 0,
+    providersDegraded: 0,
   }
+}
+
+function numberPayloadValue(payload: Record<string, unknown>, key: string) {
+  const value = payload[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function stringPayloadValue(payload: Record<string, unknown>, key: string) {
+  const value = payload[key]
+  return typeof value === 'string' && value.length > 0 ? value : null
 }
 
 function metadataStringValue(metadata: Record<string, unknown> | null, key: string) {
@@ -916,6 +951,8 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
     verificationCountResult,
     deletionCountResult,
     reviewQueueCountResult,
+    jobQueueHealthResult,
+    providerHealthResult,
   ] = await Promise.allSettled([
     client
       .from('disputes')
@@ -1018,6 +1055,8 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
       .from('reviews')
       .select('id', { count: 'exact', head: true })
       .or('flagged.eq.true,published_at.is.null'),
+    client.rpc('get_job_queue_health'),
+    client.rpc('get_provider_health'),
   ])
 
   const disputes =
@@ -1068,6 +1107,36 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
     escrowOrdersResult.status === 'fulfilled' && !escrowOrdersResult.value.error
       ? ((escrowOrdersResult.value.data ?? []) as EscrowOrderSummaryRow[])
       : []
+  const jobQueuePayload =
+    jobQueueHealthResult.status === 'fulfilled' && !jobQueueHealthResult.value.error && jobQueueHealthResult.value.data
+      ? (jobQueueHealthResult.value.data as Record<string, unknown>)
+      : {}
+  const statusCounts = jobQueuePayload.statusCounts && typeof jobQueuePayload.statusCounts === 'object'
+    ? (jobQueuePayload.statusCounts as Record<string, unknown>)
+    : {}
+  const providerHealth =
+    providerHealthResult.status === 'fulfilled' && !providerHealthResult.value.error && Array.isArray(providerHealthResult.value.data)
+      ? (providerHealthResult.value.data as Array<Record<string, unknown>>)
+      : []
+  const systemHealth = {
+    jobQueue: {
+      pending: numberPayloadValue(statusCounts, 'PENDING'),
+      retryable: numberPayloadValue(jobQueuePayload, 'retryableCount'),
+      processing: numberPayloadValue(statusCounts, 'PROCESSING'),
+      dead: numberPayloadValue(jobQueuePayload, 'deadCount'),
+      oldestPendingAt: stringPayloadValue(jobQueuePayload, 'oldestPendingAt'),
+      oldestProcessingAt: stringPayloadValue(jobQueuePayload, 'oldestProcessingAt'),
+    },
+    providers: providerHealth.map((row) => ({
+      provider: stringPayloadValue(row, 'provider') ?? 'UNKNOWN',
+      operation: stringPayloadValue(row, 'operation') ?? 'GENERAL',
+      status: stringPayloadValue(row, 'status') ?? 'UNKNOWN',
+      failureCount: numberPayloadValue(row, 'failureCount'),
+      circuitOpenUntil: stringPayloadValue(row, 'circuitOpenUntil'),
+      lastError: stringPayloadValue(row, 'lastError'),
+      updatedAt: stringPayloadValue(row, 'updatedAt'),
+    })),
+  }
 
   const issueHistoryByIssueId = new Map<string, OpsIssueHistoryEntry[]>()
   const openIssueIds = [...new Set(opsIssues.map((issue) => issue.id))]
@@ -1144,6 +1213,14 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
   if (escrowOrdersResult.status === 'fulfilled' && escrowOrdersResult.value.error) {
     issues.push(formatIssue('Escrow orders', escrowOrdersResult.value.error))
   }
+  if (jobQueueHealthResult.status === 'rejected') issues.push(formatIssue('Job queue health', jobQueueHealthResult.reason))
+  if (jobQueueHealthResult.status === 'fulfilled' && jobQueueHealthResult.value.error) {
+    issues.push(formatIssue('Job queue health', jobQueueHealthResult.value.error))
+  }
+  if (providerHealthResult.status === 'rejected') issues.push(formatIssue('Provider health', providerHealthResult.reason))
+  if (providerHealthResult.status === 'fulfilled' && providerHealthResult.value.error) {
+    issues.push(formatIssue('Provider health', providerHealthResult.value.error))
+  }
 
   const summary = emptySummary()
   if (disputeCountResult.status === 'fulfilled' && !disputeCountResult.value.error) {
@@ -1207,6 +1284,9 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
     summary.unreviewedBypassLogs
     + reviewQueue.filter((review) => review.flagged).length
     + summary.recentSafetyReports
+  summary.deadJobs = systemHealth.jobQueue.dead
+  summary.retryableJobs = systemHealth.jobQueue.retryable
+  summary.providersDegraded = systemHealth.providers.filter((provider) => provider.status !== 'OK').length
 
   const openOrderReviews = orderReviewRows.flatMap((row) =>
     parseOpenOrderReviews(row.special_note).map((review, index) => ({
@@ -1416,6 +1496,7 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
 
   return {
     summary,
+    systemHealth,
     disputes: disputes.map((dispute) => {
       const order = ordersById.get(dispute.order_id)
       const customer = order ? usersById.get(order.customer_id) : null

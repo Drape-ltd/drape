@@ -3,7 +3,11 @@ export function getSupabaseUrl(): string {
 }
 
 export function getServiceRoleKey(): string {
-  return Deno.env.get('DRAPE_SERVICE_ROLE_JWT') ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+  return (
+    Deno.env.get('DRAPE_SERVICE_ROLE_JWT') ??
+    Deno.env.get('DRAPE_SERVICE_ROLE_KEY') ??
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  )!
 }
 
 export function getSupabaseAnonKey(): string {
