@@ -25,7 +25,8 @@
     "supabase:functions:deploy:dev": "node scripts/supabase-target-guard.mjs functions:deploy development",
     "supabase:functions:deploy:prod": "node scripts/supabase-target-guard.mjs functions:deploy production",
     "supabase:functions:deploy:all:dev": "node scripts/supabase-target-guard.mjs functions:deploy-all development",
-    "supabase:functions:deploy:all:prod": "node scripts/supabase-target-guard.mjs functions:deploy-all production"
+    "supabase:functions:deploy:all:prod": "node scripts/supabase-target-guard.mjs functions:deploy-all production",
+    "load:smoke": "node scripts/load-smoke.mjs"
   },
   "devDependencies": {
     "prettier": "^3.4.2",

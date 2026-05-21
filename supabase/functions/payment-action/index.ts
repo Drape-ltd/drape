@@ -12,7 +12,7 @@ import {
   upsertPreparedPaymentAttempt,
 } from '../_shared/payment-ledger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
-import { sendOrderConfirmationEmails } from '../_shared/order-email.ts'
+import { enqueueOrderConfirmationEmailJob } from '../_shared/payment-side-effects.ts'
 import { notifyTailorAboutReadyMadeStockChange } from '../_shared/ready-made-stock-alert.ts'
 import { sendSmsToUser } from '../_shared/sms.ts'
 import {
@@ -41,6 +41,7 @@ import {
   type AccountCurrencyCode,
 } from '../../../packages/shared/src/currency-config.ts'
 import { resolvePreparedPaymentReference } from '../_shared/payment-recovery.ts'
+import { getProviderCircuit, recordProviderHealth } from '../_shared/provider-health.ts'
 
 const FN = 'payment-action'
 
@@ -226,6 +227,35 @@ function providerFailureMessage(provider: PaymentProvider, _currency: OrderCurre
   return phase === 'prepare'
     ? 'We could not start Stripe checkout right now. Please try again in a moment.'
     : 'We could not confirm the Stripe payment right now. Please refresh and try again.'
+}
+
+async function recordPaymentProviderEvent(
+  supabase: any,
+  input: {
+    provider: PaymentProvider
+    action: 'prepare-payment' | 'confirm-payment'
+    succeeded: boolean
+    orderId: string
+    paymentPhase: PaymentPhase
+    currency: OrderCurrency
+    paymentIntentId?: string | null
+    error?: unknown
+  },
+) {
+  await recordProviderHealth(supabase, {
+    provider: input.provider,
+    operation: 'PAYMENT',
+    succeeded: input.succeeded,
+    error: input.error instanceof Error ? input.error.message : input.error ? String(input.error) : null,
+    metadata: {
+      function: FN,
+      action: input.action,
+      order_id: input.orderId,
+      payment_phase: input.paymentPhase,
+      currency: input.currency,
+      payment_intent_id: input.paymentIntentId ?? null,
+    },
+  })
 }
 
 async function auditPaymentBlocked(
@@ -491,7 +521,12 @@ async function finalizeSuccessfulPayment(
       )
     }
 
-    EdgeRuntime.waitUntil(sendOrderConfirmationEmails(supabase, order, phase))
+    await enqueueOrderConfirmationEmailJob(supabase, {
+      order,
+      phase,
+      source: FN,
+      provider,
+    })
 
     return { alreadyConfirmed: false as const, stage: order.stage }
   }
@@ -606,7 +641,12 @@ async function finalizeSuccessfulPayment(
       )
     }
 
-    EdgeRuntime.waitUntil(sendOrderConfirmationEmails(supabase, order, phase))
+    await enqueueOrderConfirmationEmailJob(supabase, {
+      order,
+      phase,
+      source: FN,
+      provider,
+    })
 
     return { alreadyConfirmed: false as const, stage: order.stage }
   }
@@ -727,7 +767,12 @@ async function finalizeSuccessfulPayment(
     )
   }
 
-  EdgeRuntime.waitUntil(sendOrderConfirmationEmails(supabase, order, phase))
+  await enqueueOrderConfirmationEmailJob(supabase, {
+    order,
+    phase,
+    source: FN,
+    provider,
+  })
 
   return { alreadyConfirmed: false as const, stage: 'CONFIRMED' }
 }
@@ -1010,9 +1055,27 @@ Deno.serve(async (req) => {
         })
         return preflightFailureResponse(preflight, cors, 409)
       }
+
+      const circuit = await getProviderCircuit(supabase, provider, 'PAYMENT')
+      if (circuit.open) {
+        return jsonError(cors, 503, providerFailureMessage(provider, orderCurrency, 'prepare'), {
+          code: 'PAYMENT_PROVIDER_DEGRADED',
+          provider,
+          retryAt: circuit.circuitOpenUntil,
+        })
+      }
     }
 
     if (parsed.data.action === 'confirm-payment') {
+      const circuit = await getProviderCircuit(supabase, provider, 'PAYMENT')
+      if (circuit.open) {
+        return jsonError(cors, 503, providerFailureMessage(provider, orderCurrency, 'confirm'), {
+          code: 'PAYMENT_PROVIDER_DEGRADED',
+          provider,
+          retryAt: circuit.circuitOpenUntil,
+        })
+      }
+
       const preparedPayment = resolvePreparedPaymentReference({
         expectedProvider: provider,
         storedPaymentIntentId: paymentIntentForPhase(row, phase),
@@ -1064,6 +1127,16 @@ Deno.serve(async (req) => {
         try {
           transaction = await verifyPaystackTransaction(preparedPaymentIntentId)
         } catch (error) {
+          await recordPaymentProviderEvent(supabase, {
+            provider: 'PAYSTACK',
+            action: 'confirm-payment',
+            succeeded: false,
+            orderId: row.id,
+            paymentPhase: phase,
+            currency: orderCurrency,
+            paymentIntentId: preparedPaymentIntentId,
+            error,
+          })
           await auditPaymentBlocked(supabase, caller.id, row, 'confirm_provider_error', {
             provider: 'PAYSTACK',
             payment_intent_id: preparedPaymentIntentId,
@@ -1072,6 +1145,15 @@ Deno.serve(async (req) => {
           })
           return jsonError(cors, 502, providerFailureMessage('PAYSTACK', orderCurrency, 'confirm'))
         }
+        await recordPaymentProviderEvent(supabase, {
+          provider: 'PAYSTACK',
+          action: 'confirm-payment',
+          succeeded: true,
+          orderId: row.id,
+          paymentPhase: phase,
+          currency: orderCurrency,
+          paymentIntentId: preparedPaymentIntentId,
+        })
         if (transaction.status !== 'success') {
           const failureStatus = paystackFailureAttemptStatus(transaction.status)
           let nextStage = row.stage
@@ -1129,6 +1211,16 @@ Deno.serve(async (req) => {
       try {
         paymentIntent = await retrieveStripePaymentIntent(preparedPaymentIntentId)
       } catch (error) {
+        await recordPaymentProviderEvent(supabase, {
+          provider: 'STRIPE',
+          action: 'confirm-payment',
+          succeeded: false,
+          orderId: row.id,
+          paymentPhase: phase,
+          currency: orderCurrency,
+          paymentIntentId: preparedPaymentIntentId,
+          error,
+        })
         await auditPaymentBlocked(supabase, caller.id, row, 'confirm_provider_error', {
           provider: 'STRIPE',
           payment_intent_id: preparedPaymentIntentId,
@@ -1137,6 +1229,15 @@ Deno.serve(async (req) => {
         })
         return jsonError(cors, 502, providerFailureMessage('STRIPE', orderCurrency, 'confirm'))
       }
+      await recordPaymentProviderEvent(supabase, {
+        provider: 'STRIPE',
+        action: 'confirm-payment',
+        succeeded: true,
+        orderId: row.id,
+        paymentPhase: phase,
+        currency: orderCurrency,
+        paymentIntentId: preparedPaymentIntentId,
+      })
       if (paymentIntent.status !== 'succeeded') {
         const failureStatus = stripeFailureAttemptStatus(paymentIntent.status)
         let nextStage = row.stage
@@ -1275,6 +1376,16 @@ Deno.serve(async (req) => {
         try {
           transaction = await verifyPaystackTransaction(paymentReference)
         } catch (error) {
+          await recordPaymentProviderEvent(supabase, {
+            provider: 'PAYSTACK',
+            action: 'prepare-payment',
+            succeeded: false,
+            orderId: row.id,
+            paymentPhase: phase,
+            currency: orderCurrency,
+            paymentIntentId: paymentReference,
+            error,
+          })
           await auditPaymentBlocked(supabase, caller.id, row, 'prepare_provider_error', {
             provider: 'PAYSTACK',
             payment_intent_id: paymentReference,
@@ -1283,6 +1394,15 @@ Deno.serve(async (req) => {
           })
           return jsonError(cors, 502, providerFailureMessage('PAYSTACK', orderCurrency, 'prepare'))
         }
+        await recordPaymentProviderEvent(supabase, {
+          provider: 'PAYSTACK',
+          action: 'prepare-payment',
+          succeeded: true,
+          orderId: row.id,
+          paymentPhase: phase,
+          currency: orderCurrency,
+          paymentIntentId: paymentReference,
+        })
 
         if (transaction.status === 'success') {
           const finalized = await finalizeSuccessfulPayment(supabase, row, caller.id, 'PAYSTACK', transaction.reference, phase)
@@ -1351,6 +1471,16 @@ Deno.serve(async (req) => {
             },
           })
         } catch (error) {
+          await recordPaymentProviderEvent(supabase, {
+            provider: 'PAYSTACK',
+            action: 'prepare-payment',
+            succeeded: false,
+            orderId: row.id,
+            paymentPhase: phase,
+            currency: orderCurrency,
+            paymentIntentId: paystackIdempotencyKey,
+            error,
+          })
           await auditPaymentBlocked(supabase, caller.id, row, 'prepare_provider_error', {
             provider: 'PAYSTACK',
             error: error instanceof Error ? error.message : String(error),
@@ -1359,6 +1489,15 @@ Deno.serve(async (req) => {
           })
           return jsonError(cors, 502, providerFailureMessage('PAYSTACK', orderCurrency, 'prepare'))
         }
+        await recordPaymentProviderEvent(supabase, {
+          provider: 'PAYSTACK',
+          action: 'prepare-payment',
+          succeeded: true,
+          orderId: row.id,
+          paymentPhase: phase,
+          currency: orderCurrency,
+          paymentIntentId: transaction.reference,
+        })
 
         paymentReference = transaction.reference
         checkoutUrl = transaction.authorization_url ?? null
@@ -1501,6 +1640,16 @@ Deno.serve(async (req) => {
       try {
         paymentIntent = await retrieveStripePaymentIntent(existingPaymentIntentId)
       } catch (error) {
+        await recordPaymentProviderEvent(supabase, {
+          provider: 'STRIPE',
+          action: 'prepare-payment',
+          succeeded: false,
+          orderId: row.id,
+          paymentPhase: phase,
+          currency: orderCurrency,
+          paymentIntentId: existingPaymentIntentId,
+          error,
+        })
         await auditPaymentBlocked(supabase, caller.id, row, 'prepare_provider_error', {
           provider: 'STRIPE',
           payment_intent_id: existingPaymentIntentId,
@@ -1509,6 +1658,15 @@ Deno.serve(async (req) => {
         })
         return jsonError(cors, 502, providerFailureMessage('STRIPE', orderCurrency, 'prepare'))
       }
+      await recordPaymentProviderEvent(supabase, {
+        provider: 'STRIPE',
+        action: 'prepare-payment',
+        succeeded: true,
+        orderId: row.id,
+        paymentPhase: phase,
+        currency: orderCurrency,
+        paymentIntentId: existingPaymentIntentId,
+      })
       if (paymentIntent.status === 'succeeded') {
         const finalized = await finalizeSuccessfulPayment(supabase, row, caller.id, 'STRIPE', paymentIntent.id, phase)
 
@@ -1555,6 +1713,16 @@ Deno.serve(async (req) => {
           },
         })
       } catch (error) {
+        await recordPaymentProviderEvent(supabase, {
+          provider: 'STRIPE',
+          action: 'prepare-payment',
+          succeeded: false,
+          orderId: row.id,
+          paymentPhase: phase,
+          currency: orderCurrency,
+          paymentIntentId: stripeIdempotencyKey,
+          error,
+        })
         await auditPaymentBlocked(supabase, caller.id, row, 'prepare_provider_error', {
           provider: 'STRIPE',
           error: error instanceof Error ? error.message : String(error),
@@ -1563,6 +1731,15 @@ Deno.serve(async (req) => {
         })
         return jsonError(cors, 502, providerFailureMessage('STRIPE', orderCurrency, 'prepare'))
       }
+      await recordPaymentProviderEvent(supabase, {
+        provider: 'STRIPE',
+        action: 'prepare-payment',
+        succeeded: true,
+        orderId: row.id,
+        paymentPhase: phase,
+        currency: orderCurrency,
+        paymentIntentId: paymentIntent.id,
+      })
     }
 
     if (!paymentIntent.client_secret) {

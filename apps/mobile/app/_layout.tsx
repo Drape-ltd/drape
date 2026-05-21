@@ -30,6 +30,7 @@ import { initSentry, Sentry } from '@/lib/sentry'
 import { identify, setAnalyticsConsent } from '@/lib/analytics'
 import { isBiometricEnabled, authenticate } from '@/lib/biometric'
 import { queryClient } from '@/lib/queryClient'
+import { hydratePersistedQueryCache, installQueryCachePersistence } from '@/lib/queryPersistence'
 import { Colors, FontSize, FontWeight, Fonts, Spacing } from '@/constants/theme'
 import { validatePhoneForProfile } from '@drape/shared/phone'
 
@@ -525,6 +526,21 @@ export default function RootLayout() {
       })
     }
   }, [fontError])
+
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined
+    hydratePersistedQueryCache(queryClient)
+      .catch((error) => {
+        Sentry.captureException(error, { tags: { area: 'query_cache_hydration' } })
+      })
+      .finally(() => {
+        unsubscribe = installQueryCachePersistence(queryClient)
+      })
+
+    return () => {
+      unsubscribe?.()
+    }
+  }, [])
 
   return (
     <StartupErrorBoundary>

@@ -3,8 +3,8 @@ import { authorizeCronRequest } from '../_shared/cron.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
-import { sendPushToUser } from '../_shared/notify.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
+import { enqueuePushJob } from '../_shared/side-effect-jobs.ts'
 import {
   getClientIp,
   RATE_LIMITS,
@@ -20,6 +20,7 @@ import {
 import { createPaystackTransfer } from '../_shared/paystack.ts'
 import { createStripeTransfer } from '../_shared/stripe.ts'
 import { logPreflightFailure, runPreflight } from '../_shared/preflight.ts'
+import { getProviderCircuit, recordProviderHealth } from '../_shared/provider-health.ts'
 import { parseBody, uuid, z } from '../_shared/validate.ts'
 import { normalizeAccountCurrency, resolvePaymentProviderForCurrency } from '../../../packages/shared/src/currency-config.ts'
 import {
@@ -49,12 +50,20 @@ async function notifyTailorPayoutFailure(
 ) {
   if (!order.tailor_id) return
 
-  await sendPushToUser(supabase, order.tailor_id.toString(), {
-    title: 'Payout needs review',
-    body: 'A payout release for this order needs Drape ops review before it can be retried.',
-    data: {
-      orderId: order.id,
-      reason: error.slice(0, 120),
+  await enqueuePushJob(supabase, {
+    userId: order.tailor_id.toString(),
+    source: FN,
+    orderId: order.id,
+    idempotencyKey: `payout-failure:${order.id}`,
+    priority: 10,
+    notification: {
+      title: 'Payout needs review',
+      body: 'A payout release for this order needs Drape ops review before it can be retried.',
+      preferenceKey: 'paymentReleased',
+      data: {
+        orderId: order.id,
+        reason: error.slice(0, 120),
+      },
     },
   })
 }
@@ -64,6 +73,7 @@ function blockedPayoutIssueSeverity(reason: PayoutBlockedReason) {
     reason === PAYOUT_BLOCKED_REASONS.NO_SETTLED_PAYMENT
     || reason === PAYOUT_BLOCKED_REASONS.PAYOUT_ACCOUNT_UNVERIFIED
     || reason === PAYOUT_BLOCKED_REASONS.PAYOUT_ACCOUNT_MISSING
+    || reason === PAYOUT_BLOCKED_REASONS.PAYOUT_PROVIDER_UNAVAILABLE
   ) {
     return 'CRITICAL' as const
   }
@@ -136,6 +146,35 @@ async function refreshFailedPayoutIssue(
       payout_currency: tailorProfile?.payout_currency ?? order.currency ?? null,
       payout_provider: fallbackBlockedProvider(order, tailorProfile),
       ...extra,
+    },
+  })
+}
+
+async function recordPayoutProviderEvent(
+  supabase: any,
+  input: {
+    provider: string
+    succeeded: boolean
+    orderId: string
+    payoutId?: string | null
+    currency?: string | null
+    amount?: number | null
+    error?: string | null
+  },
+) {
+  await recordProviderHealth(supabase, {
+    provider: input.provider,
+    operation: 'PAYOUT',
+    succeeded: input.succeeded,
+    error: input.error ?? null,
+    openAfterFailures: 2,
+    openSeconds: 600,
+    metadata: {
+      order_id: input.orderId,
+      payout_id: input.payoutId ?? null,
+      currency: input.currency ?? null,
+      amount: input.amount ?? null,
+      function: FN,
     },
   })
 }
@@ -694,6 +733,34 @@ Deno.serve(async (req) => {
 
         const payoutTailorProfile = tailorProfile
         const payoutSourcePayment = settledPayment
+        const providerCircuit = await getProviderCircuit(supabase, payoutMoney.provider, 'PAYOUT')
+        if (providerCircuit.open) {
+          const blockedReason = PAYOUT_BLOCKED_REASONS.PAYOUT_PROVIDER_UNAVAILABLE
+          await recordBlockedPayout(
+            supabase,
+            order,
+            payoutTailorProfile,
+            payoutSourcePayment,
+            blockedReason,
+            {
+              provider: payoutMoney.provider,
+              payout_currency: payoutMoney.currency,
+              payout_amount: payoutMoney.amount,
+              circuit_status: providerCircuit.status,
+              circuit_open_until: providerCircuit.circuitOpenUntil ?? null,
+              circuit_message: providerCircuit.message ?? null,
+            },
+          )
+          blocked += 1
+          results.push({
+            orderId: order.id,
+            result: 'blocked',
+            reason: blockedReason,
+            provider: payoutMoney.provider,
+            circuitOpenUntil: providerCircuit.circuitOpenUntil ?? null,
+          })
+          continue
+        }
 
         const { data: createdPayout, error: createPayoutError } = await supabase
           .from('payouts')
@@ -724,13 +791,36 @@ Deno.serve(async (req) => {
         payoutIdForFailure = payoutId
 
         if (payoutMoney.provider === 'PAYSTACK') {
-          const transfer = await createPaystackTransfer({
-            amount: payoutMoney.amount,
-            recipientCode: paystackRecipientCode!,
-            reason: `Drape payout for order ${order.reference ?? order.id}`,
-            reference: `DRAPE-PAYOUT-${order.id}`,
-            currency: payoutMoney.currency,
-          })
+          let transfer
+          try {
+            transfer = await createPaystackTransfer({
+              amount: payoutMoney.amount,
+              recipientCode: paystackRecipientCode!,
+              reason: `Drape payout for order ${order.reference ?? order.id}`,
+              reference: `DRAPE-PAYOUT-${order.id}`,
+              currency: payoutMoney.currency,
+            })
+            await recordPayoutProviderEvent(supabase, {
+              provider: payoutMoney.provider,
+              succeeded: true,
+              orderId: order.id,
+              payoutId,
+              currency: payoutMoney.currency,
+              amount: payoutMoney.amount,
+            })
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            await recordPayoutProviderEvent(supabase, {
+              provider: payoutMoney.provider,
+              succeeded: false,
+              orderId: order.id,
+              payoutId,
+              currency: payoutMoney.currency,
+              amount: payoutMoney.amount,
+              error: message,
+            })
+            throw error
+          }
 
           await updatePayoutRow(supabase, payoutId, {
             provider_payout_id: transfer.reference ?? transfer.transfer_code ?? null,
@@ -743,19 +833,42 @@ Deno.serve(async (req) => {
             completed_at: transfer.status === 'success' ? new Date().toISOString() : null,
           })
         } else {
-          const transfer = await createStripeTransfer({
-            amount: payoutMoney.amount,
-            currency: payoutMoney.currency,
-            destinationAccountId: stripeAccountId!,
-            idempotencyKey: `DRAPE-PAYOUT-${order.id}`,
-            transferGroup: `order:${order.id}`,
-            metadata: {
-              order_id: order.id,
-              payout_id: payoutId,
-              tailor_profile_id: payoutTailorProfile.id,
-              payout_currency: payoutMoney.currency,
-            },
-          })
+          let transfer
+          try {
+            transfer = await createStripeTransfer({
+              amount: payoutMoney.amount,
+              currency: payoutMoney.currency,
+              destinationAccountId: stripeAccountId!,
+              idempotencyKey: `DRAPE-PAYOUT-${order.id}`,
+              transferGroup: `order:${order.id}`,
+              metadata: {
+                order_id: order.id,
+                payout_id: payoutId,
+                tailor_profile_id: payoutTailorProfile.id,
+                payout_currency: payoutMoney.currency,
+              },
+            })
+            await recordPayoutProviderEvent(supabase, {
+              provider: payoutMoney.provider,
+              succeeded: true,
+              orderId: order.id,
+              payoutId,
+              currency: payoutMoney.currency,
+              amount: payoutMoney.amount,
+            })
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            await recordPayoutProviderEvent(supabase, {
+              provider: payoutMoney.provider,
+              succeeded: false,
+              orderId: order.id,
+              payoutId,
+              currency: payoutMoney.currency,
+              amount: payoutMoney.amount,
+              error: message,
+            })
+            throw error
+          }
 
           await updatePayoutRow(supabase, payoutId, {
             provider_payout_id: transfer.id,

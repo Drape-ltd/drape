@@ -29,16 +29,11 @@ import {
   rateLimit,
   rateLimitExceededResponse,
 } from '../_shared/rateLimit.ts'
-import { sendPushToUser } from '../_shared/notify.ts'
-import { sendSmsToUser } from '../_shared/sms.ts'
+import { enqueuePushJob, enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
 import {
   buildCustomerStageSms,
   buildTailorStageSms,
 } from '../../../packages/shared/src/sms-copy.ts'
-
-declare const EdgeRuntime: {
-  waitUntil(promise: Promise<unknown>): void
-}
 
 const FN = 'delivery-webhook'
 
@@ -398,14 +393,19 @@ Deno.serve(async (req) => {
   })
 
   if (order.customer_id) {
-    EdgeRuntime.waitUntil(
-      sendPushToUser(supabase, order.customer_id.toString(), {
+    await enqueuePushJob(supabase, {
+      userId: order.customer_id.toString(),
+      source: FN,
+      orderId: order.id,
+      idempotencyKey: `delivery-confirmed:${order.id}:customer:push`,
+      priority: 15,
+      notification: {
         title: 'Delivered ✅',
         body: 'Your carrier marked this order as delivered.',
         preferenceKey: 'orderUpdates',
         data: { orderId: order.id },
-      })
-    )
+      },
+    })
     const customerSms = buildCustomerStageSms({
       id: order.id,
       reference: order.reference ?? null,
@@ -418,29 +418,34 @@ Deno.serve(async (req) => {
       carrier: carrier ?? order.carrier ?? null,
     }, 'DELIVERED')
     if (customerSms) {
-      EdgeRuntime.waitUntil(
-        sendSmsToUser({
-          supabase,
-          userId: order.customer_id.toString(),
-          audience: 'CUSTOMER',
-          orderId: order.id,
-          event: 'order.stage_delivered',
-          body: customerSms,
-          fallbackPhone: order.recipient_phone ?? null,
-        }),
-      )
+      await enqueueSmsJob(supabase, {
+        userId: order.customer_id.toString(),
+        audience: 'CUSTOMER',
+        orderId: order.id,
+        event: 'order.stage_delivered',
+        body: customerSms,
+        fallbackPhone: order.recipient_phone ?? null,
+        source: FN,
+        idempotencyKey: `delivery-confirmed:${order.id}:customer:sms`,
+        priority: 15,
+      })
     }
   }
 
   if (order.tailor_id) {
-    EdgeRuntime.waitUntil(
-      sendPushToUser(supabase, order.tailor_id.toString(), {
+    await enqueuePushJob(supabase, {
+      userId: order.tailor_id.toString(),
+      source: FN,
+      orderId: order.id,
+      idempotencyKey: `delivery-confirmed:${order.id}:tailor:push`,
+      priority: 20,
+      notification: {
         title: 'Order delivered 📦',
         body: 'Tracking confirmed that the customer received this order.',
         preferenceKey: 'newOrders',
         data: { orderId: order.id },
-      })
-    )
+      },
+    })
     const tailorSms = buildTailorStageSms({
       id: order.id,
       reference: order.reference ?? null,
@@ -453,16 +458,16 @@ Deno.serve(async (req) => {
       carrier: carrier ?? order.carrier ?? null,
     }, 'DELIVERED')
     if (tailorSms) {
-      EdgeRuntime.waitUntil(
-        sendSmsToUser({
-          supabase,
-          userId: order.tailor_id.toString(),
-          audience: 'TAILOR',
-          orderId: order.id,
-          event: 'order.stage_delivered',
-          body: tailorSms,
-        }),
-      )
+      await enqueueSmsJob(supabase, {
+        userId: order.tailor_id.toString(),
+        audience: 'TAILOR',
+        orderId: order.id,
+        event: 'order.stage_delivered',
+        body: tailorSms,
+        source: FN,
+        idempotencyKey: `delivery-confirmed:${order.id}:tailor:sms`,
+        priority: 20,
+      })
     }
   }
 

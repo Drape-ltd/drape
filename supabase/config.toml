@@ -162,6 +162,12 @@ verify_jwt = false
 [functions.service-health]
 verify_jwt = false
 
+[functions.process-job-queue]
+verify_jwt = false
+
+[functions.read-gateway]
+verify_jwt = false
+
 [functions.expire-pending-payments]
 verify_jwt = false
 

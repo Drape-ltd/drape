@@ -112,8 +112,8 @@ export default function TailorOrdersScreen() {
     void loadTailorProfile()
   }, [loadTailorProfile]))
 
-  // Refetch whenever this screen comes back into focus (e.g. returning from order detail)
-  useRefreshOnFocus(refetch, 0)
+  // Refetch on focus, but keep a short freshness window so tab hops do not hammer Supabase.
+  useRefreshOnFocus(refetch, 30_000)
 
   // Group: pending quotes first when on active tab; search on completed tab
   const sortedOrders = (() => {

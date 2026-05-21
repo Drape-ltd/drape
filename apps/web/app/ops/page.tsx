@@ -2386,32 +2386,77 @@ export default async function OpsPage({
                 value={data.summary.pendingDeletionRequests}
                 hint="Account deletion requests still waiting on a first response."
               />
+              <SummaryCard
+                label="Dead jobs"
+                value={data.summary.deadJobs}
+                hint="Background work that exhausted retries and needs manual review."
+              />
+              <SummaryCard
+                label="Retrying jobs"
+                value={data.summary.retryableJobs}
+                hint="Background work waiting for another attempt."
+              />
+              <SummaryCard
+                label="Provider alerts"
+                value={data.summary.providersDegraded}
+                hint="Payment, payout, SMS, email, or shipping providers marked degraded."
+              />
             </section>
 
             {safeView === 'overview' ? (
-              <section className="rounded-[2rem] border border-ink/8 bg-white/80 p-6 shadow-[0_20px_70px_rgba(22,28,24,0.08)]">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/80">Architecture stance</p>
-                <div className="mt-3 grid gap-4 lg:grid-cols-3">
-                  <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
-                    <p className="text-sm font-semibold text-ink">Public web stays public</p>
-                    <p className="mt-2 text-sm leading-7 text-ink/62">
-                      Waitlist, marketing, and future customer acquisition stay clean. Internal ops should never leak into the public nav.
-                    </p>
+              <>
+                <section className="rounded-[2rem] border border-ink/8 bg-white/80 p-6 shadow-[0_20px_70px_rgba(22,28,24,0.08)]">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/80">System health</p>
+                  <div className="mt-3 grid gap-4 lg:grid-cols-3">
+                    <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
+                      <p className="text-sm font-semibold text-ink">Background queue</p>
+                      <p className="mt-2 text-sm leading-7 text-ink/62">
+                        {data.systemHealth.jobQueue.pending} pending, {data.systemHealth.jobQueue.processing} processing, {data.systemHealth.jobQueue.retryable} retrying, {data.systemHealth.jobQueue.dead} dead-lettered.
+                      </p>
+                    </div>
+                    <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
+                      <p className="text-sm font-semibold text-ink">Provider circuits</p>
+                      <p className="mt-2 text-sm leading-7 text-ink/62">
+                        {data.systemHealth.providers.length === 0
+                          ? 'No provider circuit records yet. They will appear after payment, payout, SMS, email, or shipping events run.'
+                          : `${data.summary.providersDegraded} degraded across ${data.systemHealth.providers.length} tracked provider lanes.`}
+                      </p>
+                    </div>
+                    <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
+                      <p className="text-sm font-semibold text-ink">Oldest queued work</p>
+                      <p className="mt-2 text-sm leading-7 text-ink/62">
+                        {data.systemHealth.jobQueue.oldestPendingAt
+                          ? `Oldest pending job started waiting at ${new Date(data.systemHealth.jobQueue.oldestPendingAt).toLocaleString()}.`
+                          : 'No pending jobs waiting right now.'}
+                      </p>
+                    </div>
                   </div>
-                  <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
-                    <p className="text-sm font-semibold text-ink">Drape owns the workflow</p>
-                    <p className="mt-2 text-sm leading-7 text-ink/62">
-                      Refunds, verification, deletion, dispatch, review moderation, and trust decisions live here with audit history.
-                    </p>
+                </section>
+
+                <section className="rounded-[2rem] border border-ink/8 bg-white/80 p-6 shadow-[0_20px_70px_rgba(22,28,24,0.08)]">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/80">Architecture stance</p>
+                  <div className="mt-3 grid gap-4 lg:grid-cols-3">
+                    <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
+                      <p className="text-sm font-semibold text-ink">Public web stays public</p>
+                      <p className="mt-2 text-sm leading-7 text-ink/62">
+                        Waitlist, marketing, and future customer acquisition stay clean. Internal ops should never leak into the public nav.
+                      </p>
+                    </div>
+                    <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
+                      <p className="text-sm font-semibold text-ink">Drape owns the workflow</p>
+                      <p className="mt-2 text-sm leading-7 text-ink/62">
+                        Refunds, verification, deletion, dispatch, review moderation, and trust decisions live here with audit history.
+                      </p>
+                    </div>
+                    <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
+                      <p className="text-sm font-semibold text-ink">Security gets stricter from here</p>
+                      <p className="mt-2 text-sm leading-7 text-ink/62">
+                        Today is token bootstrap mode. Next is workforce SSO, @drapeon.co gating, team roles, and app-level permission checks.
+                      </p>
+                    </div>
                   </div>
-                  <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
-                    <p className="text-sm font-semibold text-ink">Security gets stricter from here</p>
-                    <p className="mt-2 text-sm leading-7 text-ink/62">
-                      Today is token bootstrap mode. Next is workforce SSO, @drapeon.co gating, team roles, and app-level permission checks.
-                    </p>
-                  </div>
-                </div>
-              </section>
+                </section>
+              </>
             ) : null}
 
             {renderOpsSection(safeView, data, safeView)}
