@@ -1907,20 +1907,18 @@ export default function OrderBriefScreen() {
                   required
                   hint={`${fitNote.length}/500 · min 20 characters`}
                 />
-                <View style={styles.inlineChipRow}>
+                <View style={styles.quickAddList}>
                   {FIT_NOTE_PRESETS.map((value) => (
-                    <TouchableOpacity
+                    <QuickAddRow
                       key={value}
-                      style={styles.inlineChip}
+                      label={value}
                       onPress={() => {
                         const next =
                           fitNote.trim().length > 0 ? `${fitNote.trim()}. ${value}` : value
                         setFitNote(next)
                         if (fitNoteError) validateFitNote(next)
                       }}
-                    >
-                      <Text style={styles.inlineChipText}>{value}</Text>
-                    </TouchableOpacity>
+                    />
                   ))}
                 </View>
               </View>
@@ -2005,23 +2003,23 @@ export default function OrderBriefScreen() {
                       <Text style={styles.fieldHint}>
                         How long should the tailor have to source fabric before you are updated?
                       </Text>
-                      <View style={styles.inlineChipRow}>
+                      <View style={styles.segmentedControl}>
                         {CUSTOM_ORDER_FABRIC_SOURCING_DEADLINE_DAYS.map((days) => (
                           <TouchableOpacity
                             key={days}
                             style={[
-                              styles.inlineChip,
-                              fabricSourcingDeadlineDays === days && styles.inlineChipActive,
+                              styles.segmentedItem,
+                              fabricSourcingDeadlineDays === days && styles.segmentedItemActive,
                             ]}
                             onPress={() => setFabricSourcingDeadlineDays(days)}
                           >
                             <Text
                               style={[
-                                styles.inlineChipText,
-                                fabricSourcingDeadlineDays === days && styles.inlineChipTextActive,
+                                styles.segmentedItemText,
+                                fabricSourcingDeadlineDays === days && styles.segmentedItemTextActive,
                               ]}
                             >
-                              {days} business days
+                              {days} days
                             </Text>
                           </TouchableOpacity>
                         ))}
@@ -2072,20 +2070,20 @@ export default function OrderBriefScreen() {
                     <Text style={styles.fieldLabel}>
                       Shipping preference <Text style={styles.required}>*</Text>
                     </Text>
-                    <View style={styles.inlineChipRow}>
+                    <View style={styles.segmentedControl}>
                       {CUSTOM_ORDER_SHIPPING_PREFERENCES.map((value) => (
                         <TouchableOpacity
                           key={value}
                           style={[
-                            styles.inlineChip,
-                            shippingPreference === value && styles.inlineChipActive,
+                            styles.segmentedItem,
+                            shippingPreference === value && styles.segmentedItemActive,
                           ]}
                           onPress={() => setShippingPreference(value)}
                         >
                           <Text
                             style={[
-                              styles.inlineChipText,
-                              shippingPreference === value && styles.inlineChipTextActive,
+                              styles.segmentedItemText,
+                              shippingPreference === value && styles.segmentedItemTextActive,
                             ]}
                           >
                             {value === 'EXPRESS' ? 'Express' : 'Standard'}
@@ -2787,6 +2785,17 @@ function OptionCard({
   )
 }
 
+function QuickAddRow({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={styles.quickAddRow} onPress={onPress} accessibilityLabel={`Add ${label}`}>
+      <View style={styles.quickAddIcon}>
+        <Text style={styles.quickAddIconText}>+</Text>
+      </View>
+      <Text style={styles.quickAddText}>{label}</Text>
+    </TouchableOpacity>
+  )
+}
+
 function ReviewSection({
   title,
   onEdit,
@@ -2986,20 +2995,34 @@ const styles = StyleSheet.create({
   },
   required: { color: Colors.error },
   fieldHint: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
-  inlineChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
-  inlineChip: {
-    minHeight: 36,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.white,
+  quickAddList: { gap: Spacing.sm, marginTop: Spacing.sm },
+  quickAddRow: {
+    minHeight: 46,
+    borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  quickAddIcon: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
     justifyContent: 'center',
   },
-  inlineChipActive: { backgroundColor: Colors.white, borderColor: Colors.needleGreen },
-  inlineChipText: { fontSize: FontSize.xs, color: Colors.ink, fontWeight: FontWeight.medium },
-  inlineChipTextActive: { color: Colors.needleGreen },
+  quickAddIconText: {
+    color: Colors.needleGreen,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.bold,
+    lineHeight: 20,
+  },
+  quickAddText: { flex: 1, fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.medium },
   segmentedControl: {
     marginTop: Spacing.sm,
     flexDirection: 'row',

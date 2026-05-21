@@ -1208,13 +1208,13 @@ const styles = StyleSheet.create({
   supportEmailCard: {
     marginHorizontal: Spacing.lg,
     marginTop: Spacing.xs,
-    backgroundColor: Colors.needleGreenLight,
+    backgroundColor: Colors.needleGreen,
     borderRadius: Radius.lg,
     padding: Spacing.md,
     gap: 4,
   },
-  supportEmailTitle: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
-  supportEmailText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  supportEmailTitle: { fontSize: FontSize.sm, color: Colors.textInverse, fontWeight: FontWeight.semibold },
+  supportEmailText: { fontSize: FontSize.xs, color: Colors.textInverse, lineHeight: 18 },
   supportDivider: {
     height: 1,
     backgroundColor: Colors.lightGrey,

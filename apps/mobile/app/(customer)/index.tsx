@@ -41,6 +41,7 @@ const LAST_SEARCH_KEY = 'drape_last_search'
 const CUSTOMER_ONBOARDING_KEY = 'drape_customer_onboarding_seen'
 const MAX_RECENT_SEARCHES = 5
 const PAGE_SIZE = 20
+const EXPLORE_FOCUS_REFRESH_MS = 60_000
 const HOME_BG = Colors.bone
 const PRIMARY_GREEN = Colors.needleGreen
 const CHARCOAL = Colors.ink
@@ -410,6 +411,7 @@ export default function CustomerHomeScreen() {
   const resultCacheRef = useRef<Map<string, TailorCard[]>>(new Map())
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<TextInput>(null)
+  const lastBrowseFetchAtRef = useRef(0)
 
   const isSearchActive = query.trim().length > 0
   const showSuggestions = searchFocused && !isSearchActive
@@ -508,6 +510,7 @@ export default function CustomerHomeScreen() {
 
       if (ordersFailed && tailorsFailed) {
         setFetchError(true)
+        lastBrowseFetchAtRef.current = 0
         setActiveOrders([])
         setAllTailors([])
         return
@@ -540,16 +543,25 @@ export default function CustomerHomeScreen() {
         setAllTailors(tailorRows.map(mapTailor))
       } else {
         setFetchError(true)
+        lastBrowseFetchAtRef.current = 0
       }
     } catch {
       setFetchError(true)
+      lastBrowseFetchAtRef.current = 0
     }
   }, [userId])
 
   useFocusEffect(
     useCallback(() => {
       if (!userId) return undefined
-      void fetchData()
+      const now = Date.now()
+      const shouldRefresh =
+        lastBrowseFetchAtRef.current === 0 ||
+        now - lastBrowseFetchAtRef.current > EXPLORE_FOCUS_REFRESH_MS
+      if (shouldRefresh) {
+        lastBrowseFetchAtRef.current = now
+        void fetchData()
+      }
       return undefined
     }, [fetchData, userId])
   )
@@ -687,6 +699,7 @@ export default function CustomerHomeScreen() {
   async function onRefresh() {
     setRefreshing(true)
     await fetchData()
+    lastBrowseFetchAtRef.current = Date.now()
     const [rv, rs, ls] = await Promise.all([
       loadRecentlyViewedTailors<TailorCardWithRecent>(user?.id),
       loadRecentSearches(user?.id),

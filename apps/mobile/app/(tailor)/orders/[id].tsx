@@ -2923,23 +2923,17 @@ function MeasurementConfirmationRequestModal({ visible, orderId, measurements, o
             {fieldOptions.length > 0 ? (
               <View style={styles.measurementFieldPicker}>
                 <Text style={styles.modalSectionLabel}>Fields to confirm</Text>
-                <View style={styles.measurementFieldChipWrap}>
+                <View style={styles.choiceList}>
                   {fieldOptions.map((option) => {
                     const active = selectedFields.includes(option.key)
                     return (
-                      <TouchableOpacity
+                      <SelectableSettingRow
                         key={option.key}
-                        accessibilityRole="button"
+                        label={option.label}
+                        detail={`${String(option.value)} ${measurements?.unit ?? ''}`.trim()}
+                        active={active}
                         onPress={() => toggleField(option.key)}
-                        style={[styles.measurementFieldChip, active && styles.measurementFieldChipActive]}
-                      >
-                        <Text style={[styles.measurementFieldChipText, active && styles.measurementFieldChipTextActive]}>
-                          {option.label}
-                        </Text>
-                        <Text style={[styles.measurementFieldChipValue, active && styles.measurementFieldChipTextActive]}>
-                          {String(option.value)} {measurements?.unit ?? ''}
-                        </Text>
-                      </TouchableOpacity>
+                      />
                     )
                   })}
                 </View>
@@ -4137,7 +4131,7 @@ function ConsultationModal({ visible, orderId, action, defaultCurrency, onClose,
   const [scheduledAt, setScheduledAt] = useState<Date>(defaultConsultationStart())
   const [showPicker, setShowPicker] = useState(false)
   const [creditFeeTowardOrder, setCreditFeeTowardOrder] = useState(true)
-  const [paymentTiming, setPaymentTiming] = useState<'BEFORE_CALL_STARTS' | 'WAIVED_OR_FREE'>('BEFORE_CALL_STARTS')
+  const [paymentTiming] = useState<'BEFORE_CALL_STARTS' | 'WAIVED_OR_FREE'>('BEFORE_CALL_STARTS')
   const [reschedulePolicy, setReschedulePolicy] = useState<'ONE_FREE_RESCHEDULE' | 'FLEXIBLE_WITH_NOTICE' | 'CASE_BY_CASE'>('ONE_FREE_RESCHEDULE')
   const [noShowPolicy, setNoShowPolicy] = useState<'FEE_FORFEITED' | 'ONE_REBOOK_ALLOWED' | 'CASE_BY_CASE'>('FEE_FORFEITED')
   const [expiryPolicy, setExpiryPolicy] = useState<'EXPIRES_IN_7_DAYS' | 'EXPIRES_IN_14_DAYS' | 'NO_EXPIRY'>('EXPIRES_IN_14_DAYS')
@@ -4269,97 +4263,81 @@ function ConsultationModal({ visible, orderId, action, defaultCurrency, onClose,
               {feeEnabled ? (
                 <>
                   <Text style={styles.fieldLabel}>Should this fee count toward the final order?</Text>
-                  <View style={{ flexDirection: 'row', gap: Spacing.sm, flexWrap: 'wrap' }}>
-                    <TouchableOpacity
-                      style={[styles.currencyChip, creditFeeTowardOrder && styles.currencyChipActive]}
+                  <View style={styles.choiceList}>
+                    <SelectableSettingRow
+                      label="Credit it later"
+                      detail="The consultation fee is deducted from the final order quote."
+                      active={creditFeeTowardOrder}
                       onPress={() => setCreditFeeTowardOrder(true)}
-                    >
-                      <Text style={[styles.currencyChipText, creditFeeTowardOrder && styles.currencyChipTextActive]}>Credit it later</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.currencyChip, !creditFeeTowardOrder && styles.currencyChipActive]}
+                    />
+                    <SelectableSettingRow
+                      label="Separate fee"
+                      detail="The consultation is paid on its own and does not reduce the order quote."
+                      active={!creditFeeTowardOrder}
                       onPress={() => setCreditFeeTowardOrder(false)}
-                    >
-                      <Text style={[styles.currencyChipText, !creditFeeTowardOrder && styles.currencyChipTextActive]}>Separate fee</Text>
-                    </TouchableOpacity>
+                    />
                   </View>
 
                   <Text style={styles.fieldLabel}>When is payment due?</Text>
-                  <View style={{ flexDirection: 'row', gap: Spacing.sm, flexWrap: 'wrap' }}>
-                    {(['BEFORE_CALL_STARTS'] as const).map((value) => (
-                      <TouchableOpacity
-                        key={value}
-                        style={[styles.currencyChip, paymentTiming === value && styles.currencyChipActive]}
-                        onPress={() => setPaymentTiming(value)}
-                      >
-                        <Text style={[styles.currencyChipText, paymentTiming === value && styles.currencyChipTextActive]}>
-                          {CONSULTATION_PAYMENT_TIMING_LABELS[value]}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
+                  <View style={styles.policySummaryRow}>
+                    <Text style={styles.policySummaryLabel}>Payment due</Text>
+                    <Text style={styles.policySummaryValue}>
+                      {CONSULTATION_PAYMENT_TIMING_LABELS[paymentTiming]}
+                    </Text>
                   </View>
                 </>
               ) : null}
 
               <Text style={styles.fieldLabel}>Reschedule policy</Text>
-              <View style={{ flexDirection: 'row', gap: Spacing.sm, flexWrap: 'wrap' }}>
+              <View style={styles.choiceList}>
                 {(['ONE_FREE_RESCHEDULE', 'FLEXIBLE_WITH_NOTICE', 'CASE_BY_CASE'] as const).map((value) => (
-                  <TouchableOpacity
+                  <SelectableSettingRow
                     key={value}
-                    style={[styles.currencyChip, reschedulePolicy === value && styles.currencyChipActive]}
+                    label={CONSULTATION_RESCHEDULE_POLICY_LABELS[value]}
+                    active={reschedulePolicy === value}
                     onPress={() => setReschedulePolicy(value)}
-                  >
-                    <Text style={[styles.currencyChipText, reschedulePolicy === value && styles.currencyChipTextActive]}>
-                      {CONSULTATION_RESCHEDULE_POLICY_LABELS[value]}
-                    </Text>
-                  </TouchableOpacity>
+                  />
                 ))}
               </View>
 
               <Text style={styles.fieldLabel}>No-show policy</Text>
-              <View style={{ flexDirection: 'row', gap: Spacing.sm, flexWrap: 'wrap' }}>
+              <View style={styles.choiceList}>
                 {noShowOptions.map((value) => (
-                  <TouchableOpacity
+                  <SelectableSettingRow
                     key={value}
-                    style={[styles.currencyChip, noShowPolicy === value && styles.currencyChipActive]}
+                    label={CONSULTATION_NO_SHOW_POLICY_LABELS[value]}
+                    active={noShowPolicy === value}
                     onPress={() => setNoShowPolicy(value)}
-                  >
-                    <Text style={[styles.currencyChipText, noShowPolicy === value && styles.currencyChipTextActive]}>
-                      {CONSULTATION_NO_SHOW_POLICY_LABELS[value]}
-                    </Text>
-                  </TouchableOpacity>
+                  />
                 ))}
               </View>
 
               <Text style={styles.fieldLabel}>How long should this consultation hold?</Text>
-              <View style={{ flexDirection: 'row', gap: Spacing.sm, flexWrap: 'wrap' }}>
+              <View style={styles.choiceList}>
                 {(['EXPIRES_IN_7_DAYS', 'EXPIRES_IN_14_DAYS', 'NO_EXPIRY'] as const).map((value) => (
-                  <TouchableOpacity
+                  <SelectableSettingRow
                     key={value}
-                    style={[styles.currencyChip, expiryPolicy === value && styles.currencyChipActive]}
+                    label={CONSULTATION_EXPIRY_POLICY_LABELS[value]}
+                    active={expiryPolicy === value}
                     onPress={() => setExpiryPolicy(value)}
-                  >
-                    <Text style={[styles.currencyChipText, expiryPolicy === value && styles.currencyChipTextActive]}>
-                      {CONSULTATION_EXPIRY_POLICY_LABELS[value]}
-                    </Text>
-                  </TouchableOpacity>
+                  />
                 ))}
               </View>
 
               <Text style={styles.fieldLabel}>Reminder support</Text>
-              <View style={{ flexDirection: 'row', gap: Spacing.sm, flexWrap: 'wrap' }}>
-                <TouchableOpacity
-                  style={[styles.currencyChip, reminderEnabled && styles.currencyChipActive]}
+              <View style={styles.choiceList}>
+                <SelectableSettingRow
+                  label="Send reminder"
+                  detail="Drape sends reminders before the scheduled consultation."
+                  active={reminderEnabled}
                   onPress={() => setReminderEnabled(true)}
-                >
-                  <Text style={[styles.currencyChipText, reminderEnabled && styles.currencyChipTextActive]}>Send reminder</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.currencyChip, !reminderEnabled && styles.currencyChipActive]}
+                />
+                <SelectableSettingRow
+                  label="No reminder"
+                  detail="Use only when you have already arranged the reminder outside this request."
+                  active={!reminderEnabled}
                   onPress={() => setReminderEnabled(false)}
-                >
-                  <Text style={[styles.currencyChipText, !reminderEnabled && styles.currencyChipTextActive]}>No reminder</Text>
-                </TouchableOpacity>
+                />
               </View>
             </View>
             <Input
@@ -4486,6 +4464,37 @@ function BriefRow({ label, value }: { label: string; value: string }) {
       <Text style={styles.briefRowLabel}>{label}</Text>
       <Text style={styles.briefRowValue}>{value}</Text>
     </View>
+  )
+}
+
+function SelectableSettingRow({
+  label,
+  detail,
+  active,
+  onPress,
+}: {
+  label: string
+  detail?: string
+  active: boolean
+  onPress: () => void
+}) {
+  return (
+    <TouchableOpacity
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      onPress={onPress}
+      style={[styles.selectableSettingRow, active && styles.selectableSettingRowActive]}
+    >
+      <View style={[styles.selectableSettingRadio, active && styles.selectableSettingRadioActive]}>
+        {active ? <Feather name="check" size={12} color={Colors.textInverse} /> : null}
+      </View>
+      <View style={styles.selectableSettingBody}>
+        <Text style={[styles.selectableSettingLabel, active && styles.selectableSettingLabelActive]}>
+          {label}
+        </Text>
+        {detail ? <Text style={styles.selectableSettingDetail}>{detail}</Text> : null}
+      </View>
+    </TouchableOpacity>
   )
 }
 
@@ -4823,23 +4832,51 @@ const styles = StyleSheet.create({
   modalSectionLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
   modalHelpText: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   measurementFieldPicker: { gap: Spacing.sm },
-  measurementFieldChipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  measurementFieldChip: {
-    minHeight: 44,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
+  choiceList: { gap: Spacing.sm },
+  selectableSettingRow: {
+    minHeight: 52,
     borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
   },
-  measurementFieldChipActive: {
+  selectableSettingRowActive: {
     borderColor: Colors.needleGreen,
     backgroundColor: Colors.needleGreenLight,
   },
-  measurementFieldChipText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
-  measurementFieldChipTextActive: { color: Colors.needleGreen },
-  measurementFieldChipValue: { marginTop: 2, fontSize: FontSize.xs, color: Colors.midGrey },
+  selectableSettingRadio: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectableSettingRadioActive: {
+    borderColor: Colors.needleGreen,
+    backgroundColor: Colors.needleGreen,
+  },
+  selectableSettingBody: { flex: 1 },
+  selectableSettingLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  selectableSettingLabelActive: { color: Colors.needleGreen },
+  selectableSettingDetail: { marginTop: 3, fontSize: FontSize.xs, lineHeight: 17, color: Colors.midGrey },
+  policySummaryRow: {
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.md,
+  },
+  policySummaryLabel: { fontSize: FontSize.xs, color: Colors.midGrey, marginBottom: 3 },
+  policySummaryValue: { fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
   shippingFields: { gap: Spacing.sm },
   shippingWarning: {
     fontSize: FontSize.sm,
@@ -4932,12 +4969,4 @@ const styles = StyleSheet.create({
   },
   reasonText: { flex: 1, fontSize: FontSize.sm, color: Colors.ink },
   reasonTextActive: { color: Colors.needleGreen, fontWeight: FontWeight.semibold },
-  currencyChip: {
-    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
-    borderRadius: Radius.full, borderWidth: 1.5, borderColor: Colors.lightGrey,
-    backgroundColor: Colors.white,
-  },
-  currencyChipActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
-  currencyChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
-  currencyChipTextActive: { color: Colors.needleGreen },
 })

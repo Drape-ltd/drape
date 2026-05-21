@@ -1,5 +1,4 @@
-import { useCallback, useState } from 'react'
-import { useFocusEffect } from 'expo-router'
+import { useEffect, useMemo, useState } from 'react'
 import {
   View,
   Text,
@@ -16,12 +15,13 @@ import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import * as ImageManipulator from 'expo-image-manipulator'
-import { invokeFunction, supabase } from '@/lib/supabase'
+import { invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { pickAvatarImageUri, type AvatarImageSource } from '@/lib/avatar-picker'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { deriveTailorReadiness } from '@/lib/tailor-readiness'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
+import { useTailorDashboard, useTailorPublic } from '@/lib/queries'
 import { useTailorProfile } from '@/lib/tailorProfile'
 import { shareTailorProfile, inviteTailorColleague, inviteCustomerFromTailor } from '@/lib/invite'
 import { Sentry } from '@/lib/sentry'
@@ -58,42 +58,6 @@ type TailorProfile = {
   payoutAccountType: 'PAYSTACK' | 'STRIPE_CONNECT' | null
 }
 
-type TailorProfileRow = {
-  id: string
-  display_name?: string | null
-  location?: string | null
-  bio?: string | null
-  seller_type?: 'TAILOR' | 'BOUTIQUE' | 'TAILOR_SHOP' | null
-  tier?: string | null
-  avg_rating?: number | null
-  total_reviews?: number | null
-  total_orders?: number | null
-  availability?: string | null
-  specialty_tags?: unknown
-  supports_custom_orders?: boolean | null
-  supports_ready_made?: boolean | null
-  pickup_available?: boolean | null
-  delivery_available?: boolean | null
-  shipping_available?: boolean | null
-  ships_internationally?: boolean | null
-  id_verification_status?: string | null
-  is_live?: boolean | null
-  avatar_url?: string | null
-  profile_completed?: boolean | null
-  payout_currency?: string | null
-  payout_provider?: string | null
-  payout_reverification_required?: boolean | null
-  payout_account_verified?: boolean | null
-  payout_account_type?: 'PAYSTACK' | 'STRIPE_CONNECT' | null
-}
-
-function asStringList(value: unknown): string[] {
-  if (Array.isArray(value))
-    return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
-  if (typeof value === 'string' && value.length > 0) return [value]
-  return []
-}
-
 const AVAIL_LABEL: Record<string, string> = {
   OPEN: 'Available',
   LIMITED: 'Limited',
@@ -116,12 +80,58 @@ export default function TailorProfileScreen() {
   const router = useRouter()
   const { user, signOut } = useAuth()
   const { avatarUrl, setAvatarUrl } = useTailorProfile()
-  const [profile, setProfile] = useState<TailorProfile | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [fetchErrorMessage, setFetchErrorMessage] = useState('')
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
-  const [pendingQuoteCount, setPendingQuoteCount] = useState(0)
   const userId = user?.id
+  const displayName = user?.user_metadata?.display_name ?? ''
+  const dashboardQuery = useTailorDashboard(userId, displayName)
+  const dashboardStats = dashboardQuery.data?.stats ?? null
+  const profileId = dashboardStats?.profileId ?? undefined
+  const publicProfileQuery = useTailorPublic(profileId, userId)
+  const publicProfile = publicProfileQuery.data?.profile ?? null
+
+  const profile = useMemo<TailorProfile | null>(() => {
+    if (!dashboardStats?.profileId && !publicProfile?.id) return null
+    return {
+      id: dashboardStats?.profileId ?? publicProfile!.id,
+      displayName: publicProfile?.displayName ?? dashboardStats?.displayName ?? displayName,
+      location: publicProfile?.location ?? '',
+      bio: publicProfile?.bio ?? null,
+      sellerType: publicProfile?.sellerType ?? 'TAILOR',
+      tier: publicProfile?.tier ?? dashboardStats?.tier ?? 'VERIFIED',
+      avgRating: publicProfile?.avgRating ?? dashboardStats?.avgRating ?? 0,
+      totalOrders: publicProfile?.totalOrders ?? dashboardStats?.completedOrders ?? 0,
+      totalReviews: publicProfile?.totalReviews ?? 0,
+      availability: publicProfile?.availability ?? dashboardStats?.availability ?? 'OPEN',
+      specialtyTags: publicProfile?.specialtyTags ?? [],
+      supportsCustomOrders: publicProfile?.supportsCustomOrders ?? true,
+      supportsReadyMade: publicProfile?.supportsReadyMade ?? false,
+      pickupAvailable: publicProfile?.pickupAvailable ?? false,
+      deliveryAvailable: publicProfile?.deliveryAvailable ?? false,
+      shippingAvailable: publicProfile?.shippingAvailable ?? false,
+      shipsInternationally: false,
+      idVerificationStatus: dashboardStats?.idVerificationStatus ?? 'NOT_SUBMITTED',
+      isLive: dashboardStats?.isLive ?? false,
+      profileCompleted: dashboardStats?.profileCompleted ?? false,
+      stripeAccountId: null,
+      paystackAccountId: null,
+      payoutCurrency: dashboardStats?.payoutCurrency ?? null,
+      payoutProvider: dashboardStats?.payoutProvider ?? null,
+      payoutReverificationRequired: dashboardStats?.payoutReverificationRequired ?? null,
+      payoutAccountVerified: dashboardStats?.payoutAccountVerified ?? null,
+      payoutAccountType: dashboardStats?.payoutAccountType ?? null,
+    }
+  }, [dashboardStats, displayName, publicProfile])
+
+  const loading =
+    dashboardQuery.isLoading ||
+    (!!profileId && publicProfileQuery.isLoading && !publicProfile && !profile)
+  const fetchErrorMessage =
+    !loading && dashboardQuery.error
+      ? isLikelyConnectivityIssue(dashboardQuery.error)
+        ? 'Connection looks weak. Your storefront details should still be there once the signal stabilizes, so retry when it improves.'
+        : 'Your profile is where customers judge trust, portfolio, and reviews. Please try again in a moment.'
+      : ''
+  const pendingQuoteCount = dashboardStats?.pendingQuotes ?? 0
 
   async function openExternalUrl(url: string, fallbackMessage: string) {
     const supported = await Linking.canOpenURL(url)
@@ -137,7 +147,6 @@ export default function TailorProfileScreen() {
     }
   }
 
-  const displayName = user?.user_metadata?.display_name ?? ''
   const initials =
     displayName
       .split(' ')
@@ -146,117 +155,9 @@ export default function TailorProfileScreen() {
       .join('')
       .toUpperCase() || '?'
 
-  const loadProfile = useCallback(async () => {
-    setFetchErrorMessage('')
-    setLoading(true)
-    if (!userId) {
-      setProfile(null)
-      setPendingQuoteCount(0)
-      setLoading(false)
-      return
-    }
-    try {
-      const [profileRes, pendingRes] = await Promise.allSettled([
-        supabase
-          .from('tailor_profiles')
-          .select(
-            'id, display_name, location, bio, seller_type, tier, avg_rating, total_reviews, total_orders, availability, specialty_tags, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, ships_internationally, id_verification_status, is_live, avatar_url, profile_completed, payout_currency, payout_provider, payout_reverification_required, payout_account_verified, payout_account_type'
-          )
-          .eq('user_id', userId)
-          .maybeSingle(),
-        supabase
-          .from('orders')
-          .select('id', { count: 'exact', head: true })
-          .eq('tailor_id', userId)
-          .eq('stage', 'PENDING_QUOTE'),
-      ])
-
-      const profileFailed =
-        profileRes.status === 'rejected' ||
-        (profileRes.status === 'fulfilled' && !!profileRes.value.error)
-      const pendingFailed =
-        pendingRes.status === 'rejected' ||
-        (pendingRes.status === 'fulfilled' && !!pendingRes.value.error)
-
-      if (profileFailed && pendingFailed) {
-        const profileError =
-          profileRes.status === 'fulfilled' ? profileRes.value.error : profileRes.reason
-        const pendingError =
-          pendingRes.status === 'fulfilled' ? pendingRes.value.error : pendingRes.reason
-        const rootError = profileError ?? pendingError
-        setFetchErrorMessage(
-          isLikelyConnectivityIssue(rootError)
-            ? 'Connection looks weak. Your storefront details should still be there once the signal stabilizes, so retry when it improves.'
-            : 'Your profile is where customers judge trust, portfolio, and reviews. Please try again in a moment.'
-        )
-        setProfile(null)
-        setPendingQuoteCount(0)
-        setLoading(false)
-        return
-      }
-
-      const profileData =
-        profileRes.status === 'fulfilled' && !profileRes.value.error
-          ? (profileRes.value.data as TailorProfileRow | null)
-          : null
-      const pendingCount =
-        pendingRes.status === 'fulfilled' && !pendingRes.value.error
-          ? (pendingRes.value.count ?? 0)
-          : 0
-
-      if (profileData) {
-        const d = profileData
-        setProfile({
-          id: d.id,
-          displayName: d.display_name ?? 'Drape tailor',
-          location: d.location ?? '',
-          bio: d.bio ?? null,
-          sellerType: d.seller_type ?? 'TAILOR',
-          tier: d.tier ?? 'VERIFIED',
-          avgRating: d.avg_rating ?? 0,
-          totalOrders: d.total_orders ?? 0,
-          totalReviews: d.total_reviews ?? 0,
-          availability: d.availability ?? 'OPEN',
-          specialtyTags: asStringList(d.specialty_tags),
-          supportsCustomOrders: d.supports_custom_orders ?? true,
-          supportsReadyMade: d.supports_ready_made ?? false,
-          pickupAvailable: d.pickup_available ?? false,
-          deliveryAvailable: d.delivery_available ?? false,
-          shippingAvailable: d.shipping_available ?? false,
-          shipsInternationally: d.ships_internationally ?? false,
-          idVerificationStatus: d.id_verification_status ?? 'NOT_SUBMITTED',
-          isLive: d.is_live ?? false,
-          profileCompleted: d.profile_completed ?? false,
-          stripeAccountId: null,
-          paystackAccountId: null,
-          payoutCurrency: d.payout_currency ?? null,
-          payoutProvider: d.payout_provider ?? null,
-          payoutReverificationRequired: d.payout_reverification_required ?? null,
-          payoutAccountVerified: d.payout_account_verified ?? null,
-          payoutAccountType: d.payout_account_type ?? null,
-        })
-        if (d.avatar_url) setAvatarUrl(d.avatar_url)
-      } else {
-        setProfile(null)
-      }
-
-      setPendingQuoteCount(pendingCount)
-      setLoading(false)
-    } catch (error) {
-      setFetchErrorMessage(
-        isLikelyConnectivityIssue(error)
-          ? 'Connection looks weak. Your storefront details should still be there once the signal stabilizes, so retry when it improves.'
-          : 'Your profile is where customers judge trust, portfolio, and reviews. Please try again in a moment.'
-      )
-      setLoading(false)
-    }
-  }, [setAvatarUrl, userId])
-
-  useFocusEffect(
-    useCallback(() => {
-      void loadProfile()
-    }, [loadProfile])
-  )
+  useEffect(() => {
+    if (publicProfile?.avatarUrl) setAvatarUrl(publicProfile.avatarUrl)
+  }, [publicProfile?.avatarUrl, setAvatarUrl])
 
   // ── Avatar upload ────────────────────────────────────────────────────────────
 
@@ -340,7 +241,7 @@ export default function TailorProfileScreen() {
       : 'NOT_SUBMITTED'
   const liveBadge = LIVE_BADGE[liveBadgeKey]
 
-  if (fetchErrorMessage) {
+  if (fetchErrorMessage && !userId) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.stateWrap}>
@@ -351,7 +252,8 @@ export default function TailorProfileScreen() {
             <TouchableOpacity
               style={styles.statePrimaryBtn}
               onPress={() => {
-                void loadProfile()
+                void dashboardQuery.refetch()
+                if (profileId) void publicProfileQuery.refetch()
               }}
             >
               <Text style={styles.statePrimaryBtnText}>Try again</Text>
@@ -758,11 +660,11 @@ function FlatRow({
       <Feather
         name={icon}
         size={20}
-        color={accent ? Colors.needleGreen : Colors.inkLight}
+        color={accent ? Colors.textInverse : Colors.inkLight}
         style={{ width: 24 }}
       />
       <Text style={[styles.flatRowLabel, accent && styles.flatRowLabelAccent]}>{label}</Text>
-      <Feather name="chevron-right" size={16} color={accent ? Colors.needleGreen : Colors.midGrey} />
+      <Feather name="chevron-right" size={16} color={accent ? Colors.textInverse : Colors.midGrey} />
     </TouchableOpacity>
   )
 }
@@ -1299,10 +1201,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Colors.lightGrey,
   },
-  flatRowAccent: { backgroundColor: Colors.needleGreenLight },
+  flatRowAccent: { backgroundColor: Colors.needleGreen },
   rowLast: { borderBottomWidth: 0 },
   flatRowLabel: { flex: 1, fontSize: FontSize.sm, color: Colors.ink },
-  flatRowLabelAccent: { color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+  flatRowLabelAccent: { color: Colors.textInverse, fontWeight: FontWeight.semibold },
 
   // Log out
   logOutRow: {
