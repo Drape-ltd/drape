@@ -27,6 +27,7 @@ import {
 import { rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { log, audit } from '../_shared/logger.ts'
+import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
 import { enqueueOrderEventEmailJob, enqueuePushJob, enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
@@ -651,6 +652,24 @@ async function insertCustomProductionEvidence(
       actor_role: 'TAILOR',
       metadata: input.metadata ?? {},
     })
+
+  if (!error) {
+    await queueMediaSafetyReview(supabase, {
+      fn: FN,
+      actorId: input.actorId,
+      actorRole: 'TAILOR',
+      surface: 'production_stage.evidence',
+      publicUrls: input.photoUrls,
+      purpose: 'PRODUCTION_STAGE',
+      orderId: input.orderId,
+      relatedEntityType: 'order',
+      relatedEntityId: input.orderId,
+      metadata: {
+        stageKey: input.stageKey,
+        ...(input.metadata ?? {}),
+      },
+    })
+  }
 
   return error
 }

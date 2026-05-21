@@ -12,6 +12,7 @@ import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
+import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
 import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
 import { verifyReauthProof } from '../_shared/reauth-proof.ts'
 import { checkRateLimit, getClientIp, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
@@ -19,13 +20,20 @@ import { parseBody, z } from '../_shared/validate.ts'
 
 const FN = 'account-profile-action'
 
-const BodySchema = z.object({
-  action: z.literal('update-personal-info'),
-  role: z.enum(['CUSTOMER', 'TAILOR']),
-  displayName: z.string().trim().min(1).max(80),
-  phone: z.string().trim().min(1).max(32),
-  reauthProof: z.string().trim().min(20).optional(),
-})
+const BodySchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('update-personal-info'),
+    role: z.enum(['CUSTOMER', 'TAILOR']),
+    displayName: z.string().trim().min(1).max(80),
+    phone: z.string().trim().min(1).max(32),
+    reauthProof: z.string().trim().min(20).optional(),
+  }),
+  z.object({
+    action: z.literal('update-avatar'),
+    role: z.enum(['CUSTOMER', 'TAILOR']),
+    avatarUrl: z.string().url(),
+  }),
+])
 
 function jsonResponse(payload: Record<string, unknown>, status: number, cors: HeadersInit) {
   return new Response(JSON.stringify(payload), {
@@ -69,7 +77,12 @@ Deno.serve(async (req) => {
     const body = parsed.data
     const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
     const clientIp = getClientIp(req)
-    const allowed = await checkRateLimit(supabase, `${FN}:${caller.id}:${clientIp}`, 3600, 5)
+    const allowed = await checkRateLimit(
+      supabase,
+      `${FN}:${body.action}:${caller.id}:${clientIp}`,
+      3600,
+      body.action === 'update-avatar' ? 20 : 5,
+    )
     if (!allowed) {
       await audit(supabase, {
         event: 'rate_limit.exceeded',
@@ -79,6 +92,86 @@ Deno.serve(async (req) => {
         payload: { function: FN, ip: clientIp, action: body.action },
       })
       return rateLimitExceededResponse(cors)
+    }
+
+    if (body.action === 'update-avatar') {
+      const now = new Date().toISOString()
+      let tailorProfileId: string | null = null
+
+      if (body.role === 'CUSTOMER') {
+        const { error: profileError } = await supabase
+          .from('customer_profiles')
+          .upsert(
+            {
+              user_id: caller.id,
+              avatar_url: body.avatarUrl,
+              updated_at: now,
+            },
+            { onConflict: 'user_id' },
+          )
+
+        if (profileError) {
+          log('error', FN, 'customer_avatar.update_failed', { actor_id: caller.id, error: profileError.message })
+          return jsonResponse({
+            error: 'We could not update your profile photo right now.',
+            message: 'We could not update your profile photo right now.',
+          }, 500, cors)
+        }
+      } else {
+        const { data: tailorProfile, error: tailorLookupError } = await supabase
+          .from('tailor_profiles')
+          .select('id')
+          .eq('user_id', caller.id)
+          .maybeSingle()
+
+        if (tailorLookupError || !tailorProfile?.id) {
+          log('error', FN, 'tailor_avatar.profile_lookup_failed', {
+            actor_id: caller.id,
+            error: tailorLookupError?.message ?? 'missing tailor profile',
+          })
+          return jsonResponse({
+            error: 'Finish tailor setup before updating this photo.',
+            message: 'Finish tailor setup before updating this photo.',
+          }, tailorLookupError ? 500 : 404, cors)
+        }
+
+        tailorProfileId = tailorProfile.id
+        const { error: profileError } = await supabase
+          .from('tailor_profiles')
+          .update({ avatar_url: body.avatarUrl, updated_at: now })
+          .eq('id', tailorProfile.id)
+
+        if (profileError) {
+          log('error', FN, 'tailor_avatar.update_failed', { actor_id: caller.id, error: profileError.message })
+          return jsonResponse({
+            error: 'We could not update your profile photo right now.',
+            message: 'We could not update your profile photo right now.',
+          }, 500, cors)
+        }
+      }
+
+      await queueMediaSafetyReview(supabase, {
+        fn: FN,
+        actorId: caller.id,
+        actorRole: body.role,
+        surface: 'avatar.public',
+        publicUrls: [body.avatarUrl],
+        purpose: 'AVATAR',
+        tailorProfileId,
+        relatedEntityType: body.role === 'TAILOR' ? 'tailor_profile' : 'customer_profile',
+        relatedEntityId: tailorProfileId ?? caller.id,
+        metadata: { action: body.action },
+      })
+
+      await audit(supabase, {
+        event: 'account.avatar_updated',
+        actor_id: caller.id,
+        actor_role: body.role,
+        severity: 'info',
+        payload: { function: FN },
+      })
+
+      return jsonResponse({ ok: true }, 200, cors)
     }
 
     const displayName = body.displayName.trim()

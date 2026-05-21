@@ -2,6 +2,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log } from '../_shared/logger.ts'
+import { filterBlockedMediaUrls, findBlockedMediaUrls } from '../_shared/media-safety.ts'
 
 const FN = 'read-gateway'
 
@@ -163,13 +164,23 @@ async function fetchTailorShop(supabase: any, tailorId: string) {
         inventoryQuantity: item.inventoryQuantity,
       })
     )
+  const blockedPhotoUrls = await findBlockedMediaUrls(
+    supabase,
+    items.flatMap((item) => item.photoUrls),
+  )
+  const safeItems = blockedPhotoUrls.size === 0
+    ? items
+    : items.map((item) => ({
+        ...item,
+        photoUrls: item.photoUrls.filter((url) => !blockedPhotoUrls.has(url)),
+      }))
 
   return {
     tailorName: asString(profile.display_name) ?? 'This seller',
     sellerAvailability: asString(profile.availability),
     sellerLive: profile.is_live === true,
     supportsCustomOrders: profile.supports_custom_orders !== false,
-    items,
+    items: safeItems,
   }
 }
 
@@ -213,6 +224,7 @@ async function fetchSellerItem(supabase: any, itemId: string) {
       ? row.inventory_quantity
       : fallbackInventoryQuantity(stockStatus, true)
   const sizes = asStringList(row.sizes)
+  const photoUrls = await filterBlockedMediaUrls(supabase, asStringList(row.photo_urls))
   const detail = {
     id: row.id,
     tailorProfileId: row.tailor_profile_id,
@@ -231,7 +243,7 @@ async function fetchSellerItem(supabase: any, itemId: string) {
     sizeInventory: normalizeSizeInventory(sizes, row.size_inventory, inventoryQuantity),
     currency: row.currency,
     priceAmount: row.price_amount,
-    photoUrls: asStringList(row.photo_urls),
+    photoUrls,
     stockStatus,
     inventoryQuantity,
     pickupAvailable: row.pickup_available === true,
@@ -256,6 +268,19 @@ async function attachExploreCovers(supabase: any, rows: TailorDiscoveryGatewayRo
     .order('sort_order', { ascending: true })
 
   if (error) return rows
+  const coverCandidateUrls = [
+    ...((data ?? []) as PortfolioCoverRow[])
+      .map((row) => (typeof row.image_url === 'string' ? row.image_url.trim() : null))
+      .filter((value): value is string => !!value),
+    ...rows.flatMap((row) => [
+      typeof row.avatar_url === 'string' ? row.avatar_url.trim() : null,
+      ...asStringList(row.portfolio_photo_urls),
+    ]),
+  ].filter((value): value is string => !!value)
+  const blockedUrls = await findBlockedMediaUrls(
+    supabase,
+    coverCandidateUrls,
+  )
 
   const coverByTailor = new Map<string, string>()
   for (const row of (data ?? []) as PortfolioCoverRow[]) {
@@ -264,7 +289,7 @@ async function attachExploreCovers(supabase: any, rows: TailorDiscoveryGatewayRo
       typeof row.image_url === 'string' && row.image_url.trim().length > 0
         ? row.image_url.trim()
         : null
-    if (!tailorId || !imageUrl || coverByTailor.has(tailorId)) continue
+    if (!tailorId || !imageUrl || blockedUrls.has(imageUrl) || coverByTailor.has(tailorId)) continue
     coverByTailor.set(tailorId, imageUrl)
   }
 
@@ -281,11 +306,12 @@ async function attachExploreCovers(supabase: any, rows: TailorDiscoveryGatewayRo
     const avatarUrl = typeof row.avatar_url === 'string' && row.avatar_url.trim().length > 0
       ? row.avatar_url.trim()
       : null
-    const fallbackPhotos = asStringList(row.portfolio_photo_urls)
+    const safeAvatarUrl = avatarUrl && !blockedUrls.has(avatarUrl) ? avatarUrl : null
+    const fallbackPhotos = asStringList(row.portfolio_photo_urls).filter((url) => !blockedUrls.has(url))
     return {
       ...row,
-      explore_image_url: avatarUrl ?? fallbackPhotos[0] ?? null,
-      explore_image_bucket: avatarUrl ? 'avatars' : fallbackPhotos[0] ? 'portfolio-photos' : null,
+      explore_image_url: safeAvatarUrl ?? fallbackPhotos[0] ?? null,
+      explore_image_bucket: safeAvatarUrl ? 'avatars' : fallbackPhotos[0] ? 'portfolio-photos' : null,
     }
   })
 }
@@ -374,6 +400,26 @@ async function fetchTailorProfile(supabase: any, req: Request, tailorId: string)
   const portfolioPhotosFromItems = portfolioData
     .map((row) => asString(row.image_url))
     .filter((value): value is string => !!value)
+  const profileAvatarUrl = asString(profileRow.avatar_url)
+  const profilePortfolioPhotos = asStringList(profileRow.portfolio_photo_urls)
+  const profilePortfolioVideos = asStringList(profileRow.portfolio_video_urls)
+  const blockedProfileMedia = await findBlockedMediaUrls(supabase, [
+    profileAvatarUrl,
+    ...portfolioPhotosFromItems,
+    ...profilePortfolioPhotos,
+    ...profilePortfolioVideos,
+  ].filter((value): value is string => !!value))
+  const safePortfolioPhotosFromItems = portfolioPhotosFromItems.filter((url) => !blockedProfileMedia.has(url))
+  const safeProfilePortfolioPhotos = profilePortfolioPhotos.filter((url) => !blockedProfileMedia.has(url))
+  const safeProfilePortfolioVideos = profilePortfolioVideos.filter((url) => !blockedProfileMedia.has(url))
+  const reviewerAvatarUrls = reviewsData
+    .map((row) => {
+      const orderRow = firstJoinedRow(row.orders as Record<string, unknown> | Record<string, unknown>[] | null)
+      const customerProfile = firstJoinedRow(asRecord(orderRow).customer_profiles as Record<string, unknown> | Record<string, unknown>[] | null)
+      return asString(asRecord(customerProfile).avatar_url)
+    })
+    .filter((value): value is string => !!value)
+  const blockedReviewerAvatarUrls = await findBlockedMediaUrls(supabase, reviewerAvatarUrls)
   const derivedReviewCount = reviewsData.length
   const derivedAverageRating = derivedReviewCount > 0
     ? reviewsData.reduce((sum, row) => sum + (typeof row.rating === 'number' ? row.rating : 0), 0) / derivedReviewCount
@@ -409,11 +455,11 @@ async function fetchTailorProfile(supabase: any, req: Request, tailorId: string)
       currency: asString(profileRow.currency) ?? 'USD',
       priceRangeMin: typeof profileRow.price_range_min === 'number' ? profileRow.price_range_min : null,
       priceRangeMax: typeof profileRow.price_range_max === 'number' ? profileRow.price_range_max : null,
-      avatarUrl: asString(profileRow.avatar_url),
-      portfolioPhotos: portfolioPhotosFromItems.length > 0
-        ? portfolioPhotosFromItems
-        : asStringList(profileRow.portfolio_photo_urls),
-      portfolioVideos: asStringList(profileRow.portfolio_video_urls),
+      avatarUrl: profileAvatarUrl && !blockedProfileMedia.has(profileAvatarUrl) ? profileAvatarUrl : null,
+      portfolioPhotos: safePortfolioPhotosFromItems.length > 0
+        ? safePortfolioPhotosFromItems
+        : safeProfilePortfolioPhotos,
+      portfolioVideos: safeProfilePortfolioVideos,
       supportsCustomOrders: profileRow.supports_custom_orders !== false,
       supportsReadyMade: profileRow.supports_ready_made === true,
       pickupAvailable: profileRow.pickup_available === true,
@@ -423,13 +469,14 @@ async function fetchTailorProfile(supabase: any, req: Request, tailorId: string)
     reviews: reviewsData.map((row) => {
       const orderRow = firstJoinedRow(row.orders as Record<string, unknown> | Record<string, unknown>[] | null)
       const customerProfile = firstJoinedRow(asRecord(orderRow).customer_profiles as Record<string, unknown> | Record<string, unknown>[] | null)
+      const reviewerAvatarUrl = asString(asRecord(customerProfile).avatar_url)
       return {
         id: row.id,
         rating: typeof row.rating === 'number' ? row.rating : 0,
         body: asString(row.body),
         tags: asStringList(row.tags),
         reviewerName: asString(row.reviewer_name) ?? 'Customer',
-        reviewerAvatarUrl: asString(asRecord(customerProfile).avatar_url),
+        reviewerAvatarUrl: reviewerAvatarUrl && !blockedReviewerAvatarUrls.has(reviewerAvatarUrl) ? reviewerAvatarUrl : null,
         response: asString(row.tailor_response),
         createdAt: asString(row.created_at) ?? new Date().toISOString(),
       }

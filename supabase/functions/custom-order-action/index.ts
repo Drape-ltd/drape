@@ -5,6 +5,7 @@ import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
+import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import { sendOrderEventEmail } from '../_shared/order-email.ts'
 import { serializeOrderSupportMeta } from '../_shared/order-support.ts'
@@ -701,6 +702,19 @@ Deno.serve(async (req) => {
       log('error', FN, 'db.error', { actor_id: caller.id, order_id: created.id, error: detailError.message, surface: 'custom_order_details' })
       return jsonError(cors, 500, 'ORDER_CREATE_FAILED', 'Could not submit your order right now.')
     }
+
+    await queueMediaSafetyReview(supabase, {
+      fn: FN,
+      actorId: caller.id,
+      actorRole: 'CUSTOMER',
+      surface: 'custom_order.reference',
+      publicUrls: referencePhotos,
+      purpose: 'ORDER_REFERENCE',
+      orderId: created.id,
+      relatedEntityType: 'order',
+      relatedEntityId: created.id,
+      metadata: { referencePhotoCount: referencePhotos.length },
+    })
 
     await audit(supabase, {
       event: 'custom_order.created',

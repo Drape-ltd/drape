@@ -4,6 +4,8 @@ import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
+import { rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
+import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
 import {
   deriveReadyMadeStockStatus,
   normalizeReadyMadeSizeInventory,
@@ -334,6 +336,27 @@ Deno.serve(async (req) => {
       })
       const nextIsLive = body.isLive ?? false
 
+      const contactCheckedFields: Array<[string, string, string | null | undefined, string]> = [
+        ['seller_item.title', 'title', body.title, "Contact details can't be included in item titles."],
+        ['seller_item.category', 'category', body.category, "Contact details can't be included in item categories."],
+        ['seller_item.description', 'description', normalizedDescription, "Contact details can't be included in item descriptions."],
+      ]
+
+      for (const [surface, field, text, message] of contactCheckedFields) {
+        const blocked = await rejectIfBlockedContact({
+          supabase,
+          fn: FN,
+          cors,
+          actorId: caller.id,
+          actorRole: 'TAILOR',
+          surface,
+          text,
+          message,
+          extra: { field, action: body.action },
+        })
+        if (blocked) return blocked
+      }
+
       if (nextIsLive) {
         if (!(body.pickupAvailable || body.deliveryAvailable || body.shippingAvailable)) {
           return jsonResponse({ error: 'Choose at least one fulfillment option before publishing this item live.' }, 400, cors)
@@ -440,6 +463,19 @@ Deno.serve(async (req) => {
           },
         })
 
+        await queueMediaSafetyReview(supabase, {
+          fn: FN,
+          actorId: caller.id,
+          actorRole: 'TAILOR',
+          surface: nextIsLive ? 'ready_made_item.public' : 'ready_made_item.draft',
+          publicUrls: nextPhotoUrls,
+          purpose: 'READY_MADE_ITEM',
+          tailorProfileId: profile.id,
+          relatedEntityType: 'seller_item',
+          relatedEntityId: editableItem.id,
+          metadata: { action: body.action, isLive: nextIsLive },
+        })
+
         return jsonResponse({
           ok: true,
           itemId: editableItem.id,
@@ -492,6 +528,19 @@ Deno.serve(async (req) => {
           inventory_quantity: nextInventoryQuantity,
           size_inventory: nextSizeInventory,
         },
+      })
+
+      await queueMediaSafetyReview(supabase, {
+        fn: FN,
+        actorId: caller.id,
+        actorRole: 'TAILOR',
+        surface: nextIsLive ? 'ready_made_item.public' : 'ready_made_item.draft',
+        publicUrls: nextPhotoUrls,
+        purpose: 'READY_MADE_ITEM',
+        tailorProfileId: profile.id,
+        relatedEntityType: 'seller_item',
+        relatedEntityId: created.id,
+        metadata: { action: body.action, isLive: nextIsLive },
       })
 
       return jsonResponse({

@@ -16,7 +16,7 @@ import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import * as ImageManipulator from 'expo-image-manipulator'
-import { supabase } from '@/lib/supabase'
+import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { pickAvatarImageUri, type AvatarImageSource } from '@/lib/avatar-picker'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
@@ -292,10 +292,9 @@ export default function TailorProfileScreen() {
 
       const bustUrl = `${publicUrl}?t=${Date.now()}`
 
-      const { error: profileError } = await supabase
-        .from('tailor_profiles')
-        .update({ avatar_url: bustUrl })
-        .eq('user_id', user!.id)
+      const { error: profileError } = await invokeFunction('tailor-profile-action', {
+        body: { action: 'update-avatar', avatarUrl: bustUrl },
+      })
       if (profileError) throw profileError
 
       setAvatarUrl(bustUrl)

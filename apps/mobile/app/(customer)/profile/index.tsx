@@ -13,7 +13,7 @@ import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import * as ImageManipulator from 'expo-image-manipulator'
-import { supabase } from '@/lib/supabase'
+import { invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { useCustomerProfile } from '@/lib/customerProfile'
 import { pickAvatarImageUri, type AvatarImageSource } from '@/lib/avatar-picker'
@@ -209,10 +209,13 @@ export default function CustomerProfileScreen() {
       // Cache-bust so the new image replaces the old one immediately
       const bustUrl = `${publicUrl}?t=${Date.now()}`
 
-      const { error: profileError } = await supabase
-        .from('customer_profiles')
-        .update({ avatar_url: bustUrl })
-        .eq('user_id', user!.id)
+      const { error: profileError } = await invokeFunction('account-profile-action', {
+        body: {
+          action: 'update-avatar',
+          role: 'CUSTOMER',
+          avatarUrl: bustUrl,
+        },
+      })
       if (profileError) throw profileError
 
       setAvatarUrl(bustUrl)

@@ -9,6 +9,7 @@ import { getClientIp, rateLimit, rateLimitExceededResponse } from '../_shared/ra
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
+import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
 import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
 import { parseBody, z, uuid } from '../_shared/validate.ts'
 
@@ -259,6 +260,20 @@ Deno.serve(async (req) => {
     if (error) {
       log('error', FN, 'message.insert_failed', { actor_id: caller.id, error: error.message })
       return jsonError(cors, 500, 'MESSAGE_INSERT_FAILED', 'Could not send this message right now.')
+    }
+
+    if (body.type === 'PHOTO' || body.type === 'VOICE') {
+      await queueMediaSafetyReview(supabase, {
+        fn: FN,
+        actorId: caller.id,
+        actorRole,
+        surface: body.type === 'PHOTO' ? 'messages.photo' : 'messages.voice',
+        publicUrls: body.type === 'PHOTO' ? [body.photoUrl!] : [body.voiceUrl!],
+        purpose: 'MESSAGE_MEDIA',
+        orderId: body.orderId,
+        relatedEntityType: 'message',
+        metadata: { messageType: body.type },
+      })
     }
 
     await audit(supabase, {
