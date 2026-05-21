@@ -6,8 +6,6 @@ import { authorizeCronRequest } from "../_shared/cron.ts";
 import { getCorsHeaders } from "../_shared/cors.ts";
 import { getServiceRoleKey, getSupabaseUrl } from "../_shared/env.ts";
 import { audit, log } from "../_shared/logger.ts";
-import { sendPushToUser } from "../_shared/notify.ts";
-import { sendOrderEventEmail } from "../_shared/order-email.ts";
 import {
   parseOrderSupportMeta,
   serializeOrderSupportMeta,
@@ -15,6 +13,7 @@ import {
 } from "../_shared/order-support.ts";
 import { createOrRefreshOpsIssue } from "../_shared/ops-issues.ts";
 import { releaseConsultationSlot } from "../_shared/consultation-bookings.ts";
+import { enqueueOrderEventEmailJob, enqueuePushJob } from "../_shared/side-effect-jobs.ts";
 import {
   getClientIp,
   RATE_LIMITS,
@@ -30,10 +29,6 @@ const CONSULTATION_DURATION_MS = 30 * 60 * 1000;
 const POST_SLOT_FOLLOW_UP_MS = 10 * 60 * 1000;
 const REQUEST_FOLLOW_UP_MS = 24 * 60 * 60 * 1000;
 const REQUEST_EXPIRE_MS = 48 * 60 * 60 * 1000;
-
-declare const EdgeRuntime: {
-  waitUntil(promise: Promise<unknown>): void;
-};
 
 type OrderRow = {
   id: string;
@@ -124,8 +119,26 @@ async function sendReminder(
   };
 
   const sends: Promise<unknown>[] = [];
-  if (order.customer_id) sends.push(sendPushToUser(supabase, order.customer_id, payload));
-  if (order.tailor_id) sends.push(sendPushToUser(supabase, order.tailor_id, payload));
+  if (order.customer_id) {
+    sends.push(enqueuePushJob(supabase, {
+      userId: order.customer_id,
+      source: FN,
+      orderId: order.id,
+      idempotencyKey: `consultation-reminder:${order.id}:${kind}:customer`,
+      priority: 15,
+      notification: payload,
+    }));
+  }
+  if (order.tailor_id) {
+    sends.push(enqueuePushJob(supabase, {
+      userId: order.tailor_id,
+      source: FN,
+      orderId: order.id,
+      idempotencyKey: `consultation-reminder:${order.id}:${kind}:tailor`,
+      priority: 15,
+      notification: payload,
+    }));
+  }
   await Promise.allSettled(sends);
 }
 
@@ -136,34 +149,52 @@ async function notifyBothByPushAndEmail(
 ) {
   const sends: Promise<unknown>[] = [];
   if (order.customer_id) {
-    sends.push(sendPushToUser(supabase, order.customer_id, {
-      title: payload.title,
-      body: payload.customerBody,
-      preferenceKey: "orderUpdates",
-      data: { orderId: order.id },
+    sends.push(enqueuePushJob(supabase, {
+      userId: order.customer_id,
+      source: FN,
+      orderId: order.id,
+      idempotencyKey: `consultation-followup:${order.id}:${payload.title}:customer:push`,
+      priority: 20,
+      notification: {
+        title: payload.title,
+        body: payload.customerBody,
+        preferenceKey: "orderUpdates",
+        data: { orderId: order.id },
+      },
     }));
-    EdgeRuntime.waitUntil(sendOrderEventEmail(supabase, {
+    sends.push(enqueueOrderEventEmailJob(supabase, {
       order,
       recipientUserId: order.customer_id,
       audience: "CUSTOMER",
       subject: payload.title,
       body: payload.customerBody,
+      source: FN,
+      idempotencyKey: `consultation-followup:${order.id}:${payload.title}:customer:email`,
     }));
   }
 
   if (order.tailor_id) {
-    sends.push(sendPushToUser(supabase, order.tailor_id, {
-      title: payload.title,
-      body: payload.tailorBody,
-      preferenceKey: "newOrders",
-      data: { orderId: order.id },
+    sends.push(enqueuePushJob(supabase, {
+      userId: order.tailor_id,
+      source: FN,
+      orderId: order.id,
+      idempotencyKey: `consultation-followup:${order.id}:${payload.title}:tailor:push`,
+      priority: 20,
+      notification: {
+        title: payload.title,
+        body: payload.tailorBody,
+        preferenceKey: "newOrders",
+        data: { orderId: order.id },
+      },
     }));
-    EdgeRuntime.waitUntil(sendOrderEventEmail(supabase, {
+    sends.push(enqueueOrderEventEmailJob(supabase, {
       order,
       recipientUserId: order.tailor_id,
       audience: "TAILOR",
       subject: payload.title,
       body: payload.tailorBody,
+      source: FN,
+      idempotencyKey: `consultation-followup:${order.id}:${payload.title}:tailor:email`,
     }));
   }
 

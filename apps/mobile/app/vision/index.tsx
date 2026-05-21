@@ -18,6 +18,7 @@ import {
   type DrapeVisionMode,
 } from '@/constants/drapeVision'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
+import { useFeatureFlags } from '@/lib/feature-flags'
 import { Sentry } from '@/lib/sentry'
 
 type VisionParams = {
@@ -49,13 +50,13 @@ function isExpoGo() {
   return expoAppOwnership() === 'expo'
 }
 
-function isAndroidLiveScanPausedForLaunch() {
-  return Platform.OS === 'android'
+function isAndroidLiveScanPausedForLaunch(androidVisionEnabled = false) {
+  return Platform.OS === 'android' && !androidVisionEnabled
 }
 
-function loadNativeVisionScreen() {
+function loadNativeVisionScreen(androidVisionEnabled = false) {
   if (isExpoGo()) return null
-  if (isAndroidLiveScanPausedForLaunch()) return null
+  if (isAndroidLiveScanPausedForLaunch(androidVisionEnabled)) return null
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- native module must stay lazy so Expo Go and Android fallback do not crash.
@@ -129,11 +130,13 @@ export default function DrapeVisionRoute() {
   }), [rawParams.diaryId, rawParams.itemId, rawParams.mode, rawParams.orderId, rawParams.returnTo])
   const mode: DrapeVisionMode = isDrapeVisionMode(params.mode) ? params.mode : 'customer_scan'
   const meta = DRAPE_VISION_MODE_META[mode]
-  const NativeVisionScreen = useMemo(() => loadNativeVisionScreen()?.default ?? null, [])
+  const { data: featureFlags } = useFeatureFlags('ALL')
+  const androidVisionEnabled = featureFlags?.android_drape_vision?.enabled === true
+  const NativeVisionScreen = useMemo(() => loadNativeVisionScreen(androidVisionEnabled)?.default ?? null, [androidVisionEnabled])
   const returnRoute = useMemo(() => returnRouteForParams(mode, params), [mode, params])
   const primaryFallbackTarget = useMemo(() => primaryFallbackTargetForParams(mode, params), [mode, params])
   const primaryFallbackLabel = useMemo(() => primaryFallbackLabelForParams(mode, params), [mode, params])
-  const androidPaused = isAndroidLiveScanPausedForLaunch()
+  const androidPaused = isAndroidLiveScanPausedForLaunch(androidVisionEnabled)
 
   useEffect(() => {
     if (NativeVisionScreen) return

@@ -45,6 +45,7 @@ export const PAYOUT_BLOCKED_REASONS = {
   PAYOUT_AMOUNT_INVALID: 'PAYOUT_AMOUNT_INVALID',
   PAYOUT_CURRENCY_INVALID: 'PAYOUT_CURRENCY_INVALID',
   PAYMENT_ALREADY_REFUNDED: 'PAYMENT_ALREADY_REFUNDED',
+  PAYOUT_PROVIDER_UNAVAILABLE: 'PAYOUT_PROVIDER_UNAVAILABLE',
 } as const
 
 export type PayoutBlockedReason = typeof PAYOUT_BLOCKED_REASONS[keyof typeof PAYOUT_BLOCKED_REASONS]
@@ -105,6 +106,8 @@ export function payoutBlockReasonMessage(reason: PayoutBlockedReason) {
       return 'The locked payout currency is invalid for release.'
     case PAYOUT_BLOCKED_REASONS.PAYMENT_ALREADY_REFUNDED:
       return 'Some or all customer funds were already refunded, so payout needs manual ops review.'
+    case PAYOUT_BLOCKED_REASONS.PAYOUT_PROVIDER_UNAVAILABLE:
+      return 'The payout provider is degraded right now, so payout release needs ops review before retry.'
   }
 }
 

@@ -21,10 +21,10 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { sendPushToUser } from '../_shared/notify.ts'
 import { log } from '../_shared/logger.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
+import { enqueuePushJob } from '../_shared/side-effect-jobs.ts'
 import {
   getClientIp,
   RATE_LIMITS,
@@ -150,17 +150,24 @@ Deno.serve(async (req) => {
       if ((msg.body ?? '').length > 60) preview += '…'
     }
 
-    await sendPushToUser(supabase, recipientId, {
-      title: msg.sender_name ?? 'New message',
-      body: preview || 'Sent you a message.',
-      preferenceKey: 'messages',
-      data: {
-        orderId: msg.order_id,
-        target: 'messages',
+    await enqueuePushJob(supabase, {
+      userId: recipientId,
+      source: FN,
+      orderId: msg.order_id,
+      idempotencyKey: `message-created:${msg.id}`,
+      priority: 20,
+      notification: {
+        title: msg.sender_name ?? 'New message',
+        body: preview || 'Sent you a message.',
+        preferenceKey: 'messages',
+        data: {
+          orderId: msg.order_id,
+          target: 'messages',
+        },
       },
     })
 
-    log('info', FN, 'notification.sent', { order_id: msg.order_id, sender_role: msg.sender_role })
+    log('info', FN, 'notification.queued', { order_id: msg.order_id, sender_role: msg.sender_role })
 
     return jsonResponse({ ok: true }, 200, corsHeaders)
 

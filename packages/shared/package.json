@@ -18,7 +18,8 @@
     "./validation": "./src/validation.ts",
     "./design-system": "./src/design-system.ts",
     "./rate-limit": "./src/rate-limit.ts",
-    "./preflight": "./src/preflight.ts"
+    "./preflight": "./src/preflight.ts",
+    "./media-policy": "./src/media-policy.ts"
   },
   "scripts": {
     "test": "jest --watchman=false"

@@ -73,7 +73,7 @@ export default function SavedScreen() {
     refetch,
   } = useWishlistCollections(user?.id)
 
-  useRefreshOnFocus(refetch, 0)
+  useRefreshOnFocus(refetch, 60_000)
   const refreshRecentlyViewed = useCallback(async () => {
     setRecentlyViewed(await loadRecentlyViewedTailors(user?.id))
   }, [user?.id])
