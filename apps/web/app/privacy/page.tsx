@@ -90,7 +90,7 @@ export default function PrivacyPage(): JSX.Element {
         <div className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
           <p className="font-semibold text-ink">Last updated: {lastUpdated}</p>
           <p className="mt-3">
-            This Privacy Policy applies to Drape's mobile apps, web pages, support channels, marketplace, order flows, payment flows, and operational tools. If you use Drape as a customer, tailor, applicant, visitor, or support contact, this policy explains how your information is handled.
+            This Privacy Policy applies to Drape&apos;s mobile apps, web pages, support channels, marketplace, order flows, payment flows, and operational tools. If you use Drape as a customer, tailor, applicant, visitor, or support contact, this policy explains how your information is handled.
           </p>
         </div>
       </section>

@@ -19,13 +19,13 @@ export function RecoveryBridge(): any {
 
   useEffect(() => {
     const nextTarget = buildDeepLinkTarget()
-    setTargetUrl(nextTarget)
 
     const redirectTimer = window.setTimeout(() => {
       window.location.replace(nextTarget)
     }, 80)
 
     const fallbackTimer = window.setTimeout(() => {
+      setTargetUrl(nextTarget)
       setShowFallback(true)
     }, 1600)
 

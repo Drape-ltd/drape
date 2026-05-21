@@ -69,7 +69,7 @@ export default function AccountDeletionPage(): JSX.Element {
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Web path</p>
             <h2 className="mt-3 text-3xl text-ink">If you cannot sign in</h2>
             <p className="mt-4 text-sm leading-7 text-ink/68">
-              Email the privacy team from the email address you believe is tied to your Drape account. Include your phone number, role, and any details that help us find the account without exposing someone else's data.
+              Email the privacy team from the email address you believe is tied to your Drape account. Include your phone number, role, and any details that help us find the account without exposing someone else&apos;s data.
             </p>
             <a
               href={deletionMailto}
