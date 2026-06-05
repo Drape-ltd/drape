@@ -56,7 +56,7 @@ export function AddressAutocompleteInput({
       try {
         const response = await fetch(
           `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&addressdetails=1&limit=5`,
-          { headers: { 'Accept-Language': 'en', 'User-Agent': 'Drape/1.0' } },
+          { headers: { 'Accept-Language': 'en', 'User-Agent': 'Drapeon/1.0' } },
         )
         const data = (await response.json()) as Suggestion[]
         const filtered = data.filter((item) => typeof item?.display_name === 'string' && item.display_name.trim().length > 0)

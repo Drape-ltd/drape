@@ -9,6 +9,7 @@ import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   TextInput, Alert, ActivityIndicator, Keyboard,
 } from 'react-native'
+import { Feather } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { Audio } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -49,6 +50,10 @@ interface Props {
   customerAvatarUrl?: string | null
   locked?: boolean
   lockedMessage?: string
+  callAvailable?: boolean
+  callLoading?: boolean
+  onPressCall?: () => void
+  callAccessibilityLabel?: string
 }
 
 // Rate limit: max 8 sends in 30 seconds
@@ -103,7 +108,7 @@ async function resolveMessageSendFailure(error: Error | null, fallback: string) 
 
   if (code === 'BLOCKED_CONTACT') {
     return {
-      title: 'Keep it on Drape',
+      title: 'Keep it on Drapeon',
       message: payloadMessage ?? "Contact details can't be shared in messages.",
       inlineMessage: payloadMessage ?? "Contact details can't be shared in messages.",
       showAlert: false,
@@ -122,8 +127,8 @@ async function resolveMessageSendFailure(error: Error | null, fallback: string) 
   if (code === 'CONVERSATION_BLOCKED') {
     return {
       title: 'Conversation paused',
-      message: payloadMessage ?? 'This conversation is paused while Drape reviews a safety concern.',
-      inlineMessage: payloadMessage ?? 'This conversation is paused while Drape reviews a safety concern.',
+      message: payloadMessage ?? 'This conversation is paused while Drapeon reviews a safety concern.',
+      inlineMessage: payloadMessage ?? 'This conversation is paused while Drapeon reviews a safety concern.',
       showAlert: false,
     }
   }
@@ -203,6 +208,10 @@ export function MessageThread({
   customerAvatarUrl,
   locked = false,
   lockedMessage,
+  callAvailable = false,
+  callLoading = false,
+  onPressCall,
+  callAccessibilityLabel = 'Open Drapeon call options',
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([])
   const messagesRef = useRef<Message[]>([])
@@ -503,7 +512,7 @@ export function MessageThread({
       setRecording(rec)
       setIsRecording(true)
     } catch {
-      Alert.alert('Microphone unavailable', 'Drape could not access your microphone. Check your phone permissions and try again.')
+      Alert.alert('Microphone unavailable', 'Drapeon could not access your microphone. Check your phone permissions and try again.')
     }
   }
 
@@ -686,31 +695,48 @@ export function MessageThread({
               testID="message-input"
             />
 
-            {text.trim() ? (
-              <TouchableOpacity
-                style={styles.sendBtn}
-                onPress={sendText}
-                disabled={sending || !!textError || rateLimited}
-                accessibilityRole="button"
-                accessibilityLabel="Send message"
-              >
-                {sending
-                  ? <ActivityIndicator color={Colors.textInverse} size="small" />
-                  : <Text style={styles.sendBtnText}>→</Text>
-                }
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity
-                style={[styles.voiceBtn, isRecording && styles.voiceBtnActive]}
-                onPressIn={startRecording}
-                onPressOut={stopRecording}
-                disabled={sending}
-                accessibilityRole="button"
-                accessibilityLabel={isRecording ? 'Recording voice note' : 'Hold to record voice note'}
-              >
-                <Text style={styles.iconBtnText}>🎤</Text>
-              </TouchableOpacity>
-            )}
+            <View style={styles.composerActions}>
+              {callAvailable && onPressCall ? (
+                <TouchableOpacity
+                  style={styles.callBtn}
+                  onPress={onPressCall}
+                  disabled={sending || callLoading}
+                  accessibilityRole="button"
+                  accessibilityLabel={callAccessibilityLabel}
+                >
+                  {callLoading
+                    ? <ActivityIndicator color={Colors.needleGreen} size="small" />
+                    : <Feather name="phone-call" size={18} color={Colors.needleGreen} />
+                  }
+                </TouchableOpacity>
+              ) : null}
+
+              {text.trim() ? (
+                <TouchableOpacity
+                  style={styles.sendBtn}
+                  onPress={sendText}
+                  disabled={sending || !!textError || rateLimited}
+                  accessibilityRole="button"
+                  accessibilityLabel="Send message"
+                >
+                  {sending
+                    ? <ActivityIndicator color={Colors.textInverse} size="small" />
+                    : <Text style={styles.sendBtnText}>→</Text>
+                  }
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.voiceBtn, isRecording && styles.voiceBtnActive]}
+                  onPressIn={startRecording}
+                  onPressOut={stopRecording}
+                  disabled={sending}
+                  accessibilityRole="button"
+                  accessibilityLabel={isRecording ? 'Recording voice note' : 'Hold to record voice note'}
+                >
+                  <Text style={styles.iconBtnText}>🎤</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
         </>
       )}
@@ -937,6 +963,21 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen, alignItems: 'center', justifyContent: 'center',
   },
   sendBtnText: { color: Colors.textInverse, fontSize: 18, fontWeight: FontWeight.bold },
+  composerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+  },
+  callBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '24',
+  },
   voiceBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22 },
   voiceBtnActive: { backgroundColor: Colors.needleGreenLight },
 

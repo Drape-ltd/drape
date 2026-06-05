@@ -16,6 +16,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as ImagePicker from 'expo-image-picker'
 import DateTimePicker from '@react-native-community/datetimepicker'
+import { Feather } from '@expo/vector-icons'
 import {
   isLikelyConnectivityIssue,
   isMachineErrorCodeMessage,
@@ -75,6 +76,7 @@ const MEAS_PROMPT_KEY = 'drape_meas_prompt_shown'
 type FabricSource = 'CUSTOMER_SUPPLIES' | 'TAILOR_SOURCES'
 type DeliveryMethod = 'SHIPPING' | 'LOCAL_DELIVERY' | 'LOCAL_COLLECTION'
 type RecipientMode = 'SELF' | 'OTHER'
+type WearerMode = 'SELF' | 'OTHER'
 type GenderPresentation = (typeof CUSTOM_ORDER_GENDER_PRESENTATIONS)[number]
 type ShippingPreference = (typeof CUSTOM_ORDER_SHIPPING_PREFERENCES)[number]
 type MeasurementRecord = Record<string, unknown>
@@ -133,6 +135,14 @@ const STEP_SUBS = [
 ]
 
 const SUPPORTED_STYLE_LINK_LABELS = ['Instagram posts / reels', 'Pinterest pins', 'TikTok videos']
+const STALE_MEASUREMENT_MONTHS = 6
+
+type MeasurementAgeSummary = {
+  lastUpdatedAt: string
+  ageMonths: number
+  stale: boolean
+  label: string
+}
 
 function buildBriefRoute(
   tailorId: string,
@@ -149,6 +159,17 @@ function buildBriefRoute(
 
 function defaultDeadline() {
   return customOrderDefaultDeadline()
+}
+
+function deadlineContextNotice(value: Date | null) {
+  if (!value) return null
+  const month = value.getMonth()
+  const day = value.getDate()
+  const inDecemberRush = month === 11 && day >= 15
+  const inNewYearRush = month === 0 && day <= 7
+  const nearIndependenceDay = month === 9 && day >= 1 && day <= 3
+  if (!inDecemberRush && !inNewYearRush && !nearIndependenceDay) return null
+  return 'This date falls around a busy holiday period. Add buffer for fabric sourcing, courier availability, and last-mile delays if the garment is event-critical.'
 }
 
 function asStringList(value: unknown): string[] {
@@ -175,6 +196,37 @@ function hasCompleteMeasurementProfile(value: unknown): boolean {
       ? [measurement.bodyShape]
       : []
   return hasCore && hasContext && bodyShapes.length > 0
+}
+
+function measurementTimestamp(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const measurement = value as MeasurementRecord
+  const fields = ['measurementProfileUpdatedAt', 'capturedAt', 'confirmedAt']
+  for (const field of fields) {
+    const raw = measurement[field]
+    if (typeof raw !== 'string' || raw.trim().length === 0) continue
+    const date = new Date(raw)
+    if (Number.isFinite(date.getTime())) return date
+  }
+  return null
+}
+
+function measurementAgeFromSnapshot(value: unknown, now = new Date()): MeasurementAgeSummary | null {
+  const lastUpdated = measurementTimestamp(value)
+  if (!lastUpdated) return null
+  const ageMonths = Math.max(
+    0,
+    Math.floor((now.getTime() - lastUpdated.getTime()) / (1000 * 60 * 60 * 24 * 30.44))
+  )
+  return {
+    lastUpdatedAt: lastUpdated.toISOString(),
+    ageMonths,
+    stale: ageMonths >= STALE_MEASUREMENT_MONTHS,
+    label:
+      ageMonths <= 0
+        ? 'Updated this month'
+        : `Updated ${ageMonths} month${ageMonths === 1 ? '' : 's'} ago`,
+  }
 }
 
 function createBriefPhotoPath(userId: string | undefined) {
@@ -275,6 +327,9 @@ export default function OrderBriefScreen() {
   const [bulkRecipientCount, setBulkRecipientCount] = useState('')
   const [bulkLabel, setBulkLabel] = useState('')
   const [bulkNotes, setBulkNotes] = useState('')
+  const [bulkMemberNames, setBulkMemberNames] = useState('')
+  const [wearerMode, setWearerMode] = useState<WearerMode>('SELF')
+  const [wearerName, setWearerName] = useState('')
 
   // Step 2
   const [photos, setPhotos] = useState<string[]>([])
@@ -353,6 +408,12 @@ export default function OrderBriefScreen() {
   }
   const guidedFitProfile = buildOrderFitProfile(measurements)
   const recipientPhoneHint = phoneHintForContext(deliveryCountry)
+  const savedMeasurementProfileLabel =
+    typeof measurements?.measurementProfileLabel === 'string' && measurements.measurementProfileLabel.trim()
+      ? measurements.measurementProfileLabel.trim()
+      : 'Me'
+  const measurementAgeSummary = measurementAgeFromSnapshot(measurements)
+  const deadlineNotice = deadlineContextNotice(deadline)
 
   function resetBriefState() {
     setStep(0)
@@ -373,6 +434,9 @@ export default function OrderBriefScreen() {
     setBulkRecipientCount('')
     setBulkLabel('')
     setBulkNotes('')
+    setBulkMemberNames('')
+    setWearerMode('SELF')
+    setWearerName('')
     setPhotos([])
     setInspirationLinks([])
     setInspirationInput('')
@@ -454,7 +518,7 @@ export default function OrderBriefScreen() {
       if (existingOrder?.id) {
         Alert.alert(
           'Continue your current custom order?',
-          `You already have a custom order with this tailor in progress (${existingOrder.reference ?? existingOrder.stage}). Drape keeps one active custom order per customer-tailor pair so details, payments, and production updates stay clean.`,
+          `You already have a custom order with this tailor in progress (${existingOrder.reference ?? existingOrder.stage}). Drapeon keeps one active custom order per customer-tailor pair so details, payments, and production updates stay clean.`,
           [
             {
               text: 'Browse others',
@@ -607,7 +671,7 @@ export default function OrderBriefScreen() {
       try {
         const res = await fetch(
           `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&addressdetails=1&limit=5`,
-          { headers: { 'Accept-Language': 'en', 'User-Agent': 'Drape/1.0' } }
+          { headers: { 'Accept-Language': 'en', 'User-Agent': 'Drapeon/1.0' } }
         )
         const data = (await res.json()) as unknown
         const filtered = Array.isArray(data)
@@ -740,6 +804,7 @@ export default function OrderBriefScreen() {
     if (step === 0) {
       const bulkCount = Number.parseInt(bulkRecipientCount, 10)
       if (isBulkOrder && (!Number.isFinite(bulkCount) || bulkCount < 2)) return false
+      if (!isBulkOrder && wearerMode === 'OTHER' && wearerName.trim().length < 2) return false
       const hasGarment =
         !!garmentType && (garmentType !== 'Other' || garmentTypeOther.trim().length >= 2)
       return (
@@ -860,8 +925,38 @@ export default function OrderBriefScreen() {
     if (deliveryMethod !== 'LOCAL_COLLECTION' && !validateRecipientContact()) return
     setSubmitting(true)
 
-    const measurementSnapshot = enrichMeasurementSnapshot(measurements)
+    const wearerLabel = isBulkOrder
+      ? bulkLabel.trim() || 'Group order'
+      : wearerMode === 'SELF'
+        ? savedMeasurementProfileLabel
+        : wearerName.trim()
+    const wearerContext = {
+      mode: isBulkOrder ? 'GROUP' as const : wearerMode,
+      label: wearerLabel,
+      measurementProfileLabel: wearerLabel,
+      relationship: isBulkOrder ? 'GROUP' as const : wearerMode === 'SELF' ? 'BUYER' as const : 'NAMED_OTHER' as const,
+      selectedAt: new Date().toISOString(),
+      note: isBulkOrder
+        ? 'Group order measurements are handled per recipient before quote acceptance.'
+        : wearerMode === 'OTHER'
+          ? 'Customer confirmed the attached measurements are for this named wearer.'
+          : null,
+    }
+    const measurementSnapshot = enrichMeasurementSnapshot({
+      ...measurements,
+      wearerContext,
+      measurementProfileLabel: wearerContext.measurementProfileLabel,
+    })
     const fitProfile = buildOrderFitProfile(measurementSnapshot)
+    const measurementAge = measurementAgeFromSnapshot(measurementSnapshot)
+    const measurementAgeMeta = measurementAge
+      ? {
+          lastUpdatedAt: measurementAge.lastUpdatedAt,
+          ageMonths: measurementAge.ageMonths,
+          stale: measurementAge.stale,
+          warningShown: measurementAge.stale,
+        }
+      : null
     const fabricPolicy =
       fabricSource === 'CUSTOMER_SUPPLIES'
         ? {
@@ -879,10 +974,11 @@ export default function OrderBriefScreen() {
             replacementRule:
               'Replacement fabric must be confirmed inside the order before cutting resumes.',
             disagreementRule:
-              'If fabric suitability is disputed, Drape reviews the timeline before work continues.',
+              'If fabric suitability is disputed, Drapeon reviews the timeline before work continues.',
             prepRequirements: [
               'Share the handoff plan before the order is submitted',
               'Keep any shipping reference inside the order thread',
+              'Keep receipt or dropoff proof in Drapeon if fabric value is material',
               'Do not expect cutting to start before receipt is confirmed',
               'Prewash, press, or stabilize the fabric first when the tailor asks for it',
             ],
@@ -890,21 +986,29 @@ export default function OrderBriefScreen() {
         : {
             approvalRequiredForTailorSourcing: true,
             replacementRule:
-              'Tailor-sourced fabric should only be replaced after customer approval inside Drape.',
+              'Tailor-sourced fabric should only be replaced after customer approval inside Drapeon.',
             disagreementRule:
-              'If sourcing changes the agreed design or budget, Drape should review before work continues.',
+              'If sourcing changes the agreed design or budget, Drapeon should review before work continues.',
             prepRequirements: [
               'Fabric sourcing is covered by the accepted quote',
               'Tailor should not buy replacement fabric without approval',
+              'Fabric proof should be photographed in natural light with a white paper reference when color matters',
             ],
           }
     const bulkCount = Number.parseInt(bulkRecipientCount, 10)
+    const bulkMembers = bulkMemberNames
+      .split(/\n|,/u)
+      .map((name) => name.trim())
+      .filter(Boolean)
     const bulkOrder = isBulkOrder
       ? {
           enabled: true,
           mode: 'OPS_MANAGED_SPECIAL_CASE' as const,
           label: bulkLabel.trim() || null,
           recipientCount: Number.isFinite(bulkCount) && bulkCount >= 2 ? bulkCount : null,
+          memberNames: bulkMembers.length > 0 ? bulkMembers : null,
+          memberMeasurementPolicy:
+            'Each wearer needs their own measurement profile before quote acceptance. Do not reuse the buyer profile unless the buyer is also that wearer.',
           payerModel: 'SINGLE_PAYER' as const,
           measurementPrivacy: 'TAILOR_ONLY' as const,
           statusPolicy: 'OPS_MANAGED_LINKED_CHILDREN' as const,
@@ -912,6 +1016,15 @@ export default function OrderBriefScreen() {
           notes: bulkNotes.trim() || null,
         }
       : null
+    const styleAlignment = {
+      requiredBeforeCutting: true,
+      referencePhotoCount: photos.length,
+      styleReferenceLinkCount: inspirationLinks.length,
+      instruction:
+        'Before cutting, confirm what can and cannot be matched from the customer references inside Drapeon.',
+      customerExpectation:
+        'Reference photos guide the garment. Exact replication depends on fabric, budget, measurements, and agreed finish.',
+    }
     const supportMeta =
       fabricSource === 'CUSTOMER_SUPPLIES'
         ? {
@@ -919,9 +1032,12 @@ export default function OrderBriefScreen() {
             fabricHandoffLabel: fabricHandoffMode ? FABRIC_HANDOFF_LABELS[fabricHandoffMode] : null,
             fabricPolicy,
             bulkOrder,
+            wearerContext,
+            measurementAge: measurementAgeMeta,
             fitProfile,
             styleInspirationLinks: inspirationLinks,
             styleAttributes,
+            styleAlignment,
             styleNotes: styleNotes.trim() || null,
             bodyNote: fitNote.trim() || null,
           }
@@ -930,9 +1046,12 @@ export default function OrderBriefScreen() {
             fabricHandoffLabel: FABRIC_HANDOFF_LABELS.NO_CUSTOMER_HANDOFF_REQUIRED,
             fabricPolicy,
             bulkOrder,
+            wearerContext,
+            measurementAge: measurementAgeMeta,
             fitProfile,
             styleInspirationLinks: inspirationLinks,
             styleAttributes,
+            styleAlignment,
             styleNotes: styleNotes.trim() || null,
             bodyNote: fitNote.trim() || null,
             fabricSourcing: {
@@ -1064,6 +1183,7 @@ export default function OrderBriefScreen() {
       fabric_handoff_mode: supportMeta.fabricHandoffMode ?? null,
       delivery_method: deliveryMethod,
       bulk_order: isBulkOrder,
+      wearer_mode: wearerContext.mode,
       has_deadline: !!deadline,
     })
 
@@ -1273,9 +1393,7 @@ export default function OrderBriefScreen() {
                         Browse cultural, formal, modest, and group order categories.
                       </Text>
                     </View>
-                    <Text style={styles.garmentSelectAction}>
-                      {garmentType ? 'Change' : 'Open'}
-                    </Text>
+                    <Feather name="chevron-right" size={21} color={Colors.midGrey} />
                   </TouchableOpacity>
                   {garmentType === 'Other' ? (
                     <Input
@@ -1410,6 +1528,16 @@ export default function OrderBriefScreen() {
                       onChangeText={setBulkLabel}
                     />
                     <Input
+                      label="Group member names (optional)"
+                      placeholder={'One per line, e.g.\nAda\nTola\nMum'}
+                      value={bulkMemberNames}
+                      onChangeText={setBulkMemberNames}
+                      multiline
+                      numberOfLines={4}
+                      maxLength={500}
+                      hint="This keeps the order legible for the tailor and ops. Each person still needs their own measurements before cutting."
+                    />
+                    <Input
                       label="Group notes (optional)"
                       placeholder="Anything ops and the tailor should know about dye-lot consistency, measurement privacy, or linked recipients..."
                       value={bulkNotes}
@@ -1419,12 +1547,73 @@ export default function OrderBriefScreen() {
                       maxLength={300}
                     />
                     <Text style={styles.measureSubcardHint}>
-                      Bulk custom orders stay inside Drape, but ops may help manage linked
+                      Bulk custom orders stay inside Drapeon, but ops may help manage linked
                       recipients, dye-lot consistency, and measurement privacy before quote
                       acceptance.
                     </Text>
                   </View>
-                ) : null}
+                ) : (
+                  <View style={styles.measureSubcard}>
+                    <Text style={styles.fieldLabel}>Whose measurements should the tailor use?</Text>
+                    <Text style={styles.fieldHint}>
+                      This prevents gift or family orders from accidentally using the buyer's fit
+                      profile.
+                    </Text>
+                    <View style={styles.segmentedControl}>
+                      <TouchableOpacity
+                        style={[
+                          styles.segmentedItem,
+                          wearerMode === 'SELF' && styles.segmentedItemActive,
+                        ]}
+                        onPress={() => {
+                          setWearerMode('SELF')
+                          setWearerName('')
+                        }}
+                        activeOpacity={0.78}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: wearerMode === 'SELF' }}
+                      >
+                        <Text
+                          style={[
+                            styles.segmentedItemText,
+                            wearerMode === 'SELF' && styles.segmentedItemTextActive,
+                          ]}
+                        >
+                          {savedMeasurementProfileLabel}
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[
+                          styles.segmentedItem,
+                          wearerMode === 'OTHER' && styles.segmentedItemActive,
+                        ]}
+                        onPress={() => setWearerMode('OTHER')}
+                        activeOpacity={0.78}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: wearerMode === 'OTHER' }}
+                      >
+                        <Text
+                          style={[
+                            styles.segmentedItemText,
+                            wearerMode === 'OTHER' && styles.segmentedItemTextActive,
+                          ]}
+                        >
+                          Someone else
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                    {wearerMode === 'OTHER' ? (
+                      <Input
+                        label="Wearer name"
+                        placeholder="e.g. Mum, Tola, my brother"
+                        value={wearerName}
+                        onChangeText={setWearerName}
+                        required
+                        hint="Before submitting, make sure the saved measurements above belong to this person."
+                      />
+                    ) : null}
+                  </View>
+                )}
 
                 <View>
                   <Text style={styles.fieldLabel}>
@@ -1463,6 +1652,9 @@ export default function OrderBriefScreen() {
                     />
                   )}
                   {deadlineError ? <Text style={styles.linkError}>{deadlineError}</Text> : null}
+                  {deadlineNotice ? (
+                    <Text style={styles.fieldHint}>{deadlineNotice}</Text>
+                  ) : null}
                 </View>
               </View>
             )}
@@ -1662,6 +1854,50 @@ export default function OrderBriefScreen() {
                         </Text>
                       </View>
                     ) : null}
+                    {measurementAgeSummary ? (
+                      <View style={styles.measureSourceRow}>
+                        <Text style={styles.measureSourceLabel}>Last updated</Text>
+                        <Text
+                          style={[
+                            styles.measureSourceValue,
+                            measurementAgeSummary.stale && styles.measureSourceValueWarning,
+                          ]}
+                        >
+                          {measurementAgeSummary.label}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {measurementAgeSummary?.stale ? (
+                      <View style={styles.measureAgeCard}>
+                        <View style={styles.measureAgeIcon}>
+                          <Feather name="clock" size={16} color={Colors.kanteRust} />
+                        </View>
+                        <View style={styles.measureAgeCopy}>
+                          <Text style={styles.measureAgeTitle}>Refresh if your fit changed</Text>
+                          <Text style={styles.measureAgeText}>
+                            These measurements are over {STALE_MEASUREMENT_MONTHS} months old. If
+                            body shape, comfort, or fit preference changed, update them before this
+                            tailor quotes.
+                          </Text>
+                          <TouchableOpacity
+                            style={styles.measureAgeAction}
+                            onPress={() =>
+                              router.push({
+                                pathname: '/(customer)/profile/measurements',
+                                params: {
+                                  returnTo: buildBriefRoute(tailorId, {
+                                    draftSession,
+                                    resumeDraft: true,
+                                  }),
+                                },
+                              })
+                            }
+                          >
+                            <Text style={styles.measureAgeActionText}>Update measurements</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    ) : null}
                     <View style={styles.measureSummaryGrid}>
                       {[
                         { key: 'chest', label: 'Chest', value: measurements.chest },
@@ -1850,11 +2086,11 @@ export default function OrderBriefScreen() {
                     <Text style={styles.noMeasureTitle}>Choose how to add measurements</Text>
                     <Text style={styles.noMeasureHint}>
                       Your tailor needs your fit profile before they can quote accurately. Scan with
-                      Drape Vision or enter measurements manually, then return to this brief.
+                      Drapeon Vision or enter measurements manually, then return to this brief.
                     </Text>
                     <View style={styles.optionCards}>
                       <OptionCard
-                        title="Scan with Drape Vision"
+                        title="Scan with Drapeon Vision"
                         hint="Guided rotation scan. Your progress in this order will stay here when you come back."
                         active={false}
                         onPress={() =>
@@ -1907,20 +2143,18 @@ export default function OrderBriefScreen() {
                   required
                   hint={`${fitNote.length}/500 · min 20 characters`}
                 />
-                <View style={styles.inlineChipRow}>
+                <View style={styles.quickAddList}>
                   {FIT_NOTE_PRESETS.map((value) => (
-                    <TouchableOpacity
+                    <QuickAddRow
                       key={value}
-                      style={styles.inlineChip}
+                      label={value}
                       onPress={() => {
                         const next =
                           fitNote.trim().length > 0 ? `${fitNote.trim()}. ${value}` : value
                         setFitNote(next)
                         if (fitNoteError) validateFitNote(next)
                       }}
-                    >
-                      <Text style={styles.inlineChipText}>{value}</Text>
-                    </TouchableOpacity>
+                    />
                   ))}
                 </View>
               </View>
@@ -2005,23 +2239,23 @@ export default function OrderBriefScreen() {
                       <Text style={styles.fieldHint}>
                         How long should the tailor have to source fabric before you are updated?
                       </Text>
-                      <View style={styles.inlineChipRow}>
+                      <View style={styles.segmentedControl}>
                         {CUSTOM_ORDER_FABRIC_SOURCING_DEADLINE_DAYS.map((days) => (
                           <TouchableOpacity
                             key={days}
                             style={[
-                              styles.inlineChip,
-                              fabricSourcingDeadlineDays === days && styles.inlineChipActive,
+                              styles.segmentedItem,
+                              fabricSourcingDeadlineDays === days && styles.segmentedItemActive,
                             ]}
                             onPress={() => setFabricSourcingDeadlineDays(days)}
                           >
                             <Text
                               style={[
-                                styles.inlineChipText,
-                                fabricSourcingDeadlineDays === days && styles.inlineChipTextActive,
+                                styles.segmentedItemText,
+                                fabricSourcingDeadlineDays === days && styles.segmentedItemTextActive,
                               ]}
                             >
-                              {days} business days
+                              {days} days
                             </Text>
                           </TouchableOpacity>
                         ))}
@@ -2030,7 +2264,9 @@ export default function OrderBriefScreen() {
                     <View style={styles.guideCard}>
                       <Text style={styles.guideTitle}>Approval required</Text>
                       <Text style={styles.guideText}>
-                        The tailor cannot cut until you approve the sourced fabric inside Drape.
+                        The tailor cannot cut until you approve the sourced fabric inside Drapeon. If
+                        color accuracy matters, ask for natural light and a white paper reference in
+                        the photo.
                       </Text>
                     </View>
                   </View>
@@ -2072,20 +2308,20 @@ export default function OrderBriefScreen() {
                     <Text style={styles.fieldLabel}>
                       Shipping preference <Text style={styles.required}>*</Text>
                     </Text>
-                    <View style={styles.inlineChipRow}>
+                    <View style={styles.segmentedControl}>
                       {CUSTOM_ORDER_SHIPPING_PREFERENCES.map((value) => (
                         <TouchableOpacity
                           key={value}
                           style={[
-                            styles.inlineChip,
-                            shippingPreference === value && styles.inlineChipActive,
+                            styles.segmentedItem,
+                            shippingPreference === value && styles.segmentedItemActive,
                           ]}
                           onPress={() => setShippingPreference(value)}
                         >
                           <Text
                             style={[
-                              styles.inlineChipText,
-                              shippingPreference === value && styles.inlineChipTextActive,
+                              styles.segmentedItemText,
+                              shippingPreference === value && styles.segmentedItemTextActive,
                             ]}
                           >
                             {value === 'EXPRESS' ? 'Express' : 'Standard'}
@@ -2258,7 +2494,7 @@ export default function OrderBriefScreen() {
                         : 'Your tailor ships the finished garment here. If search misses your area, you can still enter the address manually in full.'}
                     </Text>
                     <Text style={styles.fieldHint}>
-                      Drape includes a standard{' '}
+                      Drapeon includes a standard{' '}
                       {deliveryMethod === 'LOCAL_DELIVERY' ? 'delivery' : 'shipping'} fee when you
                       pay the quote. Carrier surcharges, customs, or import duties are never charged
                       automatically; we will ask you to approve anything extra before dispatch.
@@ -2276,8 +2512,9 @@ export default function OrderBriefScreen() {
                   <View style={styles.guideCard}>
                     <Text style={styles.guideTitle}>Collection code</Text>
                     <Text style={styles.guideText}>
-                      When the garment is ready, Drape creates a collection code. Share it only when
-                      you have collected the order.
+                      When the garment is ready, Drapeon creates a collection code. Share it only when
+                      you have collected the order. Try to collect within 7 days of the ready notice;
+                      after 14 days Drapeon may follow up so the tailor is not left storing finished work.
                     </Text>
                   </View>
                 ) : null}
@@ -2304,6 +2541,26 @@ export default function OrderBriefScreen() {
                     value={garmentType === 'Other' ? garmentTypeOther.trim() : garmentType}
                   />
                   <SummaryRow label="Fit category" value={genderPresentation ?? 'Not set'} />
+                  <SummaryRow
+                    label="Wearer"
+                    value={
+                      isBulkOrder
+                        ? bulkLabel.trim() || 'Group order'
+                        : wearerMode === 'SELF'
+                          ? savedMeasurementProfileLabel
+                          : wearerName.trim()
+                    }
+                  />
+                  {isBulkOrder && bulkMemberNames.trim() ? (
+                    <SummaryRow
+                      label="Members"
+                      value={bulkMemberNames
+                        .split(/\n|,/u)
+                        .map((name) => name.trim())
+                        .filter(Boolean)
+                        .join(', ')}
+                    />
+                  ) : null}
                   <SummaryRow label="Occasion" value={occasion.trim() || 'Not set'} />
                   <SummaryRow label="Target date" value={formatDate(deadline)} />
                   <SummaryRow label="Brief" value={description.trim()} />
@@ -2334,6 +2591,16 @@ export default function OrderBriefScreen() {
                         MEASUREMENT_SOURCE_LABELS[
                           measurements.measurementSource as keyof typeof MEASUREMENT_SOURCE_LABELS
                         ] ?? measurements.measurementSource
+                      }
+                    />
+                  ) : null}
+                  {measurementAgeSummary ? (
+                    <SummaryRow
+                      label="Last updated"
+                      value={
+                        measurementAgeSummary.stale
+                          ? `${measurementAgeSummary.label} — refresh if your fit changed`
+                          : measurementAgeSummary.label
                       }
                     />
                   ) : null}
@@ -2407,6 +2674,14 @@ export default function OrderBriefScreen() {
                   <SummaryRow label="Total" value="Shown before payment" />
                   <Text style={styles.fieldHint}>
                     You will see the full checkout breakdown before any payment is confirmed.
+                  </Text>
+                </View>
+
+                <View style={styles.guideCard}>
+                  <Text style={styles.guideTitle}>Handmade garment note</Text>
+                  <Text style={styles.guideText}>
+                    Bespoke garments can have small handmade variation. Fit, finish, wrong item, or
+                    quality issues are still protected through the order concern and aftercare path.
                   </Text>
                 </View>
 
@@ -2787,6 +3062,17 @@ function OptionCard({
   )
 }
 
+function QuickAddRow({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={styles.quickAddRow} onPress={onPress} accessibilityLabel={`Add ${label}`}>
+      <View style={styles.quickAddIcon}>
+        <Text style={styles.quickAddIconText}>+</Text>
+      </View>
+      <Text style={styles.quickAddText}>{label}</Text>
+    </TouchableOpacity>
+  )
+}
+
 function ReviewSection({
   title,
   onEdit,
@@ -2986,20 +3272,34 @@ const styles = StyleSheet.create({
   },
   required: { color: Colors.error },
   fieldHint: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
-  inlineChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
-  inlineChip: {
-    minHeight: 36,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.white,
+  quickAddList: { gap: Spacing.sm, marginTop: Spacing.sm },
+  quickAddRow: {
+    minHeight: 46,
+    borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  quickAddIcon: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
     justifyContent: 'center',
   },
-  inlineChipActive: { backgroundColor: Colors.white, borderColor: Colors.needleGreen },
-  inlineChipText: { fontSize: FontSize.xs, color: Colors.ink, fontWeight: FontWeight.medium },
-  inlineChipTextActive: { color: Colors.needleGreen },
+  quickAddIconText: {
+    color: Colors.needleGreen,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.bold,
+    lineHeight: 20,
+  },
+  quickAddText: { flex: 1, fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.medium },
   segmentedControl: {
     marginTop: Spacing.sm,
     flexDirection: 'row',
@@ -3077,11 +3377,6 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     color: Colors.inkLight,
     lineHeight: 18,
-  },
-  garmentSelectAction: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
   },
   pickerOverlay: {
     flex: 1,
@@ -3302,6 +3597,37 @@ const styles = StyleSheet.create({
   },
   measureSourceLabel: { fontSize: FontSize.sm, color: Colors.midGrey },
   measureSourceValue: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink },
+  measureSourceValueWarning: { color: Colors.kanteRust },
+  measureAgeCard: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    padding: Spacing.md,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.kanteRust + '40',
+    backgroundColor: Colors.kanteRustLight,
+  },
+  measureAgeIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.white,
+  },
+  measureAgeCopy: { flex: 1, gap: 4 },
+  measureAgeTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  measureAgeText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  measureAgeAction: { alignSelf: 'flex-start', marginTop: 2 },
+  measureAgeActionText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.kanteRust,
+  },
   measureSummaryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   measureSummaryItem: { width: '47%', gap: 2 },
   measureSummaryLabel: { fontSize: FontSize.xs, color: Colors.midGrey },

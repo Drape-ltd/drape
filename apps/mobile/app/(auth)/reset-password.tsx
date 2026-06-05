@@ -136,7 +136,7 @@ export default function ResetPasswordScreen() {
           <View style={styles.nextCard}>
             <Text style={styles.nextEyebrow}>What happens next</Text>
             <Text style={styles.nextTitle}>
-              Sign back in and we’ll return you to the right side of Drape.
+              Sign back in and we’ll return you to the right side of Drapeon.
             </Text>
             <Text style={styles.nextCopy}>
               Your orders, messages, clients, and profile stay exactly where you left them. For
@@ -187,7 +187,7 @@ export default function ResetPasswordScreen() {
           <View style={styles.reassuranceCard}>
             <Text style={styles.reassuranceTitle}>A smooth return matters here.</Text>
             <Text style={styles.reassuranceText}>
-              You’re updating access to the same Drape account, not creating a new one.
+              You’re updating access to the same Drapeon account, not creating a new one.
             </Text>
             <Text style={styles.reassuranceText}>
               Once saved, you’ll sign back in and continue with your orders, clients, and messages

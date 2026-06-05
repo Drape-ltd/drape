@@ -19,18 +19,63 @@ import {
   getEmptyConversationAccessState,
   type ConversationAccessState,
 } from '@/lib/conversation-access'
-import { openConsultationCallUrl } from '@/lib/consultation'
+import { createConsultationRoom, openConsultationCallUrl } from '@/lib/consultation'
+import { createOrderCallRoom, openDrapeCallUrl } from '@/lib/order-call'
 import { invokeFunction } from '@/lib/supabase'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { useCustomerMessageOrderInfo, useRefreshOnFocus } from '@/lib/queries'
 import { MessageThread } from '@/components/ui/MessageThread'
 import { AvatarImage } from '@/components/ui/AvatarImage'
+import { OrderCallScheduleModal } from '@/components/ui/OrderCallScheduleModal'
 import { goBackOrReturnTo } from '@/lib/navigation'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { TERMINAL_STAGES } from '@drape/shared/order-machine'
+import { TERMINAL_STAGES, type OrderStage } from '@drape/shared/order-machine'
+import type { OrderCallMeta } from '@/lib/order-support'
 
 const SUPPORT_EMAIL = 'support@drapeon.co'
 type SafetyReportCategory = 'ABUSIVE_LANGUAGE' | 'OFF_PLATFORM_PRESSURE' | 'UNSAFE_BEHAVIOR'
+const ORDER_CALL_STAGES: OrderStage[] = [
+  'CONFIRMED',
+  'DESIGNING',
+  'SOURCING',
+  'CUTTING',
+  'SEWING',
+  'FINISHING',
+  'READY_FOR_COLLECTION',
+  'READY_FOR_DRAPE_DISPATCH',
+  'OUT_FOR_DELIVERY',
+  'SHIPPED',
+  'DELIVERED',
+  'COLLECTED',
+]
+
+function isOrderCallStage(stage: OrderStage | null | undefined) {
+  return !!stage && ORDER_CALL_STAGES.includes(stage)
+}
+
+function readyMadeCallJoinState(orderCall: OrderCallMeta | null | undefined) {
+  if (!orderCall || orderCall.status !== 'SCHEDULED' || !orderCall.scheduledStartAt) return 'needs-schedule' as const
+  if (orderCall.expiredAt) return 'expired' as const
+  const startsAt = new Date(orderCall.scheduledStartAt).getTime()
+  if (!Number.isFinite(startsAt)) return 'expired' as const
+  const now = Date.now()
+  if (now < startsAt - 10 * 60 * 1000) return 'too-early' as const
+  if (now > startsAt + 45 * 60 * 1000) return 'expired' as const
+  return 'join' as const
+}
+
+function formatOrderCallTime(value: string | null | undefined) {
+  if (!value) return 'the scheduled time'
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return 'the scheduled time'
+  return date.toLocaleString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
 
 export default function CustomerMessagesScreen() {
   const { orderId, returnTo } = useLocalSearchParams<{ orderId: string; returnTo?: string }>()
@@ -53,6 +98,8 @@ export default function CustomerMessagesScreen() {
     getEmptyConversationAccessState()
   )
   const [loadingConversationAccess, setLoadingConversationAccess] = useState(false)
+  const [startingCall, setStartingCall] = useState<'audio' | 'video' | null>(null)
+  const [showOrderCallScheduler, setShowOrderCallScheduler] = useState(false)
 
   const refreshConversationAccess = useCallback(async () => {
     if (!resolvedOrderId) return
@@ -89,6 +136,135 @@ export default function CustomerMessagesScreen() {
     await openConsultationCallUrl(url, 'customer')
   }
 
+  async function startConsultationCall(callType: 'audio' | 'video') {
+    if (startingCall) return
+    setStartingCall(callType)
+    try {
+      const room = await createConsultationRoom(resolvedOrderId, callType)
+      if (room?.fallback === 'MESSAGES') {
+        await refetch()
+        return
+      }
+      if (!room?.url) return
+      await refetch()
+      await openCallUrl(room.url)
+    } catch (error) {
+      Alert.alert(
+        'Call unavailable',
+        isLikelyConnectivityIssue(error)
+          ? 'Connection looks weak. Keep this thread updated and try the Drapeon call again when the signal improves.'
+          : 'Could not start the consultation call. Keep using Messages and try again in a moment.'
+      )
+    } finally {
+      setStartingCall(null)
+    }
+  }
+
+  async function startOrderCall(callType: 'audio' | 'video') {
+    if (startingCall) return
+    setStartingCall(callType)
+    try {
+      const room = await createOrderCallRoom(resolvedOrderId, callType)
+      if (room?.fallback === 'MESSAGES') {
+        await refetch()
+        return
+      }
+      if (!room?.url) return
+      await refetch()
+      await openDrapeCallUrl(room.url)
+    } finally {
+      setStartingCall(null)
+    }
+  }
+
+  function showDrapeCallOptions() {
+    if (!orderInfo || startingCall) return
+    const consultation = orderInfo.stage === 'CONSULTATION'
+    const readyMade = orderInfo.orderKind === 'READY_MADE'
+    if (readyMade && !consultation) {
+      showReadyMadeOrderCallOptions()
+      return
+    }
+    const title = consultation ? 'Consultation call' : readyMade ? 'Order call' : 'Drapeon call'
+    const body = consultation
+      ? `Start or join the scheduled consultation with ${orderInfo.tailorName}. This call stays inside Drapeon; any fee must be the consultation fee already shown on the order.`
+      : readyMade
+        ? `Start a Drapeon call with ${orderInfo.tailorName} for pickup, delivery, sizing, or item-condition questions. Do not arrange extra payments outside Drapeon.`
+      : `Start a Drapeon call with ${orderInfo.tailorName} for fit, fabric, delivery, or timeline questions. Keep final decisions in Messages after the call.`
+
+    Alert.alert(title, body, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Video',
+        onPress: () => {
+          void (consultation ? startConsultationCall('video') : startOrderCall('video'))
+        },
+      },
+      {
+        text: 'Audio only',
+        onPress: () => {
+          void (consultation ? startConsultationCall('audio') : startOrderCall('audio'))
+        },
+      },
+    ])
+  }
+
+  function showReadyMadeOrderCallOptions() {
+    if (!orderInfo || startingCall) return
+    const orderCall = orderInfo.supportMeta.orderCall ?? null
+    const state = readyMadeCallJoinState(orderCall)
+
+    if (state === 'needs-schedule') {
+      setShowOrderCallScheduler(true)
+      return
+    }
+
+    if (state === 'too-early') {
+      Alert.alert(
+        'Call is scheduled',
+        `This ready-made order call is set for ${formatOrderCallTime(orderCall?.scheduledStartAt)}. The room opens shortly before the scheduled time.`,
+        [
+          { text: 'Close', style: 'cancel' },
+          { text: 'Reschedule', onPress: () => setShowOrderCallScheduler(true) },
+        ]
+      )
+      return
+    }
+
+    if (state === 'expired') {
+      Alert.alert(
+        'Schedule a new call',
+        'That ready-made order call window has passed. Set a new time from Messages.',
+        [
+          { text: 'Close', style: 'cancel' },
+          { text: 'Schedule', onPress: () => setShowOrderCallScheduler(true) },
+        ]
+      )
+      return
+    }
+
+    Alert.alert(
+      'Join order call',
+      `This ready-made call is free and stays inside Drapeon. Use it for pickup, delivery, sizing, or item-condition clarity; keep final decisions in Messages.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Reschedule', onPress: () => setShowOrderCallScheduler(true) },
+        {
+          text: 'Video',
+          onPress: () => {
+            void startOrderCall('video')
+          },
+        },
+        {
+          text: 'Audio only',
+          onPress: () => {
+            void startOrderCall('audio')
+          },
+        },
+      ]
+    )
+  }
+
   async function submitSafetyReport(category: SafetyReportCategory) {
     if (reportingSafety) return
     setReportingSafety(true)
@@ -109,7 +285,7 @@ export default function CustomerMessagesScreen() {
 
     Alert.alert(
       'Report received',
-      'Drape logged this concern for review. Keep the conversation in Drape and leave the message thread intact as evidence.'
+      'Drapeon logged this concern for review. Keep the conversation in Drapeon and leave the message thread intact as evidence.'
     )
   }
 
@@ -121,7 +297,7 @@ export default function CustomerMessagesScreen() {
       setConversationAccess(nextState)
       Alert.alert(
         'Conversation paused',
-        nextState.userMessage ?? 'This conversation is paused while Drape reviews a safety concern.'
+        nextState.userMessage ?? 'This conversation is paused while Drapeon reviews a safety concern.'
       )
     } catch (error) {
       Alert.alert(
@@ -147,7 +323,7 @@ export default function CustomerMessagesScreen() {
         },
       },
       {
-        text: 'Move off Drape',
+        text: 'Move off Drapeon',
         onPress: () => {
           void submitSafetyReport('OFF_PLATFORM_PRESSURE')
         },
@@ -241,7 +417,7 @@ export default function CustomerMessagesScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         {/* Header */}
         <View style={styles.header}>
@@ -262,46 +438,6 @@ export default function CustomerMessagesScreen() {
             </View>
           </View>
           <View style={styles.headerActions}>
-            {orderInfo.stage === 'CONSULTATION' && (
-              <TouchableOpacity
-                style={styles.callBtn}
-                onPress={() => {
-                  if (!orderInfo.videoCallUrl) {
-                    Alert.alert(
-                      'Consultation requested',
-                      `${orderInfo.tailorName} has requested a consultation. Keep chatting here and they’ll share the call link when ready.`
-                    )
-                    return
-                  }
-
-                  Alert.alert('Join call', `Join your consultation with ${orderInfo.tailorName}.`, [
-                    { text: 'Cancel', style: 'cancel' },
-                    {
-                      text: 'Video',
-                      onPress: () => {
-                        void openCallUrl(orderInfo.videoCallUrl!)
-                      },
-                    },
-                    {
-                      text: 'Audio only',
-                      onPress: () => {
-                        void openCallUrl(orderInfo.videoCallUrl!)
-                      },
-                    },
-                  ])
-                }}
-                accessibilityRole="button"
-                accessibilityLabel={
-                  orderInfo.videoCallUrl ? 'Join consultation call' : 'Consultation requested'
-                }
-              >
-                <Feather
-                  name={orderInfo.videoCallUrl ? 'phone-call' : 'message-circle'}
-                  size={18}
-                  color={Colors.textInverse}
-                />
-              </TouchableOpacity>
-            )}
             <TouchableOpacity
               style={styles.orderBtn}
               onPress={() => {
@@ -347,12 +483,17 @@ export default function CustomerMessagesScreen() {
           <View style={styles.safetyCopy}>
             <Text style={styles.safetyTitle}>Protected chat</Text>
             <Text style={styles.safetyText}>
-              Keep decisions, pickup details, and payments inside Drape.
+              Keep decisions, pickup details, and payments inside Drapeon.
             </Text>
             {conversationAccess.blocked ? (
               <Text style={styles.safetyWarning}>
                 {conversationAccess.userMessage ??
-                  'This conversation is paused while Drape reviews a safety concern.'}
+                  'This conversation is paused while Drapeon reviews a safety concern.'}
+              </Text>
+            ) : null}
+            {orderInfo.stage === 'IN_DISPUTE' && !conversationAccess.blocked ? (
+              <Text style={styles.safetyWarning}>
+                Calls are paused while Drapeon reviews this concern. Keep updates and evidence in this thread.
               </Text>
             ) : null}
             {loadingConversationAccess && !conversationAccess.blocked ? (
@@ -384,13 +525,34 @@ export default function CustomerMessagesScreen() {
           tailorAvatarUrl={orderInfo.tailorAvatarUrl}
           customerName={orderInfo.customerName}
           customerAvatarUrl={orderInfo.customerAvatarUrl}
+          callAvailable={orderInfo.stage === 'CONSULTATION' || isOrderCallStage(orderInfo.stage)}
+          callLoading={!!startingCall}
+          onPressCall={showDrapeCallOptions}
+          callAccessibilityLabel={
+            orderInfo.stage === 'CONSULTATION'
+              ? 'Open consultation call options'
+              : orderInfo.orderKind === 'READY_MADE'
+                ? 'Schedule or join order call'
+                : 'Open Drapeon call options'
+          }
           locked={TERMINAL_STAGES.includes(orderInfo.stage) || conversationAccess.blocked}
           lockedMessage={
             conversationAccess.blocked
               ? (conversationAccess.userMessage ??
-                'This conversation is paused while Drape reviews a safety concern.')
+                'This conversation is paused while Drapeon reviews a safety concern.')
               : undefined
           }
+        />
+        <OrderCallScheduleModal
+          visible={showOrderCallScheduler}
+          orderId={resolvedOrderId}
+          counterpartName={orderInfo.tailorName}
+          actorLabel="customer"
+          existingOrderCall={orderInfo.supportMeta.orderCall ?? null}
+          onClose={() => setShowOrderCallScheduler(false)}
+          onScheduled={() => {
+            void refetch()
+          }}
         />
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -535,14 +697,6 @@ const styles = StyleSheet.create({
     color: Colors.kanteRust,
   },
   safetyMeta: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
-  callBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.needleGreen,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   orderBtn: {
     backgroundColor: Colors.white,
     borderWidth: 1,

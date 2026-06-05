@@ -17,7 +17,7 @@ WebBrowser.maybeCompleteAuthSession()
 
 const STRIPE_RETURN_URL = 'drape://stripe-redirect'
 const PAYSTACK_RETURN_URL = 'drape:///paystack-redirect'
-const STRIPE_MERCHANT_DISPLAY_NAME = 'Drape'
+const STRIPE_MERCHANT_DISPLAY_NAME = 'Drapeon'
 
 function paymentProviderDisplayName(provider: PaymentRoutingProvider) {
   return provider === 'PAYSTACK' ? 'Paystack' : 'Stripe'
@@ -32,7 +32,7 @@ export function paymentRouteLabelForCurrency(currency: string | null | undefined
 export function paymentRouteCopyForCurrency(currency: string | null | undefined) {
   const orderCurrency = normalizeAccountCurrency(currency)
   if (!orderCurrency) return null
-  return `Payment route is locked to this ${orderCurrency} order. Drape opens ${paymentRouteLabelForCurrency(orderCurrency)} for this payment; changing account currency later will not move the order, refund, or payout route.`
+  return `Payment route is locked to this ${orderCurrency} order. Drapeon opens ${paymentRouteLabelForCurrency(orderCurrency)} for this payment; changing account currency later will not move the order, refund, or payout route.`
 }
 
 type BasePreparePaymentResponse = {
@@ -70,6 +70,29 @@ type ConfirmPaymentResponse = {
   paymentIntentId: string
   stage: string
   status: string
+}
+
+type MaterialAdvancePreparePaymentResponse = {
+  ok: boolean
+  provider: 'STRIPE' | 'PAYSTACK'
+  orderId: string
+  advanceId: string
+  paymentIntentId: string
+  authorizationUrl: string | null
+  clientSecret: string | null
+  amount: number
+  currency: string
+  existing: boolean
+}
+
+type MaterialAdvanceConfirmPaymentResponse = {
+  ok: boolean
+  confirmed: boolean
+  advance: {
+    id: string
+    status: string
+    release_status?: string | null
+  }
 }
 
 export type OrderPaymentFlowResult =
@@ -425,8 +448,182 @@ export function useOrderPaymentFlow() {
     return confirmOrderPayment(prepared.orderId, prepared.paymentIntentId)
   }
 
+  async function startMaterialAdvancePayment(options: {
+    orderId: string
+    advanceId: string
+    customerEmail?: string | null
+    customerName?: string | null
+  }): Promise<OrderPaymentFlowResult> {
+    const { data: prepared, error: prepareError } = await invokeFunction<MaterialAdvancePreparePaymentResponse>(
+      'material-advance-action',
+      {
+        body: {
+          action: 'prepare-payment',
+          orderId: options.orderId,
+          advanceId: options.advanceId,
+        },
+      },
+    )
+
+    if (prepareError || !prepared) {
+      return {
+        ok: false,
+        reason: 'failed',
+        message: await resolvePaymentErrorMessage(
+          prepareError,
+          'Could not start the material advance payment right now.',
+        ),
+      }
+    }
+
+    const orderCurrency = normalizeAccountCurrency(prepared.currency)
+    if (!orderCurrency || prepared.provider !== resolvePaymentProviderForCurrency(orderCurrency)) {
+      return {
+        ok: false,
+        reason: 'failed',
+        message: 'Payment routing did not match this material advance. Refresh the order and try again before paying.',
+      }
+    }
+
+    const confirmMaterialAdvance = async (providerPaymentId: string): Promise<OrderPaymentFlowResult> => {
+      const { data: confirmed, error: confirmError } = await invokeFunction<MaterialAdvanceConfirmPaymentResponse>(
+        'material-advance-action',
+        {
+          body: {
+            action: 'confirm-payment',
+            advanceId: options.advanceId,
+            paymentIntentId: providerPaymentId,
+          },
+        },
+      )
+
+      if (confirmError || !confirmed?.confirmed) {
+        return {
+          ok: false,
+          reason: 'failed',
+          message: await resolvePaymentErrorMessage(
+            confirmError,
+            'Payment went through, but Drapeon could not confirm the material advance yet. Pull to refresh in a moment.',
+          ),
+        }
+      }
+
+      return successResult({
+        orderId: options.orderId,
+        stage: confirmed.advance.status,
+        paymentIntentId: providerPaymentId,
+      })
+    }
+
+    if (prepared.provider === 'PAYSTACK') {
+      if (!prepared.authorizationUrl) {
+        return {
+          ok: false,
+          reason: 'failed',
+          message: 'Payment checkout could not open cleanly. Please try again in a moment.',
+        }
+      }
+
+      const browserResult = await WebBrowser.openAuthSessionAsync(
+        prepared.authorizationUrl,
+        PAYSTACK_RETURN_URL,
+      )
+
+      let reference = prepared.paymentIntentId
+      if (browserResult.type === 'success') {
+        try {
+          const callbackUrl = new URL(browserResult.url)
+          reference =
+            callbackUrl.searchParams.get('reference') ??
+            callbackUrl.searchParams.get('trxref') ??
+            prepared.paymentIntentId
+        } catch {
+          reference = prepared.paymentIntentId
+        }
+      }
+
+      const confirmed = await confirmMaterialAdvance(reference)
+      if (confirmed.ok || browserResult.type === 'success') return confirmed
+
+      return {
+        ok: false,
+        reason: 'cancelled',
+        message: 'Payment was not completed.',
+      }
+    }
+
+    if (!hasStripePublishableKey()) {
+      return {
+        ok: false,
+        reason: 'not_configured',
+        message: 'Card payments are not available in this build yet. Use another supported payment method or try again after updating the app.',
+      }
+    }
+
+    if (!stripeRuntimeAvailable || !isNativeStripeRuntimeAvailable()) {
+      return {
+        ok: false,
+        reason: 'not_configured',
+        message: getStripeUnavailableMessage(),
+      }
+    }
+
+    if (!prepared.clientSecret) {
+      return {
+        ok: false,
+        reason: 'failed',
+        message: 'Card checkout could not open cleanly. Please try again in a moment.',
+      }
+    }
+
+    const { error: initError } = await initPaymentSheet({
+      merchantDisplayName: STRIPE_MERCHANT_DISPLAY_NAME,
+      paymentIntentClientSecret: prepared.clientSecret,
+      returnURL: STRIPE_RETURN_URL,
+      allowsDelayedPaymentMethods: false,
+      defaultBillingDetails: {
+        email: options.customerEmail?.trim() || undefined,
+        name: options.customerName?.trim() || undefined,
+      },
+    })
+
+    if (initError) {
+      return {
+        ok: false,
+        reason: 'failed',
+        message: nativePaymentSheetErrorMessage(
+          initError,
+          'Card checkout could not open cleanly. Please try again in a moment.',
+        ),
+      }
+    }
+
+    const { error: presentError } = await presentPaymentSheet()
+    if (presentError) {
+      if (isStripePaymentSheetCanceled(presentError.code)) {
+        return {
+          ok: false,
+          reason: 'cancelled',
+          message: 'Payment was not completed.',
+        }
+      }
+
+      return {
+        ok: false,
+        reason: 'failed',
+        message: nativePaymentSheetErrorMessage(
+          presentError,
+          'Payment could not be completed. Try again or use another card.',
+        ),
+      }
+    }
+
+    return confirmMaterialAdvance(prepared.paymentIntentId)
+  }
+
   return {
     startOrderPayment,
+    startMaterialAdvancePayment,
     isStripeConfigured: hasStripePublishableKey(),
   }
 }

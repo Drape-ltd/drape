@@ -7,7 +7,7 @@ import { buildMetadata } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'Apply as Tailor',
-  description: 'Submit a short tailor application to Drape.',
+  description: 'Submit a short tailor application to Drapeon.',
   path: '/apply',
 })
 
@@ -15,7 +15,7 @@ export default function ApplyPage(): JSX.Element {
   return (
     <MarketingShell
       eyebrow="Tailor application"
-      title="Show your craft clearly. Tell us why you belong in Drape."
+      title="Show your craft clearly. Tell us why you belong in Drapeon."
       description="A short application for serious tailors."
       cta={
         <Link

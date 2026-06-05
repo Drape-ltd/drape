@@ -4,6 +4,8 @@ import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
+import { rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
+import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
 import { parseBody, z } from '../_shared/validate.ts'
 import { normalizeAccountCurrency, resolvePaymentProviderForCurrency } from '../../../packages/shared/src/currency-config.ts'
@@ -131,6 +133,19 @@ Deno.serve(async (req) => {
         payload: { function: FN },
       })
 
+      await queueMediaSafetyReview(supabase, {
+        fn: FN,
+        actorId: caller.id,
+        actorRole: 'TAILOR',
+        surface: 'avatar.public',
+        publicUrls: [body.avatarUrl],
+        purpose: 'AVATAR',
+        tailorProfileId: existingProfile?.id ?? null,
+        relatedEntityType: 'tailor_profile',
+        relatedEntityId: existingProfile?.id ?? caller.id,
+        metadata: { action: body.action },
+      })
+
       return jsonResponse({ ok: true }, 200, cors)
     }
 
@@ -159,6 +174,40 @@ Deno.serve(async (req) => {
     }
     if (profile.pickupAvailable && !profile.pickupAddress?.trim()) {
       return jsonResponse({ error: 'Add your private pickup address before offering pickup.' }, 400, cors)
+    }
+
+    const contactCheckedFields: Array<[string, string, string | null | undefined, string]> = [
+      ['tailor_profile.display_name', 'displayName', profile.displayName, "Contact details can't be included in your public profile name."],
+      ['tailor_profile.bio', 'bio', profile.bio, "Contact details can't be included in your bio. Keep communication on Drape so orders stay protected."],
+      ['tailor_profile.location', 'location', profile.location, "Contact details can't be included in your location."],
+      ['tailor_profile.pickup_instructions', 'pickupInstructions', profile.pickupInstructions, "Contact details can't be included in pickup instructions."],
+      ...languages.map((language): [string, string, string, string] => [
+        'tailor_profile.languages',
+        'languages',
+        language,
+        "Contact details can't be included in languages.",
+      ]),
+      ...specialties.map((specialty): [string, string, string, string] => [
+        'tailor_profile.specialties',
+        'specialties',
+        specialty,
+        "Contact details can't be included in specialties.",
+      ]),
+    ]
+
+    for (const [surface, field, text, message] of contactCheckedFields) {
+      const blocked = await rejectIfBlockedContact({
+        supabase,
+        fn: FN,
+        cors,
+        actorId: caller.id,
+        actorRole: 'TAILOR',
+        surface,
+        text,
+        message,
+        extra: { field, action: body.action },
+      })
+      if (blocked) return blocked
     }
 
     const existingValues = existingProfile?.id
@@ -304,6 +353,41 @@ Deno.serve(async (req) => {
         supports_custom_orders: profile.supportsCustomOrders,
       },
     })
+
+    if (savedProfile?.id) {
+      const avatarMedia = [submittedAvatarUrl]
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      const portfolioMedia = [
+        ...(body.action === 'upsert-setup' ? body.profile.portfolioPhotoUrls ?? [] : []),
+        ...(body.action === 'upsert-setup' ? body.profile.portfolioVideoUrls ?? [] : []),
+      ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+
+      await queueMediaSafetyReview(supabase, {
+        fn: FN,
+        actorId: caller.id,
+        actorRole: 'TAILOR',
+        surface: 'avatar.public',
+        publicUrls: avatarMedia,
+        purpose: 'AVATAR',
+        tailorProfileId: savedProfile.id,
+        relatedEntityType: 'tailor_profile',
+        relatedEntityId: savedProfile.id,
+        metadata: { action: body.action, mediaCount: avatarMedia.length },
+      })
+
+      await queueMediaSafetyReview(supabase, {
+        fn: FN,
+        actorId: caller.id,
+        actorRole: 'TAILOR',
+        surface: 'portfolio.public',
+        publicUrls: portfolioMedia,
+        purpose: 'PORTFOLIO',
+        tailorProfileId: savedProfile.id,
+        relatedEntityType: 'tailor_profile',
+        relatedEntityId: savedProfile.id,
+        metadata: { action: body.action, mediaCount: portfolioMedia.length },
+      })
+    }
 
     if (
       body.action === 'upsert-setup'

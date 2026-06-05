@@ -216,12 +216,12 @@ const MEASUREMENT_SOURCE_OPTIONS: Array<{ value: MeasurementSource; label: strin
   [
     {
       value: 'DRAPE_VISION',
-      label: 'Drape Vision scan',
+      label: 'Drapeon Vision scan',
       hint: 'AI-assisted starting point. Tailors can still verify high-risk fields.',
     },
     {
       value: 'TAILOR_ASSISTED_DRAPE_VISION',
-      label: 'Tailor-assisted Drape Vision',
+      label: 'Tailor-assisted Drapeon Vision',
       hint: 'A tailor helped capture or verify the scan.',
     },
     {
@@ -351,6 +351,7 @@ export default function MeasurementsScreen() {
   const [showGuide, setShowGuide] = useState(true)
 
   // Layer 1
+  const [measurementProfileLabel, setMeasurementProfileLabel] = useState('Me')
   const [unit, setUnit] = useState<Unit>('in')
   const [chest, setChest] = useState('')
   const [waist, setWaist] = useState('')
@@ -393,6 +394,7 @@ export default function MeasurementsScreen() {
 
   function applyMeasurements(m: Record<string, unknown> | null) {
     setUnit('in')
+    setMeasurementProfileLabel('Me')
     setChest('')
     setWaist('')
     setHips('')
@@ -426,6 +428,9 @@ export default function MeasurementsScreen() {
     setCustomMeasurements([])
     setFitCaptureMeta({})
     if (!m) return
+    if (typeof m.measurementProfileLabel === 'string' && m.measurementProfileLabel.trim()) {
+      setMeasurementProfileLabel(m.measurementProfileLabel.trim())
+    }
     if (m.unit === 'cm' || m.unit === 'in') setUnit(m.unit)
     if (typeof m.chest === 'number') setChest(String(m.chest))
     if (typeof m.waist === 'number') setWaist(String(m.waist))
@@ -496,6 +501,9 @@ export default function MeasurementsScreen() {
       'filaHeight',
       'torsoLength',
       'unit',
+      'measurementProfileLabel',
+      'measurementProfileUpdatedAt',
+      'wearerContext',
       'fitStyle',
       'fitPassportVersion',
       'measurementSource',
@@ -754,6 +762,15 @@ export default function MeasurementsScreen() {
     }
 
     const payload = {
+      measurementProfileLabel: measurementProfileLabel.trim() || 'Me',
+      measurementProfileUpdatedAt: new Date().toISOString(),
+      wearerContext: {
+        mode: 'SELF',
+        label: measurementProfileLabel.trim() || 'Me',
+        measurementProfileLabel: measurementProfileLabel.trim() || 'Me',
+        relationship: 'BUYER',
+        selectedAt: new Date().toISOString(),
+      },
       chest: safeParse(chest),
       waist: safeParse(waist),
       hips: safeParse(hips),
@@ -803,9 +820,8 @@ export default function MeasurementsScreen() {
         { onConflict: 'user_id' }
       )
 
-    setSaving(false)
-
     if (error) {
+      setSaving(false)
       Alert.alert(
         'Error',
         isLikelyConnectivityIssue(error)
@@ -813,6 +829,41 @@ export default function MeasurementsScreen() {
           : 'Could not save your measurements right now. Please try again in a moment.'
       )
     } else {
+      if (user?.id) {
+        const { data: existingDefault } = await supabase
+          .from('customer_measurement_profiles')
+          .select('id')
+          .eq('customer_id', user.id)
+          .eq('is_default', true)
+          .maybeSingle()
+
+        const namedProfilePayload = {
+          customer_id: user.id,
+          label: measurementProfileLabel.trim() || 'Me',
+          relationship: 'SELF',
+          measurements: payload,
+          unit_preference: unit,
+          source: measurementSource === 'DRAPE_VISION'
+            ? 'DRAPE_VISION'
+            : measurementSource === 'TAILOR_ASSISTED_DRAPE_VISION' || measurementSource === 'TAILOR_CAPTURED'
+              ? 'TAILOR_ASSISTED'
+              : 'MANUAL',
+          is_default: true,
+          last_measured_at: payload.measurementProfileUpdatedAt,
+        }
+
+        if (existingDefault?.id) {
+          await supabase
+            .from('customer_measurement_profiles')
+            .update(namedProfilePayload)
+            .eq('id', existingDefault.id)
+        } else {
+          await supabase
+            .from('customer_measurement_profiles')
+            .insert(namedProfilePayload)
+        }
+      }
+      setSaving(false)
       capture('measurements_saved', { unit, measurement_source: measurementSource })
       goBackOrReturnToIfNeeded(router, navigation, safeReturnTo, '/(customer)/profile')
     }
@@ -923,7 +974,7 @@ export default function MeasurementsScreen() {
               <View style={styles.fields}>
                 <TouchableOpacity
                   accessibilityRole="button"
-                  accessibilityLabel="Open Drape Vision"
+                  accessibilityLabel="Open Drapeon Vision"
                   onPress={openDrapeVision}
                   style={styles.visionPassportCard}
                 >
@@ -931,7 +982,7 @@ export default function MeasurementsScreen() {
                     <Feather name="aperture" size={20} color={PRIMARY_GREEN} />
                   </View>
                   <View style={styles.visionPassportCopy}>
-                    <Text style={styles.visionPassportTitle}>Drape Vision</Text>
+                    <Text style={styles.visionPassportTitle}>Drapeon Vision</Text>
                     <Text style={styles.visionPassportText}>
                       Scan flow, manual entry, and tailor-assisted measurements all save into this
                       Fit Passport.
@@ -939,6 +990,14 @@ export default function MeasurementsScreen() {
                   </View>
                   <Feather name="chevron-right" size={18} color={Colors.midGrey} />
                 </TouchableOpacity>
+
+                <Input
+                  label="Profile name"
+                  placeholder="Me, Mum, Partner, Child"
+                  value={measurementProfileLabel}
+                  onChangeText={setMeasurementProfileLabel}
+                  hint="Use the name of the person these measurements belong to. Orders can then say clearly whose body the tailor is cutting for."
+                />
 
                 {/* Unit toggle */}
                 <View style={styles.unitToggle}>
@@ -1070,14 +1129,17 @@ export default function MeasurementsScreen() {
                   {CUSTOM_MEASUREMENT_SUGGESTION_GROUPS.map((group) => (
                     <View key={group.title} style={styles.customSuggestionGroup}>
                       <Text style={styles.customSuggestionGroupTitle}>{group.title}</Text>
-                      <View style={styles.customSuggestionWrap}>
+                      <View style={styles.customSuggestionList}>
                         {group.items.map((name) => (
                           <TouchableOpacity
                             key={name}
-                            style={styles.customSuggestionChip}
+                            style={styles.customSuggestionRow}
                             onPress={() => addSuggestedMeasurement(name)}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Add ${name} measurement`}
                           >
                             <Text style={styles.customSuggestionText}>{name}</Text>
+                            <Feather name="plus" size={16} color={Colors.needleGreen} />
                           </TouchableOpacity>
                         ))}
                       </View>
@@ -1454,26 +1516,29 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
     color: CHARCOAL,
   },
-  customSuggestionWrap: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 2,
-  },
-  customSuggestionChip: {
-    minHeight: 34,
-    paddingHorizontal: 12,
-    borderRadius: Radius.full,
+  customSuggestionList: {
     borderWidth: 1,
     borderColor: Colors.lightGrey,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    marginTop: 2,
+  },
+  customSuggestionRow: {
+    minHeight: 44,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     backgroundColor: Colors.white,
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.lightGrey,
   },
   customSuggestionText: {
     fontSize: 12,
-    color: Colors.inkLight,
-    fontWeight: FontWeight.medium,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
   },
   customRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   customNameField: { flex: 2 },

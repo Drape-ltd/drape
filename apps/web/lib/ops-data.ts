@@ -1,6 +1,13 @@
 import 'server-only'
 
-import { formatOpsIssueNumber, normalizeAccountCurrency, resolvePaymentProviderForCurrency } from '@drape/shared'
+import {
+  formatOpsIssueNumber,
+  normalizeAccountCurrency,
+  payoutBlockReasonMessage,
+  payoutWindowClosesAt,
+  resolvePaymentProviderForCurrency,
+  type PayoutBlockedReason,
+} from '@drape/shared'
 
 import { createServiceRoleClient } from './server-supabase'
 
@@ -111,10 +118,49 @@ type OrderPaymentContextRow = {
   id: string
   order_id: string
   phase: string
+  provider: string
   amount: number
   currency: string | null
   status: string
   refunded_amount: number | null
+  confirmed_at?: string | null
+  failed_at?: string | null
+  created_at?: string | null
+}
+
+type SellerItemRow = {
+  id: string
+  tailor_profile_id: string
+  title: string
+  description: string | null
+  category: string | null
+  sizes: string[] | null
+  price_amount: number
+  currency: string
+  photo_urls: string[] | null
+  is_live: boolean
+  stock_status: string
+  inventory_quantity?: number | null
+  size_inventory?: Record<string, unknown> | null
+  pickup_available: boolean
+  delivery_available: boolean
+  shipping_available: boolean
+  created_at: string
+  updated_at: string
+}
+
+type MessageRow = {
+  id: string
+  order_id: string
+  sender_id: string
+  sender_role: string | null
+  sender_name: string | null
+  type: string | null
+  body: string | null
+  photo_url: string | null
+  voice_url: string | null
+  read_at: string | null
+  created_at: string
 }
 
 type AuditLogRow = {
@@ -124,6 +170,16 @@ type AuditLogRow = {
   actor_role: string | null
   event: string
   severity: string
+  order_id: string | null
+  payload: Record<string, unknown> | null
+}
+
+type ConversationAccessLogRow = {
+  id: string
+  created_at: string
+  actor_id: string | null
+  actor_role: string | null
+  event: string
   order_id: string | null
   payload: Record<string, unknown> | null
 }
@@ -185,6 +241,12 @@ type OrderRow = {
   special_note?: string | null
   quoted_amount: number | null
   total_amount?: number | null
+  source_amount?: number | null
+  source_currency?: string | null
+  subtotal_amount?: number | null
+  platform_fee_amount?: number | null
+  tax_amount?: number | null
+  shipping_amount?: number | null
   currency?: string | null
   quoted_currency: string | null
   delivery_method: string | null
@@ -198,6 +260,11 @@ type OrderRow = {
   fulfillment_contact_phone?: string | null
   tracking_number?: string | null
   carrier?: string | null
+  handoff_completed_at?: string | null
+  customer_handoff_confirmed_at?: string | null
+  handoff_confirmation_source?: string | null
+  escrow_released?: boolean | null
+  escrow_released_at?: string | null
   customer_id: string
   tailor_id: string
 }
@@ -330,12 +397,80 @@ export type OpsPayout = {
   status: string
   providerPayoutId: string | null
   blockedReason: string | null
+  blockedReasonMessage: string | null
   orderId: string | null
   orderReference: string | null
+  orderStage: string | null
+  orderKind: string | null
+  orderTotalAmount: number | null
+  orderCurrency: string | null
+  sourceAmount: number | null
+  sourceCurrency: string | null
+  platformFeeAmount: number | null
+  taxAmount: number | null
+  shippingAmount: number | null
+  handoffCompletedAt: string | null
+  customerHandoffConfirmedAt: string | null
+  handoffConfirmationSource: string | null
+  payoutReadyAt: string | null
+  escrowReleased: boolean
+  escrowReleasedAt: string | null
+  paymentStatus: string | null
+  paymentProvider: string | null
+  capturedAmount: number
+  alreadyRefundedAmount: number
+  maxRefundableAmount: number
   initiatedAt: string | null
   completedAt: string | null
   failedAt: string | null
   processedAt: string
+}
+
+export type OpsShopItem = {
+  id: string
+  title: string
+  category: string | null
+  tailorProfileId: string
+  tailorDisplayName: string
+  tailorEmail: string | null
+  priceAmount: number
+  currency: string
+  photoUrls: string[]
+  isLive: boolean
+  stockStatus: string
+  inventoryQuantity: number
+  sizeInventoryLabel: string
+  sizes: string[]
+  fulfillment: string[]
+  createdAt: string
+  updatedAt: string
+  riskLabels: string[]
+}
+
+export type OpsSupportThread = {
+  orderId: string
+  orderReference: string | null
+  orderStage: string | null
+  orderKind: string | null
+  deliveryMethod: string | null
+  paymentStatus: string | null
+  paymentProvider: string | null
+  customerName: string
+  customerEmail: string | null
+  tailorName: string
+  tailorEmail: string | null
+  latestSenderName: string
+  latestSenderRole: string
+  latestMessagePreview: string
+  latestMessageType: string
+  latestMessageAt: string
+  unreadCount: number
+  messageCount: number
+  mediaCount: number
+  blockedMessageCount: number
+  conversationBlocked: boolean
+  blockedAt: string | null
+  blockedByRole: string | null
 }
 
 export type OpsReviewQueueItem = {
@@ -374,6 +509,11 @@ export type OpsWorkflowIssue = {
   orderId: string | null
   orderReference: string | null
   orderStage: string | null
+  relatedEntityType: string | null
+  relatedEntityId: string | null
+  materialAdvanceId: string | null
+  materialAdvanceAmount: number | null
+  materialAdvanceCurrency: string | null
   summary: string
   reason: string | null
   blockedReasonCode: string | null
@@ -457,6 +597,8 @@ export type OpsDashboardData = {
     deadJobs: number
     retryableJobs: number
     providersDegraded: number
+    shopInventoryAlerts: number
+    activeSupportThreads: number
   }
   systemHealth: {
     jobQueue: {
@@ -484,6 +626,8 @@ export type OpsDashboardData = {
   deletionRequests: OpsAccountDeletionRequest[]
   reviewQueue: OpsReviewQueueItem[]
   payouts: OpsPayout[]
+  shopItems: OpsShopItem[]
+  supportThreads: OpsSupportThread[]
   orderReviews: OpsOrderReviewItem[]
   workflowIssues: OpsWorkflowIssue[]
   dispatchQueue: OpsDispatchItem[]
@@ -519,6 +663,8 @@ function emptySummary() {
     deadJobs: 0,
     retryableJobs: 0,
     providersDegraded: 0,
+    shopInventoryAlerts: 0,
+    activeSupportThreads: 0,
   }
 }
 
@@ -839,7 +985,7 @@ function workflowRecommendedAction(event: string, payload: Record<string, unknow
     case 'CONVERSATION_SAFETY':
       return 'Review the report, decide whether the order chat should stay paused, and leave an internal trust note.'
     case 'conversation.blocked':
-      return 'Confirm whether the block should stand or the conversation can reopen safely inside Drape.'
+      return 'Confirm whether the block should stand or the conversation can reopen safely inside Drapeon.'
     case 'payment.blocked':
       return reason === 'confirm_status_not_success'
         ? 'Verify the provider payment status, then either confirm the order or trigger a refund path.'
@@ -859,7 +1005,7 @@ function workflowRecommendedAction(event: string, payload: Record<string, unknow
     case 'AFTERCARE_REQUEST':
       return 'Review the note, request evidence if needed, and decide whether support or refund review is required.'
     case 'shipping.handoff_blocked':
-      return 'Resolve the missing dispatch detail or courier handoff issue blocking Drape-managed delivery.'
+      return 'Resolve the missing dispatch detail or courier handoff issue blocking Drapeon-managed delivery.'
     case 'shipping.webhook_skipped':
     case 'shipping.delivery_order_missing':
     case 'shipping.delivery_skipped_wrong_stage':
@@ -918,10 +1064,66 @@ function formatGroupedCurrencyTotals(values: Array<{ amount: number | null | und
     .join(' + ')
 }
 
+function formatSizeInventory(value: Record<string, unknown> | null | undefined) {
+  if (!value || typeof value !== 'object') return '—'
+
+  const entries = Object.entries(value)
+    .map(([size, count]) => [size, typeof count === 'number' ? count : Number.parseInt(String(count), 10)] as const)
+    .filter(([, count]) => Number.isFinite(count))
+
+  if (entries.length === 0) return '—'
+
+  return entries
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([size, count]) => `${size}: ${count}`)
+    .join(' · ')
+}
+
+function sellerItemRiskLabels(item: SellerItemRow) {
+  const labels: string[] = []
+  const inventory = typeof item.inventory_quantity === 'number' ? item.inventory_quantity : 0
+  const photos = item.photo_urls ?? []
+  const fulfillmentReady = item.pickup_available || item.delivery_available || item.shipping_available
+
+  if (!item.is_live || item.stock_status === 'HIDDEN') labels.push('Hidden from buyers')
+  if (item.stock_status === 'SOLD_OUT' || inventory <= 0) labels.push('Sold out')
+  if (item.stock_status === 'LOW_STOCK' || inventory === 1) labels.push('Low stock')
+  if (photos.length === 0) labels.push('Missing photos')
+  if (!fulfillmentReady) labels.push('No fulfillment option')
+
+  return labels
+}
+
 function orderPaymentRefundedAmount(payment: OrderPaymentContextRow) {
   if (payment.status === 'REFUNDED') return Math.max(payment.amount, 0)
   if (typeof payment.refunded_amount === 'number') return Math.max(Math.min(payment.refunded_amount, payment.amount), 0)
   return 0
+}
+
+function payoutBlockedReasonCopy(reason: string | null) {
+  if (!reason) return null
+
+  try {
+    return payoutBlockReasonMessage(reason as PayoutBlockedReason)
+  } catch {
+    return reason.replace(/_/g, ' ').toLowerCase()
+  }
+}
+
+function messagePreview(message: MessageRow) {
+  const type = (message.type ?? 'TEXT').toUpperCase()
+  const content = message.body?.trim()
+  if (content) return content.length > 180 ? `${content.slice(0, 177)}...` : content
+  if (type === 'IMAGE' || type === 'PHOTO' || message.photo_url) return 'Photo message'
+  if (type === 'AUDIO' || type === 'VOICE' || message.voice_url) return 'Voice note'
+  return 'Message'
+}
+
+function messageMediaCount(messages: MessageRow[]) {
+  return messages.filter((message) => {
+    const type = (message.type ?? '').toUpperCase()
+    return !!message.photo_url || !!message.voice_url || ['IMAGE', 'PHOTO', 'AUDIO', 'VOICE'].includes(type)
+  }).length
 }
 
 export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
@@ -934,12 +1136,15 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
     disputesResult,
     orderReviewsResult,
     bypassResult,
+    messagesResult,
+    conversationAccessLogsResult,
     safetyReportCountResult,
     dispatchQueueResult,
     applicationsResult,
     verificationsResult,
     deletionRequestsResult,
     reviewQueueResult,
+    sellerItemsResult,
     payoutsResult,
     opsIssuesResult,
     legacyWorkflowIssuesResult,
@@ -971,6 +1176,17 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
       .select('id, user_id, surface, content, attempt, reviewed, reviewed_at, reviewed_by, created_at')
       .order('created_at', { ascending: false })
       .limit(40),
+    client
+      .from('messages')
+      .select('id, order_id, sender_id, sender_role, sender_name, type, body, photo_url, voice_url, read_at, created_at')
+      .order('created_at', { ascending: false })
+      .limit(160),
+    client
+      .from('audit_logs')
+      .select('id, created_at, actor_id, actor_role, event, order_id, payload')
+      .in('event', ['conversation.blocked', 'conversation.unblocked'])
+      .order('created_at', { ascending: false })
+      .limit(120),
     client
       .from('audit_logs')
       .select('id', { count: 'exact', head: true })
@@ -1005,6 +1221,11 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
       .or('flagged.eq.true,published_at.is.null')
       .order('created_at', { ascending: false })
       .limit(24),
+    client
+      .from('seller_items')
+      .select('id, tailor_profile_id, title, description, category, sizes, price_amount, currency, photo_urls, is_live, stock_status, inventory_quantity, size_inventory, pickup_available, delivery_available, shipping_available, created_at, updated_at')
+      .order('updated_at', { ascending: false })
+      .limit(48),
     client
       .from('payouts')
       .select('id, tailor_profile_id, amount, currency, provider, status, provider_payout_id, blocked_reason, order_id, initiated_at, completed_at, failed_at, processed_at')
@@ -1071,6 +1292,14 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
     bypassResult.status === 'fulfilled' && !bypassResult.value.error
       ? ((bypassResult.value.data ?? []) as ContactBypassRow[])
       : []
+  const messages =
+    messagesResult.status === 'fulfilled' && !messagesResult.value.error
+      ? ((messagesResult.value.data ?? []) as MessageRow[])
+      : []
+  const conversationAccessLogs =
+    conversationAccessLogsResult.status === 'fulfilled' && !conversationAccessLogsResult.value.error
+      ? ((conversationAccessLogsResult.value.data ?? []) as ConversationAccessLogRow[])
+      : []
   const dispatchQueue =
     dispatchQueueResult.status === 'fulfilled' && !dispatchQueueResult.value.error
       ? ((dispatchQueueResult.value.data ?? []) as OrderRow[])
@@ -1090,6 +1319,10 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
   const reviewQueue =
     reviewQueueResult.status === 'fulfilled' && !reviewQueueResult.value.error
       ? ((reviewQueueResult.value.data ?? []) as ReviewRow[])
+      : []
+  const sellerItems =
+    sellerItemsResult.status === 'fulfilled' && !sellerItemsResult.value.error
+      ? ((sellerItemsResult.value.data ?? []) as SellerItemRow[])
       : []
   const payouts =
     payoutsResult.status === 'fulfilled' && !payoutsResult.value.error
@@ -1177,6 +1410,14 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
   if (bypassResult.status === 'fulfilled' && bypassResult.value.error) {
     issues.push(formatIssue('Bypass logs', bypassResult.value.error))
   }
+  if (messagesResult.status === 'rejected') issues.push(formatIssue('Support messages', messagesResult.reason))
+  if (messagesResult.status === 'fulfilled' && messagesResult.value.error) {
+    issues.push(formatIssue('Support messages', messagesResult.value.error))
+  }
+  if (conversationAccessLogsResult.status === 'rejected') issues.push(formatIssue('Conversation access logs', conversationAccessLogsResult.reason))
+  if (conversationAccessLogsResult.status === 'fulfilled' && conversationAccessLogsResult.value.error) {
+    issues.push(formatIssue('Conversation access logs', conversationAccessLogsResult.value.error))
+  }
   if (dispatchQueueResult.status === 'rejected') issues.push(formatIssue('Dispatch queue', dispatchQueueResult.reason))
   if (dispatchQueueResult.status === 'fulfilled' && dispatchQueueResult.value.error) {
     issues.push(formatIssue('Dispatch queue', dispatchQueueResult.value.error))
@@ -1196,6 +1437,10 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
   if (reviewQueueResult.status === 'rejected') issues.push(formatIssue('Review moderation queue', reviewQueueResult.reason))
   if (reviewQueueResult.status === 'fulfilled' && reviewQueueResult.value.error) {
     issues.push(formatIssue('Review moderation queue', reviewQueueResult.value.error))
+  }
+  if (sellerItemsResult.status === 'rejected') issues.push(formatIssue('Shop inventory', sellerItemsResult.reason))
+  if (sellerItemsResult.status === 'fulfilled' && sellerItemsResult.value.error) {
+    issues.push(formatIssue('Shop inventory', sellerItemsResult.value.error))
   }
   if (payoutsResult.status === 'rejected') issues.push(formatIssue('Payouts', payoutsResult.reason))
   if (payoutsResult.status === 'fulfilled' && payoutsResult.value.error) {
@@ -1220,6 +1465,23 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
   if (providerHealthResult.status === 'rejected') issues.push(formatIssue('Provider health', providerHealthResult.reason))
   if (providerHealthResult.status === 'fulfilled' && providerHealthResult.value.error) {
     issues.push(formatIssue('Provider health', providerHealthResult.value.error))
+  }
+
+  const messagesByOrderId = new Map<string, MessageRow[]>()
+  for (const message of messages) {
+    const thread = messagesByOrderId.get(message.order_id) ?? []
+    thread.push(message)
+    messagesByOrderId.set(message.order_id, thread)
+  }
+  for (const thread of messagesByOrderId.values()) {
+    thread.sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))
+  }
+  const supportThreadOrderIds = [...messagesByOrderId.keys()]
+
+  const latestConversationAccessByOrderId = new Map<string, ConversationAccessLogRow>()
+  for (const log of conversationAccessLogs) {
+    if (!log.order_id || latestConversationAccessByOrderId.has(log.order_id)) continue
+    latestConversationAccessByOrderId.set(log.order_id, log)
   }
 
   const summary = emptySummary()
@@ -1284,6 +1546,8 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
     summary.unreviewedBypassLogs
     + reviewQueue.filter((review) => review.flagged).length
     + summary.recentSafetyReports
+  summary.shopInventoryAlerts = sellerItems.filter((item) => sellerItemRiskLabels(item).length > 0).length
+  summary.activeSupportThreads = supportThreadOrderIds.length
   summary.deadJobs = systemHealth.jobQueue.dead
   summary.retryableJobs = systemHealth.jobQueue.retryable
   summary.providersDegraded = systemHealth.providers.filter((provider) => provider.status !== 'OK').length
@@ -1296,7 +1560,7 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
       orderKind: row.order_kind ?? null,
       orderStage: row.stage ?? null,
       reviewType: review.type,
-      requestedBy: review.requestedBy ?? 'Drape',
+      requestedBy: review.requestedBy ?? 'Drapeon',
       requestedByRole: review.requestedBy,
       customerId: row.customer_id,
       tailorId: row.tailor_id,
@@ -1336,6 +1600,7 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
     ...openOrderReviews.map((review) => review.orderId),
     ...reviewQueue.map((review) => review.order_id),
     ...payouts.map((payout) => payout.order_id).filter((value): value is string => typeof value === 'string' && value.length > 0),
+    ...supportThreadOrderIds,
     ...workflowOpsIssues.map((issue) => issue.order_id).filter((value): value is string => typeof value === 'string' && value.length > 0),
     ...legacyWorkflowIssues.map((issue) => issue.order_id).filter((value): value is string => typeof value === 'string' && value.length > 0),
   ])]
@@ -1345,13 +1610,16 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
 
   const ordersById = new Map<string, OrderRow>()
   const orderPaymentContextByOrderId = new Map<string, {
+    capturedAmount: number
     alreadyRefundedAmount: number
     maxRefundableAmount: number
+    paymentStatus: string | null
+    paymentProvider: string | null
   }>()
   if (orderIds.length > 0) {
     const { data, error } = await client
       .from('orders')
-      .select('id, reference, stage, quoted_amount, total_amount, currency, quoted_currency, delivery_method, fulfillment_option, customer_id, tailor_id')
+      .select('id, reference, order_kind, garment_type, item_title, stage, quoted_amount, total_amount, source_amount, source_currency, subtotal_amount, platform_fee_amount, tax_amount, shipping_amount, currency, quoted_currency, delivery_method, fulfillment_option, customer_id, tailor_id, handoff_completed_at, customer_handoff_confirmed_at, handoff_confirmation_source, escrow_released, escrow_released_at')
       .in('id', orderIds)
 
     if (error) {
@@ -1366,7 +1634,7 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
 
     const { data: orderPaymentsData, error: orderPaymentsError } = await client
       .from('order_payments')
-      .select('id, order_id, phase, amount, currency, status, refunded_amount')
+      .select('id, order_id, phase, provider, amount, currency, status, refunded_amount, confirmed_at, failed_at, created_at')
       .in('order_id', orderIds)
 
     if (orderPaymentsError) {
@@ -1374,14 +1642,20 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
     } else {
       const paymentRows = (orderPaymentsData ?? []) as OrderPaymentContextRow[]
       for (const orderId of orderIds) {
-        const payments = paymentRows.filter((row) => row.order_id === orderId)
+        const payments = paymentRows
+          .filter((row) => row.order_id === orderId)
+          .sort((left, right) => Date.parse(right.created_at ?? '') - Date.parse(left.created_at ?? ''))
+        const latestPayment = payments[0] ?? null
         const capturedAmount = payments
           .filter((row) => ['SUCCEEDED', 'PARTIAL_REFUND', 'REFUNDED'].includes(row.status))
           .reduce((sum, row) => sum + Math.max(row.amount, 0), 0)
         const alreadyRefundedAmount = payments.reduce((sum, row) => sum + orderPaymentRefundedAmount(row), 0)
         orderPaymentContextByOrderId.set(orderId, {
+          capturedAmount,
           alreadyRefundedAmount,
           maxRefundableAmount: Math.max(capturedAmount - alreadyRefundedAmount, 0),
+          paymentStatus: latestPayment?.status ?? null,
+          paymentProvider: latestPayment?.provider ?? null,
         })
       }
     }
@@ -1397,6 +1671,10 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
     userIds.add(log.user_id)
   }
 
+  for (const message of messages) {
+    userIds.add(message.sender_id)
+  }
+
   for (const verification of pendingVerifications) {
     userIds.add(verification.user_id)
   }
@@ -1407,6 +1685,10 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
 
   for (const payout of payouts) {
     tailorProfileIds.add(payout.tailor_profile_id)
+  }
+
+  for (const item of sellerItems) {
+    tailorProfileIds.add(item.tailor_profile_id)
   }
 
   for (const workflowIssue of workflowOpsIssues) {
@@ -1473,6 +1755,25 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
   }
 
   const usersById = new Map<string, UserRow>()
+  if (userIds.size > 0) {
+    const { data, error } = await client
+      .from('users')
+      .select('id, email, display_name, role')
+      .in('id', [...userIds])
+
+    if (error) {
+      issues.push(formatIssue('User account context', error))
+    } else {
+      for (const row of (data ?? []) as UserRow[]) {
+        usersById.set(row.id, {
+          id: row.id,
+          email: row.email,
+          display_name: row.display_name || (row.role === 'TAILOR' ? 'Tailor' : 'Customer'),
+          role: row.role,
+        })
+      }
+    }
+  }
 
   for (const [userId, profile] of customerProfilesByUserId) {
     const existing = usersById.get(userId)
@@ -1643,6 +1944,7 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
       const tailorProfile = tailorProfilesById.get(payout.tailor_profile_id)
       const order = payout.order_id ? ordersById.get(payout.order_id) : null
       const tailorUser = tailorProfile ? usersById.get(tailorProfile.user_id) : order ? usersById.get(order.tailor_id) : null
+      const paymentContext = payout.order_id ? orderPaymentContextByOrderId.get(payout.order_id) : null
 
       return {
         id: payout.id,
@@ -1655,12 +1957,100 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
         status: payout.status,
         providerPayoutId: payout.provider_payout_id,
         blockedReason: payout.blocked_reason,
+        blockedReasonMessage: payoutBlockedReasonCopy(payout.blocked_reason),
         orderId: payout.order_id,
         orderReference: order?.reference ?? null,
+        orderStage: order?.stage ?? null,
+        orderKind: order?.order_kind ?? null,
+        orderTotalAmount: order?.total_amount ?? order?.quoted_amount ?? null,
+        orderCurrency: order?.currency ?? order?.quoted_currency ?? null,
+        sourceAmount: order?.source_amount ?? order?.subtotal_amount ?? null,
+        sourceCurrency: order?.source_currency ?? order?.currency ?? order?.quoted_currency ?? null,
+        platformFeeAmount: order?.platform_fee_amount ?? null,
+        taxAmount: order?.tax_amount ?? null,
+        shippingAmount: order?.shipping_amount ?? null,
+        handoffCompletedAt: order?.handoff_completed_at ?? null,
+        customerHandoffConfirmedAt: order?.customer_handoff_confirmed_at ?? null,
+        handoffConfirmationSource: order?.handoff_confirmation_source ?? null,
+        payoutReadyAt: order?.customer_handoff_confirmed_at ? payoutWindowClosesAt(order.customer_handoff_confirmed_at) : null,
+        escrowReleased: order?.escrow_released === true,
+        escrowReleasedAt: order?.escrow_released_at ?? null,
+        paymentStatus: paymentContext?.paymentStatus ?? null,
+        paymentProvider: paymentContext?.paymentProvider ?? null,
+        capturedAmount: paymentContext?.capturedAmount ?? 0,
+        alreadyRefundedAmount: paymentContext?.alreadyRefundedAmount ?? 0,
+        maxRefundableAmount: paymentContext?.maxRefundableAmount ?? 0,
         initiatedAt: payout.initiated_at,
         completedAt: payout.completed_at,
         failedAt: payout.failed_at,
         processedAt: payout.processed_at,
+      }
+    }),
+    shopItems: sellerItems.map((item) => {
+      const tailorProfile = tailorProfilesById.get(item.tailor_profile_id)
+      const tailorUser = tailorProfile ? usersById.get(tailorProfile.user_id) : null
+      const fulfillment = [
+        item.pickup_available ? 'Pickup' : null,
+        item.delivery_available ? 'Delivery' : null,
+        item.shipping_available ? 'Shipping' : null,
+      ].filter((value): value is string => typeof value === 'string')
+
+      return {
+        id: item.id,
+        title: item.title,
+        category: item.category,
+        tailorProfileId: item.tailor_profile_id,
+        tailorDisplayName: tailorProfile?.display_name ?? tailorUser?.display_name ?? 'Tailor',
+        tailorEmail: tailorUser?.email ?? null,
+        priceAmount: item.price_amount,
+        currency: item.currency,
+        photoUrls: item.photo_urls ?? [],
+        isLive: item.is_live,
+        stockStatus: item.stock_status,
+        inventoryQuantity: typeof item.inventory_quantity === 'number' ? item.inventory_quantity : 0,
+        sizeInventoryLabel: formatSizeInventory(item.size_inventory),
+        sizes: item.sizes ?? [],
+        fulfillment,
+        createdAt: item.created_at,
+        updatedAt: item.updated_at,
+        riskLabels: sellerItemRiskLabels(item),
+      }
+    }),
+    supportThreads: supportThreadOrderIds.map((orderId) => {
+      const thread = messagesByOrderId.get(orderId) ?? []
+      const latestMessage = thread[0]
+      const order = ordersById.get(orderId)
+      const customer = order ? usersById.get(order.customer_id) : null
+      const tailor = order ? usersById.get(order.tailor_id) : null
+      const sender = latestMessage ? usersById.get(latestMessage.sender_id) : null
+      const paymentContext = orderPaymentContextByOrderId.get(orderId)
+      const accessLog = latestConversationAccessByOrderId.get(orderId)
+      const conversationBlocked = accessLog?.event === 'conversation.blocked'
+
+      return {
+        orderId,
+        orderReference: order?.reference ?? null,
+        orderStage: order?.stage ?? null,
+        orderKind: order?.order_kind ?? null,
+        deliveryMethod: order?.delivery_method ?? null,
+        paymentStatus: paymentContext?.paymentStatus ?? null,
+        paymentProvider: paymentContext?.paymentProvider ?? null,
+        customerName: customer?.display_name ?? 'Customer',
+        customerEmail: customer?.email ?? null,
+        tailorName: tailor?.display_name ?? 'Tailor',
+        tailorEmail: tailor?.email ?? null,
+        latestSenderName: latestMessage?.sender_name ?? sender?.display_name ?? 'Unknown sender',
+        latestSenderRole: latestMessage?.sender_role ?? sender?.role ?? 'Unknown',
+        latestMessagePreview: latestMessage ? messagePreview(latestMessage) : 'No message preview available',
+        latestMessageType: latestMessage?.type ?? 'TEXT',
+        latestMessageAt: latestMessage?.created_at ?? new Date(0).toISOString(),
+        unreadCount: thread.filter((message) => !message.read_at).length,
+        messageCount: thread.length,
+        mediaCount: messageMediaCount(thread),
+        blockedMessageCount: 0,
+        conversationBlocked,
+        blockedAt: conversationBlocked ? accessLog?.created_at ?? null : null,
+        blockedByRole: conversationBlocked ? accessLog?.actor_role ?? null : null,
       }
     }),
     orderReviews: openOrderReviews.map((review) => {
@@ -1711,6 +2101,15 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
           orderId: workflowIssue.order_id,
           orderReference: order?.reference ?? null,
           orderStage: order?.stage ?? workflowIssue.stage ?? null,
+          relatedEntityType: workflowIssue.related_entity_type,
+          relatedEntityId: workflowIssue.related_entity_id,
+          materialAdvanceId:
+            workflowIssue.related_entity_type === 'order_material_advance'
+              ? workflowIssue.related_entity_id
+              : payloadStringValue(workflowIssue.metadata, 'advance_id')
+                ?? payloadStringValue(workflowIssue.metadata, 'material_advance_id'),
+          materialAdvanceAmount: numberPayloadValue(workflowIssue.metadata ?? {}, 'amount'),
+          materialAdvanceCurrency: payloadStringValue(workflowIssue.metadata, 'currency'),
           summary: workflowIssue.description,
           reason:
             payloadStringValue(workflowIssue.metadata, 'reason')
@@ -1754,6 +2153,13 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
           orderId: workflowIssue.order_id,
           orderReference: order?.reference ?? null,
           orderStage: order?.stage ?? null,
+          relatedEntityType: null,
+          relatedEntityId: null,
+          materialAdvanceId:
+            payloadStringValue(workflowIssue.payload, 'advance_id')
+            ?? payloadStringValue(workflowIssue.payload, 'material_advance_id'),
+          materialAdvanceAmount: numberPayloadValue(workflowIssue.payload ?? {}, 'amount'),
+          materialAdvanceCurrency: payloadStringValue(workflowIssue.payload, 'currency'),
           summary: formatWorkflowSummary(workflowIssue.event, workflowIssue.payload),
           reason: payloadStringValue(workflowIssue.payload, 'reason'),
           blockedReasonCode: payloadStringValue(workflowIssue.payload, 'blocked_reason'),

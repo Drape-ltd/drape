@@ -50,7 +50,7 @@ export function deriveTailorAccessGuidance(input: TailorReadinessInput | null | 
       nextStep: 'Complete your public profile first, then return here if anything still looks stuck.',
       supportEmail: CONTACTS.tailors,
       supportLabel: 'Tailor support',
-      supportSubject: 'Drape tailor setup help',
+      supportSubject: 'Drapeon tailor setup help',
       appealCopy: null,
     }
   }
@@ -65,7 +65,7 @@ export function deriveTailorAccessGuidance(input: TailorReadinessInput | null | 
       nextStep: 'Wait for review to finish, or contact the verification team if something has been pending unusually long or you submitted the wrong document.',
       supportEmail: CONTACTS.verify,
       supportLabel: 'Verification team',
-      supportSubject: 'Drape verification review follow-up',
+      supportSubject: 'Drapeon verification review follow-up',
       appealCopy: 'Appeals are usually unnecessary while review is still active. Use support to add missing context instead.',
     }
   }
@@ -74,13 +74,13 @@ export function deriveTailorAccessGuidance(input: TailorReadinessInput | null | 
     return {
       state: 'FIX_REQUIRED',
       title: 'Verification needs attention before access can expand',
-      body: 'This usually means Drape still needs clearer or corrected identity evidence. It should be treated as fix-first, not full appeal-first.',
+      body: 'This usually means Drapeon still needs clearer or corrected identity evidence. It should be treated as fix-first, not full appeal-first.',
       reasonCategory: 'Verification follow-up',
       blockedCapabilities,
-      nextStep: 'Resubmit verification with clearer evidence. If you think Drape made a factual mistake, contact the verification team with that context.',
+      nextStep: 'Resubmit verification with clearer evidence. If you think Drapeon made a factual mistake, contact the verification team with that context.',
       supportEmail: CONTACTS.verify,
       supportLabel: 'Verification team',
-      supportSubject: 'Drape verification follow-up',
+      supportSubject: 'Drapeon verification follow-up',
       appealCopy: 'Use support for factual-error correction or new evidence. A simple disagreement is usually not enough by itself.',
     }
   }
@@ -89,13 +89,13 @@ export function deriveTailorAccessGuidance(input: TailorReadinessInput | null | 
     return {
       state: 'FIX_REQUIRED',
       title: 'Set up your payout account before paid work opens',
-      body: 'This is an operational hold, not a trust strike. Identity checks look good, but Drape should not route paid work to a seller whose payout path is not actually ready.',
+      body: 'This is an operational hold, not a trust strike. Identity checks look good, but Drapeon should not route paid work to a seller whose payout path is not actually ready.',
       reasonCategory: 'Payout readiness',
       blockedCapabilities,
-      nextStep: 'Open payout setup, verify the payout path Drape should use, and use the payouts inbox only if the in-app path still gets stuck.',
+      nextStep: 'Open payout setup, verify the payout path Drapeon should use, and use the payouts inbox only if the in-app path still gets stuck.',
       supportEmail: CONTACTS.payouts,
       supportLabel: 'Payouts',
-      supportSubject: 'Drape payout readiness question',
+      supportSubject: 'Drapeon payout readiness question',
       appealCopy: 'Operational payout holds are usually solved by fixing the requirement rather than filing a formal appeal.',
     }
   }
@@ -107,10 +107,10 @@ export function deriveTailorAccessGuidance(input: TailorReadinessInput | null | 
       body: 'Your current setup supports standard paid work. Keep international orders especially clear in the order thread so support can help quickly if anything changes.',
       reasonCategory: 'Higher-risk capability',
       blockedCapabilities,
-      nextStep: 'Keep your storefront, payout setup, and communication clean. If support asks for extra context on a higher-risk order, keep the response inside Drape.',
+      nextStep: 'Keep your storefront, payout setup, and communication clean. If support asks for extra context on a higher-risk order, keep the response inside Drapeon.',
       supportEmail: CONTACTS.tailors,
       supportLabel: 'Tailor support',
-      supportSubject: 'Drape tailor trust question',
+      supportSubject: 'Drapeon tailor trust question',
       appealCopy: null,
     }
   }
@@ -121,10 +121,10 @@ export function deriveTailorAccessGuidance(input: TailorReadinessInput | null | 
     body: 'Profile, identity, and payout signals currently support normal paid work.',
     reasonCategory: 'Normal access',
     blockedCapabilities,
-    nextStep: 'Keep your storefront honest, your communication in Drape, and your payout details up to date.',
+    nextStep: 'Keep your storefront honest, your communication in Drapeon, and your payout details up to date.',
     supportEmail: CONTACTS.tailors,
     supportLabel: 'Tailor support',
-    supportSubject: 'Drape tailor trust question',
+    supportSubject: 'Drapeon tailor trust question',
     appealCopy: null,
   }
 }

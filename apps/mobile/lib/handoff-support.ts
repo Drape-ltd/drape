@@ -40,27 +40,27 @@ const CUSTOMER_PICKUP_OPTIONS: HandoffOption[] = [
   { type: 'CANT_FIND_LOCATION', label: "Can't find location", hint: 'Use this when the pickup point or instructions are still unclear.' },
   { type: 'COUNTERPART_NOT_RESPONDING', label: 'Seller not responding', hint: 'Use this when you have messaged and still need a live reply.' },
   { type: 'ORDER_NOT_READY', label: 'Order not ready', hint: 'Use this when the handoff is scheduled but the order is not actually ready.' },
-  { type: 'NEED_DRAPE_HELP', label: 'Need Drape help', hint: 'Use this when you want Drape to step into the pickup situation.' },
+  { type: 'NEED_DRAPE_HELP', label: 'Need Drapeon help', hint: 'Use this when you want Drapeon to step into the pickup situation.' },
 ]
 
 const TAILOR_PICKUP_OPTIONS: HandoffOption[] = [
-  { type: 'AT_PICKUP', label: 'Customer has arrived', hint: 'Use this when you want the pickup thread logged clearly inside Drape.' },
+  { type: 'AT_PICKUP', label: 'Customer has arrived', hint: 'Use this when you want the pickup thread logged clearly inside Drapeon.' },
   { type: 'CANT_FIND_LOCATION', label: "Customer can't find pickup", hint: 'Use this when the customer is nearby but still lost.' },
   { type: 'COUNTERPART_NOT_RESPONDING', label: 'Customer not responding', hint: 'Use this when pickup is live but the customer has gone silent.' },
-  { type: 'ORDER_NOT_READY', label: 'Pickup needs Drape help', hint: 'Use this when the pickup handoff itself needs extra help or recoordination.' },
-  { type: 'NEED_DRAPE_HELP', label: 'Need Drape help', hint: 'Use this when you want Drape to step into the pickup situation.' },
+  { type: 'ORDER_NOT_READY', label: 'Pickup needs Drapeon help', hint: 'Use this when the pickup handoff itself needs extra help or recoordination.' },
+  { type: 'NEED_DRAPE_HELP', label: 'Need Drapeon help', hint: 'Use this when you want Drapeon to step into the pickup situation.' },
 ]
 
 const CUSTOMER_DELIVERY_OPTIONS: HandoffOption[] = [
   { type: 'COURIER_OR_DELIVERY_ISSUE', label: 'Courier or delivery issue', hint: 'Use this when dispatch, tracking, or delivery has stalled.' },
-  { type: 'COUNTERPART_NOT_RESPONDING', label: 'Seller not responding', hint: 'Use this when you have messaged but still need a reply in Drape.' },
-  { type: 'NEED_DRAPE_HELP', label: 'Need Drape help', hint: 'Use this when you want Drape to step into the delivery situation.' },
+  { type: 'COUNTERPART_NOT_RESPONDING', label: 'Seller not responding', hint: 'Use this when you have messaged but still need a reply in Drapeon.' },
+  { type: 'NEED_DRAPE_HELP', label: 'Need Drapeon help', hint: 'Use this when you want Drapeon to step into the delivery situation.' },
 ]
 
 const TAILOR_DELIVERY_OPTIONS: HandoffOption[] = [
   { type: 'COURIER_OR_DELIVERY_ISSUE', label: 'Courier or delivery issue', hint: 'Use this when dispatch or tracking needs extra help.' },
   { type: 'COUNTERPART_NOT_RESPONDING', label: 'Customer not responding', hint: 'Use this when delivery needs customer action and they are silent.' },
-  { type: 'NEED_DRAPE_HELP', label: 'Need Drape help', hint: 'Use this when you want Drape to step into the delivery situation.' },
+  { type: 'NEED_DRAPE_HELP', label: 'Need Drapeon help', hint: 'Use this when you want Drapeon to step into the delivery situation.' },
 ]
 
 export function handoffOptionsFor(role: HandoffActorRole, deliveryMethod: string | null | undefined) {
@@ -83,7 +83,7 @@ export function handoffIssueLabel(issueType: HandoffIssueType) {
     case 'COURIER_OR_DELIVERY_ISSUE':
       return 'Courier or delivery issue'
     case 'NEED_DRAPE_HELP':
-      return 'Need Drape help'
+      return 'Need Drapeon help'
     default:
       return 'Handoff issue'
   }
@@ -99,12 +99,12 @@ export function handoffHelpCardTitle(role: HandoffActorRole, deliveryMethod: str
 export function handoffHelpCardBody(role: HandoffActorRole, deliveryMethod: string | null | undefined) {
   if (deliveryMethod === 'LOCAL_COLLECTION') {
     return role === 'CUSTOMER'
-      ? 'Keep pickup communication inside Drape. Log pickup help first when you need Drape to step in, then use a Drape call only if you need to coordinate directly with the seller.'
-      : 'Keep pickup communication inside Drape. Log pickup help first when you need Drape to step in, then use a Drape call only if you need to coordinate directly with the customer.'
+      ? 'Keep pickup communication inside Drapeon. Log pickup help first when you need Drapeon to step in, then use a Drapeon call only if you need to coordinate directly with the seller.'
+      : 'Keep pickup communication inside Drapeon. Log pickup help first when you need Drapeon to step in, then use a Drapeon call only if you need to coordinate directly with the customer.'
   }
   return role === 'CUSTOMER'
-    ? 'Keep delivery communication inside Drape. Contact Drape dispatch first when the handoff stalls, then use a Drape call only if you need to coordinate directly with the seller.'
-    : 'Keep delivery communication inside Drape. Contact Drape dispatch first when the handoff stalls, then use a Drape call only if you need to coordinate directly with the customer.'
+    ? 'Keep delivery communication inside Drapeon. Contact Drapeon dispatch first when the handoff stalls, then use a Drapeon call only if you need to coordinate directly with the seller.'
+    : 'Keep delivery communication inside Drapeon. Contact Drapeon dispatch first when the handoff stalls, then use a Drapeon call only if you need to coordinate directly with the customer.'
 }
 
 export function handoffIssueStatusLabel(status: HandoffIssueStatus) {

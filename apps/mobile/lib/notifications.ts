@@ -1,5 +1,5 @@
 /**
- * Drape push notification setup.
+ * Drapeon push notification setup.
  * Registers the device for Expo push notifications and stores the token
  * in the user's profile row. Also handles foreground notification display.
  */
@@ -123,6 +123,13 @@ export function usePushNotifications(userId: string | null) {
 
 async function registerAndStore(userId: string) {
   try {
+    Sentry.addBreadcrumb({
+      category: 'push',
+      message: 'Push registration started',
+      level: 'info',
+      data: { platform: Platform.OS, projectIdConfigured: !!process.env.EXPO_PUBLIC_PROJECT_ID?.trim() },
+    })
+
     const { status: existing } = await Notifications.getPermissionsAsync()
     let finalStatus = existing
 
@@ -131,7 +138,23 @@ async function registerAndStore(userId: string) {
       finalStatus = status
     }
 
-    if (finalStatus !== 'granted') return // User declined, don't store
+    if (finalStatus !== 'granted') {
+      Sentry.addBreadcrumb({
+        category: 'push',
+        message: 'Push permission not granted',
+        level: 'warning',
+        data: { status: finalStatus },
+      })
+      return
+    }
+
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync('default', {
+        name: 'Drapeon',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+      })
+    }
 
     const tokenData = await Notifications.getExpoPushTokenAsync({
       projectId: EXPO_PROJECT_ID,
@@ -139,21 +162,24 @@ async function registerAndStore(userId: string) {
 
     const token = tokenData.data
 
-    // Android: set notification channel
-    if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync('default', {
-        name: 'Drape',
-        importance: Notifications.AndroidImportance.MAX,
-        vibrationPattern: [0, 250, 250, 250],
-      })
-    }
-
     // Store token in Supabase — upsert so re-installs update cleanly
-    await supabase.from('push_tokens').upsert(
+    const { error } = await supabase.from('push_tokens').upsert(
       { user_id: userId, token, platform: Platform.OS, updated_at: new Date().toISOString() },
       { onConflict: 'user_id' }
     )
+
+    if (error) {
+      throw new Error(`Could not save push token: ${error.message}`)
+    }
+
+    Sentry.addBreadcrumb({
+      category: 'push',
+      message: 'Push token stored',
+      level: 'info',
+      data: { platform: Platform.OS },
+    })
   } catch (error) {
+    if (__DEV__) console.warn('Drapeon push registration failed', error)
     Sentry.captureException(error, {
       extra: {
         context: 'push_token_registration',

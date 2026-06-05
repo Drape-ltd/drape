@@ -211,7 +211,7 @@ export default function TailorTrustAccessScreen() {
             <Text style={styles.sectionTitle}>{payoutNextStep.title}</Text>
             <Text style={styles.sectionBody}>{payoutNextStep.body}</Text>
             <Text style={styles.noteText}>
-              Submit the payout setup inside Drape so this blocker is durable and visible. Email is still there if the app path fails, but it should not be your first stop anymore.
+              Submit the payout setup inside Drapeon so this blocker is durable and visible. Email is still there if the app path fails, but it should not be your first stop anymore.
             </Text>
             <TouchableOpacity
               style={styles.reviewBtn}
@@ -234,7 +234,7 @@ export default function TailorTrustAccessScreen() {
               ))}
             </View>
           ) : (
-            <Text style={styles.sectionBody}>No standard seller capability is currently blocked by the signals Drape stores today.</Text>
+            <Text style={styles.sectionBody}>No standard seller capability is currently blocked by the signals Drapeon stores today.</Text>
           )}
         </View>
 
@@ -267,7 +267,7 @@ export default function TailorTrustAccessScreen() {
             {guidance.supportEmail ? (
               <TouchableOpacity
                 style={styles.contactRow}
-                onPress={() => { void openEmail(guidance.supportEmail!, guidance.supportSubject ?? 'Drape tailor access question') }}
+                onPress={() => { void openEmail(guidance.supportEmail!, guidance.supportSubject ?? 'Drapeon tailor access question') }}
               >
                 <View style={styles.contactIcon}>
                   <Feather name="mail" size={16} color={Colors.needleGreen} />
@@ -282,7 +282,7 @@ export default function TailorTrustAccessScreen() {
             {guidance.supportEmail !== CONTACTS.tailors ? (
               <TouchableOpacity
                 style={styles.contactRow}
-                onPress={() => { void openEmail(CONTACTS.tailors, 'Drape tailor support request') }}
+                onPress={() => { void openEmail(CONTACTS.tailors, 'Drapeon tailor support request') }}
               >
                 <View style={styles.contactIcon}>
                   <Feather name="help-circle" size={16} color={Colors.needleGreen} />

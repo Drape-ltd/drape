@@ -248,7 +248,7 @@ export default function PassportClaimScreen() {
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Measurement passport</Text>
           </View>
-          <Text style={styles.heroTitle}>Bring your tailor-measured fit into Drape.</Text>
+          <Text style={styles.heroTitle}>Bring your tailor-measured fit into Drapeon.</Text>
           <Text style={styles.heroSub}>
             Claiming this passport saves your recorded measurements to your profile so future
             orders start with a stronger fit foundation.
@@ -280,7 +280,7 @@ export default function PassportClaimScreen() {
         <View style={styles.guideCard}>
           <Text style={styles.guideTitle}>How claiming works</Text>
           <Text style={styles.guideText}>
-            This copies the shared fit passport into your Drape profile so future briefs can start from measurements your tailor already recorded.
+            This copies the shared fit passport into your Drapeon profile so future briefs can start from measurements your tailor already recorded.
           </Text>
         </View>
 
@@ -305,7 +305,7 @@ export default function PassportClaimScreen() {
           <View style={[styles.statusBanner, styles.statusInfo]}>
             <Feather name="log-in" size={14} color={Colors.needleGreen} />
             <Text style={[styles.statusText, { color: Colors.needleGreen }]}>
-              Sign in to your Drape account to claim this passport.
+              Sign in to your Drapeon account to claim this passport.
             </Text>
           </View>
         )}
@@ -334,7 +334,7 @@ export default function PassportClaimScreen() {
         )}
 
         <Text style={styles.footer}>
-          Your measurements will be saved to your Drape profile and pre-filled when placing orders.
+          Your measurements will be saved to your Drapeon profile and pre-filled when placing orders.
         </Text>
 
       </ScrollView>

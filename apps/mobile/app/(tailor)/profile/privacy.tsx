@@ -95,10 +95,10 @@ export default function TailorPrivacyScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.md }}>
         <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Privacy control</Text>
-          </View>
-          <Text style={styles.heroTitle}>Privacy and account controls.</Text>
+          <Text style={styles.heroTitle}>Your data stays under your control</Text>
+          <Text style={styles.heroSub}>
+            Choose how Drapeon personalises your tailor account. Order, verification, payout, safety, and legal notices still arrive when needed.
+          </Text>
         </View>
 
         <Text style={styles.intro}>Tailor identity, payout readiness, and order history need clear handling too.</Text>
@@ -109,7 +109,7 @@ export default function TailorPrivacyScreen() {
             <ToggleRow
               icon="sliders"
               title="Personalised recommendations"
-              description="When available, let Drape use your activity to shape recommendations and seller-facing suggestions more thoughtfully."
+              description="When available, let Drapeon use your activity to shape recommendations and seller-facing suggestions more thoughtfully."
               value={prefs.personalisation}
               onChange={(v) => toggle('personalisation', v)}
               disabled={saving}
@@ -118,7 +118,7 @@ export default function TailorPrivacyScreen() {
             <ToggleRow
               icon="bar-chart-2"
               title="Analytics & improvement"
-              description="If enabled, Drape may collect product-usage analytics to improve the app. Core crash and reliability diagnostics may still run."
+              description="If enabled, Drapeon may collect product-usage analytics to improve the app. Core crash and reliability diagnostics may still run."
               value={prefs.analyticsSharing}
               onChange={(v) => toggle('analyticsSharing', v)}
               disabled={saving}
@@ -132,7 +132,7 @@ export default function TailorPrivacyScreen() {
             <ToggleRow
               icon="mail"
               title="Marketing emails"
-              description="Receive updates about new demand, product improvements, and Drape announcements."
+              description="Receive updates about new demand, product improvements, and Drapeon announcements."
               value={prefs.marketingEmails}
               onChange={(v) => toggle('marketingEmails', v)}
               disabled={saving}
@@ -222,6 +222,9 @@ function ToggleRow({
         value={value}
         onValueChange={onChange}
         disabled={disabled}
+        accessibilityLabel={`${title} privacy setting`}
+        accessibilityHint={value ? 'Double tap to turn this setting off' : 'Double tap to turn this setting on'}
+        accessibilityState={{ checked: value, disabled }}
         trackColor={{ false: Colors.lightGrey, true: Colors.needleGreen }}
         thumbColor={Colors.textInverse}
       />
@@ -248,27 +251,14 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
     ...Shadow.sm,
   },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  heroBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
   heroTitle: {
-    fontSize: FontSize.xl,
+    fontSize: FontSize.lg,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
-    lineHeight: 28,
+    lineHeight: 24,
     fontFamily: Fonts.display,
   },
+  heroSub: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   intro: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   section: { gap: Spacing.sm },
   sectionTitle: { fontSize: FontSize.lg, color: Colors.ink, fontWeight: FontWeight.semibold, fontFamily: Fonts.display },

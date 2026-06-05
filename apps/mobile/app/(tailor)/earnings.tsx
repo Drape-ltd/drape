@@ -9,6 +9,8 @@ import {
   RefreshControl,
   TextInput,
   Share,
+  Modal,
+  Pressable,
 } from 'react-native'
 import * as FileSystem from 'expo-file-system/legacy'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -139,6 +141,18 @@ function payoutMethodLabel(data: TailorEarningsDashboardData) {
   return data.payoutProvider === 'PAYSTACK' ? 'Verified Paystack account' : 'Verified Stripe Connect account'
 }
 
+function payoutReviewMessage(row: TailorPayoutHistoryRecord) {
+  if (row.status === 'FAILED' || row.status === 'REVERSED' || row.status === 'CANCELED') {
+    return 'Drapeon ops is reviewing this payout. You do not need to change your bank details unless support asks.'
+  }
+
+  if (row.blockedReason) {
+    return row.blockedReason.replace(/_/g, ' ').toLowerCase()
+  }
+
+  return null
+}
+
 function shareOf(total: number, value: number) {
   if (total <= 0 || value <= 0) return 0
   return Math.max(8, Math.round((value / total) * 100))
@@ -154,26 +168,6 @@ function StatCard({ label, value, hint }: { label: string; value: string; hint: 
   )
 }
 
-function FilterChip({
-  label,
-  active,
-  onPress,
-}: {
-  label: string
-  active: boolean
-  onPress: () => void
-}) {
-  return (
-    <TouchableOpacity
-      style={[styles.filterChip, active ? styles.filterChipActive : null]}
-      onPress={onPress}
-      activeOpacity={0.7}
-    >
-      <Text style={[styles.filterChipText, active ? styles.filterChipTextActive : null]}>{label}</Text>
-    </TouchableOpacity>
-  )
-}
-
 export default function TailorEarningsScreen() {
   const router = useRouter()
   const navigation = useNavigation()
@@ -186,6 +180,7 @@ export default function TailorEarningsScreen() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL')
   const [rangeFilter, setRangeFilter] = useState<RangeFilter>('ALL')
+  const [filterSheet, setFilterSheet] = useState<'status' | 'range' | null>(null)
   const [exporting, setExporting] = useState(false)
 
   const load = useCallback(async () => {
@@ -265,7 +260,7 @@ export default function TailorEarningsScreen() {
       })
       await Share.share({
         url: fileUri,
-        message: `Drape earnings export\n${fileUri}`,
+        message: `Drapeon earnings export\n${fileUri}`,
       })
     } catch (shareError) {
       setError(shareError instanceof Error ? shareError.message : 'Could not export CSV.')
@@ -299,7 +294,7 @@ export default function TailorEarningsScreen() {
             <Text style={styles.stateEyebrow}>Payments & payouts</Text>
             <Text style={styles.stateTitle}>No payout profile yet.</Text>
             <Text style={styles.stateHint}>
-              Set up a payout account before you take paid work so Drape can release earnings safely.
+              Set up a payout account before you take paid work so Drapeon can release earnings safely.
             </Text>
             <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/earnings' } } as never)}>
               <Text style={styles.primaryBtnText}>Open payout setup</Text>
@@ -337,7 +332,7 @@ export default function TailorEarningsScreen() {
               {data.payoutReverificationRequired ? 'Reconnect your payout account' : 'Payout account still required'}
             </Text>
             <Text style={styles.warningBody}>
-              Drape will not release earnings until your payout account is verified. Orders can still settle into a protected balance, but withdrawals stay blocked until setup is complete.
+              Drapeon will not release earnings until your payout account is verified. Orders can still settle into a protected balance, but withdrawals stay blocked until setup is complete.
             </Text>
             <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push({ pathname: '/(tailor)/profile/payout-setup', params: { returnTo: '/(tailor)/earnings' } } as never)}>
               <Text style={styles.primaryBtnText}>{data.payoutReverificationRequired ? 'Reconnect payout account' : 'Finish payout setup'}</Text>
@@ -364,7 +359,7 @@ export default function TailorEarningsScreen() {
           <Text style={styles.summaryValue}>{money(data.totalEarnings, summaryCurrency)}</Text>
           <Text style={styles.summaryHint}>
             {showCurrencyReview
-              ? `This summary is shown in the order's locked earning currency, ${summaryCurrency}. Your payout account is set to ${data.payoutCurrency}, so Drape will not silently convert it.`
+              ? `This summary is shown in the order's locked earning currency, ${summaryCurrency}. Your payout account is set to ${data.payoutCurrency}, so Drapeon will not silently convert it.`
               : `Total earnings is the sum of your pending, available, and paid out net earnings in ${summaryCurrency}.`}
           </Text>
           <View style={styles.summaryMetaCard}>
@@ -436,28 +431,39 @@ export default function TailorEarningsScreen() {
               <Text style={styles.clearFiltersText}>Clear filters</Text>
             </TouchableOpacity>
           ) : null}
-          <View style={styles.filterWrap}>
-            {STATUS_FILTERS.map((filter) => (
-              <FilterChip
-                key={filter.key}
-                label={filter.label}
-                active={statusFilter === filter.key}
-                onPress={() => setStatusFilter(filter.key)}
-              />
-            ))}
-          </View>
-          <View style={styles.filterWrap}>
-            {RANGE_FILTERS.map((filter) => (
-              <FilterChip
-                key={filter.key}
-                label={filter.label}
-                active={rangeFilter === filter.key}
-                onPress={() => setRangeFilter(filter.key)}
-              />
-            ))}
+          <View style={styles.filterPanel}>
+            <TouchableOpacity
+              style={styles.filterSelectRow}
+              onPress={() => setFilterSheet('status')}
+              accessibilityRole="button"
+              accessibilityLabel="Choose transaction status filter"
+            >
+              <View>
+                <Text style={styles.filterSelectLabel}>Status</Text>
+                <Text style={styles.filterSelectValue}>
+                  {STATUS_FILTERS.find((filter) => filter.key === statusFilter)?.label ?? 'All'}
+                </Text>
+              </View>
+              <Feather name="chevron-right" size={18} color={Colors.inkLight} />
+            </TouchableOpacity>
+            <View style={styles.filterDivider} />
+            <TouchableOpacity
+              style={styles.filterSelectRow}
+              onPress={() => setFilterSheet('range')}
+              accessibilityRole="button"
+              accessibilityLabel="Choose transaction date range"
+            >
+              <View>
+                <Text style={styles.filterSelectLabel}>Date range</Text>
+                <Text style={styles.filterSelectValue}>
+                  {RANGE_FILTERS.find((filter) => filter.key === rangeFilter)?.label ?? 'All time'}
+                </Text>
+              </View>
+              <Feather name="chevron-right" size={18} color={Colors.inkLight} />
+            </TouchableOpacity>
           </View>
           <Text style={styles.controlsHint}>
-            Rows keep customer-paid and tailor-earning currencies separate. Export includes both values for reconciliation, and Drape never silently converts payout money.
+            Rows keep customer-paid and tailor-earning currencies separate. Export includes both values for reconciliation, and Drapeon never silently converts payout money.
           </Text>
         </View>
 
@@ -534,12 +540,13 @@ export default function TailorEarningsScreen() {
             <View style={styles.emptyCard}>
               <Text style={styles.emptyTitle}>No payouts have been triggered yet.</Text>
               <Text style={styles.emptyText}>
-                Once Drape releases a completed order, the provider reference and settlement status will appear here.
+                Once Drapeon releases a completed order, the provider reference and settlement status will appear here.
               </Text>
             </View>
           ) : (
             data.payouts.map((row) => {
               const tone = payoutStatusTone(row.status)
+              const reviewMessage = payoutReviewMessage(row)
               return (
                 <View key={row.id} style={styles.payoutCard}>
                   <View style={styles.rowTop}>
@@ -580,14 +587,80 @@ export default function TailorEarningsScreen() {
                       })}
                     </Text>
                   ) : null}
-                  {row.blockedReason ? <Text style={styles.reasonText}>{row.blockedReason}</Text> : null}
+                  {reviewMessage ? <Text style={styles.reasonText}>{reviewMessage}</Text> : null}
                 </View>
               )
             })
           )}
         </View>
       </ScrollView>
+
+      <EarningsFilterSheet
+        visible={filterSheet !== null}
+        title={filterSheet === 'status' ? 'Transaction status' : 'Date range'}
+        options={filterSheet === 'status' ? STATUS_FILTERS : RANGE_FILTERS}
+        selectedKey={filterSheet === 'status' ? statusFilter : rangeFilter}
+        onClose={() => setFilterSheet(null)}
+        onSelect={(key) => {
+          if (filterSheet === 'status') {
+            setStatusFilter(key as StatusFilter)
+          } else {
+            setRangeFilter(key as RangeFilter)
+          }
+          setFilterSheet(null)
+        }}
+      />
     </SafeAreaView>
+  )
+}
+
+function EarningsFilterSheet({
+  visible,
+  title,
+  options,
+  selectedKey,
+  onSelect,
+  onClose,
+}: {
+  visible: boolean
+  title: string
+  options: Array<{ key: string; label: string }>
+  selectedKey: string
+  onSelect: (key: string) => void
+  onClose: () => void
+}) {
+  return (
+    <Modal transparent visible={visible} animationType="slide" onRequestClose={onClose}>
+      <View style={styles.sheetBackdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View style={styles.sheet}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.sheetHeader}>
+            <Text style={styles.sheetTitle}>{title}</Text>
+            <TouchableOpacity style={styles.sheetCloseBtn} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close filter picker">
+              <Feather name="x" size={20} color={Colors.ink} />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.sheetOptionList}>
+            {options.map((option) => {
+              const active = selectedKey === option.key
+              return (
+                <TouchableOpacity
+                  key={option.key}
+                  style={styles.sheetOption}
+                  onPress={() => onSelect(option.key)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                >
+                  <Text style={[styles.sheetOptionText, active && styles.sheetOptionTextActive]}>{option.label}</Text>
+                  {active ? <Feather name="check" size={20} color={Colors.needleGreen} /> : null}
+                </TouchableOpacity>
+              )
+            })}
+          </View>
+        </View>
+      </View>
+    </Modal>
   )
 }
 
@@ -888,20 +961,69 @@ const styles = StyleSheet.create({
     color: Colors.inkLight,
     fontWeight: FontWeight.medium,
   },
-  filterWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  filterChip: {
-    borderRadius: Radius.full,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 7,
+  filterPanel: {
     backgroundColor: Colors.bone,
-  },
-  filterChipActive: {
-    backgroundColor: Colors.needleGreenLight,
+    borderRadius: Radius.md,
+    overflow: 'hidden',
     borderWidth: 1,
-    borderColor: Colors.needleGreen + '35',
+    borderColor: Colors.lightGrey,
   },
-  filterChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
-  filterChipTextActive: { color: Colors.needleGreenDark },
+  filterSelectRow: {
+    minHeight: 58,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  filterDivider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginLeft: Spacing.md },
+  filterSelectLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
+  },
+  filterSelectValue: { marginTop: 2, fontSize: FontSize.sm, color: Colors.ink, fontWeight: FontWeight.semibold },
+  sheetBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(26,26,24,0.35)' },
+  sheet: {
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    padding: Spacing.lg,
+    paddingBottom: Spacing.xl,
+    gap: Spacing.md,
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 48,
+    height: 4,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.lightGrey,
+  },
+  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sheetTitle: { fontSize: FontSize.lg, color: Colors.ink, fontWeight: FontWeight.bold, fontFamily: Fonts.display },
+  sheetCloseBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.bone,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetOptionList: { gap: 2 },
+  sheetOption: {
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.lightGrey,
+  },
+  sheetOptionText: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.medium },
+  sheetOptionTextActive: { color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   controlsHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   inlineErrorCard: {
     marginHorizontal: Spacing.lg,

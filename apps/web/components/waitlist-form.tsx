@@ -188,7 +188,7 @@ export function WaitlistForm({ role, title, description }: WaitlistFormProps): J
               href="/how-it-works"
               className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink"
             >
-              See how Drape works
+              See how Drapeon works
             </Link>
           </div>
         </div>

@@ -92,7 +92,7 @@ export function customerOrderStageLabel(stage: OrderStage, orderKind: MobileOrde
     if (stage === 'PAYMENT_FAILED') return 'Checkout failed'
     if (stage === 'CONFIRMED') return 'Order placed'
     if (isReadyMadePreparationStage(stage)) return 'Preparing order'
-    if (stage === 'READY_FOR_DRAPE_DISPATCH') return 'Awaiting Drape dispatch'
+    if (stage === 'READY_FOR_DRAPE_DISPATCH') return 'Awaiting Drapeon dispatch'
     if (stage === 'OUT_FOR_DELIVERY') return 'Out for delivery'
     if (stage === 'SHIPPED') return 'Shipped'
   }
@@ -107,7 +107,7 @@ export function tailorOrderStageLabel(stage: OrderStage, orderKind: MobileOrderK
     if (stage === 'PAYMENT_FAILED') return 'Checkout failed'
     if (stage === 'CONFIRMED') return 'Paid order'
     if (isReadyMadePreparationStage(stage)) return 'Preparing order'
-    if (stage === 'READY_FOR_DRAPE_DISPATCH') return 'Ready for Drape dispatch'
+    if (stage === 'READY_FOR_DRAPE_DISPATCH') return 'Ready for Drapeon dispatch'
     if (stage === 'OUT_FOR_DELIVERY') return 'Out for delivery'
     if (stage === 'SHIPPED') return 'Shipped'
   }
@@ -140,7 +140,7 @@ export function customerOrderHint(stage: OrderStage, orderKind: MobileOrderKind)
     case 'FINISHING':
       return orderKind === 'READY_MADE' ? 'Preparing order' : 'Finishing'
     case 'READY_FOR_DRAPE_DISPATCH':
-      return 'Awaiting Drape dispatch'
+      return 'Awaiting Drapeon dispatch'
     case 'READY_FOR_COLLECTION':
       return 'Ready for collection'
     case 'OUT_FOR_DELIVERY':
@@ -182,7 +182,7 @@ export function tailorOrderHint(stage: OrderStage, orderKind: MobileOrderKind): 
     case 'FINISHING':
       return orderKind === 'READY_MADE' ? 'Preparing order' : 'Finishing'
     case 'READY_FOR_DRAPE_DISPATCH':
-      return 'Ready for Drape dispatch'
+      return 'Ready for Drapeon dispatch'
     case 'READY_FOR_COLLECTION':
       return 'Ready for collection'
     case 'OUT_FOR_DELIVERY':

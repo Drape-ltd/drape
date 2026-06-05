@@ -34,6 +34,10 @@
   - `STRIPE_WEBHOOK_SECRET`
   - `STRIPE_WEBHOOK_SECRETS` only during webhook endpoint rotation, as a comma-separated overlap list
   - `PAYSTACK_SECRET_KEY`
+  - `SMS_PROVIDER=termii` for critical SMS fallback
+  - `TERMII_API_KEY` for critical order/security SMS
+  - `TERMII_SENDER_ID` or `TERMII_FROM` for the approved sender ID
+  - `AUTH_SMS_HOOK_SECRET` only when Supabase Auth phone OTP is enabled through the HTTP Send SMS hook
   - `DAILY_API_KEY`
   - `SHIPPO_WEBHOOK_SECRET` when Shippo tracking is enabled
   - `TOPSHIP_WEBHOOK_SECRET` when Topship tracking is enabled
@@ -56,12 +60,16 @@
 - Confirm webhook endpoints are deployed and pointed at the right project.
 - Confirm payment and order status are read from the database, not inferred from cached client state.
 - Confirm refunds follow the original provider and original charged currency.
+- Confirm scheduled payout release skips orders whose 72-hour dispute window is still open, then releases or blocks with a real reason after the exact `customer_handoff_confirmed_at + 72 hours` timestamp.
+- Confirm Paystack business verification is upgraded beyond starter status before live NGN payouts. Dev has proven the failure mode: Paystack rejects third-party payouts until CAC/business verification is complete, and Drape must keep those payouts in ops review instead of retrying automatically.
 
 ## Shipping And Calls
 
 - Confirm shipping handoff preflight rejects missing delivery state or invalid order stages cleanly.
 - Confirm delivery webhooks write audit breadcrumbs for failures and skipped updates across any enabled provider (`Shippo`, `Topship`, `Shipbubble`).
 - Confirm consultation room creation fails gracefully when `DAILY_API_KEY` is absent or provider calls fail.
+- Confirm critical SMS degrades cleanly when the SMS provider is absent, and sends through Termii when `SMS_PROVIDER=termii` is configured.
+- Confirm Supabase Auth phone OTP remains disabled unless the Send SMS hook is configured with `AUTH_SMS_HOOK_SECRET`.
 
 ## Ops And Observability
 
@@ -87,6 +95,15 @@
   - consultation join
   - push notification tap-through
 - Verify account switching does not leak the previous user's data or route state.
+- Verify Android push registration on a release/dev-client build that includes Firebase/FCM config:
+  - Follow `docs/android-push-fcm-runbook.md`
+  - Firebase Android app exists for `com.drape.app` in `drape-mobile-4729`
+  - `apps/mobile/google-services.json` exists locally and `GOOGLE_SERVICES_JSON` is configured as an EAS file env var for native Firebase initialization
+  - EAS Android FCM V1 service account key is configured for the same Firebase project so Expo can send notifications
+  - Android has been rebuilt after Firebase config and FCM V1 credentials were assigned
+  - `expo-notifications` returns an Expo push token on both Android QA devices
+  - `push_tokens` has current rows for both customer and tailor test users
+  - payment/order/message notifications show on device and tap to fresh data
 
 ## Launch Sanity
 

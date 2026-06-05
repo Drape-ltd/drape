@@ -7,7 +7,7 @@ import { buildMetadata } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'Discover',
-  description: 'Get on the list to hear when Drape opens wider.',
+  description: 'Get on the list to hear when Drapeon opens wider.',
   path: '/discover',
 })
 
@@ -38,12 +38,12 @@ export default function DiscoverPage(): JSX.Element {
         <SectionTitle
           eyebrow="What to expect"
           title="What you can do today."
-          description="Join the queue, share Drape, and come back when the network opens wider."
+          description="Join the queue, share Drapeon, and come back when the network opens wider."
         />
         <div className="mt-10 grid gap-4 lg:grid-cols-3">
           {[
             ['Join the queue', 'Tell us whether you are coming in as a customer or a tailor.'],
-            ['Share Drape', 'Use the site to explain the idea cleanly while access opens in stages.'],
+            ['Share Drapeon', 'Use the site to explain the idea cleanly while access opens in stages.'],
             ['Come back later', 'Richer discovery will follow after the queue and rollout.' ],
           ].map(([title, body]) => (
             <div key={title} className="rounded-[1.5rem] border border-ink/6 bg-white/80 p-5 shadow-sm">
@@ -65,7 +65,7 @@ export default function DiscoverPage(): JSX.Element {
               Join the queue
             </Link>
             <a
-              href={`mailto:${CONTACTS.support}?subject=Drape%20customer%20queue`}
+              href={`mailto:${CONTACTS.support}?subject=Drapeon%20customer%20queue`}
               className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-bone px-6 py-4 text-sm font-semibold text-ink"
             >
               Contact customer team

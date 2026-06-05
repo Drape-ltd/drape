@@ -63,16 +63,16 @@ export function payoutSetupCopy(currency: string | null | undefined) {
     return {
       provider,
       title: `Connect ${provider} for ${currencyLabel}`,
-      body: `${currencyLabel} payouts should use ${provider} first. Use Drape payout setup to send the account details Drape needs to link before paid work goes live.`,
-      emailSubject: `Drape payout setup: ${currencyLabel} via ${provider}`,
+      body: `${currencyLabel} payouts should use ${provider} first. Use Drapeon payout setup to send the account details Drapeon needs to link before paid work goes live.`,
+      emailSubject: `Drapeon payout setup: ${currencyLabel} via ${provider}`,
     }
   }
 
   return {
     provider,
     title: `Connect ${provider} for ${currencyLabel}`,
-    body: `${currencyLabel} payouts should use ${provider} first. Use Drape payout setup to send the account details Drape needs to link before paid work goes live.`,
-    emailSubject: `Drape payout setup: ${currencyLabel} via ${provider}`,
+    body: `${currencyLabel} payouts should use ${provider} first. Use Drapeon payout setup to send the account details Drapeon needs to link before paid work goes live.`,
+    emailSubject: `Drapeon payout setup: ${currencyLabel} via ${provider}`,
   }
 }
 
@@ -149,7 +149,7 @@ export function deriveTailorReadiness(input: TailorReadinessInput | null | undef
         idVerificationStatus === 'PENDING'
           ? 'Your profile can finish review before it goes live. Paid work should still wait until identity review and payout setup are both complete.'
           : idVerificationStatus === 'REJECTED'
-            ? 'Your verification needs attention before Drape can show you publicly or let you take paid work.'
+            ? 'Your verification needs attention before Drapeon can show you publicly or let you take paid work.'
             : 'Customers should not discover or pay an unverified seller profile as if it were fully ready.',
       actionLabel:
         idVerificationStatus === 'PENDING'
@@ -209,7 +209,7 @@ export function deriveTailorReadiness(input: TailorReadinessInput | null | undef
     blockers,
     title: liveHigherRisk ? 'Live with higher-risk shipping enabled' : 'Live and payout-ready',
     body: liveHigherRisk
-      ? 'Standard payout checks look good. Keep higher-risk cross-border work conservative and ops-visible while Drape is still learning.'
+      ? 'Standard payout checks look good. Keep higher-risk cross-border work conservative and ops-visible while Drapeon is still learning.'
       : 'You can accept standard paid work and publish paid items with your current setup.',
     actionLabel: null,
     tone: 'success',

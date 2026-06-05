@@ -617,15 +617,15 @@ function parseTapeInput(value: string) {
 function formatVisionError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
   if (message.includes('model asset missing')) {
-    return 'Drape Vision needs one more scanning file before live measurements can run on this device.'
+    return 'Drapeon Vision needs one more scanning file before live measurements can run on this device.'
   }
   if (message.includes('MediaPipeTasksVision')) {
     return 'Live body scanning is not available in this build yet. Manual measurements still work.'
   }
   if (message.includes('native Frame')) {
-    return 'The camera opened, but Drape Vision could not read the frame. Close the scan and try again.'
+    return 'The camera opened, but Drapeon Vision could not read the frame. Close the scan and try again.'
   }
-  return 'Drape Vision could not start the scan on this device. Continue with manual measurements for now, or close and try again.'
+  return 'Drapeon Vision could not start the scan on this device. Continue with manual measurements for now, or close and try again.'
 }
 
 function isAndroidLiveScanPreflightBlocked() {
@@ -665,9 +665,9 @@ function isVisionLabGroundTruthUnavailable(error: { code?: string | null; messag
 function formatVisionSaveError(error: { code?: string | null; message?: string | null; details?: string | null } | null | undefined) {
   const message = `${error?.message ?? ''} ${error?.details ?? ''}`.toLowerCase()
   if (isLikelyConnectivityIssue(error)) return 'Connection looks weak. The scan is still on this screen, so retry when the signal improves.'
-  if (isMeasurementScansUnavailable(error)) return 'Drape Vision saving is not ready in this build yet. Keep the result on this screen and use manual measurements for now.'
+  if (isMeasurementScansUnavailable(error)) return 'Drapeon Vision saving is not ready in this build yet. Keep the result on this screen and use manual measurements for now.'
   if (message.includes('measurement_scans_capture_method_check') || message.includes('capture_method')) {
-    return 'Drape Vision saving is being updated. Keep the result on this screen and try again after the update.'
+    return 'Drapeon Vision saving is being updated. Keep the result on this screen and try again after the update.'
   }
   return 'Could not save this scan right now. Please try again in a moment.'
 }
@@ -735,7 +735,7 @@ function buildScanDistanceCue(input: {
   if (instruction.includes('hold')) {
     return {
       title: 'HOLD STILL',
-      subtitle: 'Let Drape lock this angle.',
+      subtitle: 'Let Drapeon lock this angle.',
       tone: 'action',
     }
   }
@@ -1468,7 +1468,7 @@ export default function DrapeVisionScreen() {
     })
     Alert.alert(
       'Quality check saved',
-      'This Drape Vision QC entry is now on the order timeline for you, the customer, and ops.',
+      'This Drapeon Vision QC entry is now on the order timeline for you, the customer, and ops.',
       [{ text: primaryActionLabel, onPress: openPrimary }],
     )
   }, [garmentQcChecks, garmentQcDraft, garmentQcNote, garmentQcPhotoUrl, garmentQcUnit, openPrimary, params.orderId, primaryActionLabel])
@@ -1560,7 +1560,7 @@ export default function DrapeVisionScreen() {
     })
     Alert.alert(
       'Size guide saved',
-      'This listing now has Drape Vision fit guidance for shoppers using their Fit Passport.',
+      'This listing now has Drapeon Vision fit guidance for shoppers using their Fit Passport.',
       [{ text: 'Return to listing', onPress: openPrimary }],
     )
   }, [openPrimary, params.itemId, selectedSize, sizeGuideItem, sizeGuideNote, sizeGuideRanges, sizeGuideUnit])
@@ -1706,7 +1706,7 @@ export default function DrapeVisionScreen() {
     try {
       if (!user?.id) {
         if (!options.silent) {
-          Alert.alert('Sign in required', 'Please sign in again before uploading a Drape Vision debug log.')
+          Alert.alert('Sign in required', 'Please sign in again before uploading a Drapeon Vision debug log.')
         }
         return
       }
@@ -1714,7 +1714,7 @@ export default function DrapeVisionScreen() {
       const payload = buildVisionLabPayload(result)
       if (!payload?.sessionId) {
         if (!options.silent) {
-          Alert.alert('No scan log yet', 'Start a Drape Vision countdown first, then upload the debug log after frames begin flowing.')
+          Alert.alert('No scan log yet', 'Start a Drapeon Vision countdown first, then upload the debug log after frames begin flowing.')
         }
         return
       }
@@ -1747,7 +1747,7 @@ export default function DrapeVisionScreen() {
           Alert.alert(
             'Could not upload debug log',
             error.code === 'PGRST205' || message.includes('drape_vision_scan_logs')
-              ? 'Drape Vision logging is not ready in this build yet. Your scan can still be reviewed on this screen.'
+              ? 'Drapeon Vision logging is not ready in this build yet. Your scan can still be reviewed on this screen.'
               : formatVisionSaveError(error),
           )
         } else {
@@ -1793,7 +1793,7 @@ export default function DrapeVisionScreen() {
       setRepeatabilityRows([])
       setRepeatabilityMessage(
         isMeasurementScansUnavailable(error)
-          ? 'Repeatability unlocks after Drape Vision scan storage is available.'
+          ? 'Repeatability unlocks after Drapeon Vision scan storage is available.'
           : 'Could not load repeatability yet. Save another scan and try again.',
       )
       return
@@ -1807,7 +1807,7 @@ export default function DrapeVisionScreen() {
 
   const saveCustomerVisionResult = useCallback(async (result: DrapeVisionMeasurementResult) => {
     if (!user?.id) {
-      Alert.alert('Sign in required', 'Please sign in again before saving this Drape Vision scan.')
+      Alert.alert('Sign in required', 'Please sign in again before saving this Drapeon Vision scan.')
       return
     }
 
@@ -1857,56 +1857,65 @@ export default function DrapeVisionScreen() {
       : resultUnit
     const scanMeasurements = buildVisionMeasurementSnapshot(result.measurements, profileUnit)
     const scanMeasurementsCm = buildVisionMeasurementSnapshot(result.measurements, 'cm')
+    let measurementScanId = savedMeasurementScanId
 
-    const { data: inserted, error: scanError } = await supabase
-      .from('measurement_scans')
-      .insert({
-        user_id: user.id,
-        capture_method: CUSTOMER_VISION_CAPTURE_METHOD,
-        capture_version: DRAPE_VISION_VERSION,
-        status,
-        confidence_overall: confidenceOverall,
-        confidence_by_field: confidenceByField,
-        measurement_snapshot: {
-          ...scanMeasurementsCm,
-          displayUnit: profileUnit,
-          displayMeasurements: scanMeasurements,
-          captureMethod: CUSTOMER_VISION_CAPTURE_METHOD,
-          captureVersion: DRAPE_VISION_VERSION,
-          capturedAt: now,
-          confidenceOverall,
-          confidenceByField,
-          warnings: result.warnings,
-        },
-        garment_preferences: {
+    if (!measurementScanId) {
+      const { data: inserted, error: scanError } = await supabase
+        .from('measurement_scans')
+        .insert({
+          user_id: user.id,
+          capture_method: CUSTOMER_VISION_CAPTURE_METHOD,
+          capture_version: DRAPE_VISION_VERSION,
+          status,
+          confidence_overall: confidenceOverall,
+          confidence_by_field: confidenceByField,
+          measurement_snapshot: {
+            ...scanMeasurementsCm,
+            displayUnit: profileUnit,
+            displayMeasurements: scanMeasurements,
+            captureMethod: CUSTOMER_VISION_CAPTURE_METHOD,
+            captureVersion: DRAPE_VISION_VERSION,
+            capturedAt: now,
+            confidenceOverall,
+            confidenceByField,
+            warnings: result.warnings,
+          },
+          garment_preferences: {
+            mode,
+            calibration: result.calibration,
+            warnings: result.warnings,
+            ...(visionLab ? { visionLab } : {}),
+          },
+          body_flags: bodyFlags,
+          symmetry_flags: symmetryFlags,
+          requires_tailor_review: requiresTailorReview,
+          source_device: sourceDevice,
+        })
+        .select('id')
+        .single()
+
+      if (scanError || !inserted?.id) {
+        setSavingResult(false)
+        addVisionBreadcrumb('scan_save_failed', {
           mode,
-          calibration: result.calibration,
-          warnings: result.warnings,
-          ...(visionLab ? { visionLab } : {}),
-        },
-        body_flags: bodyFlags,
-        symmetry_flags: symmetryFlags,
-        requires_tailor_review: requiresTailorReview,
-        source_device: sourceDevice,
+          step: 'insert_measurement_scan',
+          error: formatVisionSaveError(scanError),
+        }, 'error')
+        Alert.alert('Could not save scan', formatVisionSaveError(scanError))
+        return
+      }
+
+      measurementScanId = inserted.id
+      setSavedMeasurementScanId(inserted.id)
+      setGroundTruthRows([])
+      setGroundTruthMessage(DRAPE_VISION_LAB_ENABLED ? 'Scan saved. Enter tape values below to compare.' : null)
+      void loadVisionLabRepeatability()
+    } else {
+      addVisionBreadcrumb('scan_profile_update_retry', {
+        mode,
+        scanId: measurementScanId,
       })
-      .select('id')
-      .single()
-
-	    if (scanError || !inserted?.id) {
-	      setSavingResult(false)
-	      addVisionBreadcrumb('scan_save_failed', {
-	        mode,
-	        step: 'insert_measurement_scan',
-	        error: formatVisionSaveError(scanError),
-	      }, 'error')
-	      Alert.alert('Could not save scan', formatVisionSaveError(scanError))
-	      return
-	    }
-
-	    setSavedMeasurementScanId(inserted.id)
-	    setGroundTruthRows([])
-	    setGroundTruthMessage(DRAPE_VISION_LAB_ENABLED ? 'Scan saved. Enter tape values below to compare.' : null)
-	    void loadVisionLabRepeatability()
+    }
 
     const nextMeasurements = {
       ...existingMeasurements,
@@ -1922,14 +1931,14 @@ export default function DrapeVisionScreen() {
       confidenceOverall,
       confidenceByField,
       sourceDevice,
-      latestMeasurementScanId: inserted.id,
+      latestMeasurementScanId: measurementScanId,
       latestMeasurementScanStatus: status,
       bodyFlags,
       symmetryFlags,
       requiresTailorReview,
       latestFitProfile: {
         ...existingFitProfile,
-        measurementScanId: inserted.id,
+        measurementScanId,
         captureMethod: CUSTOMER_VISION_CAPTURE_METHOD,
         captureMethodLabel: MEASUREMENT_SCAN_CAPTURE_METHOD_LABELS[CUSTOMER_VISION_CAPTURE_METHOD],
         captureVersion: DRAPE_VISION_VERSION,
@@ -1956,7 +1965,7 @@ export default function DrapeVisionScreen() {
       addVisionBreadcrumb('scan_save_failed', {
         mode,
         step: 'update_customer_profile',
-        scanId: inserted.id,
+        scanId: measurementScanId,
         error: formatVisionSaveError(updateError),
       }, 'error')
       Alert.alert(
@@ -1976,7 +1985,7 @@ export default function DrapeVisionScreen() {
     })
 
 	    Alert.alert(
-	      requiresTailorReview ? 'Saved for review' : 'Drape Vision saved',
+	      requiresTailorReview ? 'Saved for review' : 'Drapeon Vision saved',
 	      requiresTailorReview
 	        ? 'Your scan is saved to your Fit Passport. A tailor review may still be needed before cutting starts.'
 	        : 'Your scan is saved to your Fit Passport and will carry into your next brief.',
@@ -1987,7 +1996,7 @@ export default function DrapeVisionScreen() {
 	          ]
 	        : [{ text: 'Continue', onPress: openPrimary }],
 	    )
-	  }, [buildVisionLabPayload, loadVisionLabRepeatability, mode, openPrimary, resultUnit, user?.id])
+	  }, [buildVisionLabPayload, loadVisionLabRepeatability, mode, openPrimary, resultUnit, savedMeasurementScanId, user?.id])
 
 	  const updateTapeInput = useCallback((field: VisionLabTapeField, value: string) => {
 	    setTapeInputs((previous) => ({ ...previous, [field]: value }))
@@ -2003,7 +2012,7 @@ export default function DrapeVisionScreen() {
 	    }
 
 	    if (!savedMeasurementScanId) {
-	      Alert.alert('Save scan first', 'Save this Drape Vision result, then enter tape values to compare it.')
+	      Alert.alert('Save scan first', 'Save this Drapeon Vision result, then enter tape values to compare it.')
 	      return
 	    }
 
@@ -2052,7 +2061,7 @@ export default function DrapeVisionScreen() {
 	            excludedSampleCount: diagnostic.fit?.excludedSampleCount ?? 0,
 	          })) ?? [],
 	        },
-	        notes: 'Entered from the Drape Vision result screen.',
+	        notes: 'Entered from the Drapeon Vision result screen.',
 	      })
 	      .select('id')
 	      .single()
@@ -2139,10 +2148,10 @@ export default function DrapeVisionScreen() {
 
     const customMeasurements = isPlainRecord(existing?.custom_measurements) ? existing.custom_measurements : {}
     const nextCustomMeasurements = { ...customMeasurements }
-    addFinitePayloadValue(nextCustomMeasurements, 'Drape Vision height', scanMeasurements.height)
-    addFinitePayloadValue(nextCustomMeasurements, 'Drape Vision knee', scanMeasurements.kneeCircumference)
-    addFinitePayloadValue(nextCustomMeasurements, 'Drape Vision torso length', scanMeasurements.torsoLength)
-    nextCustomMeasurements['Drape Vision confidence'] = confidenceOverall
+    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision height', scanMeasurements.height)
+    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision knee', scanMeasurements.kneeCircumference)
+    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision torso length', scanMeasurements.torsoLength)
+    nextCustomMeasurements['Drapeon Vision confidence'] = confidenceOverall
     payload.custom_measurements = nextCustomMeasurements
 
     const { data: updated, error: updateError } = await supabase
@@ -2172,7 +2181,7 @@ export default function DrapeVisionScreen() {
 
     Alert.alert(
       'Saved to Diary',
-      'Drape Vision core measurements were added to this client diary. You can review and edit them before sharing a passport invite.',
+      'Drapeon Vision core measurements were added to this client diary. You can review and edit them before sharing a passport invite.',
       [{ text: 'Continue', onPress: openPrimary }],
     )
   }, [mode, openPrimary, params.diaryId, user?.id])
@@ -2200,7 +2209,7 @@ export default function DrapeVisionScreen() {
         }, 'warning')
         Alert.alert(
           'Retake or measure manually',
-          `Drape Vision could not confidently read ${fieldListCopy(blockingFields)}. Retake in fitted clothing with your full body in frame, or use manual measurements so the order stays accurate.`,
+          `Drapeon Vision could not confidently read ${fieldListCopy(blockingFields)}. Retake in fitted clothing with your full body in frame, or use manual measurements so the order stays accurate.`,
         )
         return
       }
@@ -2393,8 +2402,8 @@ export default function DrapeVisionScreen() {
         Alert.alert(
           'Need a clearer full-body scan',
           message.includes('calibration reference')
-            ? 'Drape Vision did not get a reliable head-to-ankles view. Set the phone down, step back until your full body is visible, then start the countdown again.'
-            : 'Drape Vision could not calculate measurements from that pass. Please retake the scan.',
+            ? 'Drapeon Vision did not get a reliable head-to-ankles view. Set the phone down, step back until your full body is visible, then start the countdown again.'
+            : 'Drapeon Vision could not calculate measurements from that pass. Please retake the scan.',
         )
         void uploadVisionLabLog('FAILED', undefined, { silent: true })
       }
@@ -2503,10 +2512,10 @@ export default function DrapeVisionScreen() {
       }
 
       const message = stalledBeforeFrames
-        ? 'Drape Vision is not receiving camera frames on this device. Use manual measurements for this order, then try Vision again after restarting the app.'
+        ? 'Drapeon Vision is not receiving camera frames on this device. Use manual measurements for this order, then try Vision again after restarting the app.'
         : capturedAngles > 0
-          ? `Drape Vision captured ${capturedAngles} angle${capturedAngles === 1 ? '' : 's'} but could not finish the scan. Retake it or use manual measurements so this order keeps moving.`
-          : 'Drape Vision could not lock onto a full-body scan. Use manual measurements for this order or retake the scan with more light and space.'
+          ? `Drapeon Vision captured ${capturedAngles} angle${capturedAngles === 1 ? '' : 's'} but could not finish the scan. Retake it or use manual measurements so this order keeps moving.`
+          : 'Drapeon Vision could not lock onto a full-body scan. Use manual measurements for this order or retake the scan with more light and space.'
 
       addVisionBreadcrumb('scan_failure', {
         mode,
@@ -3219,7 +3228,7 @@ export default function DrapeVisionScreen() {
           mode,
           step: 'camera_permission',
         }, 'warning')
-        setEngineError('Camera permission is required to run Drape Vision.')
+        setEngineError('Camera permission is required to run Drapeon Vision.')
         setPhase('fallback')
         return
       }
@@ -3379,7 +3388,7 @@ export default function DrapeVisionScreen() {
       <View style={styles.header}>
         <TouchableOpacity
           accessibilityRole="button"
-          accessibilityLabel="Close Drape Vision"
+          accessibilityLabel="Close Drapeon Vision"
           onPress={closeVision}
           style={styles.headerButton}
         >
@@ -3587,19 +3596,21 @@ export default function DrapeVisionScreen() {
                 <Text style={styles.sectionBody}>Loading listing sizes...</Text>
               </View>
             ) : sizes.length === 0 ? (
-              <Text style={styles.sectionBody}>Add sizes to this listing first, then return to Drape Vision size guide.</Text>
+              <Text style={styles.sectionBody}>Add sizes to this listing first, then return to Drapeon Vision size guide.</Text>
             ) : (
               <>
                 <Text style={styles.sectionBody}>Choose the size these ranges describe.</Text>
-                <View style={styles.workflowChipRow}>
+                <View style={styles.workflowOptionList}>
                   {sizes.map((size) => (
                     <TouchableOpacity
                       key={size}
                       accessibilityRole="button"
+                      accessibilityState={{ selected: selectedSize === size }}
                       onPress={() => setSelectedSize(size)}
-                      style={[styles.workflowChip, selectedSize === size && styles.workflowChipActive]}
+                      style={styles.workflowOptionRow}
                     >
-                      <Text style={[styles.workflowChipText, selectedSize === size && styles.workflowChipTextActive]}>{size}</Text>
+                      <Text style={[styles.workflowOptionText, selectedSize === size && styles.workflowOptionTextActive]}>{size}</Text>
+                      {selectedSize === size ? <Feather name="check" size={18} color={Colors.needleGreen} /> : null}
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -3683,7 +3694,7 @@ export default function DrapeVisionScreen() {
               <Feather name={meta.icon} size={28} color={Colors.needleGreen} />
             </View>
             <Text style={styles.eyebrow}>{meta.eyebrow}</Text>
-            <Text style={styles.title}>Drape Vision</Text>
+            <Text style={styles.title}>Drapeon Vision</Text>
             <Text style={styles.tagline}>Measured privately. Saved to your fit profile.</Text>
             <Text style={styles.subtitle}>{meta.title}</Text>
             <Text style={styles.body}>{meta.subtitle}</Text>
@@ -3733,7 +3744,7 @@ export default function DrapeVisionScreen() {
               <View style={styles.noticeCopy}>
                 <Text style={styles.noticeTitle}>Wear fitted clothing</Text>
                 <Text style={styles.noticeText}>
-                  Drape Vision needs your body outline. A boubou, agbada, kaftan, oversized hoodie, or layered outfit can hide chest, waist, and hip edges. Use manual measurements if that is what you are wearing.
+                  Drapeon Vision needs your body outline. A boubou, agbada, kaftan, oversized hoodie, or layered outfit can hide chest, waist, and hip edges. Use manual measurements if that is what you are wearing.
                 </Text>
               </View>
             </View>
@@ -3858,7 +3869,7 @@ export default function DrapeVisionScreen() {
               <View style={styles.noticeCopy}>
                 <Text style={styles.noticeTitle}>Camera permission needed</Text>
                 <Text style={styles.noticeText}>
-                  Drape Vision processes camera frames in memory. The video is not saved to your library.
+                  Drapeon Vision processes camera frames in memory. The video is not saved to your library.
                 </Text>
               </View>
             </View>
@@ -4010,7 +4021,7 @@ export default function DrapeVisionScreen() {
             </View>
             <Text style={styles.scanHint}>{scanHint}</Text>
             <Text style={styles.scanPrivacyText}>
-              Video is processed in memory only. Drape saves measurements after review, and proof photos only when you choose one.
+              Video is processed in memory only. Drapeon saves measurements after review, and proof photos only when you choose one.
             </Text>
             {!captureArmed ? (
               <TouchableOpacity
@@ -4336,7 +4347,7 @@ export default function DrapeVisionScreen() {
 	    const reviewCopy = mode === 'tailor_client_scan'
 	      ? 'Confirm these values with the client in front of you before saving them to their Diary.'
 	      : hasBlockingFields
-          ? `Drape Vision could not confidently read ${blockingFieldsCopy}. Retake in fitted clothing or use manual measurements for this order.`
+          ? `Drapeon Vision could not confidently read ${blockingFieldsCopy}. Retake in fitted clothing or use manual measurements for this order.`
 	        : 'Check the values before saving. If something looks off, retake the scan or continue manually.'
 	    const reviewCheckCopy = mode === 'tailor_client_scan'
 	      ? 'I reviewed this scan with the client'
@@ -4350,13 +4361,13 @@ export default function DrapeVisionScreen() {
           <View style={styles.heroCompact}>
             <View style={styles.resultBadge}>
               <Feather name="aperture" size={14} color={Colors.needleGreen} />
-              <Text style={styles.resultBadgeText}>{hasBlockingFields ? 'Needs retake' : 'Powered by AI'}</Text>
+              <Text style={styles.resultBadgeText}>{hasBlockingFields ? 'Needs retake' : 'Vision estimate'}</Text>
             </View>
-            <Text style={styles.titleSmall}>{hasBlockingFields ? 'Scan needs another pass' : 'Your Drape measurements'}</Text>
+            <Text style={styles.titleSmall}>{hasBlockingFields ? 'Scan needs another pass' : 'Review your measurements'}</Text>
             <Text style={styles.body}>
               {hasBlockingFields
-                ? 'Loose garments, poor lighting, or a partial frame can hide the body edges Drape Vision needs.'
-                : 'Calculated by Drape Vision today.'}
+                ? 'Loose garments, poor lighting, or a partial frame can hide the body edges Drapeon Vision needs.'
+                : 'Calculated by Drapeon Vision today. Review the values before they travel into a brief.'}
             </Text>
             <View style={styles.resultUnitToggle}>
               {(['in', 'cm'] as MeasurementDisplayUnit[]).map((unit) => (
@@ -4377,6 +4388,14 @@ export default function DrapeVisionScreen() {
           <View style={styles.workflowCard}>
             <Text style={styles.sectionTitle}>Review before saving</Text>
             <Text style={styles.sectionBody}>{reviewCopy}</Text>
+            {isDrapeVisionBodyScanMode(mode) ? (
+              <View style={styles.workflowInsight}>
+                <Feather name="info" size={16} color={Colors.needleGreen} />
+                <Text style={styles.workflowInsightText}>
+                  Under-bust, headwear/fila, bicep, wrist, and other garment-specific details still need tape or tailor confirmation before cutting.
+                </Text>
+              </View>
+            ) : null}
             {hasBlockingFields ? (
               <View style={styles.noticeBand}>
                 <Feather name="alert-triangle" size={18} color={Colors.kanteRust} />
@@ -4394,7 +4413,7 @@ export default function DrapeVisionScreen() {
                 <View style={styles.noticeCopy}>
                   <Text style={styles.noticeTitle}>Extra review on Android</Text>
                   <Text style={styles.noticeText}>
-                    If a number looks off, retake the scan or use manual measurements. Drape will not save this result until you confirm it.
+                    If a number looks off, retake the scan or use manual measurements. Drapeon will not save this result until you confirm it.
                   </Text>
                 </View>
               </View>
@@ -4509,7 +4528,7 @@ export default function DrapeVisionScreen() {
     )
   }
 
-  function renderFallback(message = engineError ?? 'Drape Vision cannot start on this build yet.') {
+  function renderFallback(message = engineError ?? 'Drapeon Vision cannot start on this build yet.') {
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         {renderHeader('Manual path available')}
@@ -4848,6 +4867,21 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
   },
+  workflowInsight: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+    paddingVertical: Spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: DRAPE_VISION_COLORS.line,
+  },
+  workflowInsightText: {
+    flex: 1,
+    color: DRAPE_VISION_COLORS.textMuted,
+    fontSize: FontSize.sm,
+    lineHeight: 20,
+  },
   workflowSuccessText: {
     fontSize: FontSize.sm,
     color: Colors.needleGreen,
@@ -4930,34 +4964,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.sm,
   },
-  workflowChipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.sm,
-  },
-  workflowChip: {
-    minHeight: 40,
-    minWidth: 52,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: Spacing.md,
-    borderRadius: Radius.full,
+  workflowOptionList: {
+    borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: DRAPE_VISION_COLORS.line,
     backgroundColor: DRAPE_VISION_COLORS.screen,
+    overflow: 'hidden',
   },
-  workflowChipActive: {
-    borderColor: Colors.needleGreen,
-    backgroundColor: Colors.needleGreen,
+  workflowOptionRow: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: DRAPE_VISION_COLORS.line,
   },
-  workflowChipText: {
+  workflowOptionText: {
     fontSize: FontSize.sm,
     color: DRAPE_VISION_COLORS.textMuted,
     fontWeight: FontWeight.semibold,
   },
-  workflowChipTextActive: {
-    color: Colors.textInverse,
-  },
+  workflowOptionTextActive: { color: Colors.needleGreen },
   workflowRangeRow: {
     gap: Spacing.xs,
   },

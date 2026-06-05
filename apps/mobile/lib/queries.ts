@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useFocusEffect } from 'expo-router'
 import { supabase } from '@/lib/supabase'
+import { fetchReadGateway } from '@/lib/read-gateway'
 import type { OrderStage } from '@drape/shared/order-machine'
 import type { CurrencyCode } from '@/lib/currency'
 import {
@@ -34,6 +35,7 @@ import {
   type SizeInventory,
   type TailorStockAlert,
 } from '@/lib/ready-made-stock'
+import { parseOrderSupportMeta, type OrderSupportMeta } from '@/lib/order-support'
 
 // ─── Query Key Factory ───────────────────────────────────────────────────────
 
@@ -83,18 +85,6 @@ function fallbackInventoryQuantity(stockStatus: string | null | undefined, isLiv
   if (!isLive || stockStatus === 'SOLD_OUT' || stockStatus === 'HIDDEN') return 0
   if (stockStatus === 'LOW_STOCK') return 1
   return 1
-}
-
-async function fetchReadGateway<T>(body: Record<string, unknown>): Promise<T> {
-  const { data, error } = await supabase.functions.invoke('read-gateway', { body })
-  if (error) throw error
-
-  const payload = data as { ok?: boolean; data?: unknown; message?: string } | null
-  if (!payload?.ok) {
-    throw new Error(payload?.message ?? 'Could not load this data right now.')
-  }
-
-  return payload.data as T
 }
 
 /**
@@ -430,6 +420,7 @@ type CustomerMessageOrderQueryRow = {
   stage: OrderStage
   customer_id: string
   video_call_url: string | null
+  special_note: string | null
   tailor_profiles: ProfileJoinRow | ProfileJoinRow[] | null
   customer_profiles: ProfileJoinRow | ProfileJoinRow[] | null
 }
@@ -658,6 +649,7 @@ export type CustomerMessageOrderInfo = {
   customerAvatarUrl: string | null
   stage: OrderStage
   videoCallUrl: string | null
+  supportMeta: OrderSupportMeta
   resolvedOrderId: string
 } | null
 
@@ -1277,6 +1269,13 @@ async function fetchWishlistCollections(userId: string): Promise<WishlistCollect
 }
 
 async function fetchTailorPublic(tailorId: string, userId?: string): Promise<TailorPublicData> {
+  try {
+    return await fetchReadGateway<TailorPublicData>({ action: 'tailor-profile', tailorId })
+  } catch {
+    // Public profile media and reviews should come from the read gateway first.
+    // Keep the direct path as a resilience fallback during edge deploys.
+  }
+
   const queries = [
     supabase
       .from('tailor_profiles')
@@ -1284,6 +1283,7 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
         'id, display_name, location, seller_type, tier, avg_rating, total_reviews, total_orders, avg_response_hours, availability, bio, specialty_tags, languages, currency, price_range_min, price_range_max, avatar_url, portfolio_photo_urls, portfolio_video_urls, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available'
       )
       .eq('id', tailorId)
+      .eq('is_live', true)
       .maybeSingle(),
     supabase
       .from('reviews')
@@ -1930,7 +1930,7 @@ async function fetchCustomerMessageOrderInfo(
     .from('orders')
     .select(
       `
-      id, garment_type, order_kind, seller_item_id, stage, customer_id, video_call_url,
+      id, garment_type, order_kind, seller_item_id, stage, customer_id, video_call_url, special_note,
       tailor_profiles!tailor_profile_id(id, display_name, avatar_url, portfolio_photo_urls),
       customer_profiles!customer_id(display_name, avatar_url)
     `
@@ -1956,6 +1956,7 @@ async function fetchCustomerMessageOrderInfo(
       customerAvatarUrl: customerProfile?.avatar_url ?? null,
       stage: o.stage,
       videoCallUrl: o.video_call_url ?? null,
+      supportMeta: parseOrderSupportMeta(o.special_note),
       resolvedOrderId: o.id,
     }
   }
@@ -1968,7 +1969,7 @@ async function fetchCustomerMessageOrderInfo(
     .from('orders')
     .select(
       `
-      id, garment_type, order_kind, seller_item_id, stage, customer_id, video_call_url,
+      id, garment_type, order_kind, seller_item_id, stage, customer_id, video_call_url, special_note,
       tailor_profiles!inner(id, display_name, avatar_url, portfolio_photo_urls),
       customer_profiles(display_name, avatar_url)
     `
@@ -2002,6 +2003,7 @@ async function fetchCustomerMessageOrderInfo(
     customerAvatarUrl: customerProfile?.avatar_url ?? null,
     stage: o.stage,
     videoCallUrl: o.video_call_url ?? null,
+    supportMeta: parseOrderSupportMeta(o.special_note),
     resolvedOrderId: o.id,
   }
 }

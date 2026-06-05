@@ -245,6 +245,27 @@ Deno.serve(async (req: Request) => {
     console.error(`[${FN}] measurement merge error:`, profileErr.message)
   }
 
+  const profileLabel = typeof entry.full_name === 'string' && entry.full_name.trim()
+    ? entry.full_name.trim()
+    : 'Tailor passport'
+  const { error: namedProfileErr } = await service
+    .from('customer_measurement_profiles')
+    .insert({
+      customer_id: caller.id,
+      label: profileLabel,
+      relationship: 'SELF',
+      measurements: merged,
+      unit_preference: (entry as any).measurement_unit ?? merged.unit ?? 'cm',
+      source: 'PASSPORT_CLAIM',
+      is_default: false,
+      last_measured_at: (entry as any).measured_at ?? new Date().toISOString(),
+    })
+
+  if (namedProfileErr) {
+    // Non-fatal — older environments may not have named wearer profiles yet.
+    console.error(`[${FN}] named measurement profile error:`, namedProfileErr.message)
+  }
+
   console.log(`[${FN}] passport ${passportId} claimed by user ${caller.id}`)
 
   return new Response(

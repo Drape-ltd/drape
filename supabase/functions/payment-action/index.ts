@@ -11,10 +11,9 @@ import {
   markPaymentAttemptStatus,
   upsertPreparedPaymentAttempt,
 } from '../_shared/payment-ledger.ts'
-import { sendPushToUser } from '../_shared/notify.ts'
 import { enqueueOrderConfirmationEmailJob } from '../_shared/payment-side-effects.ts'
 import { notifyTailorAboutReadyMadeStockChange } from '../_shared/ready-made-stock-alert.ts'
-import { sendSmsToUser } from '../_shared/sms.ts'
+import { enqueuePushJob, enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
 import {
   fulfillmentPaymentConfirmedStageNote,
   paymentConfirmedStageNote,
@@ -511,14 +510,19 @@ async function finalizeSuccessfulPayment(
     })
 
     if (order.tailor_id) {
-      EdgeRuntime.waitUntil(
-        sendPushToUser(supabase, order.tailor_id.toString(), {
+      await enqueuePushJob(supabase, {
+        userId: order.tailor_id.toString(),
+        orderId: order.id,
+        source: FN,
+        idempotencyKey: `consultation-payment-confirmed:${order.id}:${paymentIntentId}:tailor`,
+        priority: 20,
+        notification: {
           title: 'Consultation fee paid',
           body: 'The customer paid the consultation fee. The call can start at the scheduled time.',
           preferenceKey: 'newOrders',
           data: { orderId: order.id },
-        }),
-      )
+        },
+      })
     }
 
     await enqueueOrderConfirmationEmailJob(supabase, {
@@ -593,52 +597,72 @@ async function finalizeSuccessfulPayment(
     })
 
     if (order.tailor_id) {
-      EdgeRuntime.waitUntil(
-        sendPushToUser(supabase, order.tailor_id.toString(), {
+      await enqueuePushJob(supabase, {
+        userId: order.tailor_id.toString(),
+        orderId: order.id,
+        source: FN,
+        idempotencyKey: `fulfillment-payment-confirmed:${order.id}:${paymentIntentId}:tailor`,
+        priority: 20,
+        notification: {
           ...tailorFulfillmentPaymentConfirmedNotification(order.delivery_method),
           preferenceKey: 'newOrders',
           data: { orderId: order.id },
-        }),
-      )
-      EdgeRuntime.waitUntil(
-        sendSmsToUser({
-          supabase,
-          userId: order.tailor_id.toString(),
-          audience: 'TAILOR',
-          orderId: order.id,
-          event: 'order.fulfillment_payment_confirmed',
-          body: buildTailorOrderPaymentSms({
-            id: order.id,
-            reference: order.reference,
-            orderKind: order.order_kind,
-            garmentType: order.garment_type,
-            itemTitle: order.item_title,
-            itemSize: order.item_size,
-            deliveryMethod: order.delivery_method,
-          }, phase),
-        }),
-      )
+        },
+      })
+      await enqueueSmsJob(supabase, {
+        userId: order.tailor_id.toString(),
+        audience: 'TAILOR',
+        orderId: order.id,
+        event: 'order.fulfillment_payment_confirmed',
+        source: FN,
+        idempotencyKey: `fulfillment-payment-confirmed:${order.id}:${paymentIntentId}:tailor`,
+        priority: 20,
+        body: buildTailorOrderPaymentSms({
+          id: order.id,
+          reference: order.reference,
+          orderKind: order.order_kind,
+          garmentType: order.garment_type,
+          itemTitle: order.item_title,
+          itemSize: order.item_size,
+          deliveryMethod: order.delivery_method,
+        }, phase),
+      })
     }
 
     if (order.customer_id) {
-      EdgeRuntime.waitUntil(
-        sendSmsToUser({
-          supabase,
-          userId: order.customer_id.toString(),
-          audience: 'CUSTOMER',
-          orderId: order.id,
-          event: 'order.fulfillment_payment_confirmed',
-          body: buildCustomerOrderPaymentSms({
-            id: order.id,
-            reference: order.reference,
-            orderKind: order.order_kind,
-            garmentType: order.garment_type,
-            itemTitle: order.item_title,
-            itemSize: order.item_size,
-            deliveryMethod: order.delivery_method,
-          }, phase),
-        }),
-      )
+      await enqueuePushJob(supabase, {
+        userId: order.customer_id.toString(),
+        orderId: order.id,
+        source: FN,
+        idempotencyKey: `fulfillment-payment-confirmed:${order.id}:${paymentIntentId}:customer`,
+        priority: 20,
+        notification: {
+          title: order.delivery_method === 'LOCAL_DELIVERY' ? 'Delivery payment confirmed' : 'Shipping payment confirmed',
+          body: order.delivery_method === 'LOCAL_DELIVERY'
+            ? 'Drape received your delivery payment. Your order can move into local delivery.'
+            : 'Drape received your shipping payment. Your order can move into dispatch.',
+          preferenceKey: 'paymentConfirmations',
+          data: { orderId: order.id },
+        },
+      })
+      await enqueueSmsJob(supabase, {
+        userId: order.customer_id.toString(),
+        audience: 'CUSTOMER',
+        orderId: order.id,
+        event: 'order.fulfillment_payment_confirmed',
+        source: FN,
+        idempotencyKey: `fulfillment-payment-confirmed:${order.id}:${paymentIntentId}:customer`,
+        priority: 20,
+        body: buildCustomerOrderPaymentSms({
+          id: order.id,
+          reference: order.reference,
+          orderKind: order.order_kind,
+          garmentType: order.garment_type,
+          itemTitle: order.item_title,
+          itemSize: order.item_size,
+          deliveryMethod: order.delivery_method,
+        }, phase),
+      })
     }
 
     await enqueueOrderConfirmationEmailJob(supabase, {
@@ -710,31 +734,36 @@ async function finalizeSuccessfulPayment(
   })
 
     if (order.tailor_id) {
-      EdgeRuntime.waitUntil(
-        sendPushToUser(supabase, order.tailor_id.toString(), {
+      await enqueuePushJob(supabase, {
+        userId: order.tailor_id.toString(),
+        orderId: order.id,
+        source: FN,
+        idempotencyKey: `payment-confirmed:${order.id}:${paymentIntentId}:tailor`,
+        priority: 20,
+        notification: {
           ...tailorPaymentConfirmedNotification(order.order_kind),
           preferenceKey: 'newOrders',
           data: { orderId: order.id },
-        }),
-      )
-      EdgeRuntime.waitUntil(
-        sendSmsToUser({
-          supabase,
-          userId: order.tailor_id.toString(),
-          audience: 'TAILOR',
-          orderId: order.id,
-          event: 'order.payment_confirmed',
-          body: buildTailorOrderPaymentSms({
-            id: order.id,
-            reference: order.reference,
-            orderKind: order.order_kind,
-            garmentType: order.garment_type,
-            itemTitle: order.item_title,
-            itemSize: order.item_size,
-            deliveryMethod: order.delivery_method,
-          }, phase),
-        }),
-      )
+        },
+      })
+      await enqueueSmsJob(supabase, {
+        userId: order.tailor_id.toString(),
+        audience: 'TAILOR',
+        orderId: order.id,
+        event: 'order.payment_confirmed',
+        source: FN,
+        idempotencyKey: `payment-confirmed:${order.id}:${paymentIntentId}:tailor`,
+        priority: 20,
+        body: buildTailorOrderPaymentSms({
+          id: order.id,
+          reference: order.reference,
+          orderKind: order.order_kind,
+          garmentType: order.garment_type,
+          itemTitle: order.item_title,
+          itemSize: order.item_size,
+          deliveryMethod: order.delivery_method,
+        }, phase),
+      })
       EdgeRuntime.waitUntil(
         notifyTailorAboutReadyMadeStockChange(supabase, {
           orderKind: order.order_kind,
@@ -747,28 +776,51 @@ async function finalizeSuccessfulPayment(
     }
 
   if (order.customer_id) {
-    EdgeRuntime.waitUntil(
-      sendSmsToUser({
-        supabase,
-        userId: order.customer_id.toString(),
-        audience: 'CUSTOMER',
-        orderId: order.id,
-        event: 'order.payment_confirmed',
-        body: buildCustomerOrderPaymentSms({
-          id: order.id,
-          reference: order.reference,
-          orderKind: order.order_kind,
-          garmentType: order.garment_type,
-          itemTitle: order.item_title,
-          itemSize: order.item_size,
-          deliveryMethod: order.delivery_method,
-        }, phase),
-      }),
-    )
+    await enqueuePushJob(supabase, {
+      userId: order.customer_id.toString(),
+      orderId: order.id,
+      source: FN,
+      idempotencyKey: `payment-confirmed:${order.id}:${paymentIntentId}:customer`,
+      priority: 20,
+      notification: {
+        title: order.order_kind === 'READY_MADE' ? 'Order confirmed' : 'Payment confirmed',
+        body: order.order_kind === 'READY_MADE'
+          ? 'Your ready-made order is paid and the tailor can prepare it inside Drape.'
+          : 'Your order is funded. The tailor can continue production inside Drape.',
+        preferenceKey: 'paymentConfirmations',
+        data: { orderId: order.id },
+      },
+    })
+    await enqueueSmsJob(supabase, {
+      userId: order.customer_id.toString(),
+      audience: 'CUSTOMER',
+      orderId: order.id,
+      event: 'order.payment_confirmed',
+      source: FN,
+      idempotencyKey: `payment-confirmed:${order.id}:${paymentIntentId}:customer`,
+      priority: 20,
+      body: buildCustomerOrderPaymentSms({
+        id: order.id,
+        reference: order.reference,
+        orderKind: order.order_kind,
+        garmentType: order.garment_type,
+        itemTitle: order.item_title,
+        itemSize: order.item_size,
+        deliveryMethod: order.delivery_method,
+      }, phase),
+    })
+  }
+
+  const confirmedOrder = {
+    ...order,
+    stage: 'CONFIRMED',
+    payment_provider: provider,
+    payment_intent_id: paymentIntentId,
+    payment_checkout_url: null,
   }
 
   await enqueueOrderConfirmationEmailJob(supabase, {
-    order,
+    order: confirmedOrder,
     phase,
     source: FN,
     provider,

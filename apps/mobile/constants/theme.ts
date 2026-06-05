@@ -1,4 +1,4 @@
-// Mobile aliases for the locked shared Drape design system.
+// Mobile aliases for the locked shared Drapeon design system.
 import { Appearance } from 'react-native'
 import { colors, darkColors, shadows, typography } from '@drape/shared/design-system'
 

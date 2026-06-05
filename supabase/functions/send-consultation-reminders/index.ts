@@ -10,10 +10,11 @@ import {
   parseOrderSupportMeta,
   serializeOrderSupportMeta,
   type ConsultationMeta,
+  type OrderCallMeta,
 } from "../_shared/order-support.ts";
 import { createOrRefreshOpsIssue } from "../_shared/ops-issues.ts";
 import { releaseConsultationSlot } from "../_shared/consultation-bookings.ts";
-import { enqueueOrderEventEmailJob, enqueuePushJob } from "../_shared/side-effect-jobs.ts";
+import { enqueueOrderEventEmailJob, enqueuePushJob, enqueueSmsJob } from "../_shared/side-effect-jobs.ts";
 import {
   getClientIp,
   RATE_LIMITS,
@@ -29,6 +30,21 @@ const CONSULTATION_DURATION_MS = 30 * 60 * 1000;
 const POST_SLOT_FOLLOW_UP_MS = 10 * 60 * 1000;
 const REQUEST_FOLLOW_UP_MS = 24 * 60 * 60 * 1000;
 const REQUEST_EXPIRE_MS = 48 * 60 * 60 * 1000;
+const ORDER_CALL_JOIN_LATE_MS = 45 * 60 * 1000;
+const READY_MADE_CALL_STAGES = [
+  "CONFIRMED",
+  "DESIGNING",
+  "SOURCING",
+  "CUTTING",
+  "SEWING",
+  "FINISHING",
+  "READY_FOR_COLLECTION",
+  "READY_FOR_DRAPE_DISPATCH",
+  "OUT_FOR_DELIVERY",
+  "SHIPPED",
+  "DELIVERED",
+  "COLLECTED",
+] as const;
 
 type OrderRow = {
   id: string;
@@ -38,6 +54,10 @@ type OrderRow = {
   stage: string;
   special_note: string | null;
   video_call_url: string | null;
+  order_kind?: string | null;
+  garment_type?: string | null;
+  item_title?: string | null;
+  item_size?: string | null;
 };
 
 function shouldSkip(meta: ConsultationMeta | null, nowMs: number) {
@@ -69,6 +89,33 @@ function dueReminder(meta: ConsultationMeta, nowMs: number): "30" | "5" | null {
   return null;
 }
 
+function shouldSkipOrderCall(meta: OrderCallMeta | null, nowMs: number) {
+  if (!meta) return true;
+  if (meta.reminderEnabled === false) return true;
+  if (meta.status !== "SCHEDULED") return true;
+  if (!meta.scheduledStartAt) return true;
+  if (meta.completedAt || meta.expiredAt) return true;
+  const startsAt = new Date(meta.scheduledStartAt).getTime();
+  if (!Number.isFinite(startsAt)) return true;
+  if (startsAt < nowMs - WINDOW_MS) return true;
+  return false;
+}
+
+function dueOrderCallReminder(meta: OrderCallMeta, nowMs: number): "30" | "5" | null {
+  const startsAt = new Date(meta.scheduledStartAt!).getTime();
+  const msUntil = startsAt - nowMs;
+
+  if (!meta.reminder30SentAt && Math.abs(msUntil - THIRTY_MIN_MS) <= WINDOW_MS) {
+    return "30";
+  }
+
+  if (!meta.reminder5SentAt && Math.abs(msUntil - FIVE_MIN_MS) <= WINDOW_MS) {
+    return "5";
+  }
+
+  return null;
+}
+
 function titleFor(kind: "30" | "5") {
   return kind === "30" ? "Consultation in 30 minutes" : "Consultation starts soon";
 }
@@ -77,6 +124,28 @@ function bodyFor(kind: "30" | "5") {
   return kind === "30"
     ? "Your Drape consultation is coming up. Open the order when you are ready."
     : "Your Drape consultation starts in 5 minutes. Open the order to join or start the call.";
+}
+
+function smsBodyFor(order: OrderRow, kind: "30" | "5") {
+  return kind === "30"
+    ? `Drape: your consultation for order ${orderRef(order)} starts in 30 minutes. Open Drape to prepare.`
+    : `Drape: your consultation for order ${orderRef(order)} starts in 5 minutes. Open the order to join or start the call.`;
+}
+
+function orderCallTitleFor(kind: "30" | "5") {
+  return kind === "30" ? "Order call in 30 minutes" : "Order call starts soon";
+}
+
+function orderCallBodyFor(kind: "30" | "5") {
+  return kind === "30"
+    ? "Your ready-made order call is coming up. Open Messages when you are ready."
+    : "Your ready-made order call starts in 5 minutes. Open Messages to join or start the call.";
+}
+
+function orderCallSmsBodyFor(order: OrderRow, kind: "30" | "5") {
+  return kind === "30"
+    ? `Drape: your ready-made order call for ${orderRef(order)} starts in 30 minutes. Open Messages to prepare.`
+    : `Drape: your ready-made order call for ${orderRef(order)} starts in 5 minutes. Open Messages to join or start the call.`;
 }
 
 function requestAgeMs(meta: ConsultationMeta, nowMs: number) {
@@ -128,6 +197,16 @@ async function sendReminder(
       priority: 15,
       notification: payload,
     }));
+    sends.push(enqueueSmsJob(supabase, {
+      userId: order.customer_id,
+      audience: "CUSTOMER",
+      source: FN,
+      orderId: order.id,
+      event: `consultation_reminder_${kind}`,
+      idempotencyKey: `consultation-reminder:${order.id}:${kind}:customer:sms`,
+      priority: 15,
+      body: smsBodyFor(order, kind),
+    }));
   }
   if (order.tailor_id) {
     sends.push(enqueuePushJob(supabase, {
@@ -138,7 +217,74 @@ async function sendReminder(
       priority: 15,
       notification: payload,
     }));
+    sends.push(enqueueSmsJob(supabase, {
+      userId: order.tailor_id,
+      audience: "TAILOR",
+      source: FN,
+      orderId: order.id,
+      event: `consultation_reminder_${kind}`,
+      idempotencyKey: `consultation-reminder:${order.id}:${kind}:tailor:sms`,
+      priority: 15,
+      body: smsBodyFor(order, kind),
+    }));
   }
+  await Promise.allSettled(sends);
+}
+
+async function sendOrderCallReminder(
+  supabase: SupabaseClient,
+  order: OrderRow,
+  kind: "30" | "5",
+) {
+  const payload = {
+    title: orderCallTitleFor(kind),
+    body: orderCallBodyFor(kind),
+    preferenceKey: "messages" as const,
+    data: { orderId: order.id, target: "messages" },
+  };
+
+  const sends: Promise<unknown>[] = [];
+  if (order.customer_id) {
+    sends.push(enqueuePushJob(supabase, {
+      userId: order.customer_id,
+      source: FN,
+      orderId: order.id,
+      idempotencyKey: `order-call-reminder:${order.id}:${kind}:customer`,
+      priority: 15,
+      notification: payload,
+    }));
+    sends.push(enqueueSmsJob(supabase, {
+      userId: order.customer_id,
+      audience: "CUSTOMER",
+      source: FN,
+      orderId: order.id,
+      event: `order_call_reminder_${kind}`,
+      idempotencyKey: `order-call-reminder:${order.id}:${kind}:customer:sms`,
+      priority: 15,
+      body: orderCallSmsBodyFor(order, kind),
+    }));
+  }
+  if (order.tailor_id) {
+    sends.push(enqueuePushJob(supabase, {
+      userId: order.tailor_id,
+      source: FN,
+      orderId: order.id,
+      idempotencyKey: `order-call-reminder:${order.id}:${kind}:tailor`,
+      priority: 15,
+      notification: payload,
+    }));
+    sends.push(enqueueSmsJob(supabase, {
+      userId: order.tailor_id,
+      audience: "TAILOR",
+      source: FN,
+      orderId: order.id,
+      event: `order_call_reminder_${kind}`,
+      idempotencyKey: `order-call-reminder:${order.id}:${kind}:tailor:sms`,
+      priority: 15,
+      body: orderCallSmsBodyFor(order, kind),
+    }));
+  }
+
   await Promise.allSettled(sends);
 }
 
@@ -171,6 +317,16 @@ async function notifyBothByPushAndEmail(
       source: FN,
       idempotencyKey: `consultation-followup:${order.id}:${payload.title}:customer:email`,
     }));
+    sends.push(enqueueSmsJob(supabase, {
+      userId: order.customer_id,
+      audience: "CUSTOMER",
+      source: FN,
+      orderId: order.id,
+      event: "consultation_followup",
+      idempotencyKey: `consultation-followup:${order.id}:${payload.title}:customer:sms`,
+      priority: 20,
+      body: `Drape: ${payload.customerBody}`,
+    }));
   }
 
   if (order.tailor_id) {
@@ -195,6 +351,16 @@ async function notifyBothByPushAndEmail(
       body: payload.tailorBody,
       source: FN,
       idempotencyKey: `consultation-followup:${order.id}:${payload.title}:tailor:email`,
+    }));
+    sends.push(enqueueSmsJob(supabase, {
+      userId: order.tailor_id,
+      audience: "TAILOR",
+      source: FN,
+      orderId: order.id,
+      event: "consultation_followup",
+      idempotencyKey: `consultation-followup:${order.id}:${payload.title}:tailor:sms`,
+      priority: 20,
+      body: `Drape: ${payload.tailorBody}`,
     }));
   }
 
@@ -436,6 +602,54 @@ async function handleConsultationLifecycle(
   return "skipped" as const;
 }
 
+async function handleReadyMadeOrderCall(
+  supabase: SupabaseClient,
+  order: OrderRow,
+  now: Date,
+) {
+  const supportMeta = parseOrderSupportMeta(order.special_note);
+  const orderCall = supportMeta.orderCall ?? null;
+  if (!orderCall || orderCall.status !== "SCHEDULED" || !orderCall.scheduledStartAt || orderCall.completedAt || orderCall.expiredAt) {
+    return "skipped" as const;
+  }
+
+  const startsAt = new Date(orderCall.scheduledStartAt).getTime();
+  if (!Number.isFinite(startsAt)) return "skipped" as const;
+
+  if (now.getTime() > startsAt + ORDER_CALL_JOIN_LATE_MS) {
+    const nextOrderCall = {
+      ...orderCall,
+      status: "EXPIRED" as const,
+      expiredAt: now.toISOString(),
+    };
+    const { error } = await supabase
+      .from("orders")
+      .update({
+        special_note: serializeOrderSupportMeta({
+          ...supportMeta,
+          orderCall: nextOrderCall,
+        }),
+      })
+      .eq("id", order.id);
+
+    if (error) throw new Error(error.message);
+
+    await audit(supabase, {
+      event: "order_call.expired",
+      actor_role: "SYSTEM",
+      order_id: order.id,
+      severity: "warn",
+      payload: {
+        function: FN,
+        scheduled_start_at: orderCall.scheduledStartAt,
+      },
+    });
+    return "expired" as const;
+  }
+
+  return "active" as const;
+}
+
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -472,8 +686,21 @@ Deno.serve(async (req) => {
       });
     }
 
+    const { data: readyMadeCallData, error: readyMadeCallError } = await supabase
+      .from("orders")
+      .select("id, reference, customer_id, tailor_id, stage, special_note, video_call_url, order_kind, garment_type, item_title, item_size")
+      .eq("order_kind", "READY_MADE")
+      .in("stage", READY_MADE_CALL_STAGES)
+      .not("special_note", "is", null);
+
+    if (readyMadeCallError) {
+      log("warn", FN, "ready_made_order_calls.lookup_failed", { error: readyMadeCallError.message });
+    }
+
     let sent30 = 0;
     let sent5 = 0;
+    let orderCallSent30 = 0;
+    let orderCallSent5 = 0;
     let followedUp = 0;
     let expired = 0;
     let skipped = 0;
@@ -546,7 +773,74 @@ Deno.serve(async (req) => {
       else sent5 += 1;
     }
 
-    return new Response(JSON.stringify({ ok: true, sent30, sent5, followedUp, expired, skipped }), {
+    for (const order of (readyMadeCallData ?? []) as OrderRow[]) {
+      const supportMeta = parseOrderSupportMeta(order.special_note);
+      const orderCall = supportMeta.orderCall ?? null;
+      try {
+        const lifecycle = await handleReadyMadeOrderCall(supabase, order, now);
+        if (lifecycle === "expired") {
+          expired += 1;
+          continue;
+        }
+      } catch (error) {
+        skipped += 1;
+        log("error", FN, "ready_made_order_call.lifecycle_failed", {
+          order_id: order.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
+
+      if (shouldSkipOrderCall(orderCall, nowMs)) {
+        skipped += 1;
+        continue;
+      }
+
+      const kind = dueOrderCallReminder(orderCall!, nowMs);
+      if (!kind) {
+        skipped += 1;
+        continue;
+      }
+
+      const nextOrderCall = {
+        ...orderCall!,
+        reminder30SentAt: kind === "30" ? now.toISOString() : orderCall!.reminder30SentAt ?? null,
+        reminder5SentAt: kind === "5" ? now.toISOString() : orderCall!.reminder5SentAt ?? null,
+      };
+
+      const { error: updateError } = await supabase
+        .from("orders")
+        .update({
+          special_note: serializeOrderSupportMeta({
+            ...supportMeta,
+            orderCall: nextOrderCall,
+          }),
+        })
+        .eq("id", order.id);
+
+      if (updateError) {
+        skipped += 1;
+        log("warn", FN, "ready_made_order_call.update_failed", { order_id: order.id, error: updateError.message });
+        continue;
+      }
+
+      await sendOrderCallReminder(supabase, order, kind);
+      await audit(supabase, {
+        event: "order_call.reminder_sent",
+        actor_role: "SYSTEM",
+        order_id: order.id,
+        payload: {
+          function: FN,
+          reminder: kind,
+          scheduled_start_at: orderCall!.scheduledStartAt,
+        },
+      });
+
+      if (kind === "30") orderCallSent30 += 1;
+      else orderCallSent5 += 1;
+    }
+
+    return new Response(JSON.stringify({ ok: true, sent30, sent5, orderCallSent30, orderCallSent5, followedUp, expired, skipped }), {
       status: 200,
       headers: { ...cors, "Content-Type": "application/json" },
     });

@@ -21,7 +21,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getCorsHeaders } from '../_shared/cors.ts'
-import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
+import { getServiceRoleKey, getSupabaseUrl, isTrustedServiceRoleToken } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import { finalizeOrderTerminal } from '../_shared/order-terminal.ts'
@@ -62,19 +62,6 @@ function jsonResponse(body: Record<string, unknown>, status: number, headers: He
     status,
     headers: { ...headers, 'Content-Type': 'application/json' },
   })
-}
-
-async function timingSafeEqual(a: string, b: string): Promise<boolean> {
-  const encoder = new TextEncoder()
-  const [hashA, hashB] = await Promise.all([
-    crypto.subtle.digest('SHA-256', encoder.encode(a)),
-    crypto.subtle.digest('SHA-256', encoder.encode(b)),
-  ])
-  const left = new Uint8Array(hashA)
-  const right = new Uint8Array(hashB)
-  let diff = 0
-  for (let index = 0; index < 32; index += 1) diff |= left[index] ^ right[index]
-  return diff === 0
 }
 
 type OrderRow = {
@@ -313,7 +300,7 @@ Deno.serve(async (req) => {
   try {
     const authHeader = req.headers.get('Authorization') ?? ''
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
-    const valid = await timingSafeEqual(token, getServiceRoleKey())
+    const valid = await isTrustedServiceRoleToken(token)
     if (!valid) {
       log('warn', FN, 'auth.unauthorized')
       return jsonResponse({ error: 'This scheduled payment job requires a trusted service request.' }, 401, cors)

@@ -176,7 +176,7 @@ export default function SignUpScreen() {
         >
           <AuthEntryHeader
             eyebrow="Create account"
-            title="Start with the right side of Drape."
+            title="Start with the right side of Drapeon."
             body="Choose whether you are ordering or tailoring first. You can switch views later from your account."
             showWordmark={false}
           />
@@ -394,7 +394,7 @@ export default function SignUpScreen() {
             <View style={styles.nextCard}>
               <Text style={styles.nextEyebrow}>Next</Text>
               <Text style={styles.nextTitle}>
-                After email confirmation, Drape opens the setup flow for your selected side.
+                After email confirmation, Drapeon opens the setup flow for your selected side.
               </Text>
             </View>
 

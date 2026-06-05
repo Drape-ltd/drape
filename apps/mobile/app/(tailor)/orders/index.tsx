@@ -12,7 +12,7 @@ import { openConsultationCallUrl } from '@/lib/consultation'
 import { tailorOrderHint, tailorOrderPriority, tailorOrderStageLabel } from '@/lib/order-flow'
 import { deriveTailorReadiness, type TailorReadinessInput } from '@/lib/tailor-readiness'
 import { supabase } from '@/lib/supabase'
-import { useTailorOrders, useRefreshOnFocus } from '@/lib/queries'
+import { useRefreshOnFocus, useTailorOrders } from '@/lib/queries'
 import { shareTailorProfile } from '@/lib/invite'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
@@ -297,7 +297,7 @@ export default function TailorOrdersScreen() {
                 {isConsultation && (
                   <View style={styles.consultationActions}>
                     <TouchableOpacity
-                      style={styles.callChip}
+                      style={styles.callButton}
                       disabled={openingCallOrderId === item.id}
                       onPress={(e) => {
                         e.stopPropagation()
@@ -313,7 +313,7 @@ export default function TailorOrdersScreen() {
                         }
                       }}
                     >
-                      <Text style={styles.callChipText}>
+                      <Text style={styles.callButtonText}>
                         {openingCallOrderId === item.id
                           ? 'Opening…'
                           : item.videoCallUrl ? 'Rejoin call' : 'Start call'}
@@ -508,11 +508,11 @@ const styles = StyleSheet.create({
   statusHintDispute: { fontSize: FontSize.xs, color: Colors.kanteRust, lineHeight: 18 },
   cardConsultation: { borderWidth: 1.5, borderColor: Colors.needleGreen },
   consultationActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  callChip: {
+  callButton: {
     backgroundColor: Colors.needleGreen, borderRadius: Radius.full,
     paddingHorizontal: 14, paddingVertical: 8, minHeight: 44, justifyContent: 'center',
   },
-  callChipText: { fontSize: FontSize.xs, color: Colors.textInverse, fontWeight: FontWeight.semibold },
+  callButtonText: { fontSize: FontSize.xs, color: Colors.textInverse, fontWeight: FontWeight.semibold },
   consultationHint: { fontSize: FontSize.xs, color: Colors.needleGreen, fontWeight: FontWeight.medium },
   compactActionMenuButton: {
     minHeight: 46,

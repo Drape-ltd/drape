@@ -6,6 +6,12 @@ import {
 } from '@drape/shared/rate-limit'
 import { createServiceRoleClient } from '../../../lib/server-supabase'
 import { sendTailorApplicationNotification } from '../../../lib/lead-notifications'
+import {
+  checkPublicRateLimit,
+  getClientIp,
+  readJsonBody,
+  trimmedString,
+} from '../../../lib/request-security'
 
 async function createOrRefreshApplicationOpsIssue(
   client: ReturnType<typeof createServiceRoleClient>,
@@ -63,12 +69,6 @@ async function createOrRefreshApplicationOpsIssue(
       .insert(payload)
   }
 }
-import {
-  checkPublicRateLimit,
-  getClientIp,
-  readJsonBody,
-  trimmedString,
-} from '../../../lib/request-security'
 
 function rateLimitResponse() {
   return NextResponse.json(

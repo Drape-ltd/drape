@@ -4,14 +4,14 @@ import type { JSX } from 'react'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
-const deletionEmailSubject = 'Drape account deletion request'
+const deletionEmailSubject = 'Drapeon account deletion request'
 const deletionEmailBody = [
-  'I want to request deletion of my Drape account and associated personal data.',
+  'I want to request deletion of my Drapeon account and associated personal data.',
   '',
-  'Email used for Drape:',
+  'Email used for Drapeon:',
   'Phone number, if available:',
   'Account type: customer / tailor / both / not sure',
-  'I understand Drape may need to verify my identity and may retain limited records where required for active orders, payments, payouts, disputes, fraud prevention, legal obligations, tax/accounting, safety, or claims handling.',
+  'I understand Drapeon may need to verify my identity and may retain limited records where required for active orders, payments, payouts, disputes, fraud prevention, legal obligations, tax/accounting, safety, or claims handling.',
 ].join('\n')
 
 const deletionMailto = `mailto:${CONTACTS.privacy}?subject=${encodeURIComponent(deletionEmailSubject)}&body=${encodeURIComponent(deletionEmailBody)}`
@@ -27,17 +27,17 @@ const processSteps = [
   },
   {
     title: '3. Review active obligations',
-    body: 'If you have active orders, payouts, refunds, disputes, chargebacks, or legal holds, Drape may first restrict new activity and resolve those obligations.',
+    body: 'If you have active orders, payouts, refunds, disputes, chargebacks, or legal holds, Drapeon may first restrict new activity and resolve those obligations.',
   },
   {
     title: '4. Delete or anonymize',
-    body: 'When obligations are resolved, Drape deletes or anonymizes personal data that is no longer needed and removes public personal attribution where possible.',
+    body: 'When obligations are resolved, Drapeon deletes or anonymizes personal data that is no longer needed and removes public personal attribution where possible.',
   },
 ]
 
 export const metadata: Metadata = buildMetadata({
   title: 'Account Deletion',
-  description: 'Request deletion of your Drape account and associated personal data.',
+  description: 'Request deletion of your Drapeon account and associated personal data.',
   path: '/account-deletion',
 })
 
@@ -45,8 +45,8 @@ export default function AccountDeletionPage(): JSX.Element {
   return (
     <MarketingShell
       eyebrow="Account deletion"
-      title="Request deletion of your Drape account."
-      description="Drape lets customers and tailors request account deletion in the app and on the web. This page is the public web route for account and associated personal data deletion requests."
+      title="Request deletion of your Drapeon account."
+      description="Drapeon lets customers and tailors request account deletion in the app and on the web. This page is the public web route for account and associated personal data deletion requests."
       cta={
         <a
           href={deletionMailto}
@@ -62,14 +62,14 @@ export default function AccountDeletionPage(): JSX.Element {
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Fastest path</p>
             <h2 className="mt-3 text-3xl text-ink">If you can sign in</h2>
             <p className="mt-4 text-sm leading-7 text-ink/68">
-              Open the Drape app, go to Account Settings, choose Delete account, type DELETE, confirm your password, and submit the request. This is the fastest path because the app can verify that the request came from your signed-in account.
+              Open the Drapeon app, go to Account Settings, choose Delete account, type DELETE, confirm your password, and submit the request. This is the fastest path because the app can verify that the request came from your signed-in account.
             </p>
           </div>
           <div className="rounded-[1.75rem] border border-needle/10 bg-white/82 p-6 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Web path</p>
             <h2 className="mt-3 text-3xl text-ink">If you cannot sign in</h2>
             <p className="mt-4 text-sm leading-7 text-ink/68">
-              Email the privacy team from the email address you believe is tied to your Drape account. Include your phone number, role, and any details that help us find the account without exposing someone else's data.
+              Email the privacy team from the email address you believe is tied to your Drapeon account. Include your phone number, role, and any details that help us find the account without exposing someone else&apos;s data.
             </p>
             <a
               href={deletionMailto}
@@ -85,7 +85,7 @@ export default function AccountDeletionPage(): JSX.Element {
         <SectionTitle
           eyebrow="What happens next"
           title="Deletion is handled as a verified workflow."
-          description="Drape handles real orders, payments, payouts, messages, reviews, measurements, and support records. Deletion has to protect the requester without breaking active obligations."
+          description="Drapeon handles real orders, payments, payouts, messages, reviews, measurements, and support records. Deletion has to protect the requester without breaking active obligations."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-4">
           {processSteps.map((step) => (
@@ -98,7 +98,7 @@ export default function AccountDeletionPage(): JSX.Element {
         <SectionTitle
           eyebrow="What may be retained"
           title="Some records cannot be erased immediately."
-          description="Drape deletes or anonymizes data it no longer needs, but may keep limited records where justified."
+          description="Drapeon deletes or anonymizes data it no longer needs, but may keep limited records where justified."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           <MarketingCard
@@ -135,7 +135,7 @@ export default function AccountDeletionPage(): JSX.Element {
             <p className="mt-3 text-sm leading-7 text-ink/68">Account deletion, data deletion, data access, and privacy-rights requests.</p>
           </a>
           <a
-            href={`mailto:${CONTACTS.support}?subject=Drape%20account%20access%20help`}
+            href={`mailto:${CONTACTS.support}?subject=Drapeon%20account%20access%20help`}
             className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
           >
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Support</p>

@@ -9,7 +9,7 @@ type BrandCompanionCardProps = {
 
 export function BrandCompanionCard({
   title = 'Mascot direction',
-  body = 'Launch with a subtle stitch companion, not a loud character. Drape handles money and measurements, so trust leads and charm supports.',
+  body = 'Launch with a subtle stitch companion, not a loud character. Drapeon handles money and measurements, so trust leads and charm supports.',
   label = 'Thread mark',
 }: BrandCompanionCardProps) {
   return (

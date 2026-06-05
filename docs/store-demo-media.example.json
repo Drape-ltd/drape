@@ -1,0 +1,83 @@
+{
+  "reviewerCustomer": {
+    "email": "reviewer.customer@drapeon.co",
+    "displayName": "Drape Reviewer",
+    "phone": "+15550101010",
+    "defaultCurrency": "USD",
+    "regionCode": "US"
+  },
+  "tailors": [
+    {
+      "key": "lagos-occasion",
+      "email": "demo.tailor.lagos@drapeon.co",
+      "displayName": "Tomi Atelier",
+      "businessName": "Tomi Atelier",
+      "location": "Lagos, Nigeria",
+      "currency": "NGN",
+      "payoutCurrency": "NGN",
+      "payoutProvider": "PAYSTACK",
+      "payoutAccountType": "PAYSTACK",
+      "stripeConnectAccountId": null,
+      "specialtyTags": ["Agbada", "Aso Ebi", "Occasion wear"],
+      "avatarUrl": "https://example.com/replace-with-approved-tailor-avatar.jpg",
+      "portfolioUrls": [
+        "https://example.com/replace-with-approved-portfolio-1.jpg",
+        "https://example.com/replace-with-approved-portfolio-2.jpg",
+        "https://example.com/replace-with-approved-portfolio-3.jpg",
+        "https://example.com/replace-with-approved-portfolio-4.jpg"
+      ],
+      "shopItems": [
+        {
+          "title": "Ankara two-piece",
+          "category": "Women",
+          "priceAmount": 65000,
+          "currency": "NGN",
+          "sizes": ["M", "L"],
+          "inventoryQuantity": 2,
+          "stockStatus": "LOW_STOCK",
+          "photoUrls": [
+            "https://example.com/replace-with-approved-ready-made-1.jpg"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "london-bespoke",
+      "email": "demo.tailor.london@drapeon.co",
+      "displayName": "Kemi Studio",
+      "location": "London, UK",
+      "currency": "GBP",
+      "payoutCurrency": "GBP",
+      "payoutProvider": "STRIPE",
+      "payoutAccountType": "STRIPE_CONNECT",
+      "specialtyTags": ["Bridal", "Alterations", "Bespoke"],
+      "avatarUrl": "https://example.com/replace-with-approved-tailor-avatar.jpg",
+      "portfolioUrls": [
+        "https://example.com/replace-with-approved-portfolio-1.jpg",
+        "https://example.com/replace-with-approved-portfolio-2.jpg",
+        "https://example.com/replace-with-approved-portfolio-3.jpg",
+        "https://example.com/replace-with-approved-portfolio-4.jpg"
+      ],
+      "shopItems": []
+    },
+    {
+      "key": "accra-menswear",
+      "email": "demo.tailor.accra@drapeon.co",
+      "displayName": "Mensah Clothiers",
+      "location": "Accra, Ghana",
+      "currency": "GHS",
+      "payoutCurrency": "GHS",
+      "payoutProvider": "PAYSTACK",
+      "payoutAccountType": "PAYSTACK",
+      "specialtyTags": ["Kaftan", "Menswear", "Embroidery"],
+      "avatarUrl": "https://example.com/replace-with-approved-tailor-avatar.jpg",
+      "portfolioUrls": [
+        "https://example.com/replace-with-approved-portfolio-1.jpg",
+        "https://example.com/replace-with-approved-portfolio-2.jpg",
+        "https://example.com/replace-with-approved-portfolio-3.jpg",
+        "https://example.com/replace-with-approved-portfolio-4.jpg"
+      ],
+      "shopItems": []
+    }
+  ]
+}

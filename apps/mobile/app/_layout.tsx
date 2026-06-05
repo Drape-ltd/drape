@@ -36,16 +36,33 @@ import { validatePhoneForProfile } from '@drape/shared/phone'
 
 const LOCK_AFTER_MS = 5 * 60 * 1000 // lock after 5 minutes in background
 const SPLASH_FAILSAFE_MS = __DEV__ ? 2500 : 8000
+const ROUTE_GUARD_QUERY_TIMEOUT_MS = 5_000
 
 function hideNativeSplash(reason: string) {
-  if (__DEV__) console.log(`Hiding Drape splash: ${reason}`)
+  if (__DEV__) console.log(`Hiding Drapeon splash: ${reason}`)
   SplashScreen.hideAsync().catch((error) => {
-    console.warn('Unable to hide Drape splash screen', error)
+    console.warn('Unable to hide Drapeon splash screen', error)
   })
 }
 
 function hasUsablePhone(value: unknown): boolean {
   return typeof value === 'string' && validatePhoneForProfile(value) === null
+}
+
+async function withRouteGuardTimeout<T>(promise: PromiseLike<T>, label: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null
+  try {
+    return await Promise.race([
+      Promise.resolve(promise),
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`${label} timed out`))
+        }, ROUTE_GUARD_QUERY_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
 }
 
 type CustomerProfileGuardRow = {
@@ -109,7 +126,7 @@ function BiometricGate() {
   useEffect(() => {
     if (!locked || prompting.current) return
     prompting.current = true
-    authenticate('Verify your identity to continue using Drape').then(async (ok) => {
+    authenticate('Verify your identity to continue using Drapeon').then(async (ok) => {
       prompting.current = false
       if (ok) {
         setLocked(false)
@@ -169,7 +186,7 @@ class StartupErrorBoundary extends Component<
         },
       },
     })
-    console.error('Drape startup render failed:', error, info.componentStack)
+    console.error('Drapeon startup render failed:', error, info.componentStack)
   }
 
   render() {
@@ -177,10 +194,10 @@ class StartupErrorBoundary extends Component<
 
     return (
       <ScrollView style={startupErrorStyles.screen} contentContainerStyle={startupErrorStyles.content}>
-        <Text style={startupErrorStyles.eyebrow}>Drape needs a quick restart</Text>
+        <Text style={startupErrorStyles.eyebrow}>Drapeon needs a quick restart</Text>
         <Text style={startupErrorStyles.title}>We couldn’t finish opening the app.</Text>
         <Text style={startupErrorStyles.message}>
-          Close Drape fully and open it again. If this keeps happening, contact support@drapeon.co and mention startup recovery.
+          Close Drapeon fully and open it again. If this keeps happening, contact support@drapeon.co and mention startup recovery.
         </Text>
         {__DEV__ && (
           <>
@@ -260,6 +277,7 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
   const [tailorProfileChecking, setTailorProfileChecking] = useState(false)
   const [customerProfileChecked, setCustomerProfileChecked] = useState(false)
   const [customerProfileComplete, setCustomerProfileComplete] = useState(false)
+  const [customerProfileCheckFailed, setCustomerProfileCheckFailed] = useState(false)
   const [customerProfileChecking, setCustomerProfileChecking] = useState(false)
   const analyticsSharing =
     user?.user_metadata?.privacy_prefs?.analyticsSharing === true
@@ -271,6 +289,7 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
     const timer = setTimeout(() => {
       setCustomerProfileChecked(false)
       setCustomerProfileComplete(false)
+      setCustomerProfileCheckFailed(false)
       setCustomerProfileChecking(false)
       setTailorProfileChecked(false)
       setTailorHasProfile(false)
@@ -320,17 +339,21 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
     const timer = setTimeout(() => {
       setCustomerProfileChecking(true)
       setCustomerProfileChecked(false)
-      supabase
-        .from('customer_profiles')
-        .select('id, display_name, phone, unit_preference, garment_context, measurements')
-        .eq('user_id', userId)
-        .maybeSingle()
+      withRouteGuardTimeout(
+        supabase
+          .from('customer_profiles')
+          .select('id, display_name, phone, unit_preference, garment_context, measurements')
+          .eq('user_id', userId)
+          .maybeSingle(),
+        'Customer profile guard lookup'
+      )
         .then(({ data, error }) => {
           if (cancelled) return
           setCustomerProfileChecking(false)
           if (error) {
             // Network/DB error — don't update profile state; unblock so splash can hide.
             // The customer's profile screens have their own error handling.
+            setCustomerProfileCheckFailed(true)
             setCustomerProfileChecked(true)
             return
           }
@@ -347,6 +370,13 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
             typeof measurements?.garmentContext === 'string'
 
           setCustomerProfileComplete(hasDisplayName && hasPhone && hasUnit && hasGarmentContext)
+          setCustomerProfileCheckFailed(false)
+          setCustomerProfileChecked(true)
+        }, (error: unknown) => {
+          if (cancelled) return
+          console.warn('Customer profile guard lookup failed; keeping customer out of setup redirects.', error)
+          setCustomerProfileChecking(false)
+          setCustomerProfileCheckFailed(true)
           setCustomerProfileChecked(true)
         })
     }, 0)
@@ -367,11 +397,14 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
     const timer = setTimeout(() => {
       setTailorProfileChecking(true)
       setTailorProfileChecked(false)
-      supabase
-        .from('tailor_profiles')
-        .select('id, profile_completed, display_name, location, id_verification_status')
-        .eq('user_id', userId)
-        .maybeSingle()
+      withRouteGuardTimeout(
+        supabase
+          .from('tailor_profiles')
+          .select('id, profile_completed, display_name, location, id_verification_status')
+          .eq('user_id', userId)
+          .maybeSingle(),
+        'Tailor profile guard lookup'
+      )
         .then(({ data, error }) => {
           if (cancelled) return
           setTailorProfileChecking(false)
@@ -384,6 +417,12 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
           setTailorProfileCheckFailed(false)
           setTailorHasProfile(!!data)
           setTailorProfileCompleted(isTailorProfileCompleteFromRow(data))
+          setTailorProfileChecked(true)
+        }, (error: unknown) => {
+          if (cancelled) return
+          console.warn('Tailor profile guard lookup failed; keeping tailor out of setup redirects.', error)
+          setTailorProfileChecking(false)
+          setTailorProfileCheckFailed(true)
           setTailorProfileChecked(true)
         })
     }, 0)
@@ -432,6 +471,11 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
 
     if (role === 'CUSTOMER') {
       if (!customerProfileChecked || customerProfileChecking) return
+      if (customerProfileCheckFailed) {
+        // A transient network failure should not send an existing customer into setup.
+        if (!inCustomer && !inVision && !inPaymentReturn) router.replace('/(customer)')
+        return
+      }
       if (!customerProfileComplete) {
         // New customer — send to profile setup unless already there
         const onSetup = inAuth && secondSegment === 'customer-setup'
@@ -458,6 +502,7 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
     }
   }, [
     customerProfileChecked,
+    customerProfileCheckFailed,
     customerProfileChecking,
     customerProfileComplete,
     loading,
@@ -572,6 +617,8 @@ export default function RootLayout() {
             <Stack.Screen name="(customer)" options={{ headerShown: false }} />
             <Stack.Screen name="(tailor)" options={{ headerShown: false }} />
             <Stack.Screen name="passport" options={{ headerShown: false }} />
+            <Stack.Screen name="group-invite" options={{ headerShown: false }} />
+            <Stack.Screen name="referral" options={{ headerShown: false }} />
             <Stack.Screen name="vision" options={{ headerShown: false }} />
             <Stack.Screen name="paystack-redirect" options={{ headerShown: false }} />
           </Stack>

@@ -38,7 +38,7 @@ export type DrapeVisionModeMeta = {
 export const DRAPE_VISION_MODE_META: Record<DrapeVisionMode, DrapeVisionModeMeta> = {
   customer_scan: {
     eyebrow: 'Fit Passport',
-    title: 'Drape Vision for your measurements',
+    title: 'Drapeon Vision for your measurements',
     subtitle: 'Your measurement profile will power custom orders, ready-made fit checks, and tailor briefs from one place.',
     destinationTitle: 'Saved to your profile',
     destinationBody: 'Vision measurements flow into your measurement profile, custom order measurement step, ready-made fit guide, and every tailor brief you approve.',
@@ -48,7 +48,7 @@ export const DRAPE_VISION_MODE_META: Record<DrapeVisionMode, DrapeVisionModeMeta
   },
   tailor_client_scan: {
     eyebrow: 'Tailor assisted',
-    title: 'Measure a client into Drape',
+    title: 'Measure a client into Drapeon',
     subtitle: 'Capture a client with consent, keep the session in Diary, then invite them to claim their Fit Passport.',
     destinationTitle: 'Saved to Diary',
     destinationBody: 'Tailor-assisted scans will prefill the client diary, preserve fitting context, and create a claimable passport without storing raw video.',
@@ -97,9 +97,9 @@ export const DRAPE_VISION_CAPABILITIES = [
 ] as const
 
 export const DRAPE_VISION_PRIVACY_POINTS = [
-  'Video stays in memory and is never written to the photo library.',
-  'Landmarks are cleared after measurement calculation.',
-  'Only final measurement values are saved to Drape.',
+  'No scan video is saved or uploaded.',
+  'Landmarks are processed in memory and cleared after calculation.',
+  'Only reviewed measurements are saved; proof photos save only when you attach one.',
 ] as const
 
 export const DRAPE_VISION_CALCULATION_MESSAGES = [

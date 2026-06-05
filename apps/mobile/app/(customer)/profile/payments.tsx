@@ -8,9 +8,11 @@ import {
   ActivityIndicator,
   RefreshControl,
   TextInput,
+  Modal,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useNavigation, useRouter } from 'expo-router'
+import { Feather } from '@expo/vector-icons'
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { goBackOrFallback } from '@/lib/navigation'
 import { useAuth } from '@/lib/auth'
@@ -111,28 +113,6 @@ function StatCard({ label, value, hint }: { label: string; value: string; hint: 
   )
 }
 
-function FilterChip({
-  label,
-  active,
-  onPress,
-}: {
-  label: string
-  active: boolean
-  onPress: () => void
-}) {
-  return (
-    <TouchableOpacity
-      style={[styles.filterChip, active ? styles.filterChipActive : null]}
-      onPress={onPress}
-      activeOpacity={0.72}
-    >
-      <Text style={[styles.filterChipText, active ? styles.filterChipTextActive : null]}>
-        {label}
-      </Text>
-    </TouchableOpacity>
-  )
-}
-
 export default function CustomerPaymentHistoryScreen() {
   const router = useRouter()
   const navigation = useNavigation()
@@ -146,6 +126,7 @@ export default function CustomerPaymentHistoryScreen() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL')
   const [rangeFilter, setRangeFilter] = useState<RangeFilter>('90D')
+  const [filterSheet, setFilterSheet] = useState<'status' | 'range' | null>(null)
 
   const load = useCallback(async () => {
     if (!userId) {
@@ -189,6 +170,9 @@ export default function CustomerPaymentHistoryScreen() {
   function goBack() {
     goBackOrFallback(router, navigation, '/(customer)/profile')
   }
+
+  const selectedStatusLabel = STATUS_FILTERS.find((filter) => filter.key === statusFilter)?.label ?? 'All'
+  const selectedRangeLabel = RANGE_FILTERS.find((filter) => filter.key === rangeFilter)?.label ?? '90 days'
 
   const filteredTransactions = useMemo(() => {
     const needle = search.trim().toLowerCase()
@@ -257,11 +241,11 @@ export default function CustomerPaymentHistoryScreen() {
         }
       >
         <View style={styles.header}>
-          <TouchableOpacity onPress={goBack}>
-            <Text style={styles.back}>← Back</Text>
+          <TouchableOpacity style={styles.backBtn} onPress={goBack} accessibilityRole="button" accessibilityLabel="Back to profile">
+            <Feather name="arrow-left" size={20} color={Colors.ink} />
           </TouchableOpacity>
           <Text style={styles.title}>Payment history</Text>
-          <View style={{ width: 60 }} />
+          <View style={styles.headerSpacer} />
         </View>
 
         <View style={styles.summaryCard}>
@@ -295,25 +279,32 @@ export default function CustomerPaymentHistoryScreen() {
             placeholderTextColor={Colors.midGrey}
             style={styles.searchInput}
           />
-          <View style={styles.filterWrap}>
-            {STATUS_FILTERS.map((filter) => (
-              <FilterChip
-                key={filter.key}
-                label={filter.label}
-                active={statusFilter === filter.key}
-                onPress={() => setStatusFilter(filter.key)}
-              />
-            ))}
-          </View>
-          <View style={styles.filterWrap}>
-            {RANGE_FILTERS.map((filter) => (
-              <FilterChip
-                key={filter.key}
-                label={filter.label}
-                active={rangeFilter === filter.key}
-                onPress={() => setRangeFilter(filter.key)}
-              />
-            ))}
+          <View style={styles.selectorCard}>
+            <TouchableOpacity
+              style={styles.selectorRow}
+              onPress={() => setFilterSheet('status')}
+              accessibilityRole="button"
+              accessibilityLabel={`Payment status filter, ${selectedStatusLabel}`}
+            >
+              <View>
+                <Text style={styles.selectorLabel}>Status</Text>
+                <Text style={styles.selectorValue}>{selectedStatusLabel}</Text>
+              </View>
+              <Feather name="chevron-right" size={20} color={Colors.midGrey} />
+            </TouchableOpacity>
+            <View style={styles.selectorDivider} />
+            <TouchableOpacity
+              style={styles.selectorRow}
+              onPress={() => setFilterSheet('range')}
+              accessibilityRole="button"
+              accessibilityLabel={`Date range filter, ${selectedRangeLabel}`}
+            >
+              <View>
+                <Text style={styles.selectorLabel}>Date range</Text>
+                <Text style={styles.selectorValue}>{selectedRangeLabel}</Text>
+              </View>
+              <Feather name="chevron-right" size={20} color={Colors.midGrey} />
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -368,6 +359,8 @@ export default function CustomerPaymentHistoryScreen() {
                           ? 'Consultation payment'
                           : row.phase === 'FULFILLMENT'
                             ? 'Fulfillment payment'
+                            : row.phase === 'MATERIAL_ADVANCE'
+                              ? 'Material advance'
                             : 'Amount paid'
                       }
                       value={money(row.amount, row.currency)}
@@ -399,7 +392,7 @@ export default function CustomerPaymentHistoryScreen() {
             <View style={styles.emptyCard}>
               <Text style={styles.emptyTitle}>No refunds recorded yet.</Text>
               <Text style={styles.emptyText}>
-                If Drape returns money to you, the provider reference and timeline will appear here.
+                If Drapeon returns money to you, the provider reference and timeline will appear here.
               </Text>
             </View>
           ) : (
@@ -449,7 +442,69 @@ export default function CustomerPaymentHistoryScreen() {
           )}
         </View>
       </ScrollView>
+      <FilterPickerSheet
+        visible={filterSheet !== null}
+        title={filterSheet === 'status' ? 'Payment status' : 'Date range'}
+        options={filterSheet === 'status' ? STATUS_FILTERS : RANGE_FILTERS}
+        selectedKey={filterSheet === 'status' ? statusFilter : rangeFilter}
+        onClose={() => setFilterSheet(null)}
+        onSelect={(key) => {
+          if (filterSheet === 'status') {
+            setStatusFilter(key as StatusFilter)
+          } else {
+            setRangeFilter(key as RangeFilter)
+          }
+          setFilterSheet(null)
+        }}
+      />
     </SafeAreaView>
+  )
+}
+
+function FilterPickerSheet({
+  visible,
+  title,
+  options,
+  selectedKey,
+  onClose,
+  onSelect,
+}: {
+  visible: boolean
+  title: string
+  options: Array<{ key: StatusFilter | RangeFilter; label: string }>
+  selectedKey: StatusFilter | RangeFilter
+  onClose: () => void
+  onSelect: (key: StatusFilter | RangeFilter) => void
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <TouchableOpacity style={styles.sheetBackdrop} activeOpacity={1} onPress={onClose}>
+        <TouchableOpacity style={styles.sheet} activeOpacity={1}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.sheetHeader}>
+            <Text style={styles.sheetTitle}>{title}</Text>
+            <TouchableOpacity onPress={onClose} style={styles.sheetClose} accessibilityRole="button" accessibilityLabel="Close filter options">
+              <Feather name="x" size={20} color={Colors.ink} />
+            </TouchableOpacity>
+          </View>
+          {options.map((option) => {
+            const active = option.key === selectedKey
+            return (
+              <TouchableOpacity
+                key={option.key}
+                style={styles.sheetOption}
+                onPress={() => onSelect(option.key)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+              >
+                <Text style={styles.sheetOptionText}>{option.label}</Text>
+                {active ? <Feather name="check" size={18} color={Colors.needleGreen} /> : null}
+              </TouchableOpacity>
+            )
+          })}
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Modal>
   )
 }
 
@@ -498,12 +553,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
   },
-  back: {
-    width: 60,
-    color: Colors.needleGreen,
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.medium,
+  backBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Shadow.sm,
   },
+  headerSpacer: { width: 44, height: 44 },
   title: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.ink },
   summaryCard: {
     marginHorizontal: Spacing.lg,
@@ -569,20 +628,36 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     color: Colors.ink,
   },
-  filterWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  filterChip: {
-    borderRadius: Radius.full,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 7,
+  selectorCard: {
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
     backgroundColor: Colors.bone,
   },
-  filterChipActive: {
-    backgroundColor: Colors.needleGreenLight,
-    borderWidth: 1,
-    borderColor: Colors.needleGreen + '35',
+  selectorRow: {
+    minHeight: 60,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
   },
-  filterChipText: { fontSize: FontSize.xs, color: Colors.inkLight, fontWeight: FontWeight.medium },
-  filterChipTextActive: { color: Colors.needleGreenDark },
+  selectorDivider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey },
+  selectorLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    fontWeight: FontWeight.semibold,
+  },
+  selectorValue: {
+    marginTop: 3,
+    fontSize: FontSize.sm,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+  },
   inlineErrorCard: {
     marginHorizontal: Spacing.lg,
     marginTop: Spacing.md,
@@ -641,4 +716,53 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
   },
   reasonText: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
+  sheetBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.26)',
+  },
+  sheet: {
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.xl,
+    gap: Spacing.xs,
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 48,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: Colors.lightGrey,
+    marginBottom: Spacing.sm,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: Spacing.xs,
+  },
+  sheetTitle: { fontSize: FontSize.lg, color: Colors.ink, fontWeight: FontWeight.bold },
+  sheetClose: {
+    width: 38,
+    height: 38,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.bone,
+  },
+  sheetOption: {
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: Spacing.sm,
+  },
+  sheetOptionText: {
+    fontSize: FontSize.md,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+  },
 })

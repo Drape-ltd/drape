@@ -41,6 +41,7 @@ type ExistingPayoutRow = {
   id: string
   status: string
   blocked_reason: string | null
+  provider_response: Record<string, unknown> | null
 }
 
 async function notifyTailorPayoutFailure(
@@ -143,7 +144,7 @@ async function refreshFailedPayoutIssue(
     dedupeKey: `payout-failed:${order.id}`,
     metadata: {
       error,
-      payout_currency: tailorProfile?.payout_currency ?? order.currency ?? null,
+      payout_currency: fallbackBlockedCurrency(order, tailorProfile),
       payout_provider: fallbackBlockedProvider(order, tailorProfile),
       ...extra,
     },
@@ -188,6 +189,43 @@ function jsonResponse(body: Record<string, unknown>, status: number, cors: Heade
     status,
     headers: { ...cors, 'Content-Type': 'application/json' },
   })
+}
+
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>
+    const candidate = [
+      record.message,
+      record.error,
+      record.error_description,
+      record.details,
+      record.hint,
+      record.code,
+    ].find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+
+    if (candidate) return candidate
+
+    try {
+      return JSON.stringify(error).slice(0, 1000)
+    } catch {
+      return '[unserializable error object]'
+    }
+  }
+
+  return String(error)
+}
+
+function existingPayoutFailureMessage(payout: ExistingPayoutRow) {
+  const response = payout.provider_response
+  const providerError = response && typeof response.error === 'string' ? response.error.trim() : ''
+  if (providerError.length > 0) return providerError
+
+  const providerMessage = response && typeof response.message === 'string' ? response.message.trim() : ''
+  if (providerMessage.length > 0) return providerMessage
+
+  return `Existing payout is already in ${payout.status} state.`
 }
 
 function fallbackBlockedCurrency(order: PayoutCandidateOrder, tailorProfile: TailorPayoutProfile | null) {
@@ -412,7 +450,7 @@ async function hasOpenDispute(supabase: any, orderId: string) {
 async function findExistingPayout(supabase: any, orderId: string, statuses: string[]) {
   const { data, error } = await supabase
     .from('payouts')
-    .select('id, status, blocked_reason')
+    .select('id, status, blocked_reason, provider_response')
     .eq('order_id', orderId)
     .in('status', statuses)
     .order('processed_at', { ascending: false })
@@ -532,14 +570,16 @@ Deno.serve(async (req) => {
         const existingTriggered = await findExistingPayout(supabase, order.id, ['PROCESSING', 'PAID', 'FAILED', 'REVERSED'])
         if (existingTriggered?.id) {
           if (existingTriggered.status === 'FAILED' || existingTriggered.status === 'REVERSED') {
+            const existingFailureMessage = existingPayoutFailureMessage(existingTriggered)
             await refreshFailedPayoutIssue(
               supabase,
               order,
               order.tailor_id ? await fetchTailorProfile(supabase, order.tailor_id) : null,
-              `Existing payout is already in ${existingTriggered.status} state.`,
+              existingFailureMessage,
               {
                 payout_id: existingTriggered.id,
                 payout_status: existingTriggered.status,
+                existing_failure_replayed: true,
               },
             )
           }
@@ -555,10 +595,24 @@ Deno.serve(async (req) => {
           continue
         }
 
+        const earlyReleaseReason = payoutReleaseReason(order, now)
+        if (earlyReleaseReason === PAYOUT_BLOCKED_REASONS.DISPUTE_WINDOW_OPEN) {
+          skipped += 1
+          results.push({
+            orderId: order.id,
+            result: 'not_due_yet',
+            reason: earlyReleaseReason,
+            payoutReadyAt: order.customer_handoff_confirmed_at
+              ? payoutWindowClosesAt(order.customer_handoff_confirmed_at)
+              : null,
+          })
+          continue
+        }
+
         const tailorProfile = order.tailor_id ? await fetchTailorProfile(supabase, order.tailor_id) : null
         const settledPayment = await fetchSettledOrderPayment(supabase, order.id)
         const openDispute = await hasOpenDispute(supabase, order.id)
-        const baseBlockedReason = payoutReleaseReason(order, now)
+        const baseBlockedReason = earlyReleaseReason
         const settledPaymentRefunded = !!settledPayment && (
           settledPayment.status === 'PARTIAL_REFUND'
           || settledPayment.status === 'REFUNDED'
@@ -809,7 +863,7 @@ Deno.serve(async (req) => {
               amount: payoutMoney.amount,
             })
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
+            const message = errorMessage(error)
             await recordPayoutProviderEvent(supabase, {
               provider: payoutMoney.provider,
               succeeded: false,
@@ -857,7 +911,7 @@ Deno.serve(async (req) => {
               amount: payoutMoney.amount,
             })
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
+            const message = errorMessage(error)
             await recordPayoutProviderEvent(supabase, {
               provider: payoutMoney.provider,
               succeeded: false,
@@ -910,7 +964,7 @@ Deno.serve(async (req) => {
         results.push({ orderId: order.id, result: 'released', payoutId, provider: payoutMoney.provider, currency: payoutMoney.currency, amount: payoutMoney.amount })
       } catch (error) {
         skipped += 1
-        const message = error instanceof Error ? error.message : String(error)
+        const message = errorMessage(error)
         log('error', FN, 'release.failed', { order_id: order.id, error: message })
         if (payoutIdForFailure) {
           await updatePayoutRow(supabase, payoutIdForFailure, {
@@ -925,7 +979,7 @@ Deno.serve(async (req) => {
             log('error', FN, 'payout_status_update_failed', {
               order_id: order.id,
               payout_id: payoutIdForFailure,
-              error: updateError instanceof Error ? updateError.message : String(updateError),
+              error: errorMessage(updateError),
             })
           })
         }
@@ -950,7 +1004,8 @@ Deno.serve(async (req) => {
 
     return jsonResponse({ ok: true, released, blocked, skipped, results }, 200, cors)
   } catch (error) {
-    log('error', FN, 'unhandled', { error: error instanceof Error ? error.message : String(error) })
-    return jsonResponse({ ok: false, error: error instanceof Error ? error.message : 'Internal server error' }, 500, cors)
+    const message = errorMessage(error)
+    log('error', FN, 'unhandled', { error: message })
+    return jsonResponse({ ok: false, error: message || 'Internal server error' }, 500, cors)
   }
 })

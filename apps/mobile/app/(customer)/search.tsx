@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
 import {
-  View, Text, StyleSheet, TouchableOpacity, Pressable, FlatList, ScrollView, ActivityIndicator,
+  View, Text, StyleSheet, TouchableOpacity, Pressable, ScrollView, ActivityIndicator, Modal,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -64,7 +64,7 @@ function toTierBadge(tier: string | null | undefined): TierBadge | null {
 function mapTailorResult(row: TailorResultRow): TailorResult {
   return {
     id: row.id,
-    displayName: row.display_name ?? 'Drape seller',
+    displayName: row.display_name ?? 'Drapeon seller',
     location: row.location ?? 'Location not added',
     sellerType: row.seller_type ?? 'TAILOR',
     specialtyTags: asStringList(row.specialty_tags),
@@ -126,6 +126,7 @@ export default function SearchScreen() {
   const [query, setQuery] = useState('')
   const [garment, setGarment] = useState('All')
   const [tier, setTier] = useState('All')
+  const [filterSheet, setFilterSheet] = useState<'garment' | 'tier' | null>(null)
   const [results, setResults] = useState<TailorResult[]>([])
   const [loading, setLoading] = useState(false)
   const [searched, setSearched] = useState(false)
@@ -204,6 +205,13 @@ export default function SearchScreen() {
   function selectGarment(g: string) {
     setGarment(g)
     search(query, g, tier)
+    setFilterSheet(null)
+  }
+
+  function selectTier(nextTier: string) {
+    setTier(nextTier)
+    search(query, garment, nextTier)
+    setFilterSheet(null)
   }
 
   return (
@@ -225,43 +233,33 @@ export default function SearchScreen() {
           }
         />
 
-        {/* Garment filter chips */}
-        <FlatList
-          horizontal
-          data={GARMENT_FILTERS}
-          keyExtractor={(i) => i}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.filterRow}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={[styles.chip, garment === item && styles.chipActive]}
-              onPress={() => selectGarment(item)}
-            >
-              <Text style={[styles.chipText, garment === item && styles.chipTextActive]}>{item}</Text>
-            </TouchableOpacity>
-          )}
-        />
-
-        <FlatList
-          horizontal
-          data={TIER_FILTERS}
-          keyExtractor={(i) => i}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.filterRow}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={[styles.chip, tier === item && styles.chipActive]}
-              onPress={() => {
-                setTier(item)
-                search(query, garment, item)
-              }}
-            >
-              <Text style={[styles.chipText, tier === item && styles.chipTextActive]}>
-                {item === 'All' ? 'All tiers' : item}
-              </Text>
-            </TouchableOpacity>
-          )}
-        />
+        <View style={styles.filterPanel}>
+          <TouchableOpacity
+            style={styles.filterSelectRow}
+            onPress={() => setFilterSheet('garment')}
+            accessibilityRole="button"
+            accessibilityLabel="Choose garment filter"
+          >
+            <View>
+              <Text style={styles.filterSelectLabel}>Garment</Text>
+              <Text style={styles.filterSelectValue}>{garment}</Text>
+            </View>
+            <Feather name="chevron-right" size={20} color={Colors.inkLight} />
+          </TouchableOpacity>
+          <View style={styles.filterDivider} />
+          <TouchableOpacity
+            style={styles.filterSelectRow}
+            onPress={() => setFilterSheet('tier')}
+            accessibilityRole="button"
+            accessibilityLabel="Choose tailor tier filter"
+          >
+            <View>
+              <Text style={styles.filterSelectLabel}>Tier</Text>
+              <Text style={styles.filterSelectValue}>{tier === 'All' ? 'All tiers' : tier}</Text>
+            </View>
+            <Feather name="chevron-right" size={20} color={Colors.inkLight} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {loading ? (
@@ -373,7 +371,77 @@ export default function SearchScreen() {
           ))}
         </ScrollView>
       )}
+
+      <FilterPickerSheet
+        visible={filterSheet !== null}
+        title={filterSheet === 'garment' ? 'Garment filter' : 'Tailor tier'}
+        options={filterSheet === 'garment' ? GARMENT_FILTERS : TIER_FILTERS}
+        selected={filterSheet === 'garment' ? garment : tier}
+        labelForOption={(option) => option === 'All' && filterSheet === 'tier' ? 'All tiers' : option}
+        onClose={() => setFilterSheet(null)}
+        onSelect={(option) => {
+          if (filterSheet === 'garment') {
+            selectGarment(option)
+          } else {
+            selectTier(option)
+          }
+        }}
+      />
     </SafeAreaView>
+  )
+}
+
+function FilterPickerSheet({
+  visible,
+  title,
+  options,
+  selected,
+  labelForOption,
+  onSelect,
+  onClose,
+}: {
+  visible: boolean
+  title: string
+  options: string[]
+  selected: string
+  labelForOption: (option: string) => string
+  onSelect: (option: string) => void
+  onClose: () => void
+}) {
+  return (
+    <Modal transparent visible={visible} animationType="slide" onRequestClose={onClose}>
+      <View style={styles.sheetBackdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View style={styles.sheet}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.sheetHeader}>
+            <Text style={styles.sheetTitle}>{title}</Text>
+            <TouchableOpacity style={styles.sheetCloseBtn} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close filter picker">
+              <Feather name="x" size={20} color={Colors.ink} />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.sheetOptionList}>
+            {options.map((option) => {
+              const active = selected === option
+              return (
+                <TouchableOpacity
+                  key={option}
+                  style={styles.sheetOption}
+                  onPress={() => onSelect(option)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                >
+                  <Text style={[styles.sheetOptionText, active && styles.sheetOptionTextActive]}>
+                    {labelForOption(option)}
+                  </Text>
+                  {active ? <Feather name="check" size={20} color={Colors.needleGreen} /> : null}
+                </TouchableOpacity>
+              )
+            })}
+          </View>
+        </View>
+      </View>
+    </Modal>
   )
 }
 
@@ -472,18 +540,69 @@ const styles = StyleSheet.create({
   },
   guideTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, fontFamily: Fonts.display },
   guideText: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 18 },
-  searchInput: { marginBottom: -Spacing.sm },
-  filterRow: { gap: Spacing.sm, paddingRight: Spacing.xl },
-  chip: {
-    minHeight: 40,
-    paddingHorizontal: Spacing.md, paddingVertical: 8,
-    borderRadius: Radius.full, borderWidth: 1, borderColor: Colors.lightGrey,
+  searchInput: { marginBottom: 0 },
+  filterPanel: {
     backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    ...Shadow.sm,
+  },
+  filterSelectRow: {
+    minHeight: 62,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  filterDivider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.lightGrey, marginLeft: Spacing.md },
+  filterSelectLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
+  },
+  filterSelectValue: { marginTop: 3, fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.semibold },
+  sheetBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(26,26,24,0.35)' },
+  sheet: {
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    padding: Spacing.lg,
+    paddingBottom: Spacing.xl,
+    gap: Spacing.md,
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 48,
+    height: 4,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.lightGrey,
+  },
+  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sheetTitle: { fontSize: FontSize.lg, color: Colors.ink, fontWeight: FontWeight.bold, fontFamily: Fonts.display },
+  sheetCloseBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.bone,
+    alignItems: 'center',
     justifyContent: 'center',
   },
-  chipActive: { backgroundColor: Colors.needleGreen, borderColor: Colors.needleGreen },
-  chipText: { fontSize: FontSize.sm, color: Colors.inkLight, fontWeight: FontWeight.medium },
-  chipTextActive: { color: Colors.textInverse },
+  sheetOptionList: { gap: 2 },
+  sheetOption: {
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.lightGrey,
+  },
+  sheetOptionText: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.medium },
+  sheetOptionTextActive: { color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   retryBtn: {
     marginTop: Spacing.md,
     paddingHorizontal: Spacing.xl,

@@ -317,7 +317,7 @@ export default function ReviewScreen() {
     if (publicationStatus === 'held') {
       Alert.alert(
         'Review received',
-        'Your review was saved. It may take a little longer to appear publicly while Drape checks the order context.',
+        'Your review was saved. It may take a little longer to appear publicly while Drapeon checks the order context.',
       )
       goToCompletedOrders()
     } else if (rating >= 4 && tailorProfileId) {
@@ -436,7 +436,7 @@ export default function ReviewScreen() {
 
             <View style={styles.noteCard}>
               <Text style={styles.noteText}>
-                Reviews stay open for {REVIEW_WINDOW_DAYS} days after delivery, collection, or completion. Most go public quickly, but Drape may hold a review a little longer if there is policy or dispute context to check.
+                Reviews stay open for {REVIEW_WINDOW_DAYS} days after delivery, collection, or completion. Most go public quickly, but Drapeon may hold a review a little longer if there is policy or dispute context to check.
               </Text>
             </View>
 

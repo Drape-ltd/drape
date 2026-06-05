@@ -7,7 +7,7 @@ import { buildMetadata } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'Join',
-  description: 'Join the Drape queue as a customer or tailor.',
+  description: 'Join the Drapeon queue as a customer or tailor.',
   path: '/join',
 })
 
@@ -15,7 +15,7 @@ export default function JoinPage(): JSX.Element {
   return (
     <MarketingShell
       eyebrow="Queue"
-      title="Join the right side of Drape."
+      title="Join the right side of Drapeon."
       description="Choose your side and we’ll reach out when it opens."
       cta={
         <Link

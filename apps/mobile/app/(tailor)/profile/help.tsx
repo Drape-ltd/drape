@@ -12,7 +12,7 @@ import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
-import { CONTACTS } from '@drape/shared'
+import { CONTACTS, DRAPE_TAILOR_GUIDE_TOPICS } from '@drape/shared'
 import { goBackOrFallback } from '@/lib/navigation'
 
 const FAQ: Array<{ q: string; a: string }> = [
@@ -26,15 +26,15 @@ const FAQ: Array<{ q: string; a: string }> = [
   },
   {
     q: "When do I get paid?",
-    a: "Customer payment stays protected while the order is active. Once the customer completes the handoff and closes the order out in Drape, the payout can move forward under your payout setup and Drape's platform fee terms.",
+    a: "Customer payment stays protected while the order is active. Once the customer completes the handoff and closes the order out in Drapeon, the payout can move forward under your payout setup and Drapeon's platform fee terms.",
   },
   {
     q: "How do delivery and shipping work now?",
-    a: "Standard delivery and shipping are Drape-managed. You prepare the order, mark it ready for Drape dispatch, and Drape ops takes over the normal dispatch handoff. Use pickup only for direct collection, and use support if something needs a rush or exception path.",
+    a: "Standard delivery and shipping are Drapeon-managed. You prepare the order, mark it ready for Drapeon dispatch, and Drapeon ops takes over the normal dispatch handoff. Use pickup only for direct collection, and use support if something needs a rush or exception path.",
   },
   {
     q: "What if I need to cancel a paid order?",
-    a: "Before irreversible work or handoff starts, request cancellation review from the order so Drape can review the right refund or next-step path. Do not mark an order complete, delivered, or collected if you already know you cannot fulfil it.",
+    a: "Before irreversible work or handoff starts, request cancellation review from the order so Drapeon can review the right refund or next-step path. Do not mark an order complete, delivered, or collected if you already know you cannot fulfil it.",
   },
   {
     q: "How does ID verification work?",
@@ -46,19 +46,19 @@ const FAQ: Array<{ q: string; a: string }> = [
   },
   {
     q: "What happens if a customer raises a dispute?",
-    a: "You'll be notified immediately. Respond through Messages, keep the full conversation inside Drape, and share any context that helps explain what happened. If the concern is not resolved directly, our team reviews the order history and next steps from there.",
+    a: "You'll be notified immediately. Respond through Messages, keep the full conversation inside Drapeon, and share any context that helps explain what happened. If the concern is not resolved directly, our team reviews the order history and next steps from there.",
   },
   {
-    q: "How do I build my reputation on Drape?",
+    q: "How do I build my reputation on Drapeon?",
     a: "Respond to quotes quickly, communicate clearly, and deliver quality work on time. Completed orders generate star ratings and reviews that appear on your public profile. These drive your ranking in search results.",
   },
   {
-    q: "What if Drape pauses my access or asks for more information?",
-    a: "Open Trust & access from Account settings first. Drape should separate fixable setup or payout holds from active review states. Use the verification or payouts inbox when the next step depends on those teams, and use tailor support if the status still looks wrong after you've fixed the requirement.",
+    q: "What if Drapeon pauses my access or asks for more information?",
+    a: "Open Trust & access from Account settings first. Drapeon should separate fixable setup or payout holds from active review states. Use the verification or payouts inbox when the next step depends on those teams, and use tailor support if the status still looks wrong after you've fixed the requirement.",
   },
   {
     q: "Can I work with international customers?",
-    a: "Yes. Enable shipping on your profile and keep your location accurate. Drape handles the standard shipping fee logic and dispatch ownership for standard flows, while your order quote still covers the garment work itself.",
+    a: "Yes. Enable shipping on your profile and keep your location accurate. Drapeon handles the standard shipping fee logic and dispatch ownership for standard flows, while your order quote still covers the garment work itself.",
   },
 ]
 
@@ -66,33 +66,11 @@ const GUIDE_TOPICS: Array<{
   icon: React.ComponentProps<typeof Feather>['name']
   title: string
   body: string
-}> = [
-  {
-    icon: 'inbox',
-    title: 'Orders and quotes',
-    body: 'Respond quickly, quote only after reviewing the brief, and keep every agreement inside the order thread.',
-  },
-  {
-    icon: 'camera',
-    title: 'Production updates',
-    body: 'Use fresh photos or videos at each stage so customers can trust the work without chasing you.',
-  },
-  {
-    icon: 'credit-card',
-    title: 'Payouts',
-    body: 'Keep payout details verified. Drape only releases funds after the order handoff and review window are clear.',
-  },
-  {
-    icon: 'package',
-    title: 'Pickup, delivery, and shipping',
-    body: 'Mark pickup only for direct collection. Standard delivery and shipping move through Drape-managed handoff.',
-  },
-  {
-    icon: 'shield',
-    title: 'Trust and access',
-    body: 'Use Trust & access for verification, payout blockers, profile review, and any hold on your selling tools.',
-  },
-]
+}> = DRAPE_TAILOR_GUIDE_TOPICS.map((topic) => ({
+  icon: topic.icon as React.ComponentProps<typeof Feather>['name'],
+  title: topic.title,
+  body: topic.body,
+}))
 
 export default function TailorHelpScreen() {
   const router = useRouter()
@@ -127,7 +105,7 @@ export default function TailorHelpScreen() {
         <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Drape guide</Text>
+        <Text style={styles.headerTitle}>Drapeon guide</Text>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
@@ -135,7 +113,7 @@ export default function TailorHelpScreen() {
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Tailor guide</Text>
           </View>
-          <Text style={styles.heroTitle}>Everything you need to work cleanly on Drape.</Text>
+          <Text style={styles.heroTitle}>Everything you need to work cleanly on Drapeon.</Text>
           <Text style={styles.heroSub}>
             Start here for orders, quotes, production updates, payout readiness, verification, and support paths.
           </Text>
@@ -194,14 +172,14 @@ export default function TailorHelpScreen() {
               icon="check-circle"
               title="Verification review"
               sub={`${CONTACTS.verify} · ID and review follow-up`}
-              onPress={() => { void openExternal(`mailto:${CONTACTS.verify}?subject=Drape%20verification%20review%20follow-up`) }}
+              onPress={() => { void openExternal(`mailto:${CONTACTS.verify}?subject=Drapeon%20verification%20review%20follow-up`) }}
             />
             <View style={styles.divider} />
             <ContactRow
               icon="credit-card"
               title="Payout help"
               sub={`${CONTACTS.payouts} · payout readiness and provider issues`}
-              onPress={() => { void openExternal(`mailto:${CONTACTS.payouts}?subject=Drape%20payout%20readiness%20question`) }}
+              onPress={() => { void openExternal(`mailto:${CONTACTS.payouts}?subject=Drapeon%20payout%20readiness%20question`) }}
             />
             <View style={styles.divider} />
             <ContactRow
@@ -215,14 +193,14 @@ export default function TailorHelpScreen() {
               icon="download"
               title="Request your data"
               sub={`${CONTACTS.privacy} · identity verification may be required`}
-              onPress={() => { void openExternal(`mailto:${CONTACTS.privacy}?subject=Drape%20tailor%20data%20access%20request`) }}
+              onPress={() => { void openExternal(`mailto:${CONTACTS.privacy}?subject=Drapeon%20tailor%20data%20access%20request`) }}
             />
             <View style={styles.divider} />
             <ContactRow
               icon="trash-2"
               title="Account deletion"
               sub={`${CONTACTS.privacy} · request-based review, not instant wipe`}
-              onPress={() => { void openExternal(`mailto:${CONTACTS.privacy}?subject=Drape%20tailor%20account%20deletion%20request`) }}
+              onPress={() => { void openExternal(`mailto:${CONTACTS.privacy}?subject=Drapeon%20tailor%20account%20deletion%20request`) }}
               last
             />
           </View>
@@ -274,7 +252,7 @@ export default function TailorHelpScreen() {
 function alertOpenFailed(url: string) {
   if (url.startsWith('mailto:')) {
     const inbox = url.includes(CONTACTS.privacy) ? CONTACTS.privacy : CONTACTS.tailors
-    Alert.alert('Unable to open link', `Please email ${inbox} directly from your mail app. If this is about a live order, keep the order thread updated in Drape too.`)
+    Alert.alert('Unable to open link', `Please email ${inbox} directly from your mail app. If this is about a live order, keep the order thread updated in Drapeon too.`)
     return
   }
 
@@ -288,7 +266,7 @@ function alertOpenFailed(url: string) {
     return
   }
 
-  Alert.alert('Unable to open link', `Please try again in a moment or email ${CONTACTS.tailors} directly with the subject "Tailor support request". If this is tied to a live order, keep the updates in Drape first.`)
+  Alert.alert('Unable to open link', `Please try again in a moment or email ${CONTACTS.tailors} directly with the subject "Tailor support request". If this is tied to a live order, keep the updates in Drapeon first.`)
 }
 
 function FaqItem({

@@ -248,7 +248,7 @@ export default function FulfillmentPaymentRequestScreen() {
         <View style={styles.stateCard}>
           <Text style={styles.stateTitle}>Dispatch fee is already handled</Text>
           <Text style={styles.stateText}>
-            Drape adds the standard {fulfillmentLabel(order.deliveryMethod)} fee at checkout from the buyer address and your location. If a carrier surcharge, customs charge, or import duty appears later, contact Drape support so the customer can approve it before dispatch.
+            Drapeon adds the standard {fulfillmentLabel(order.deliveryMethod)} fee at checkout from the buyer address and your location. If a carrier surcharge, customs charge, or import duty appears later, contact Drapeon support so the customer can approve it before dispatch.
           </Text>
           <Button label="Back to order" variant="secondary" onPress={goBack} />
         </View>

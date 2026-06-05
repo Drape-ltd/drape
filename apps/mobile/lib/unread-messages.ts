@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { AppState, type AppStateStatus } from 'react-native'
 import { supabase } from '@/lib/supabase'
 
 type Role = 'CUSTOMER' | 'TAILOR'
@@ -10,6 +11,8 @@ type OrderWithMessages = {
     read_at: string | null
   }> | null
 }
+
+const UNREAD_REFRESH_INTERVAL_MS = 45_000
 
 export function useUnreadMessageCount(userId: string | null | undefined, role: Role) {
   const [count, setCount] = useState(0)
@@ -43,26 +46,40 @@ export function useUnreadMessageCount(userId: string | null | undefined, role: R
   }, [role, userId])
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      void refresh()
-    }, 0)
-    if (!userId) return () => clearTimeout(timer)
+    let interval: ReturnType<typeof setInterval> | null = null
+    let active = true
 
-    const channel = supabase
-      .channel(`unread-messages:${role.toLowerCase()}:${userId}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, () => {
-        void refresh()
-      })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, () => {
-        void refresh()
-      })
-      .subscribe()
+    const startPolling = () => {
+      if (!userId || interval) return
+      void refresh()
+      interval = setInterval(() => {
+        if (active) void refresh()
+      }, UNREAD_REFRESH_INTERVAL_MS)
+    }
+
+    const stopPolling = () => {
+      if (!interval) return
+      clearInterval(interval)
+      interval = null
+    }
+
+    const handleAppStateChange = (state: AppStateStatus) => {
+      active = state === 'active'
+      if (active) {
+        startPolling()
+      } else {
+        stopPolling()
+      }
+    }
+
+    startPolling()
+    const appStateSubscription = AppState.addEventListener('change', handleAppStateChange)
 
     return () => {
-      clearTimeout(timer)
-      supabase.removeChannel(channel)
+      stopPolling()
+      appStateSubscription.remove()
     }
-  }, [refresh, role, userId])
+  }, [refresh, userId])
 
   return count
 }

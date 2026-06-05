@@ -1,7 +1,7 @@
 /**
  * Privacy
  *
- * Lets customers understand and control how their data is used on Drape.
+ * Lets customers understand and control how their data is used on Drapeon.
  * Mirrors Airbnb's "Privacy" section — toggles for personalisation,
  * marketing, and analytics, plus data export / account deletion.
  *
@@ -107,10 +107,10 @@ export default function PrivacyScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.md }}>
         <View style={styles.heroCard}>
-          <View style={styles.heroBadge}>
-            <Text style={styles.heroBadgeText}>Privacy control</Text>
-          </View>
-          <Text style={styles.heroTitle}>Privacy and account controls.</Text>
+          <Text style={styles.heroTitle}>Your data stays under your control</Text>
+          <Text style={styles.heroSub}>
+            Choose how Drapeon personalises your account. Order, safety, and legal notices still arrive when needed.
+          </Text>
         </View>
 
         {/* ── Intro ── */}
@@ -123,7 +123,7 @@ export default function PrivacyScreen() {
             <ToggleRow
               icon="sliders"
               title="Personalised recommendations"
-              description="When available, let Drape use your activity to shape recommendations and tailor suggestions more thoughtfully."
+              description="When available, let Drapeon use your activity to shape recommendations and tailor suggestions more thoughtfully."
               value={prefs.personalisation}
               onChange={(v) => toggle('personalisation', v)}
               disabled={saving}
@@ -132,7 +132,7 @@ export default function PrivacyScreen() {
             <ToggleRow
               icon="bar-chart-2"
               title="Analytics & improvement"
-              description="If enabled, Drape may collect product-usage analytics to improve the app. Core crash and reliability diagnostics may still run."
+              description="If enabled, Drapeon may collect product-usage analytics to improve the app. Core crash and reliability diagnostics may still run."
               value={prefs.analyticsSharing}
               onChange={(v) => toggle('analyticsSharing', v)}
               disabled={saving}
@@ -147,7 +147,7 @@ export default function PrivacyScreen() {
             <ToggleRow
               icon="mail"
               title="Marketing emails"
-              description="Receive updates about new tailors, seasonal collections, and exclusive offers from Drape."
+              description="Receive updates about new tailors, seasonal collections, and exclusive offers from Drapeon."
               value={prefs.marketingEmails}
               onChange={(v) => toggle('marketingEmails', v)}
               disabled={saving}
@@ -242,6 +242,9 @@ function ToggleRow({
         value={value}
         onValueChange={onChange}
         disabled={disabled}
+        accessibilityLabel={`${title} privacy setting`}
+        accessibilityHint={value ? 'Double tap to turn this setting off' : 'Double tap to turn this setting on'}
+        accessibilityState={{ checked: value, disabled }}
         trackColor={{ false: Colors.lightGrey, true: Colors.needleGreen }}
         thumbColor={Colors.textInverse}
       />
@@ -267,30 +270,17 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
     padding: Spacing.md,
-    gap: Spacing.sm,
+    gap: Spacing.xs,
     ...Shadow.sm,
   },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  heroBadgeText: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-    color: Colors.needleGreen,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
   heroTitle: {
-    fontSize: FontSize.xl,
+    fontSize: FontSize.lg,
     fontWeight: FontWeight.bold,
     color: Colors.ink,
-    lineHeight: 28,
+    lineHeight: 24,
     fontFamily: Fonts.display,
   },
+  heroSub: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   intro: {
     fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20,
   },

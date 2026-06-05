@@ -170,7 +170,7 @@ function trackingOpenFailedMessage(audience: TrackingAudience) {
     return 'We could not open the carrier tracking page right now. The tracking number is still saved on this order, so you can retry later or use it manually. Keep any customs or delivery issues in the order thread so support can follow the timeline.'
   }
 
-  return 'We could not open the carrier tracking page right now. The tracking number stays on this order, so you can retry later or share it manually if needed. Keep any carrier, customs, or dispatch updates inside Drape so the order timeline stays complete.'
+  return 'We could not open the carrier tracking page right now. The tracking number stays on this order, so you can retry later or share it manually if needed. Keep any carrier, customs, or dispatch updates inside Drapeon so the order timeline stays complete.'
 }
 
 export async function openTrackingPage(options: {

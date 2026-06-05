@@ -1,0 +1,324 @@
+#!/usr/bin/env node
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+
+const DEFAULT_PASSWORD = process.env.STORE_DEMO_PASSWORD ?? 'DrapeLaunch2026!'
+
+function argValue(name) {
+  const index = process.argv.indexOf(name)
+  return index >= 0 ? process.argv[index + 1] : undefined
+}
+
+function loadEnv(path) {
+  try {
+    const text = readFileSync(path, 'utf8')
+    const env = {}
+    for (const line of text.split(/\r?\n/u)) {
+      const match = line.match(/^([^#=\s]+)=(.*)$/u)
+      if (!match) continue
+      env[match[1]] = match[2].replace(/^"|"$/gu, '')
+    }
+    return env
+  } catch {
+    return {}
+  }
+}
+
+function stableUuid(seed) {
+  const hex = createHash('sha256').update(seed).digest('hex')
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    `4${hex.slice(13, 16)}`,
+    `${((Number.parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16)}${hex.slice(18, 20)}`,
+    hex.slice(20, 32),
+  ].join('-')
+}
+
+function parseManifest(path) {
+  if (!path) {
+    throw new Error('Pass --media <manifest.json>. Demo seeding intentionally requires approved media.')
+  }
+
+  const parsed = JSON.parse(readFileSync(path, 'utf8'))
+  if (!Array.isArray(parsed.tailors) || parsed.tailors.length < 3) {
+    throw new Error('Media manifest must include at least 3 tailors.')
+  }
+
+  for (const tailor of parsed.tailors) {
+    if (!tailor.key || !tailor.email || !tailor.displayName) {
+      throw new Error('Every tailor needs key, email, and displayName.')
+    }
+    if (!Array.isArray(tailor.portfolioUrls) || tailor.portfolioUrls.length < 4) {
+      throw new Error(`${tailor.key} needs at least 4 portfolioUrls for store screenshots.`)
+    }
+    if (!tailor.avatarUrl) {
+      throw new Error(`${tailor.key} needs avatarUrl or an intentional initials-only launch decision.`)
+    }
+  }
+
+  return parsed
+}
+
+async function fetchJson(url, options, label) {
+  const response = await fetch(url, options)
+  const text = await response.text()
+  let body = text
+  try {
+    body = text ? JSON.parse(text) : null
+  } catch {
+    // Keep the raw body for diagnostics.
+  }
+
+  if (!response.ok) {
+    throw new Error(`${label} failed (${response.status}): ${typeof body === 'string' ? body : JSON.stringify(body)}`)
+  }
+
+  return body
+}
+
+async function findAuthUserByEmail(baseUrl, headers, email) {
+  const data = await fetchJson(`${baseUrl}/auth/v1/admin/users?per_page=1000`, { headers }, 'List auth users')
+  return (data.users ?? []).find((user) => user.email?.toLowerCase() === email.toLowerCase()) ?? null
+}
+
+async function ensureAuthUser(baseUrl, headers, input) {
+  const existing = await findAuthUserByEmail(baseUrl, headers, input.email)
+  if (existing?.id) return existing.id
+
+  const created = await fetchJson(
+    `${baseUrl}/auth/v1/admin/users`,
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        email: input.email,
+        password: input.password ?? DEFAULT_PASSWORD,
+        email_confirm: true,
+        user_metadata: {
+          role: input.role,
+          display_name: input.displayName,
+          demo_account: true,
+        },
+      }),
+    },
+    `Create auth user ${input.email}`,
+  )
+
+  return created.id
+}
+
+async function upsertRows(baseUrl, headers, table, rows, onConflict) {
+  if (rows.length === 0) return
+  await fetchJson(
+    `${baseUrl}/rest/v1/${table}?on_conflict=${encodeURIComponent(onConflict)}`,
+    {
+      method: 'POST',
+      headers: {
+        ...headers,
+        Prefer: 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify(rows),
+    },
+    `Upsert ${table}`,
+  )
+}
+
+function requireUrlList(values, label) {
+  const urls = (values ?? [])
+    .filter((value) => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter(Boolean)
+  if (urls.some((url) => !/^https?:\/\//i.test(url))) {
+    throw new Error(`${label} must contain full HTTPS URLs or already-public Supabase URLs.`)
+  }
+  return urls
+}
+
+const env = {
+  ...loadEnv('apps/web/.env.local'),
+  ...process.env,
+}
+const baseUrl = env.STORE_DEMO_SUPABASE_URL ?? env.NEXT_PUBLIC_SUPABASE_URL ?? env.SUPABASE_URL
+const serviceKey = env.STORE_DEMO_SUPABASE_SERVICE_ROLE_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY
+const manifestPath = argValue('--media')
+const manifest = parseManifest(manifestPath)
+
+if (!baseUrl || !serviceKey) {
+  throw new Error('Missing Supabase URL/service role. Set STORE_DEMO_SUPABASE_URL and STORE_DEMO_SUPABASE_SERVICE_ROLE_KEY, or use apps/web/.env.local.')
+}
+
+const headers = {
+  apikey: serviceKey,
+  authorization: `Bearer ${serviceKey}`,
+  'content-type': 'application/json',
+}
+
+const publicUsers = []
+const customerProfiles = []
+const tailorProfiles = []
+const portfolioPhotos = []
+const sellerItems = []
+
+const reviewerCustomer = manifest.reviewerCustomer ?? {
+  email: 'reviewer.customer@drapeon.co',
+  displayName: 'Drape Reviewer',
+  phone: '+15550101010',
+  defaultCurrency: 'USD',
+}
+
+const reviewerCustomerId = await ensureAuthUser(baseUrl, headers, {
+  email: reviewerCustomer.email,
+  role: 'CUSTOMER',
+  displayName: reviewerCustomer.displayName,
+})
+
+publicUsers.push({
+  id: reviewerCustomerId,
+  email: reviewerCustomer.email,
+  display_name: reviewerCustomer.displayName,
+  role: 'CUSTOMER',
+  phone: reviewerCustomer.phone ?? '+15550101010',
+  default_currency: reviewerCustomer.defaultCurrency ?? 'USD',
+  currency_source: 'STORE_DEMO',
+  region_code: reviewerCustomer.regionCode ?? 'US',
+  updated_at: new Date().toISOString(),
+})
+
+customerProfiles.push({
+  user_id: reviewerCustomerId,
+  display_name: reviewerCustomer.displayName,
+  measurements: {
+    unit: 'in',
+    height: 68,
+    chest: 36,
+    waist: 29,
+    hips: 39,
+    shoulderWidth: 16,
+    sleeveLength: 23.5,
+    inseam: 30,
+    fitStyle: 'Relaxed',
+    fitPreference: 'RELAXED',
+    measurementSource: 'STORE_DEMO',
+  },
+  updated_at: new Date().toISOString(),
+})
+
+for (const tailor of manifest.tailors) {
+  const userId = await ensureAuthUser(baseUrl, headers, {
+    email: tailor.email,
+    role: 'TAILOR',
+    displayName: tailor.displayName,
+    password: tailor.password,
+  })
+  const profileId = stableUuid(`store-demo-tailor-profile:${tailor.key}`)
+  const portfolioUrls = requireUrlList(tailor.portfolioUrls, `${tailor.key}.portfolioUrls`)
+  const avatarUrl = typeof tailor.avatarUrl === 'string' ? tailor.avatarUrl.trim() : null
+
+  publicUsers.push({
+    id: userId,
+    email: tailor.email,
+    display_name: tailor.displayName,
+    role: 'TAILOR',
+    phone: tailor.phone ?? '+15550102020',
+    default_currency: tailor.currency ?? 'USD',
+    currency_source: 'STORE_DEMO',
+    region_code: tailor.regionCode ?? 'US',
+    updated_at: new Date().toISOString(),
+  })
+
+  tailorProfiles.push({
+    id: profileId,
+    user_id: userId,
+    display_name: tailor.displayName,
+    business_name: tailor.businessName ?? tailor.displayName,
+    seller_type: tailor.sellerType ?? 'TAILOR',
+    bio: tailor.bio ?? 'Launch demo tailor profile for reviewer and screenshot QA.',
+    location: tailor.location ?? 'Lagos, Nigeria',
+    languages: tailor.languages ?? ['English'],
+    specialty_tags: tailor.specialtyTags ?? ['Occasion wear', 'Traditional'],
+    price_range_min: tailor.priceRangeMin ?? 120,
+    price_range_max: tailor.priceRangeMax ?? 480,
+    currency: tailor.currency ?? 'USD',
+    payout_currency: tailor.payoutCurrency ?? tailor.currency ?? 'USD',
+    payout_provider: tailor.payoutProvider ?? 'STRIPE',
+    payout_account_type: tailor.payoutAccountType ?? 'STRIPE_CONNECT',
+    payout_account_verified: tailor.payoutAccountVerified ?? true,
+    stripe_connect_account_id: tailor.stripeConnectAccountId ?? `acct_demo_${tailor.key}`,
+    tier: tailor.tier ?? 'VERIFIED',
+    availability: tailor.availability ?? 'OPEN',
+    is_verified: true,
+    is_live: true,
+    avg_rating: tailor.avgRating ?? 4.8,
+    total_reviews: tailor.totalReviews ?? 18,
+    total_orders: tailor.totalOrders ?? 42,
+    avg_response_hours: tailor.avgResponseHours ?? 3,
+    supports_custom_orders: tailor.supportsCustomOrders ?? true,
+    supports_ready_made: tailor.supportsReadyMade ?? true,
+    pickup_available: tailor.pickupAvailable ?? true,
+    delivery_available: tailor.deliveryAvailable ?? true,
+    shipping_available: tailor.shippingAvailable ?? true,
+    delivery_fee: tailor.deliveryFee ?? 1500,
+    shipping_fee: tailor.shippingFee ?? 3500,
+    ships_internationally: tailor.shipsInternationally ?? true,
+    id_verification_status: 'APPROVED',
+    id_verified_at: new Date().toISOString(),
+    portfolio_photo_urls: portfolioUrls,
+    updated_at: new Date().toISOString(),
+  })
+
+  if (avatarUrl) {
+    tailorProfiles[tailorProfiles.length - 1].avatar_url = avatarUrl
+  }
+
+  portfolioUrls.forEach((url, index) => {
+    portfolioPhotos.push({
+      id: stableUuid(`store-demo-portfolio:${tailor.key}:${index}`),
+      tailor_profile_id: profileId,
+      storage_path: url,
+      public_url: url,
+      caption: tailor.portfolioCaptions?.[index] ?? null,
+      display_order: index,
+    })
+  })
+
+  for (const [index, item] of (tailor.shopItems ?? []).entries()) {
+    const photoUrls = requireUrlList(item.photoUrls, `${tailor.key}.shopItems.${index}.photoUrls`)
+    sellerItems.push({
+      id: stableUuid(`store-demo-seller-item:${tailor.key}:${item.title}`),
+      tailor_profile_id: profileId,
+      title: item.title,
+      description: item.description ?? 'Launch demo ready-made item.',
+      category: item.category ?? 'Ready-made',
+      sizes: item.sizes ?? ['M', 'L'],
+      price_amount: item.priceAmount ?? 18000,
+      currency: item.currency ?? tailor.currency ?? 'USD',
+      photo_urls: photoUrls,
+      is_ready_made: true,
+      is_live: item.isLive ?? true,
+      stock_status: item.stockStatus ?? 'IN_STOCK',
+      inventory_quantity: item.inventoryQuantity ?? 3,
+      size_inventory: item.sizeInventory ?? { M: 1, L: 2 },
+      size_guide: item.sizeGuide ?? {},
+      pickup_available: item.pickupAvailable ?? true,
+      delivery_available: item.deliveryAvailable ?? true,
+      shipping_available: item.shippingAvailable ?? true,
+      updated_at: new Date().toISOString(),
+    })
+  }
+}
+
+await upsertRows(baseUrl, headers, 'users', publicUsers, 'id')
+await upsertRows(baseUrl, headers, 'customer_profiles', customerProfiles, 'user_id')
+await upsertRows(baseUrl, headers, 'tailor_profiles', tailorProfiles, 'user_id')
+await upsertRows(baseUrl, headers, 'portfolio_photos', portfolioPhotos, 'id')
+await upsertRows(baseUrl, headers, 'seller_items', sellerItems, 'id')
+
+console.log(JSON.stringify({
+  ok: true,
+  password: DEFAULT_PASSWORD,
+  reviewerCustomer: reviewerCustomer.email,
+  tailorCount: tailorProfiles.length,
+  portfolioPhotoCount: portfolioPhotos.length,
+  sellerItemCount: sellerItems.length,
+}, null, 2))

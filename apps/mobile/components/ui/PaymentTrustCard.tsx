@@ -8,7 +8,7 @@ type PaymentTrustCardProps = {
 }
 
 export function PaymentTrustCard({
-  body = 'Drape holds payment securely until delivery is confirmed and the dispute window closes.',
+  body = 'Drapeon holds payment securely until delivery is confirmed and the dispute window closes.',
   actionLabel,
   onPressAction,
 }: PaymentTrustCardProps) {

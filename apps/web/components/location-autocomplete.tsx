@@ -23,17 +23,14 @@ export function LocationAutocomplete({
   required = false,
   helperText,
 }: LocationAutocompleteProps): JSX.Element {
-  const [query, setQuery] = useState(value)
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [loading, setLoading] = useState(false)
   const [open, setOpen] = useState(false)
   const [error, setError] = useState('')
   const rootRef = useRef<HTMLLabelElement | null>(null)
   const listId = useId()
-
-  useEffect(() => {
-    setQuery(value)
-  }, [value])
+  const trimmedValue = value.trim()
+  const canSearch = trimmedValue.length >= 3
 
   useEffect(() => {
     function onPointerDown(event: MouseEvent) {
@@ -47,14 +44,7 @@ export function LocationAutocomplete({
   }, [])
 
   useEffect(() => {
-    const trimmed = query.trim()
-
-    if (trimmed.length < 3) {
-      setSuggestions([])
-      setLoading(false)
-      setError('')
-      return
-    }
+    if (!canSearch) return
 
     const controller = new AbortController()
     const timeout = window.setTimeout(async () => {
@@ -63,7 +53,7 @@ export function LocationAutocomplete({
         setError('')
 
         const url = new URL('https://nominatim.openstreetmap.org/search')
-        url.searchParams.set('q', trimmed)
+        url.searchParams.set('q', trimmedValue)
         url.searchParams.set('format', 'jsonv2')
         url.searchParams.set('addressdetails', '1')
         url.searchParams.set('limit', '5')
@@ -95,10 +85,9 @@ export function LocationAutocomplete({
       controller.abort()
       window.clearTimeout(timeout)
     }
-  }, [query])
+  }, [canSearch, trimmedValue])
 
   function selectSuggestion(nextValue: string) {
-    setQuery(nextValue)
     onChange(nextValue)
     setSuggestions([])
     setOpen(false)
@@ -111,30 +100,33 @@ export function LocationAutocomplete({
       <div className="relative">
         <input
           required={required}
-          value={query}
+          value={value}
           onChange={(event) => {
             const nextValue = event.target.value
-            setQuery(nextValue)
             onChange(nextValue)
             setOpen(true)
+            if (nextValue.trim().length < 3) {
+              setSuggestions([])
+              setLoading(false)
+              setError('')
+            }
           }}
           onFocus={() => {
             if (suggestions.length > 0) setOpen(true)
           }}
           aria-autocomplete="list"
-          aria-controls={open ? listId : undefined}
-          aria-expanded={open}
+          aria-controls={canSearch && open ? listId : undefined}
           className="w-full rounded-2xl border border-ink/10 bg-bone px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40 focus:bg-white"
           placeholder={placeholder}
         />
 
-        {loading ? (
+        {canSearch && loading ? (
           <div className="pointer-events-none absolute inset-y-0 right-4 flex items-center text-xs font-semibold uppercase tracking-[0.16em] text-needle/55">
             Search
           </div>
         ) : null}
 
-        {open && suggestions.length > 0 ? (
+        {canSearch && open && suggestions.length > 0 ? (
           <div
             id={listId}
             className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-20 overflow-hidden rounded-[1.25rem] border border-ink/6 bg-white shadow-[0_22px_50px_rgba(22,28,24,0.12)]"
@@ -152,7 +144,7 @@ export function LocationAutocomplete({
           </div>
         ) : null}
       </div>
-      {error ? <span className="text-xs leading-5 text-rust">{error}</span> : null}
+      {canSearch && error ? <span className="text-xs leading-5 text-rust">{error}</span> : null}
       {helperText ? <span className="text-xs leading-5 text-ink/48">{helperText}</span> : null}
     </label>
   )

@@ -23,6 +23,7 @@ import { getDailyApiKey, getServiceRoleKey, getSupabaseUrl } from '../_shared/en
 import { audit } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import { parseOrderSupportMeta, serializeOrderSupportMeta } from '../_shared/order-support.ts'
+import { enqueueSmsJob } from '../_shared/side-effect-jobs.ts'
 
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
@@ -79,6 +80,28 @@ function consultationStartGate(scheduledStartAt: string | null | undefined) {
     return 'This consultation opens 15 minutes before the scheduled time.'
   }
   return null
+}
+
+function consultationFallbackMessage(audioOnly: boolean) {
+  return audioOnly
+    ? 'Consultation audio is unavailable right now. Continue inside Messages so Drape keeps the consultation record complete.'
+    : 'Consultation video is unavailable right now. Continue inside Messages so Drape keeps the consultation record complete.'
+}
+
+function consultationFallbackStageNote(audioOnly: boolean) {
+  return audioOnly
+    ? 'Consultation audio is unavailable. Continue this consultation in Messages; Drape has logged the fallback.'
+    : 'Consultation video is unavailable. Continue this consultation in Messages; Drape has logged the fallback.'
+}
+
+function recipientAudience(callerRole: 'CUSTOMER' | 'TAILOR') {
+  return callerRole === 'TAILOR' ? 'CUSTOMER' as const : 'TAILOR' as const
+}
+
+function consultationCallSmsBody(reference: string | null, callerRole: 'CUSTOMER' | 'TAILOR', audioOnly: boolean) {
+  const actor = callerRole === 'TAILOR' ? 'tailor' : 'customer'
+  const kind = audioOnly ? 'audio room' : 'call'
+  return `Drape: your ${actor} opened the consultation ${kind} for order ${reference ?? 'your order'}. Open Drape to join.`;
 }
 
 Deno.serve(async (req) => {
@@ -159,6 +182,69 @@ Deno.serve(async (req) => {
       return jsonError(corsHeaders, 409, 'CONSULTATION_NOT_OPEN_YET', startGate)
     }
 
+    const recipientId = callerRole === 'TAILOR' ? customerUserId : tailorUserId
+    const returnMessageFallback = (reason: 'DAILY_NOT_CONFIGURED' | 'DAILY_UNAVAILABLE') => {
+      EdgeRuntime.waitUntil(
+        (async () => {
+          const { error: stageUpdateError } = await supabase.from('order_stage_updates').insert({
+            order_id: orderId,
+            stage: order.stage,
+            note: consultationFallbackStageNote(audioOnly),
+          })
+
+          if (stageUpdateError) {
+            console.warn('[create-consultation-room] fallback stage update failed:', stageUpdateError.message)
+          }
+
+          await audit(supabase, {
+            event: 'consultation.call_fallback_started',
+            actor_id: caller.id,
+            actor_role: callerRole,
+            order_id: orderId,
+            payload: {
+              function: 'create-consultation-room',
+              call_type: callType,
+              reason,
+              fallback: 'MESSAGES',
+            },
+          })
+
+          if (recipientId) {
+            await Promise.allSettled([
+              sendPushToUser(supabase, recipientId.toString(), {
+                title: 'Consultation fallback active',
+                body: 'Calling is unavailable right now. Continue inside the order thread so Drape keeps the record.',
+                preferenceKey: 'orderUpdates',
+                data: { orderId },
+              }),
+              enqueueSmsJob(supabase, {
+                userId: recipientId.toString(),
+                audience: recipientAudience(callerRole),
+                source: 'create-consultation-room',
+                orderId,
+                event: 'consultation_call_fallback',
+                idempotencyKey: `consultation-call-fallback:${orderId}:${reason}:${recipientId}`,
+                priority: 12,
+                body: `Drape: consultation calling is unavailable for order ${order.reference ?? orderId}. Continue inside the order thread.`,
+              }),
+            ])
+          }
+        })(),
+      )
+
+      return jsonResponse(
+        {
+          url: null,
+          existing: false,
+          fallback: 'MESSAGES',
+          code: reason,
+          message: consultationFallbackMessage(audioOnly),
+        },
+        200,
+        corsHeaders,
+      )
+    }
+
     // Reuse only rooms that still fall within the app TTL. Old Daily rooms can expire
     // while the stale URL remains on the order record.
     if (order.video_call_url) {
@@ -175,12 +261,7 @@ Deno.serve(async (req) => {
     try {
       dailyApiKey = getDailyApiKey()
     } catch {
-      return jsonError(
-        corsHeaders,
-        503,
-        'DAILY_NOT_CONFIGURED',
-        'Consultation calling is not configured in this environment yet.',
-      )
+      return returnMessageFallback('DAILY_NOT_CONFIGURED')
     }
 
     const dailyRes = await fetch('https://api.daily.co/v1/rooms', {
@@ -206,12 +287,7 @@ Deno.serve(async (req) => {
     if (!dailyRes.ok) {
       const errBody = await dailyRes.text()
       console.error('[create-consultation-room] Daily.co error:', errBody)
-      return jsonError(
-        corsHeaders,
-        502,
-        'DAILY_UNAVAILABLE',
-        'Consultation calls are temporarily unavailable. Keep using messages and try again shortly.',
-      )
+      return returnMessageFallback('DAILY_UNAVAILABLE')
     }
 
     const room = await dailyRes.json()
@@ -279,17 +355,28 @@ Deno.serve(async (req) => {
       )
     }
 
-    const recipientId = callerRole === 'TAILOR' ? customerUserId : tailorUserId
     if (recipientId) {
       EdgeRuntime.waitUntil(
-        sendPushToUser(supabase, recipientId.toString(), {
-          title: audioOnly ? 'Consultation audio ready' : 'Consultation call ready',
-          body: audioOnly
-            ? 'Your consultation audio room is ready. Join from your order or messages.'
-            : 'Your consultation call is ready. Join from your order or messages.',
-          preferenceKey: 'orderUpdates',
-          data: { orderId },
-        }),
+        Promise.allSettled([
+          sendPushToUser(supabase, recipientId.toString(), {
+            title: audioOnly ? 'Consultation audio ready' : 'Consultation call ready',
+            body: audioOnly
+              ? 'Your consultation audio room is ready. Join from your order or messages.'
+              : 'Your consultation call is ready. Join from your order or messages.',
+            preferenceKey: 'orderUpdates',
+            data: { orderId },
+          }),
+          enqueueSmsJob(supabase, {
+            userId: recipientId.toString(),
+            audience: recipientAudience(callerRole),
+            source: 'create-consultation-room',
+            orderId,
+            event: 'consultation_call_started',
+            idempotencyKey: `consultation-call-started:${orderId}:${recipientId}:${callType}`,
+            priority: 10,
+            body: consultationCallSmsBody(order.reference ?? null, callerRole, audioOnly),
+          }),
+        ]),
       )
     }
 

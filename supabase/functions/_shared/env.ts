@@ -2,12 +2,56 @@ export function getSupabaseUrl(): string {
   return Deno.env.get('SUPABASE_URL')!
 }
 
+function splitSecretList(value: string | null | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+}
+
+export function getTrustedServiceRoleKeys(): string[] {
+  return [
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'),
+    Deno.env.get('DRAPE_SERVICE_ROLE_JWT'),
+    Deno.env.get('DRAPE_SERVICE_ROLE_KEY'),
+    ...splitSecretList(Deno.env.get('SUPABASE_SECRET_KEYS')),
+  ]
+    .map((entry) => entry?.trim() ?? '')
+    .filter((entry, index, entries) => entry.length > 0 && entries.indexOf(entry) === index)
+}
+
 export function getServiceRoleKey(): string {
-  return (
-    Deno.env.get('DRAPE_SERVICE_ROLE_JWT') ??
-    Deno.env.get('DRAPE_SERVICE_ROLE_KEY') ??
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-  )!
+  return getTrustedServiceRoleKeys()[0]!
+}
+
+async function timingSafeEqual(left: string, right: string): Promise<boolean> {
+  const encoder = new TextEncoder()
+  const [hashLeft, hashRight] = await Promise.all([
+    crypto.subtle.digest('SHA-256', encoder.encode(left)),
+    crypto.subtle.digest('SHA-256', encoder.encode(right)),
+  ])
+
+  const leftBytes = new Uint8Array(hashLeft)
+  const rightBytes = new Uint8Array(hashRight)
+  let diff = 0
+
+  for (let index = 0; index < 32; index += 1) {
+    diff |= leftBytes[index] ^ rightBytes[index]
+  }
+
+  return diff === 0
+}
+
+export async function isTrustedServiceRoleToken(token: string | null | undefined): Promise<boolean> {
+  const candidate = token?.trim()
+  if (!candidate) return false
+
+  const trustedKeys = getTrustedServiceRoleKeys()
+  for (const key of trustedKeys) {
+    if (await timingSafeEqual(candidate, key)) return true
+  }
+
+  return false
 }
 
 export function getSupabaseAnonKey(): string {

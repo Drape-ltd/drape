@@ -43,10 +43,10 @@ export default function PaystackCallbackPage(): JSX.Element {
   return (
     <main className="mx-auto flex min-h-[100dvh] max-w-xl flex-col items-center justify-center gap-6 px-6 pb-36 pt-16 text-center">
       <div className="space-y-3">
-        <p className="text-sm uppercase tracking-[0.28em] text-needleGreen">Return To Drape</p>
+        <p className="text-sm uppercase tracking-[0.28em] text-needleGreen">Return To Drapeon</p>
         <h1 className="text-3xl font-semibold text-ink">Heading back to your checkout</h1>
         <p className="text-base leading-7 text-ink/70">
-          If your browser asks, tap Continue. If Drape does not reopen automatically, use the button below.
+          If your browser asks, tap Continue. If Drapeon does not reopen automatically, use the button below.
         </p>
       </div>
 
@@ -54,7 +54,7 @@ export default function PaystackCallbackPage(): JSX.Element {
         href={appUrl}
         className="rounded-full bg-needleGreen px-6 py-3 text-sm font-semibold text-bone transition hover:bg-needleGreen/90"
       >
-        Open Drape
+        Open Drapeon
       </a>
 
       {reference ? (
@@ -66,7 +66,7 @@ export default function PaystackCallbackPage(): JSX.Element {
           href={appUrl}
           className="mx-auto block max-w-sm rounded-full bg-needleGreen px-6 py-4 text-center text-base font-semibold text-bone transition hover:bg-needleGreen/90"
         >
-          Open Drape
+          Open Drapeon
         </a>
       </div>
     </main>

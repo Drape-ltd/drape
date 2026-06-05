@@ -30,6 +30,7 @@ const OPS_ISSUE_STATUSES = new Set(['OPEN', 'IN_REVIEW', 'RESOLVED', 'ESCALATED'
 const MANUAL_OPS_ISSUE_TYPES = new Set<string>(OPS_ISSUE_TYPES)
 const MANUAL_OPS_ISSUE_SEVERITIES = new Set<string>(OPS_ISSUE_SEVERITIES)
 const PAYOUT_RESOLUTION_MODES = new Set(['ORIGINAL_CURRENCY', 'CONVERT_TO_CURRENT', 'REFUND_CUSTOMER'])
+const SELLER_ITEM_VISIBILITY_ACTIONS = new Set(['HIDE', 'RESTORE'])
 
 type OrderReviewMeta = {
   status?: 'OPEN' | 'RESOLVED' | null
@@ -133,10 +134,93 @@ function redirectWithMessage(
   redirectTo: string,
   key: 'notice' | 'error',
   value: string,
+  detail?: string | null,
 ) {
   const url = new URL(redirectTo, request.url)
   url.searchParams.set(key, value)
-  return NextResponse.redirect(url)
+  if (detail?.trim()) {
+    url.searchParams.set(`${key}Detail`, detail.trim().slice(0, 300))
+  }
+  return NextResponse.redirect(url, { status: 303 })
+}
+
+async function recordRefundApprovalFailure(
+  client: NonNullable<ReturnType<typeof createServiceRoleClient>>,
+  input: {
+    orderId: string
+    orderReference: string | null
+    reviewType: string
+    error: string
+    performedBy: string
+    performedRole: string
+    actionLabel?: string
+    actionTaken?: string
+    auditEvent?: string
+    relatedEntityType?: string
+  },
+) {
+  const now = new Date().toISOString()
+  const normalizedError = input.error.trim() || 'refund approval failed'
+  const actionLabel = input.actionLabel?.trim() || `${input.reviewType.toLowerCase()} review`
+  const dedupeKey = `ops-review-refund-failed:${input.orderId}:${normalizedError
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .slice(0, 80)}`
+
+  const { data: issue } = await client
+    .from('ops_issues')
+    .upsert(
+      {
+        issue_type: 'REFUND_FAILED',
+        severity: 'CRITICAL',
+        status: 'OPEN',
+        source: 'ops-dashboard',
+        actor_id: input.performedBy,
+        actor_role: input.performedRole,
+        order_id: input.orderId,
+        related_entity_type: input.relatedEntityType ?? 'order_review',
+        related_entity_id: input.orderId,
+        title: `${actionLabel[0]?.toUpperCase() ?? 'R'}${actionLabel.slice(1)} refund failed`,
+        description: `Ops could not complete ${actionLabel} because the refund step failed.`,
+        recommended_action:
+          'Check the order payment ledger, provider refund reference, and refund Edge Function health before retrying approval.',
+        dedupe_key: dedupeKey,
+        metadata: {
+          order_reference: input.orderReference,
+          review_type: input.reviewType,
+          error: normalizedError,
+        },
+        last_seen_at: now,
+      },
+      { onConflict: 'dedupe_key' },
+    )
+    .select('id')
+    .maybeSingle()
+
+  if (issue?.id) {
+    await client.from('ops_audit_logs').insert({
+      issue_id: issue.id,
+      action_taken: input.actionTaken ?? 'ORDER_REVIEW_REFUND_FAILED',
+      performed_by: input.performedBy,
+      performed_role: input.performedRole,
+      reason: normalizedError,
+      before_state: { order_id: input.orderId, review_type: input.reviewType },
+      after_state: { status: 'OPEN', error: normalizedError },
+    })
+  }
+
+  await client.from('audit_logs').insert({
+    actor_role: 'OPS',
+    order_id: input.orderId,
+    event: input.auditEvent ?? 'ops.order_review_refund_failed',
+    severity: 'error',
+    payload: {
+      order_reference: input.orderReference,
+      review_type: input.reviewType,
+      error: normalizedError,
+      performed_by: input.performedBy,
+    },
+  })
 }
 
 async function syncEntityOpsIssue(options: {
@@ -241,6 +325,113 @@ async function syncOpsIssueById(options: {
   })
 }
 
+async function resolveOrderReviewOpsIssue(options: {
+  client: NonNullable<ReturnType<typeof createServiceRoleClient>>
+  orderId: string
+  reviewType: 'CANCELLATION' | 'DELIVERY'
+  performedBy: string
+  performedRole: string
+  reason: string | null
+}) {
+  const { client, orderId, reviewType, performedBy, performedRole, reason } = options
+  const issueType = reviewType === 'DELIVERY' ? 'DELIVERY_REVIEW' : 'ORDER_REVIEW'
+  const dedupeKey = `order-review:${reviewType.toLowerCase()}:${orderId}`
+
+  const { data: issue } = await client
+    .from('ops_issues')
+    .select('id, status, assigned_to, resolved_at')
+    .eq('issue_type', issueType)
+    .eq('order_id', orderId)
+    .eq('dedupe_key', dedupeKey)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (!issue?.id) return
+
+  const resolvedAt = new Date().toISOString()
+  await client
+    .from('ops_issues')
+    .update({
+      status: 'RESOLVED',
+      assigned_to: performedBy,
+      resolved_at: resolvedAt,
+    })
+    .eq('id', issue.id)
+
+  await client.from('ops_audit_logs').insert({
+    issue_id: issue.id,
+    action_taken: 'ORDER_REVIEW_RESOLVED',
+    performed_by: performedBy,
+    performed_role: performedRole,
+    reason,
+    before_state: {
+      status: issue.status,
+      assigned_to: issue.assigned_to ?? null,
+      resolved_at: issue.resolved_at ?? null,
+    },
+    after_state: {
+      status: 'RESOLVED',
+      assigned_to: performedBy,
+      resolved_at: resolvedAt,
+    },
+  })
+}
+
+async function resolveOrderLinkedOpsIssues(options: {
+  client: NonNullable<ReturnType<typeof createServiceRoleClient>>
+  orderId: string
+  issueTypes: string[]
+  performedBy: string
+  performedRole: string
+  actionTaken: string
+  reason: string | null
+}) {
+  const { client, orderId, issueTypes, performedBy, performedRole, actionTaken, reason } = options
+  if (issueTypes.length === 0) return
+
+  const { data: issues } = await client
+    .from('ops_issues')
+    .select('id, issue_type, status, assigned_to, resolved_at')
+    .eq('order_id', orderId)
+    .in('issue_type', issueTypes)
+    .neq('status', 'RESOLVED')
+
+  const openIssues = issues ?? []
+  if (openIssues.length === 0) return
+
+  const resolvedAt = new Date().toISOString()
+  const issueIds = openIssues.map((issue) => issue.id)
+  await client
+    .from('ops_issues')
+    .update({
+      status: 'RESOLVED',
+      assigned_to: performedBy,
+      resolved_at: resolvedAt,
+    })
+    .in('id', issueIds)
+
+  await client.from('ops_audit_logs').insert(
+    openIssues.map((issue) => ({
+      issue_id: issue.id,
+      action_taken: actionTaken,
+      performed_by: performedBy,
+      performed_role: performedRole,
+      reason,
+      before_state: {
+        status: issue.status,
+        assigned_to: issue.assigned_to ?? null,
+        resolved_at: issue.resolved_at ?? null,
+      },
+      after_state: {
+        status: 'RESOLVED',
+        assigned_to: performedBy,
+        resolved_at: resolvedAt,
+      },
+    })),
+  )
+}
+
 function lockedOrderPayoutAmount(order: {
   source_amount?: number | null
   subtotal_amount?: number | null
@@ -256,6 +447,16 @@ function lockedOrderPayoutCurrency(order: {
   currency?: string | null
 }) {
   return normalizeAccountCurrency(order.tailor_payout_currency_locked ?? order.source_currency ?? order.currency)
+}
+
+function restoredSellerItemStatus(inventoryQuantity: number | null | undefined) {
+  const quantity = typeof inventoryQuantity === 'number' && Number.isFinite(inventoryQuantity)
+    ? inventoryQuantity
+    : 0
+
+  if (quantity <= 0) return 'SOLD_OUT'
+  if (quantity <= 1) return 'LOW_STOCK'
+  return 'IN_STOCK'
 }
 
 async function fetchFxQuoteForOps(from: string, to: string) {
@@ -300,6 +501,7 @@ async function refundOrderPaymentsForReview(orderId: string, input: {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
@@ -312,6 +514,8 @@ async function refundOrderPaymentsForReview(orderId: string, input: {
   const payload = await response.json().catch(() => null) as {
     ok?: boolean
     error?: string
+    reason?: string
+    message?: string
     refundMode?: 'FULL' | 'PARTIAL'
     totalRefundedAmount?: number
     remainingRefundableAmount?: number
@@ -321,7 +525,7 @@ async function refundOrderPaymentsForReview(orderId: string, input: {
   if (!response.ok || !payload?.ok) {
     return {
       ok: false as const,
-      error: payload?.error ?? `refund-function-${response.status}`,
+      error: payload?.message ?? payload?.reason ?? payload?.error ?? `refund-function-${response.status}`,
     }
   }
 
@@ -346,6 +550,7 @@ async function triggerOrderPayoutRelease(orderId: string) {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ orderId }),
@@ -354,13 +559,15 @@ async function triggerOrderPayoutRelease(orderId: string) {
   const payload = await response.json().catch(() => null) as {
     ok?: boolean
     error?: string
+    reason?: string
+    message?: string
     results?: Array<{ result?: string; reason?: string }>
   } | null
 
   if (!response.ok || !payload?.ok) {
     return {
       ok: false as const,
-      error: payload?.error ?? `payout-release-function-${response.status}`,
+      error: payload?.message ?? payload?.reason ?? payload?.error ?? `payout-release-function-${response.status}`,
     }
   }
 
@@ -369,6 +576,44 @@ async function triggerOrderPayoutRelease(orderId: string) {
     return {
       ok: false as const,
       error: result.reason ?? 'payout-blocked',
+    }
+  }
+
+  return { ok: true as const }
+}
+
+async function triggerMaterialAdvanceRelease(advanceId: string, note: string | null) {
+  const supabaseUrl = getSupabaseUrl()
+  const serviceRoleKey = getSupabaseServiceRoleKey()
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    return { ok: false as const, error: 'missing-service-role-config' }
+  }
+
+  const response = await fetch(`${supabaseUrl.replace(/\/+$/u, '')}/functions/v1/material-advance-action`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      action: 'release-advance',
+      advanceId,
+      note: note ?? undefined,
+    }),
+  })
+
+  const payload = await response.json().catch(() => null) as {
+    ok?: boolean
+    error?: string
+    message?: string
+  } | null
+
+  if (!response.ok || !payload?.ok) {
+    return {
+      ok: false as const,
+      error: payload?.message ?? payload?.error ?? `material-advance-release-function-${response.status}`,
     }
   }
 
@@ -417,6 +662,7 @@ async function submitVerificationDecision(input: {
 
 function ensureAuthorizedAction(kind: string): OpsActionKind | null {
   switch (kind) {
+    case 'seller-item-visibility':
     case 'dispute-status':
     case 'dispute-resolution':
     case 'bypass-review':
@@ -460,6 +706,68 @@ export async function POST(request: Request) {
   }
 
   try {
+    if (kind === 'seller-item-visibility') {
+      const itemId = readString(formData, 'itemId')
+      const visibilityAction = readString(formData, 'visibilityAction').toUpperCase()
+      const note = readString(formData, 'note')
+
+      if (!itemId || !SELLER_ITEM_VISIBILITY_ACTIONS.has(visibilityAction)) {
+        return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+      }
+
+      const { data: existingItem, error: existingItemError } = await client
+        .from('seller_items')
+        .select('id, title, is_live, stock_status, inventory_quantity, tailor_profile_id')
+        .eq('id', itemId)
+        .maybeSingle()
+
+      if (existingItemError || !existingItem?.id) {
+        return redirectWithMessage(request, redirectTo, 'error', 'seller-item-save-failed')
+      }
+
+      const nextIsLive = visibilityAction === 'RESTORE'
+      const nextStockStatus = visibilityAction === 'RESTORE'
+        ? restoredSellerItemStatus(existingItem.inventory_quantity)
+        : 'HIDDEN'
+
+      const { error } = await client
+        .from('seller_items')
+        .update({
+          is_live: nextIsLive,
+          stock_status: nextStockStatus,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', itemId)
+
+      if (error) {
+        return redirectWithMessage(request, redirectTo, 'error', 'seller-item-save-failed')
+      }
+
+      await client.from('audit_logs').insert({
+        actor_role: 'OPS',
+        event: 'ops.seller_item_visibility_updated',
+        severity: visibilityAction === 'HIDE' ? 'warn' : 'info',
+        payload: {
+          seller_item_id: itemId,
+          title: existingItem.title,
+          tailor_profile_id: existingItem.tailor_profile_id,
+          previous_is_live: existingItem.is_live,
+          previous_stock_status: existingItem.stock_status,
+          next_is_live: nextIsLive,
+          next_stock_status: nextStockStatus,
+          note: note.length > 0 ? note : null,
+          performed_by: session.email ?? session.role,
+        },
+      })
+
+      return redirectWithMessage(
+        request,
+        redirectTo,
+        'notice',
+        visibilityAction === 'RESTORE' ? 'seller-item-restored' : 'seller-item-hidden',
+      )
+    }
+
     if (kind === 'dispute-status') {
       const disputeId = readString(formData, 'disputeId')
       const status = readString(formData, 'status').toUpperCase()
@@ -865,7 +1173,15 @@ export async function POST(request: Request) {
         })
 
         if (!refund.ok) {
-          return redirectWithMessage(request, redirectTo, 'error', 'refund-failed')
+          await recordRefundApprovalFailure(client, {
+            orderId,
+            orderReference: existingOrder.reference ?? null,
+            reviewType,
+            error: refund.error,
+            performedBy: session.email ?? session.role,
+            performedRole: session.role.toUpperCase(),
+          })
+          return redirectWithMessage(request, redirectTo, 'error', 'refund-failed', refund.error)
         }
 
         const requestPayload = buildOrderReviewRefundTerminalRequest({
@@ -902,7 +1218,7 @@ export async function POST(request: Request) {
       } else {
         const reviewLabel = reviewType === 'CANCELLATION' ? 'cancellation review' : 'delivery review'
         const stageNote =
-          `Drape reviewed the ${reviewLabel}. The order will continue from ${restoreStage}.`
+          `Drapeon reviewed the ${reviewLabel}. The order will continue from ${restoreStage}.`
           + (resolution ? ` Note: ${resolution}` : '')
 
         const { error: updateError } = await client
@@ -939,6 +1255,27 @@ export async function POST(request: Request) {
             restored_stage: restoreStage,
             resolution: resolution.length > 0 ? resolution : null,
           },
+        })
+      }
+
+      await resolveOrderReviewOpsIssue({
+        client,
+        orderId,
+        reviewType: reviewType as 'CANCELLATION' | 'DELIVERY',
+        performedBy: session.email ?? session.role,
+        performedRole: session.role.toUpperCase(),
+        reason: resolution.length > 0 ? resolution : null,
+      })
+
+      if (outcome === 'REFUND') {
+        await resolveOrderLinkedOpsIssues({
+          client,
+          orderId,
+          issueTypes: ['REFUND_FAILED', 'PAYOUT_BLOCKED'],
+          performedBy: session.email ?? session.role,
+          performedRole: session.role.toUpperCase(),
+          actionTaken: 'ORDER_REVIEW_REFUND_CLEANUP',
+          reason: 'Order review refund succeeded; stale order-linked blockers no longer need action.',
         })
       }
 
@@ -1006,7 +1343,7 @@ export async function POST(request: Request) {
 
       const { data: order, error: orderError } = await client
         .from('orders')
-        .select('id, reference, stage, customer_id, currency')
+        .select('id, reference, stage, customer_id, tailor_id, order_kind, garment_type, item_title, item_size, delivery_method, currency')
         .eq('id', orderId)
         .maybeSingle()
 
@@ -1020,7 +1357,19 @@ export async function POST(request: Request) {
       })
 
       if (!refund.ok) {
-        return redirectWithMessage(request, redirectTo, 'error', 'refund-failed')
+        await recordRefundApprovalFailure(client, {
+          orderId,
+          orderReference: order.reference ?? null,
+          reviewType: 'PARTIAL_REFUND',
+          actionLabel: 'partial refund',
+          actionTaken: 'ORDER_PARTIAL_REFUND_FAILED',
+          auditEvent: 'ops.order_partial_refund_failed',
+          relatedEntityType: 'workflow_issue',
+          error: refund.error,
+          performedBy: session.email ?? session.role,
+          performedRole: session.role.toUpperCase(),
+        })
+        return redirectWithMessage(request, redirectTo, 'error', 'refund-failed', refund.error)
       }
 
       const nextStage = refund.remainingRefundableAmount <= 0 ? 'REFUNDED' : 'PARTIALLY_REFUNDED'
@@ -1084,14 +1433,34 @@ export async function POST(request: Request) {
 
         const customerEmail = authUser.user?.email?.trim() ?? null
         if (customerEmail) {
-          await sendOpsCustomerRefundEmail({
+          const emailResult = await sendOpsCustomerRefundEmail({
+            client,
+            order,
+            idempotencyKey: `ops-partial-refund-email:${issueId || orderId}:${amountMinor}:${refund.remainingRefundableAmount}`,
             to: customerEmail,
+            customerUserId: order.customer_id,
             customerName: customerProfile?.display_name?.trim() || 'there',
             orderReference: order.reference,
             amount: amountMinor,
             currency: order.currency,
             reason: note,
             partial: true,
+          })
+
+          await client.from('audit_logs').insert({
+            actor_role: 'OPS',
+            order_id: orderId,
+            event: emailResult.ok
+              ? 'ops.customer_refund_email_requested'
+              : 'ops.customer_refund_email_failed',
+            severity: emailResult.ok ? 'info' : 'warn',
+            payload: {
+              issue_id: issueId || null,
+              amount: amountMinor,
+              currency: order.currency,
+              queued: 'queued' in emailResult ? emailResult.queued : false,
+              skipped: emailResult.skipped,
+            },
           })
         }
       }
@@ -1153,7 +1522,19 @@ export async function POST(request: Request) {
       if (resolutionMode === 'REFUND_CUSTOMER') {
         const refund = await refundOrderPaymentsForReview(orderId, { reason: note })
         if (!refund.ok) {
-          return redirectWithMessage(request, redirectTo, 'error', 'refund-failed')
+          await recordRefundApprovalFailure(client, {
+            orderId,
+            orderReference: order.reference ?? null,
+            reviewType: 'PAYOUT_BLOCK',
+            actionLabel: 'payout block customer refund',
+            actionTaken: 'PAYOUT_BLOCK_REFUND_FAILED',
+            auditEvent: 'ops.payout_block_refund_failed',
+            relatedEntityType: 'workflow_issue',
+            error: refund.error,
+            performedBy: session.email ?? session.role,
+            performedRole: session.role.toUpperCase(),
+          })
+          return redirectWithMessage(request, redirectTo, 'error', 'refund-failed', refund.error)
         }
 
         const { error: orderUpdateError } = await client
@@ -1271,7 +1652,7 @@ export async function POST(request: Request) {
 
       const release = await triggerOrderPayoutRelease(orderId)
       if (!release.ok) {
-        return redirectWithMessage(request, redirectTo, 'error', 'payout-release-failed')
+        return redirectWithMessage(request, redirectTo, 'error', 'payout-release-failed', release.error)
       }
 
       await client.from('audit_logs').insert({
@@ -1312,7 +1693,7 @@ export async function POST(request: Request) {
 
       const release = await triggerOrderPayoutRelease(orderId)
       if (!release.ok) {
-        return redirectWithMessage(request, redirectTo, 'error', 'payout-release-failed')
+        return redirectWithMessage(request, redirectTo, 'error', 'payout-release-failed', release.error)
       }
 
       await client.from('audit_logs').insert({
@@ -1327,6 +1708,33 @@ export async function POST(request: Request) {
       })
 
       return redirectWithMessage(request, redirectTo, 'notice', 'payout-release-triggered')
+    }
+
+    if (kind === 'material-advance-release') {
+      const advanceId = readString(formData, 'advanceId')
+      const note = readString(formData, 'note')
+
+      if (!advanceId) {
+        return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+      }
+
+      const release = await triggerMaterialAdvanceRelease(advanceId, note || null)
+      if (!release.ok) {
+        return redirectWithMessage(request, redirectTo, 'error', 'material-advance-release-failed', release.error)
+      }
+
+      await client.from('audit_logs').insert({
+        actor_role: 'OPS',
+        event: 'ops.material_advance_release_triggered',
+        severity: 'info',
+        payload: {
+          source: 'ops-dashboard',
+          material_advance_id: advanceId,
+          note: note || null,
+        },
+      })
+
+      return redirectWithMessage(request, redirectTo, 'notice', 'material-advance-release-triggered')
     }
 
     if (kind === 'ops-issue-status') {

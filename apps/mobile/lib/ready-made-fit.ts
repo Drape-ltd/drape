@@ -422,7 +422,7 @@ export function recommendReadyMadeSize(input: RecommendationInput): ReadyMadeSiz
     return {
       status: 'MISSING_MEASUREMENTS',
       summary: 'Add your measurements for a size recommendation',
-      detail: `Drape can suggest a size once you save the ${fields.map(fieldLabel).join(', ').toLowerCase()} measurements this seller uses.`,
+      detail: `Drapeon can suggest a size once you save the ${fields.map(fieldLabel).join(', ').toLowerCase()} measurements this seller uses.`,
       size: null,
       secondarySize: null,
       matchedFields: [],
@@ -473,7 +473,7 @@ export function recommendReadyMadeSize(input: RecommendationInput): ReadyMadeSiz
     return {
       status: 'MISSING_MEASUREMENTS',
       summary: 'Add your measurements for a size recommendation',
-      detail: 'Drape does not have enough saved measurements yet to compare against this size guide.',
+      detail: 'Drapeon does not have enough saved measurements yet to compare against this size guide.',
       size: null,
       secondarySize: null,
       matchedFields: [],

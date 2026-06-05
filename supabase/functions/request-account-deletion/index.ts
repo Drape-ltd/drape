@@ -57,7 +57,7 @@ function getSiteUrl() {
 }
 
 function getResendFrom() {
-  return Deno.env.get('RESEND_FROM') ?? 'Drape Privacy <privacy@drapeon.co>'
+  return Deno.env.get('RESEND_FROM') ?? 'Drapeon Privacy <privacy@drapeon.co>'
 }
 
 function getResendApiKey() {
@@ -90,10 +90,10 @@ async function sendDeletionReceiptEmail(input: {
 
   const appUrl = getSiteUrl()
   const hasActiveOrders = input.activeOrderCount > 0
-  const subject = 'We received your Drape account deletion request'
+  const subject = 'We received your Drapeon account deletion request'
   const nextStep = hasActiveOrders
-    ? 'Because this account has active orders, payouts, disputes, or transaction obligations, Drape will review those first, then complete deletion or anonymization where permitted.'
-    : 'Drape will move this through privacy review and complete deletion or anonymization where permitted.'
+    ? 'Because this account has active orders, payouts, disputes, or transaction obligations, Drapeon will review those first, then complete deletion or anonymization where permitted.'
+    : 'Drapeon will move this through privacy review and complete deletion or anonymization where permitted.'
 
   const response = await fetch(RESEND_API, {
     method: 'POST',
@@ -109,7 +109,7 @@ async function sendDeletionReceiptEmail(input: {
       html: `
 <div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1f2937">
   <h1 style="font-size:24px;margin:0 0 12px">Deletion request received</h1>
-  <p style="line-height:1.6;margin:0 0 16px">Drape received your account deletion request.</p>
+  <p style="line-height:1.6;margin:0 0 16px">Drapeon received your account deletion request.</p>
   <p style="line-height:1.6;margin:0 0 16px">${escapeHtml(nextStep)}</p>
   <table style="width:100%;border-collapse:collapse;margin:24px 0">
     <tr><td style="padding:8px 0;color:#6b7280">Account type</td><td style="padding:8px 0;font-weight:600">${escapeHtml(input.role)}</td></tr>
@@ -359,7 +359,7 @@ Deno.serve(async (req) => {
       title: 'Account deletion request',
       description: activeOrderCount > 0
         ? `${role.toLowerCase()} requested permanent account deletion with ${activeOrderCount} active order(s).`
-        : `${role.toLowerCase()} requested permanent account deletion inside Drape.`,
+        : `${role.toLowerCase()} requested permanent account deletion inside Drapeon.`,
       recommendedAction: activeOrderCount > 0
         ? 'Acknowledge the request, restrict new marketplace activity if needed, review active orders/refunds first, then complete deletion/anonymization after transaction obligations are resolved.'
         : 'Acknowledge the request, verify identity if needed, and move the deletion workflow through privacy review to completion.',

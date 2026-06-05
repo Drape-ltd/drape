@@ -6,7 +6,7 @@ import { buildMetadata } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'Legal',
-  description: 'Find the formal legal contact route for Drape.',
+  description: 'Find the formal legal contact route for Drapeon.',
   path: '/legal',
 })
 
@@ -18,7 +18,7 @@ export default function LegalPage(): JSX.Element {
       description="The website should make formal communication routes visible without overwhelming the rest of the product story."
       cta={
         <a
-          href={`mailto:${CONTACTS.legal}?subject=Drape%20legal%20inquiry`}
+          href={`mailto:${CONTACTS.legal}?subject=Drapeon%20legal%20inquiry`}
           className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
         >
           Contact legal
@@ -55,7 +55,7 @@ export default function LegalPage(): JSX.Element {
         />
         <div className="mt-10">
           <a
-            href={`mailto:${CONTACTS.legal}?subject=Drape%20legal%20inquiry`}
+            href={`mailto:${CONTACTS.legal}?subject=Drapeon%20legal%20inquiry`}
             className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-6 py-4 text-sm font-semibold text-ink shadow-sm"
           >
             {CONTACTS.legal}

@@ -166,11 +166,11 @@ export default function DrapeVisionRoute() {
             <Feather name="aperture" size={28} color={Colors.needleGreen} />
           </View>
           <Text style={styles.eyebrow}>{meta.eyebrow}</Text>
-          <Text style={styles.title}>{androidPaused ? 'Use manual measurements on Android' : 'Drape Vision is not available in this build'}</Text>
+          <Text style={styles.title}>{androidPaused ? 'Use manual measurements on Android' : 'Drapeon Vision is not available in this build'}</Text>
           <Text style={styles.body}>
             {androidPaused
               ? 'The Android live scanner is paused for launch while we finish device validation. You can keep the order moving with manual measurements.'
-              : "Live scanning needs Drape's camera-enabled build. You can keep going with the manual measurement path for now."}
+              : "Live scanning needs Drapeon's camera-enabled build. You can keep going with the manual measurement path for now."}
           </Text>
         </View>
 
@@ -181,7 +181,7 @@ export default function DrapeVisionRoute() {
             <Text style={styles.noticeText}>
               {androidPaused
                 ? 'Manual measurements feed the same fit profile, tailor brief, ready-made fit check, and order flow without risking a camera crash.'
-                : 'Add or review measurements manually, then return to Drape Vision when the camera build is installed.'}
+                : 'Add or review measurements manually, then return to Drapeon Vision when the camera build is installed.'}
             </Text>
           </View>
         </View>

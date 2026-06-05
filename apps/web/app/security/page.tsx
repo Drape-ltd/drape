@@ -6,7 +6,7 @@ import { buildMetadata } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'Security',
-  description: 'Use the dedicated Drape security route for responsible disclosure and security-related contact.',
+  description: 'Use the dedicated Drapeon security route for responsible disclosure and security-related contact.',
   path: '/security',
 })
 
@@ -15,10 +15,10 @@ export default function SecurityPage(): JSX.Element {
     <MarketingShell
       eyebrow="Security"
       title="Security issues should have a direct, trusted route."
-      description="Drape handles accounts, measurements, orders, and verification-related data. The website should make security reporting feel straightforward and serious."
+      description="Drapeon handles accounts, measurements, orders, and verification-related data. The website should make security reporting feel straightforward and serious."
       cta={
         <a
-          href={`mailto:${CONTACTS.security}?subject=Drape%20security%20report`}
+          href={`mailto:${CONTACTS.security}?subject=Drapeon%20security%20report`}
           className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
         >
           Report a security issue
@@ -55,7 +55,7 @@ export default function SecurityPage(): JSX.Element {
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-2">
           <a
-            href={`mailto:${CONTACTS.security}?subject=Drape%20security%20report`}
+            href={`mailto:${CONTACTS.security}?subject=Drapeon%20security%20report`}
             className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
           >
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Security</p>
@@ -65,7 +65,7 @@ export default function SecurityPage(): JSX.Element {
             </p>
           </a>
           <a
-            href={`mailto:${CONTACTS.privacy}?subject=Drape%20privacy%20question`}
+            href={`mailto:${CONTACTS.privacy}?subject=Drapeon%20privacy%20question`}
             className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
           >
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Privacy</p>

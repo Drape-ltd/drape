@@ -1,5 +1,5 @@
 /**
- * TagSelector — searchable, grouped, multi-select chip component.
+ * TagSelector — searchable, grouped, multi-select row component.
  *
  * Handles both flat string[] and grouped TagGroup[] option sets.
  * Designed for large lists like specialties (~28 items) and languages (~36 items).
@@ -66,16 +66,20 @@ export function TagSelector({
     return allItems.filter((item) => item.toLowerCase().includes(q))
   }, [query, allItems])
 
-  function Chip({ item }: { item: string }) {
+  function OptionRow({ item }: { item: string }) {
     const active = selected.includes(item)
     return (
       <TouchableOpacity
-        style={[styles.chip, active && styles.chipActive]}
+        style={styles.optionRow}
         onPress={() => toggle(item)}
         activeOpacity={0.65}
+        accessibilityRole="button"
+        accessibilityState={{ selected: active }}
       >
-        {active && <Text style={styles.checkmark}>✓ </Text>}
-        <Text style={[styles.chipText, active && styles.chipTextActive]}>{item}</Text>
+        <Text style={[styles.optionText, active && styles.optionTextActive]}>{item}</Text>
+        <View style={[styles.optionCheck, active && styles.optionCheckActive]}>
+          {active ? <Feather name="check" size={14} color={Colors.textInverse} /> : null}
+        </View>
       </TouchableOpacity>
     )
   }
@@ -118,26 +122,24 @@ export function TagSelector({
 
       {/* Search results */}
       {filteredItems ? (
-        <View style={styles.chipWrap}>
+        <View style={styles.optionList}>
           {filteredItems.length === 0
             ? <Text style={styles.noResults}>No results for "{query}"</Text>
-            : filteredItems.map((item) => <Chip key={item} item={item} />)
+            : filteredItems.map((item) => <OptionRow key={item} item={item} />)
           }
         </View>
       ) : isGrouped(options) ? (
-        /* Grouped display */
         options.map((group) => (
           <View key={group.label} style={styles.group}>
             <Text style={styles.groupLabel}>{group.label}</Text>
-            <View style={styles.chipWrap}>
-              {group.items.map((item) => <Chip key={item} item={item} />)}
+            <View style={styles.optionList}>
+              {group.items.map((item) => <OptionRow key={item} item={item} />)}
             </View>
           </View>
         ))
       ) : (
-        /* Flat display */
-        <View style={styles.chipWrap}>
-          {(options as string[]).map((item) => <Chip key={item} item={item} />)}
+        <View style={styles.optionList}>
+          {(options as string[]).map((item) => <OptionRow key={item} item={item} />)}
         </View>
       )}
 
@@ -205,39 +207,43 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.sm,
   },
 
-  chipWrap: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: Radius.full,
-    borderWidth: 1.5,
+  optionList: {
+    borderWidth: 1,
     borderColor: Colors.lightGrey,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
     backgroundColor: Colors.white,
   },
-  chipActive: {
-    borderColor: Colors.needleGreen,
-    backgroundColor: Colors.needleGreen,
+  optionRow: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.lightGrey,
   },
-  checkmark: {
-    fontSize: FontSize.xs,
-    color: Colors.textInverse,
-    fontWeight: FontWeight.bold,
-  },
-  chipText: {
+  optionText: {
     fontSize: FontSize.sm,
-    color: Colors.inkLight,
+    color: Colors.ink,
     fontWeight: FontWeight.medium,
   },
-  chipTextActive: {
-    color: Colors.textInverse,
+  optionTextActive: {
+    color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
   },
+  optionCheck: {
+    width: 24,
+    height: 24,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  optionCheckActive: { backgroundColor: Colors.needleGreen, borderColor: Colors.needleGreen },
 
   selectionCount: {
     fontSize: FontSize.xs,

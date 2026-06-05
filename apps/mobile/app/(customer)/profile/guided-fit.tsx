@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Alert,
   KeyboardAvoidingView,
+  Modal,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -68,6 +70,18 @@ const SYMMETRY_FLAG_OPTIONS = [
 ] as const
 
 type SymmetryFlag = (typeof SYMMETRY_FLAG_OPTIONS)[number]
+type SelectorKey =
+  | 'fitIntent'
+  | 'fabricStretch'
+  | 'wearDaySupport'
+  | 'coveragePreference'
+  | 'bodyFlags'
+  | 'symmetryFlags'
+
+type SelectorOption = {
+  label: string
+  value: string
+}
 
 function hasCompleteMeasurementProfile(value: Record<string, unknown> | null | undefined) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
@@ -85,6 +99,16 @@ function safeNumber(value: string) {
   if (!value.trim()) return null
   const parsed = Number.parseFloat(value)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+function labelsForSelected<T extends string>(
+  selected: T[],
+  labels: Record<T, string>,
+  fallback = 'None selected'
+) {
+  if (selected.length === 0) return fallback
+  if (selected.length <= 2) return selected.map((item) => labels[item]).join(', ')
+  return `${selected.slice(0, 2).map((item) => labels[item]).join(', ')} +${selected.length - 2}`
 }
 
 function isMeasurementScansUnavailable(
@@ -129,6 +153,7 @@ export default function GuidedFitScreen() {
   const [bodyFlags, setBodyFlags] = useState<BodyProfileFlag[]>([])
   const [symmetryFlags, setSymmetryFlags] = useState<SymmetryFlag[]>([])
   const [noteError, setNoteError] = useState('')
+  const [activeSelector, setActiveSelector] = useState<SelectorKey | null>(null)
 
   const fitPreview = useMemo<{
     captureMethod: MeasurementScanCaptureMethod
@@ -150,6 +175,94 @@ export default function GuidedFitScreen() {
       requiresTailorReview,
     }
   }, [measurements, symmetryFlags])
+
+  const selectorConfig = useMemo(() => {
+    if (!activeSelector) return null
+
+    if (activeSelector === 'fitIntent') {
+      return {
+        title: 'Fit direction',
+        description: 'Choose the silhouette your tailor should bias toward.',
+        selectedValues: [fitIntent],
+        options: FIT_INTENT_OPTIONS.map((value) => ({
+          value,
+          label: FIT_INTENT_LABELS[value],
+        })),
+        multiple: false,
+      }
+    }
+
+    if (activeSelector === 'fabricStretch') {
+      return {
+        title: 'Fabric stretch',
+        description: 'Use the fabric behavior you expect for this garment.',
+        selectedValues: [fabricStretch],
+        options: FABRIC_STRETCH_OPTIONS.map((value) => ({
+          value,
+          label: FABRIC_STRETCH_LABELS[value],
+        })),
+        multiple: false,
+      }
+    }
+
+    if (activeSelector === 'wearDaySupport') {
+      return {
+        title: 'Wear-day support',
+        description: 'Tell the tailor what structure or foundation garments affect the fit.',
+        selectedValues: [wearDaySupport],
+        options: WEAR_DAY_SUPPORT_OPTIONS.map((value) => ({
+          value,
+          label: WEAR_DAY_SUPPORT_LABELS[value],
+        })),
+        multiple: false,
+      }
+    }
+
+    if (activeSelector === 'coveragePreference') {
+      return {
+        title: 'Coverage preference',
+        description: 'Set the baseline coverage expectation before styling notes.',
+        selectedValues: [coveragePreference],
+        options: COVERAGE_OPTIONS.map((value) => ({
+          value,
+          label: COVERAGE_PREFERENCE_LABELS[value],
+        })),
+        multiple: false,
+      }
+    }
+
+    if (activeSelector === 'bodyFlags') {
+      return {
+        title: 'Body profile flags',
+        description: 'Optional context that helps prevent common fit misses.',
+        selectedValues: bodyFlags,
+        options: BODY_FLAG_OPTIONS.map((value) => ({
+          value,
+          label: BODY_PROFILE_FLAG_LABELS[value],
+        })),
+        multiple: true,
+      }
+    }
+
+    return {
+      title: 'Symmetry flags',
+      description: 'Optional asymmetry notes that should trigger tailor review before cutting.',
+      selectedValues: symmetryFlags,
+      options: SYMMETRY_FLAG_OPTIONS.map((value) => ({
+        value,
+        label: SYMMETRY_FLAG_LABELS[value],
+      })),
+      multiple: true,
+    }
+  }, [
+    activeSelector,
+    bodyFlags,
+    coveragePreference,
+    fabricStretch,
+    fitIntent,
+    symmetryFlags,
+    wearDaySupport,
+  ])
 
   useEffect(() => {
     async function load() {
@@ -263,6 +376,36 @@ export default function GuidedFitScreen() {
     setSelected(
       selected.includes(value) ? selected.filter((item) => item !== value) : [...selected, value]
     )
+  }
+
+  function handleSelectorOption(value: string) {
+    if (!activeSelector) return
+
+    if (activeSelector === 'fitIntent') {
+      setFitIntent(value as FitIntent)
+      setActiveSelector(null)
+      return
+    }
+    if (activeSelector === 'fabricStretch') {
+      setFabricStretch(value as FabricStretch)
+      setActiveSelector(null)
+      return
+    }
+    if (activeSelector === 'wearDaySupport') {
+      setWearDaySupport(value as WearDaySupport)
+      setActiveSelector(null)
+      return
+    }
+    if (activeSelector === 'coveragePreference') {
+      setCoveragePreference(value as CoveragePreference)
+      setActiveSelector(null)
+      return
+    }
+    if (activeSelector === 'bodyFlags') {
+      toggleFlag(value as BodyProfileFlag, bodyFlags, setBodyFlags)
+      return
+    }
+    toggleFlag(value as SymmetryFlag, symmetryFlags, setSymmetryFlags)
   }
 
   async function save() {
@@ -507,16 +650,11 @@ export default function GuidedFitScreen() {
             <Text style={styles.sectionHint}>
               Choose the overall silhouette you want the tailor to bias toward.
             </Text>
-            <View style={styles.optionGrid}>
-              {FIT_INTENT_OPTIONS.map((option) => (
-                <SelectionPill
-                  key={option}
-                  label={FIT_INTENT_LABELS[option]}
-                  active={fitIntent === option}
-                  onPress={() => setFitIntent(option)}
-                />
-              ))}
-            </View>
+            <SelectSummaryRow
+              label="Current fit direction"
+              value={FIT_INTENT_LABELS[fitIntent]}
+              onPress={() => setActiveSelector('fitIntent')}
+            />
           </View>
 
           <View style={styles.sectionCard}>
@@ -524,29 +662,16 @@ export default function GuidedFitScreen() {
             <Text style={styles.sectionHint}>
               These are the context clues that change drape, contour, and ease.
             </Text>
-            <Text style={styles.fieldLabel}>Fabric stretch</Text>
-            <View style={styles.optionGrid}>
-              {FABRIC_STRETCH_OPTIONS.map((option) => (
-                <SelectionPill
-                  key={option}
-                  label={FABRIC_STRETCH_LABELS[option]}
-                  active={fabricStretch === option}
-                  onPress={() => setFabricStretch(option)}
-                />
-              ))}
-            </View>
-
-            <Text style={styles.fieldLabel}>Wear-day support</Text>
-            <View style={styles.optionGrid}>
-              {WEAR_DAY_SUPPORT_OPTIONS.map((option) => (
-                <SelectionPill
-                  key={option}
-                  label={WEAR_DAY_SUPPORT_LABELS[option]}
-                  active={wearDaySupport === option}
-                  onPress={() => setWearDaySupport(option)}
-                />
-              ))}
-            </View>
+            <SelectSummaryRow
+              label="Fabric stretch"
+              value={FABRIC_STRETCH_LABELS[fabricStretch]}
+              onPress={() => setActiveSelector('fabricStretch')}
+            />
+            <SelectSummaryRow
+              label="Wear-day support"
+              value={WEAR_DAY_SUPPORT_LABELS[wearDaySupport]}
+              onPress={() => setActiveSelector('wearDaySupport')}
+            />
 
             <Input
               label="Heel height in cm (optional)"
@@ -563,17 +688,11 @@ export default function GuidedFitScreen() {
               These notes travel with your next order so the tailor can quote and cut with fewer
               assumptions.
             </Text>
-            <Text style={styles.fieldLabel}>Coverage preference</Text>
-            <View style={styles.optionGrid}>
-              {COVERAGE_OPTIONS.map((option) => (
-                <SelectionPill
-                  key={option}
-                  label={COVERAGE_PREFERENCE_LABELS[option]}
-                  active={coveragePreference === option}
-                  onPress={() => setCoveragePreference(option)}
-                />
-              ))}
-            </View>
+            <SelectSummaryRow
+              label="Coverage preference"
+              value={COVERAGE_PREFERENCE_LABELS[coveragePreference]}
+              onPress={() => setActiveSelector('coveragePreference')}
+            />
 
             <Input
               label="Style ease notes"
@@ -598,29 +717,16 @@ export default function GuidedFitScreen() {
               These are optional, but they’re the kind of details that prevent a “looks good on
               paper” fit from missing on the body.
             </Text>
-            <Text style={styles.fieldLabel}>Body profile flags</Text>
-            <View style={styles.optionGrid}>
-              {BODY_FLAG_OPTIONS.map((option) => (
-                <SelectionPill
-                  key={option}
-                  label={BODY_PROFILE_FLAG_LABELS[option]}
-                  active={bodyFlags.includes(option)}
-                  onPress={() => toggleFlag(option, bodyFlags, setBodyFlags)}
-                />
-              ))}
-            </View>
-
-            <Text style={styles.fieldLabel}>Symmetry flags</Text>
-            <View style={styles.optionGrid}>
-              {SYMMETRY_FLAG_OPTIONS.map((option) => (
-                <SelectionPill
-                  key={option}
-                  label={SYMMETRY_FLAG_LABELS[option]}
-                  active={symmetryFlags.includes(option)}
-                  onPress={() => toggleFlag(option, symmetryFlags, setSymmetryFlags)}
-                />
-              ))}
-            </View>
+            <SelectSummaryRow
+              label="Body profile flags"
+              value={labelsForSelected(bodyFlags, BODY_PROFILE_FLAG_LABELS)}
+              onPress={() => setActiveSelector('bodyFlags')}
+            />
+            <SelectSummaryRow
+              label="Symmetry flags"
+              value={labelsForSelected(symmetryFlags, SYMMETRY_FLAG_LABELS)}
+              onPress={() => setActiveSelector('symmetryFlags')}
+            />
 
             <Input
               label="Posture note"
@@ -687,30 +793,102 @@ export default function GuidedFitScreen() {
             disabled={saving}
           />
         </ScrollView>
+
+        <OptionSelectorSheet
+          visible={!!selectorConfig}
+          title={selectorConfig?.title ?? ''}
+          description={selectorConfig?.description ?? ''}
+          options={selectorConfig?.options ?? []}
+          selectedValues={selectorConfig?.selectedValues ?? []}
+          multiple={selectorConfig?.multiple ?? false}
+          onSelect={handleSelectorOption}
+          onClose={() => setActiveSelector(null)}
+        />
       </KeyboardAvoidingView>
     </SafeAreaView>
   )
 }
 
-function SelectionPill({
+function SelectSummaryRow({
   label,
-  active,
+  value,
   onPress,
 }: {
   label: string
-  active: boolean
+  value: string
   onPress: () => void
 }) {
   return (
     <TouchableOpacity
-      style={[styles.selectionPill, active && styles.selectionPillActive]}
+      style={styles.selectRow}
       onPress={onPress}
       activeOpacity={0.8}
     >
-      <Text style={[styles.selectionPillText, active && styles.selectionPillTextActive]}>
-        {label}
-      </Text>
+      <View style={styles.selectTextBlock}>
+        <Text style={styles.selectLabel}>{label}</Text>
+        <Text style={styles.selectValue}>{value}</Text>
+      </View>
+      <Text style={styles.selectChevron}>›</Text>
     </TouchableOpacity>
+  )
+}
+
+function OptionSelectorSheet({
+  visible,
+  title,
+  description,
+  options,
+  selectedValues,
+  multiple,
+  onSelect,
+  onClose,
+}: {
+  visible: boolean
+  title: string
+  description: string
+  options: SelectorOption[]
+  selectedValues: string[]
+  multiple: boolean
+  onSelect: (value: string) => void
+  onClose: () => void
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.sheetBackdrop} onPress={onClose}>
+        <Pressable style={styles.sheet} onPress={(event) => event.stopPropagation()}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.sheetHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.sheetTitle}>{title}</Text>
+              <Text style={styles.sheetDescription}>{description}</Text>
+            </View>
+            <TouchableOpacity onPress={onClose} style={styles.sheetClose} accessibilityRole="button">
+              <Text style={styles.sheetCloseText}>{multiple ? 'Done' : 'Close'}</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.optionList}>
+            {options.map((option) => {
+              const selected = selectedValues.includes(option.value)
+              return (
+                <TouchableOpacity
+                  key={option.value}
+                  style={[styles.optionRow, selected && styles.optionRowSelected]}
+                  onPress={() => onSelect(option.value)}
+                  activeOpacity={0.82}
+                >
+                  <Text style={[styles.optionLabel, selected && styles.optionLabelSelected]}>
+                    {option.label}
+                  </Text>
+                  <View style={[styles.optionCheck, selected && styles.optionCheckSelected]}>
+                    {selected ? <Text style={styles.optionCheckText}>✓</Text> : null}
+                  </View>
+                </TouchableOpacity>
+              )
+            })}
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
   )
 }
 
@@ -810,38 +988,129 @@ const styles = StyleSheet.create({
     color: Colors.inkLight,
     lineHeight: 19,
   },
-  fieldLabel: {
-    fontSize: FontSize.sm,
+  selectRow: {
+    minHeight: 62,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.surfaceElevated,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  selectTextBlock: { flex: 1, gap: 3 },
+  selectLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  selectValue: {
+    fontSize: FontSize.md,
     color: Colors.ink,
     fontWeight: FontWeight.semibold,
-    marginTop: Spacing.sm,
   },
-  optionGrid: {
+  selectChevron: {
+    fontSize: 30,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.medium,
+  },
+  sheetBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.42)',
+  },
+  sheet: {
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    paddingHorizontal: Spacing.xl,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.xxl,
+    gap: Spacing.md,
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 4,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.lightGrey,
+    marginBottom: Spacing.sm,
+  },
+  sheetHeader: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.sm,
+    alignItems: 'flex-start',
+    gap: Spacing.md,
   },
-  selectionPill: {
+  sheetTitle: {
+    fontSize: FontSize.lg,
+    color: Colors.ink,
+    fontWeight: FontWeight.bold,
+    fontFamily: Fonts.display,
+  },
+  sheetDescription: {
+    fontSize: FontSize.sm,
+    color: Colors.inkLight,
+    lineHeight: 20,
+    marginTop: 4,
+  },
+  sheetClose: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.sm,
+  },
+  sheetCloseText: {
+    fontSize: FontSize.sm,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+  },
+  optionList: { gap: Spacing.xs },
+  optionRow: {
+    minHeight: 58,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  optionRowSelected: {
+    borderColor: Colors.needleGreen,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  optionLabel: {
+    flex: 1,
+    fontSize: FontSize.md,
+    color: Colors.ink,
+    fontWeight: FontWeight.medium,
+  },
+  optionLabelSelected: {
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+  },
+  optionCheck: {
+    width: 26,
+    height: 26,
     borderRadius: Radius.full,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    backgroundColor: Colors.white,
-    minHeight: 40,
+    alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: Colors.surface,
   },
-  selectionPillActive: {
-    backgroundColor: Colors.needleGreen,
+  optionCheckSelected: {
     borderColor: Colors.needleGreen,
+    backgroundColor: Colors.needleGreen,
   },
-  selectionPillText: {
-    color: Colors.inkLight,
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.medium,
-  },
-  selectionPillTextActive: {
+  optionCheckText: {
     color: Colors.textInverse,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.bold,
   },
   summaryRow: {
     flexDirection: 'row',

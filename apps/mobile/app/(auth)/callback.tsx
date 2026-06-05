@@ -28,7 +28,7 @@ export default function AuthCallbackScreen() {
               <ActivityIndicator color={Colors.needleGreen} size="large" />
               <Text style={styles.title}>Finishing sign in…</Text>
               <Text style={styles.hint}>
-                Please wait while we secure your session and place you on the right side of Drape.
+                Please wait while we secure your session and place you on the right side of Drapeon.
               </Text>
               <View style={styles.noteCard}>
                 <Text style={styles.noteTitle}>What happens next</Text>
@@ -48,7 +48,7 @@ export default function AuthCallbackScreen() {
                 <Text style={styles.noteTitle}>Nothing should be lost</Text>
                 <Text style={styles.noteText}>
                   Your account is still the same. This screen is only the handoff between your
-                  provider and Drape.
+                  provider and Drapeon.
                 </Text>
               </View>
               <View style={styles.noteCard}>

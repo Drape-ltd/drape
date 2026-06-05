@@ -287,7 +287,7 @@ export default function TailorReviewsScreen() {
                   <View style={styles.replyForm}>
                     {replyWarning ? (
                       <View style={styles.replyWarning}>
-                        <Text style={styles.replyWarningText}>Contact details removed — keep responses within Drape.</Text>
+                        <Text style={styles.replyWarningText}>Contact details removed — keep responses within Drapeon.</Text>
                       </View>
                     ) : null}
                     <TextInput

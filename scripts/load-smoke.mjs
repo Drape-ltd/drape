@@ -79,7 +79,7 @@ const scenarios = [
 if (healthSecret) {
   scenarios.push(() => timed('service-health/ready', () =>
     fetch(`${functionBase}/service-health?check=ready`, {
-      headers: { ...headers, 'x-drape-healthcheck-secret': healthSecret },
+      headers: { ...headers, authorization: `Bearer ${healthSecret}` },
     }).then(expectOk)))
 }
 

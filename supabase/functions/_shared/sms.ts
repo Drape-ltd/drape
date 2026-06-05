@@ -4,6 +4,7 @@ import { normalizeStoredPhone } from './phone.ts'
 
 const FN = 'sms'
 const TWILIO_API_BASE = 'https://api.twilio.com/2010-04-01'
+const TERMII_API_BASE = 'https://api.ng.termii.com/api'
 
 type SmsAudience = 'CUSTOMER' | 'TAILOR'
 
@@ -29,8 +30,46 @@ function getTwilioFromNumber() {
   return Deno.env.get('TWILIO_FROM_NUMBER')?.trim() ?? ''
 }
 
-function hasSmsConfig() {
-  return !!(getTwilioAccountSid() && getTwilioAuthToken() && getTwilioFromNumber())
+function getTermiiApiKey() {
+  return Deno.env.get('TERMII_API_KEY')?.trim() ?? ''
+}
+
+function getTermiiSenderId() {
+  return (
+    Deno.env.get('TERMII_SENDER_ID') ??
+    Deno.env.get('TERMII_FROM') ??
+    'Drape'
+  ).trim()
+}
+
+function getTermiiChannel() {
+  return (Deno.env.get('TERMII_CHANNEL') ?? 'generic').trim().toLowerCase()
+}
+
+function getTermiiMessageType() {
+  return (Deno.env.get('TERMII_MESSAGE_TYPE') ?? 'plain').trim().toLowerCase()
+}
+
+function getTermiiBaseUrl() {
+  return (Deno.env.get('TERMII_API_BASE_URL') ?? TERMII_API_BASE).replace(/\/+$/u, '')
+}
+
+export type SmsProvider = 'TERMII' | 'TWILIO' | 'NONE'
+
+export function getSmsProvider(): SmsProvider {
+  const configured = Deno.env.get('SMS_PROVIDER')?.trim().toLowerCase()
+  if (configured === 'termii') return 'TERMII'
+  if (configured === 'twilio') return 'TWILIO'
+  if (configured === 'none' || configured === 'off' || configured === 'disabled') return 'NONE'
+  if (getTermiiApiKey()) return 'TERMII'
+  if (getTwilioAccountSid() && getTwilioAuthToken() && getTwilioFromNumber()) return 'TWILIO'
+  return 'NONE'
+}
+
+export function hasSmsConfig(provider = getSmsProvider()) {
+  if (provider === 'TERMII') return !!(getTermiiApiKey() && getTermiiSenderId())
+  if (provider === 'TWILIO') return !!(getTwilioAccountSid() && getTwilioAuthToken() && getTwilioFromNumber())
+  return false
 }
 
 function maskPhone(phone: string) {
@@ -100,7 +139,11 @@ async function resolveUserPhone(supabase: SupabaseClient, audience: SmsAudience,
     : await lookupTailorPhone(supabase, userId)
 }
 
-async function sendSmsDirect(to: string, body: string) {
+function toTermiiPhone(value: string) {
+  return value.replace(/^\+/u, '')
+}
+
+async function sendTwilioSmsDirect(to: string, body: string) {
   const sid = getTwilioAccountSid()
   const token = getTwilioAuthToken()
   const from = getTwilioFromNumber()
@@ -131,12 +174,80 @@ async function sendSmsDirect(to: string, body: string) {
   return { sid: sidValue }
 }
 
+async function sendTermiiSmsDirect(to: string, body: string) {
+  const response = await fetch(`${getTermiiBaseUrl()}/sms/send`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': 'drape-termii-sms/1.0',
+    },
+    body: JSON.stringify({
+      api_key: getTermiiApiKey(),
+      to: toTermiiPhone(to),
+      from: getTermiiSenderId(),
+      sms: body,
+      type: getTermiiMessageType(),
+      channel: getTermiiChannel(),
+    }),
+  })
+
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) {
+    const message =
+      typeof payload?.message === 'string'
+        ? payload.message
+        : `Termii request failed with status ${response.status}`
+    throw new Error(message)
+  }
+
+  const providerId =
+    typeof payload?.message_id === 'string'
+      ? payload.message_id
+      : typeof payload?.sms_id === 'string'
+        ? payload.sms_id
+        : typeof payload?.id === 'string'
+          ? payload.id
+          : null
+  return { sid: providerId }
+}
+
+export async function sendSmsDirect(to: string, body: string) {
+  const provider = getSmsProvider()
+  if (!hasSmsConfig(provider)) {
+    throw new Error('SMS provider is not configured.')
+  }
+
+  if (provider === 'TERMII') {
+    return { provider, ...(await sendTermiiSmsDirect(to, body)) }
+  }
+
+  if (provider === 'TWILIO') {
+    return { provider, ...(await sendTwilioSmsDirect(to, body)) }
+  }
+
+  throw new Error('SMS provider is disabled.')
+}
+
 export async function sendSmsToUser(input: SendSmsToUserInput) {
   const { supabase, userId, audience, orderId, event, body, fallbackPhone } = input
 
   if (!userId || !body.trim()) return
 
-  if (!hasSmsConfig()) {
+  const provider = getSmsProvider()
+  if (!hasSmsConfig(provider)) {
+    await audit(supabase, {
+      event: 'notification.sms_skipped',
+      actor_id: userId,
+      actor_role: audience,
+      order_id: orderId ?? null,
+      severity: 'warn',
+      payload: {
+        channel: 'sms',
+        notification_event: event,
+        provider,
+        reason: provider === 'NONE' ? 'sms_disabled' : 'missing_provider_config',
+      },
+    })
     return
   }
 
@@ -169,7 +280,7 @@ export async function sendSmsToUser(input: SendSmsToUserInput) {
       payload: {
         channel: 'sms',
         notification_event: event,
-        provider: 'TWILIO',
+        provider: result.provider,
         destination: maskPhone(destination),
         provider_sid: result.sid,
       },
@@ -192,7 +303,7 @@ export async function sendSmsToUser(input: SendSmsToUserInput) {
       payload: {
         channel: 'sms',
         notification_event: event,
-        provider: 'TWILIO',
+        provider,
         destination: maskPhone(destination),
         error: message,
       },

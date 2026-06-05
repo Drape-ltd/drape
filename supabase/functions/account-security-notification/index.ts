@@ -41,7 +41,7 @@ function getSiteUrl() {
 }
 
 function getResendFrom() {
-  return Deno.env.get('RESEND_FROM') ?? 'Drape Security <security@drapeon.co>'
+  return Deno.env.get('RESEND_FROM') ?? 'Drapeon Security <security@drapeon.co>'
 }
 
 function getResendApiKey() {
@@ -71,14 +71,14 @@ async function sendSecurityEmail(input: {
   const timestamp = new Date().toISOString()
   const appUrl = getSiteUrl()
   const subject = input.event === 'PASSWORD_CHANGED'
-    ? 'Your Drape password was changed'
-    : 'Drape email change requested'
+    ? 'Your Drapeon password was changed'
+    : 'Drapeon email change requested'
   const headline = input.event === 'PASSWORD_CHANGED'
     ? 'Password changed'
     : 'Email change requested'
   const body = input.event === 'PASSWORD_CHANGED'
-    ? 'Your Drape password was changed from a signed-in session.'
-    : `A signed-in session requested changing this Drape account email${input.newEmail ? ` to ${input.newEmail}` : ''}. Your account email changes only after the required confirmation step is complete.`
+    ? 'Your Drapeon password was changed from a signed-in session.'
+    : `A signed-in session requested changing this Drapeon account email${input.newEmail ? ` to ${input.newEmail}` : ''}. Your account email changes only after the required confirmation step is complete.`
   const action = input.event === 'PASSWORD_CHANGED'
     ? 'If this was not you, reset your password immediately and contact security@drapeon.co.'
     : 'If this was not you, do not confirm the change and contact security@drapeon.co immediately.'

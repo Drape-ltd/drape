@@ -164,7 +164,7 @@ export default function TailorAccountSettingsScreen() {
           />
         </View>
 
-        <Text style={styles.version}>Drape v{version}</Text>
+        <Text style={styles.version}>Drapeon v{version}</Text>
       </ScrollView>
     </SafeAreaView>
   )

@@ -5,6 +5,10 @@ export type OpsRole = 'ops' | 'customer_success' | 'trust' | 'finance' | 'engine
 
 export type OpsView =
   | 'overview'
+  | 'incidents'
+  | 'access'
+  | 'support'
+  | 'shop'
   | 'dispatch'
   | 'order-reviews'
   | 'disputes'
@@ -14,11 +18,13 @@ export type OpsView =
   | 'deletions'
   | 'payouts'
   | 'workflow-issues'
+  | 'runbook'
   | 'bypass'
 
 export type OpsSurfaceStatus = 'live' | 'planned'
 
 export type OpsActionKind =
+  | 'seller-item-visibility'
   | 'dispute-status'
   | 'dispute-resolution'
   | 'bypass-review'
@@ -31,6 +37,7 @@ export type OpsActionKind =
   | 'order-review-resolution'
   | 'order-partial-refund'
   | 'payout-release'
+  | 'material-advance-release'
   | 'payout-block-resolution'
   | 'ops-issue-status'
   | 'manual-issue-create'
@@ -56,20 +63,72 @@ export const OPS_LIVE_SECTIONS: OpsSectionDefinition[] = [
     eyebrow: 'Control plane',
     title: 'See the whole operating picture before touching anything.',
     description:
-      'This is the launch control surface for trust, dispatch, payouts, verification, deletions, and exception handling. It should become the place Drape resolves real customer and tailor problems without bouncing across tools.',
+      'This is the launch control surface for trust, dispatch, payouts, verification, deletions, and exception handling. It should become the place Drapeon resolves real customer and tailor problems without bouncing across tools.',
     team: 'ADMIN',
     status: 'live',
     anchor: 'overview',
     summaryCount: () => 0,
   },
   {
+    key: 'incidents',
+    label: 'Incidents',
+    shortLabel: 'Incidents',
+    eyebrow: 'Incident command',
+    title: 'Treat provider, queue, and critical workflow failures like incidents.',
+    description:
+      'Engineering can see degraded provider circuits, dead-lettered jobs, retry pressure, and high-severity workflow issues in one place before customers feel the outage.',
+    team: 'ENGINEERING',
+    status: 'live',
+    anchor: 'incidents',
+    summaryCount: (summary) => summary.deadJobs + summary.retryableJobs + summary.providersDegraded,
+  },
+  {
+    key: 'access',
+    label: 'Access control',
+    shortLabel: 'Access',
+    eyebrow: 'People and access',
+    title: 'Know who can touch each control before launch pressure hits.',
+    description:
+      'This shows the active access mode, current session role, and the section/action matrix that protects ops work until workforce SSO fully takes over.',
+    team: 'ADMIN',
+    status: 'live',
+    anchor: 'access',
+    summaryCount: () => 0,
+  },
+  {
+    key: 'support',
+    label: 'Support inbox',
+    shortLabel: 'Support',
+    eyebrow: 'Support',
+    title: 'Watch live order conversations before customers feel abandoned.',
+    description:
+      'Recent order threads surface here with the latest message, unread state, payment context, and conversation safety controls so support can act without digging through the mobile app.',
+    team: 'CUSTOMER_SUCCESS',
+    status: 'live',
+    anchor: 'support',
+    summaryCount: (summary) => summary.activeSupportThreads,
+  },
+  {
+    key: 'shop',
+    label: 'Shop inventory',
+    shortLabel: 'Shop',
+    eyebrow: 'Ready-made',
+    title: 'Keep ready-made listings trustworthy before buyers hit checkout.',
+    description:
+      'Ops can spot live listings with missing photos, low stock, sold-out inventory, hidden items, and fulfillment gaps without opening the mobile app.',
+    team: 'OPS',
+    status: 'live',
+    anchor: 'shop',
+    summaryCount: (summary) => summary.shopInventoryAlerts,
+  },
+  {
     key: 'dispatch',
     label: 'Dispatch queue',
     shortLabel: 'Dispatch',
     eyebrow: 'Dispatch',
-    title: 'Own Drape-managed delivery and shipping from one queue.',
+    title: 'Own Drapeon-managed delivery and shipping from one queue.',
     description:
-      'These orders already collected the flat Drape-managed fulfillment fee. Ops owns the rider or courier handoff from here once the seller marks the parcel ready.',
+      'These orders already collected the flat Drapeon-managed fulfillment fee. Ops owns the rider or courier handoff from here once the seller marks the parcel ready.',
     team: 'OPS',
     status: 'live',
     anchor: 'dispatch',
@@ -82,7 +141,7 @@ export const OPS_LIVE_SECTIONS: OpsSectionDefinition[] = [
     eyebrow: 'Order reviews',
     title: 'Resolve cancellations and dispatch exceptions before they become disputes.',
     description:
-      'This is where Drape handles cancellation review, fulfillment change follow-up, and delivery exceptions while the order can still be saved or refunded cleanly.',
+      'This is where Drapeon handles cancellation review, fulfillment change follow-up, and delivery exceptions while the order can still be saved or refunded cleanly.',
     team: 'CUSTOMER_SUCCESS',
     status: 'live',
     anchor: 'order-reviews',
@@ -106,9 +165,9 @@ export const OPS_LIVE_SECTIONS: OpsSectionDefinition[] = [
     label: 'Review moderation',
     shortLabel: 'Reviews',
     eyebrow: 'Review moderation',
-    title: 'Make public review visibility an intentional Drape decision.',
+    title: 'Make public review visibility an intentional Drapeon decision.',
     description:
-      'This queue keeps held or unpublished reviews visible until Drape chooses whether they should go public, stay held, or be reviewed in context.',
+      'This queue keeps held or unpublished reviews visible until Drapeon chooses whether they should go public, stay held, or be reviewed in context.',
     team: 'TRUST',
     status: 'live',
     anchor: 'reviews',
@@ -180,11 +239,24 @@ export const OPS_LIVE_SECTIONS: OpsSectionDefinition[] = [
     summaryCount: (summary) => summary.openWorkflowIssues,
   },
   {
+    key: 'runbook',
+    label: 'Runbook',
+    shortLabel: 'Runbook',
+    eyebrow: 'Ops knowledge',
+    title: 'Find the right playbook before replying to a customer or tailor.',
+    description:
+      'This keeps Drapeon launch guidance in the same control plane as disputes, payouts, dispatch, support, and safety queues so ops can act consistently.',
+    team: 'OPS',
+    status: 'live',
+    anchor: 'runbook',
+    summaryCount: () => 0,
+  },
+  {
     key: 'bypass',
     label: 'Bypass logs',
     shortLabel: 'Bypass',
     eyebrow: 'Contact bypass',
-    title: 'Review blocked attempts to move communication off Drape.',
+    title: 'Review blocked attempts to move communication off Drapeon.',
     description:
       'This is the server-side record of users trying to move communication off-platform before the right milestone.',
     team: 'TRUST',
@@ -194,38 +266,20 @@ export const OPS_LIVE_SECTIONS: OpsSectionDefinition[] = [
   },
 ]
 
-export const OPS_FUTURE_SURFACES = [
-  {
-    key: 'support-inbox',
-    label: 'Customer success inbox',
-    team: 'CUSTOMER_SUCCESS' as OpsTeam,
-    note: 'Unified order, consultation, and support threads will land here once Drape-owned messaging and SLA routing are online.',
-  },
-  {
-    key: 'incidents',
-    label: 'Incidents and on-call',
-    team: 'ENGINEERING' as OpsTeam,
-    note: 'This will carry outage tracking, Cloudflare and API alerts, annotations, and on-call coordination.',
-  },
-  {
-    key: 'people-access',
-    label: 'People and access',
-    team: 'ADMIN' as OpsTeam,
-    note: 'This is where workforce SSO, group sync, section access, and audit-safe permission overrides should live.',
-  },
-] as const
+export const OPS_FUTURE_SURFACES = [] as const
 
 const ROLE_SECTION_ACCESS: Record<OpsRole, OpsView[]> = {
   admin: OPS_LIVE_SECTIONS.map((section) => section.key),
-  ops: ['overview', 'dispatch', 'applications', 'payouts'],
-  customer_success: ['overview', 'order-reviews', 'disputes'],
-  trust: ['overview', 'reviews', 'verification', 'deletions', 'bypass', 'workflow-issues'],
-  finance: ['overview', 'payouts'],
-  engineering: ['overview', 'workflow-issues', 'dispatch'],
+  ops: ['overview', 'support', 'shop', 'dispatch', 'applications', 'payouts', 'runbook'],
+  customer_success: ['overview', 'support', 'order-reviews', 'disputes', 'workflow-issues', 'runbook'],
+  trust: ['overview', 'support', 'reviews', 'verification', 'deletions', 'bypass', 'workflow-issues', 'runbook'],
+  finance: ['overview', 'payouts', 'runbook'],
+  engineering: ['overview', 'incidents', 'workflow-issues', 'dispatch', 'runbook'],
 }
 
 const ROLE_ACTION_ACCESS: Record<OpsRole, OpsActionKind[]> = {
   admin: [
+    'seller-item-visibility',
     'dispute-status',
     'dispute-resolution',
     'bypass-review',
@@ -238,13 +292,15 @@ const ROLE_ACTION_ACCESS: Record<OpsRole, OpsActionKind[]> = {
     'order-review-resolution',
     'order-partial-refund',
     'payout-release',
+    'material-advance-release',
+    'payout-block-resolution',
     'ops-issue-status',
     'manual-issue-create',
   ],
-  ops: ['application-status', 'dispatch-stage', 'order-partial-refund', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create'],
-  customer_success: ['dispute-status', 'dispute-resolution', 'order-review-resolution', 'order-partial-refund', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create'],
-  trust: ['bypass-review', 'verification-decision', 'deletion-status', 'review-visibility', 'conversation-access', 'ops-issue-status', 'manual-issue-create'],
-  finance: ['order-partial-refund', 'payout-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create'],
+  ops: ['seller-item-visibility', 'application-status', 'dispatch-stage', 'order-partial-refund', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create'],
+  customer_success: ['dispute-status', 'dispute-resolution', 'conversation-access', 'order-review-resolution', 'order-partial-refund', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create'],
+  trust: ['seller-item-visibility', 'bypass-review', 'verification-decision', 'deletion-status', 'review-visibility', 'conversation-access', 'ops-issue-status', 'manual-issue-create'],
+  finance: ['order-partial-refund', 'payout-release', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create'],
   engineering: ['ops-issue-status', 'manual-issue-create'],
 }
 
@@ -268,6 +324,14 @@ export function getOpsSection(view: OpsView): OpsSectionDefinition {
 export function getVisibleOpsSections(role: OpsRole): OpsSectionDefinition[] {
   const allowed = new Set<OpsView>(ROLE_SECTION_ACCESS[role] ?? ROLE_SECTION_ACCESS.admin)
   return OPS_LIVE_SECTIONS.filter((section) => allowed.has(section.key))
+}
+
+export function getOpsRoleSections(role: OpsRole) {
+  return getVisibleOpsSections(role).map((section) => section.key)
+}
+
+export function getOpsRoleActions(role: OpsRole) {
+  return ROLE_ACTION_ACCESS[role] ?? ROLE_ACTION_ACCESS.admin
 }
 
 export function canAccessOpsSection(role: OpsRole, view: OpsView) {

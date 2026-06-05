@@ -6,7 +6,7 @@ import { buildMetadata } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'Verification',
-  description: 'Understand the verification layer in Drape and contact the right team about trust and verification questions.',
+  description: 'Understand the verification layer in Drapeon and contact the right team about trust and verification questions.',
   path: '/verify',
 })
 
@@ -15,10 +15,10 @@ export default function VerifyPage(): JSX.Element {
     <MarketingShell
       eyebrow="Verification"
       title="Verification should feel clear before it feels official."
-      description="Drape works better when verification is easy to understand: what it is for, why it matters, and how it supports trust for both customers and tailors."
+      description="Drapeon works better when verification is easy to understand: what it is for, why it matters, and how it supports trust for both customers and tailors."
       cta={
         <a
-          href={`mailto:${CONTACTS.verify}?subject=Drape%20verification%20question`}
+          href={`mailto:${CONTACTS.verify}?subject=Drapeon%20verification%20question`}
           className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
         >
           Contact verification
@@ -38,7 +38,7 @@ export default function VerifyPage(): JSX.Element {
           />
           <MarketingCard
             title="Storefront trust"
-            body="A good verification flow strengthens the profile, portfolio, and public confidence around taking work through Drape."
+            body="A good verification flow strengthens the profile, portfolio, and public confidence around taking work through Drapeon."
           />
           <MarketingCard
             title="Clear routing"
@@ -55,7 +55,7 @@ export default function VerifyPage(): JSX.Element {
         />
         <div className="mt-10">
           <a
-            href={`mailto:${CONTACTS.verify}?subject=Drape%20verification%20question`}
+            href={`mailto:${CONTACTS.verify}?subject=Drapeon%20verification%20question`}
             className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-6 py-4 text-sm font-semibold text-ink shadow-sm"
           >
             {CONTACTS.verify}

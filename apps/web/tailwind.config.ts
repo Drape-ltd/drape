@@ -9,7 +9,7 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Drape brand palette
+        // Drapeon brand palette
         needle: {
           DEFAULT: '#2D6A4F',
           50: '#E8F5EF',

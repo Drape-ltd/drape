@@ -62,7 +62,7 @@ export async function setBiometricEnabled(enabled: boolean): Promise<void> {
 export async function authenticate(reason?: string): Promise<boolean> {
   if (!LocalAuthentication) return false
   const result = await LocalAuthentication.authenticateAsync({
-    promptMessage: reason ?? 'Verify your identity to access Drape',
+    promptMessage: reason ?? 'Verify your identity to access Drapeon',
     cancelLabel: 'Use password',
     disableDeviceFallback: false,
   })

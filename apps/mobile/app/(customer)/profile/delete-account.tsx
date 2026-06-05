@@ -105,9 +105,9 @@ export default function DeleteAccountScreen() {
             <View style={styles.heroBadge}>
               <Text style={styles.heroBadgeText}>Request received</Text>
             </View>
-            <Text style={styles.heroTitle}>Your deletion request is now in Drape.</Text>
+            <Text style={styles.heroTitle}>Your deletion request is now in Drapeon.</Text>
             <Text style={styles.heroCopy}>
-              We sent a receipt to your account email. {activeOrderCount && activeOrderCount > 0 ? `We found ${activeOrderCount} active order${activeOrderCount === 1 ? '' : 's'}, so Drape will resolve open transactions before deletion or anonymization.` : 'We may contact you if we need confirmation.'} Some records may be retained where required for security, active transactions, legal obligations, or claims handling.
+              We sent a receipt to your account email. {activeOrderCount && activeOrderCount > 0 ? `We found ${activeOrderCount} active order${activeOrderCount === 1 ? '' : 's'}, so Drapeon will resolve open transactions before deletion or anonymization.` : 'We may contact you if we need confirmation.'} Some records may be retained where required for security, active transactions, legal obligations, or claims handling.
             </Text>
           </View>
 
@@ -140,13 +140,13 @@ export default function DeleteAccountScreen() {
           </View>
           <Text style={styles.heroTitle}>Start an account deletion request.</Text>
           <Text style={styles.heroCopy}>
-            This does not behave like an instant total wipe. Drape may retain limited records where required for security, fraud prevention, active transactions, legal obligations, or claims handling.
+            This does not behave like an instant total wipe. Drapeon may retain limited records where required for security, fraud prevention, active transactions, legal obligations, or claims handling.
           </Text>
         </View>
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>What happens next</Text>
-          <Text style={styles.sectionCopy}>Your account can be restricted and queued for deletion review. If you have active orders, Drape resolves refunds, disputes, and legally required records before final deletion or anonymization.</Text>
+          <Text style={styles.sectionCopy}>Your account can be restricted and queued for deletion review. If you have active orders, Drapeon resolves refunds, disputes, and legally required records before final deletion or anonymization.</Text>
           <View style={styles.divider} />
           <Text style={styles.sectionTitle}>Account email</Text>
           <Text style={styles.accountValue}>{user?.email ?? 'No account email available in-app'}</Text>
@@ -204,29 +204,29 @@ export default function DeleteAccountScreen() {
 
         <View style={styles.noteCard}>
           <Text style={styles.noteTitle}>Before deletion</Text>
-          <Text style={styles.noteCopy}>Use this flow when you want Drape to process account closure and deletion. It is not an instant wipe while money movement, support, or legal retention obligations may still be open.</Text>
+          <Text style={styles.noteCopy}>Use this flow when you want Drapeon to process account closure and deletion. It is not an instant wipe while money movement, support, or legal retention obligations may still be open.</Text>
         </View>
 
         <TouchableOpacity
-          style={[styles.actionBtn, (!canSubmit || submitting) && { opacity: 0.55 }]}
+          style={[styles.actionBtn, (!canSubmit || submitting) && styles.actionBtnDisabled]}
           onPress={handleSubmit}
           disabled={submitting || !canSubmit}
           accessibilityRole="button"
           accessibilityLabel="Submit account deletion request"
         >
-          {submitting ? <ActivityIndicator color={Colors.textInverse} /> : <Text style={styles.actionBtnText}>Submit deletion request</Text>}
+          {submitting ? <ActivityIndicator color={Colors.textInverse} /> : <Text style={[styles.actionBtnText, !canSubmit && styles.actionBtnTextDisabled]}>Submit deletion request</Text>}
         </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.secondaryBtn}
           onPress={() => {
             void openExternalUrl(
-              `mailto:${CONTACTS.privacy}?subject=${encodeURIComponent('Drape account deletion request')}`,
+              `mailto:${CONTACTS.privacy}?subject=${encodeURIComponent('Drapeon account deletion request')}`,
               `Please email ${CONTACTS.privacy} if you cannot complete the request in-app.`,
             )
           }}
           accessibilityRole="button"
-          accessibilityLabel="Email Drape privacy team instead"
+          accessibilityLabel="Email Drapeon privacy team instead"
         >
           <Text style={styles.secondaryBtnText}>Email privacy team instead</Text>
         </TouchableOpacity>
@@ -329,11 +329,9 @@ const styles = StyleSheet.create({
     borderColor: Colors.lightGrey,
   },
   noteTitle: {
-    fontSize: FontSize.xs,
+    fontSize: FontSize.sm,
     color: Colors.midGrey,
     fontWeight: FontWeight.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
   },
   noteCopy: { fontSize: FontSize.sm, color: Colors.inkLight, lineHeight: 20 },
   actionBtn: {
@@ -344,7 +342,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  actionBtnDisabled: {
+    backgroundColor: Colors.disabledFill,
+  },
   actionBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
+  actionBtnTextDisabled: { color: Colors.disabledText },
   secondaryBtn: {
     borderRadius: Radius.lg,
     padding: 12,

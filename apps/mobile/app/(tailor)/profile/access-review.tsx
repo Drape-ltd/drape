@@ -77,7 +77,7 @@ export default function TailorAccessReviewScreen() {
             <View style={styles.heroBadge}>
               <Text style={styles.heroBadgeText}>Request received</Text>
             </View>
-            <Text style={styles.heroTitle}>Your tailor access review request is now in Drape.</Text>
+            <Text style={styles.heroTitle}>Your tailor access review request is now in Drapeon.</Text>
             <Text style={styles.heroCopy}>
               Support can now review the context you submitted. If more evidence is needed, they can follow up from the account email on file.
             </Text>
@@ -162,7 +162,7 @@ export default function TailorAccessReviewScreen() {
           style={styles.secondaryBtn}
           onPress={() => {
             void openExternalUrl(
-              `mailto:${CONTACTS.tailors}?subject=${encodeURIComponent('Drape tailor access review request')}`,
+              `mailto:${CONTACTS.tailors}?subject=${encodeURIComponent('Drapeon tailor access review request')}`,
               `Please email ${CONTACTS.tailors} from your account email if you cannot complete the request in-app.`,
             )
           }}

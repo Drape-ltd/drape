@@ -56,6 +56,9 @@ function PrefRow({
         value={value}
         onValueChange={onChange}
         disabled={disabled}
+        accessibilityLabel={`${title} notifications`}
+        accessibilityHint={value ? 'Double tap to turn this notification type off' : 'Double tap to turn this notification type on'}
+        accessibilityState={{ checked: value, disabled }}
         trackColor={{ false: Colors.lightGrey, true: Colors.needleGreen }}
         thumbColor={Colors.textInverse}
       />
@@ -87,7 +90,7 @@ export default function NotificationSettingsScreen() {
     if (error) {
       setPrefs(previous)
       Alert.alert(
-        'Error',
+        'Could not save setting',
         isLikelyConnectivityIssue(error)
           ? 'Connection looks weak. We could not save your notification settings yet. Retry when the signal improves.'
           : 'Could not save your notification settings right now. Please try again in a moment.',
@@ -162,14 +165,14 @@ export default function NotificationSettingsScreen() {
           </View>
         </View>
 
-        {/* ── Drape ── */}
+        {/* ── Drapeon ── */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Drape</Text>
+          <Text style={styles.sectionTitle}>Drapeon</Text>
           <View style={styles.card}>
             <PrefRow
               icon="star"
               title="Promotions & news"
-              description="New tailors, seasonal highlights, and exclusive offers from Drape."
+              description="New tailors, seasonal highlights, and exclusive offers from Drapeon."
               value={prefs.promotions}
               onChange={(v) => toggle('promotions', v)}
               disabled={saving}

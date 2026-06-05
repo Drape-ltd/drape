@@ -10,6 +10,7 @@ import {
   Linking,
   ScrollView,
   Alert,
+  BackHandler,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
@@ -35,6 +36,10 @@ type ConversationItem = {
   lastMessage: string | null
   lastMessageAt: string | null
   unreadCount: number
+}
+type ConversationGroup = {
+  tailorName: string
+  threads: ConversationItem[]
 }
 type MessageRow = {
   body: string | null
@@ -117,6 +122,7 @@ export default function MessagesInboxScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [fetchErrorMessage, setFetchErrorMessage] = useState('')
   const [filter, setFilter] = useState<FilterTab>('open')
+  const [expandedOpenTailor, setExpandedOpenTailor] = useState<string | null>(null)
   const [expandedArchiveTailor, setExpandedArchiveTailor] = useState<string | null>(null)
   const [archiveDirectoryOpen, setArchiveDirectoryOpen] = useState(false)
 
@@ -197,6 +203,32 @@ export default function MessagesInboxScreen() {
     }, [fetchConversations])
   )
 
+  useFocusEffect(
+    useCallback(() => {
+      const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+        if (filter === 'archive' && archiveDirectoryOpen) {
+          setArchiveDirectoryOpen(false)
+          setExpandedArchiveTailor(null)
+          return true
+        }
+        if (filter === 'open' && expandedOpenTailor) {
+          setExpandedOpenTailor(null)
+          return true
+        }
+        if (filter !== 'open') {
+          setFilter('open')
+          setExpandedOpenTailor(null)
+          setArchiveDirectoryOpen(false)
+          setExpandedArchiveTailor(null)
+          return true
+        }
+        return false
+      })
+
+      return () => subscription.remove()
+    }, [archiveDirectoryOpen, expandedOpenTailor, filter])
+  )
+
   async function onRefresh() {
     setRefreshing(true)
     await fetchConversations()
@@ -215,6 +247,7 @@ export default function MessagesInboxScreen() {
   }
 
   const openConversations = conversations.filter((item) => CUSTOMER_ACTIVE_ORDER_STAGES.includes(item.stage))
+  const openGroups = groupConversationsByTailor(openConversations)
   const archivedConversations = conversations
     .filter((item) => !CUSTOMER_ACTIVE_ORDER_STAGES.includes(item.stage))
     .sort((a, b) => {
@@ -272,12 +305,86 @@ export default function MessagesInboxScreen() {
     )
   }
 
+  function renderConversationGroup(item: ConversationGroup, mode: 'open' | 'archive') {
+    const expanded =
+      mode === 'open'
+        ? expandedOpenTailor === item.tailorName
+        : expandedArchiveTailor === item.tailorName
+    const unread = item.threads.reduce((sum, thread) => sum + thread.unreadCount, 0)
+    const latest = item.threads[0]
+    if (!latest) return null
+    const singleThread = item.threads.length === 1
+    const threadLabel = mode === 'open' ? 'active order' : 'past thread'
+    const preview = singleThread
+      ? orderPreview(latest.stage, latest.garmentType, latest.orderKind)
+      : `${item.threads.length} ${threadLabel}${item.threads.length === 1 ? '' : 's'}`
+
+    return (
+      <View style={styles.archiveGroupCard}>
+        <TouchableOpacity
+          style={styles.archiveGroupRow}
+          activeOpacity={0.75}
+          onPress={() => {
+            if (singleThread && latest) {
+              router.push(`/(customer)/messages/${latest.orderId}`)
+              return
+            }
+            if (mode === 'open') {
+              setExpandedOpenTailor(expanded ? null : item.tailorName)
+            } else {
+              setExpandedArchiveTailor(expanded ? null : item.tailorName)
+            }
+          }}
+        >
+          <AvatarImage
+            uri={latest?.tailorAvatarUrl ?? null}
+            initials={item.tailorName}
+            size={46}
+            borderColor={unread > 0 ? Colors.needleGreen : Colors.lightGrey}
+            borderWidth={unread > 0 ? 2 : 1}
+          />
+          <View style={styles.content}>
+            <View style={styles.contentTop}>
+              <Text style={[styles.name, unread > 0 && styles.nameBold]} numberOfLines={1}>
+                {item.tailorName}
+              </Text>
+              <Feather
+                name={singleThread ? 'chevron-right' : expanded ? 'chevron-up' : 'chevron-down'}
+                size={18}
+                color={Colors.midGrey}
+              />
+            </View>
+            <View style={styles.contentBottom}>
+              <Text style={styles.preview} numberOfLines={1}>
+                {preview}
+              </Text>
+              {unread > 0 ? (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{unread > 9 ? '9+' : unread}</Text>
+                </View>
+              ) : null}
+            </View>
+          </View>
+        </TouchableOpacity>
+        {!singleThread && expanded ? (
+          <View style={styles.archiveThreadList}>
+            {item.threads.map((thread) => (
+              <View key={thread.orderId} style={styles.archiveThreadItem}>
+                {renderConversationRow(thread, 'order')}
+              </View>
+            ))}
+          </View>
+        ) : null}
+      </View>
+    )
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.title}>Messages</Text>
-        <View style={styles.filterRow}>
+        <View style={styles.filterTabs}>
           {[
             { key: 'open' as FilterTab, label: 'Open', badge: openConversations.reduce((sum, c) => sum + c.unreadCount, 0) },
             { key: 'archive' as FilterTab, label: 'Archive', badge: archivedConversations.reduce((sum, c) => sum + c.unreadCount, 0) },
@@ -285,9 +392,10 @@ export default function MessagesInboxScreen() {
           ].map(({ key, label, badge }) => (
             <TouchableOpacity
               key={key}
-              style={[styles.filterChip, filter === key && styles.filterChipActive]}
+              style={[styles.filterTab, filter === key && styles.filterTabActive]}
               onPress={() => {
                 setFilter(key)
+                setExpandedOpenTailor(null)
                 if (key !== 'archive') {
                   setArchiveDirectoryOpen(false)
                   setExpandedArchiveTailor(null)
@@ -297,7 +405,7 @@ export default function MessagesInboxScreen() {
               accessibilityState={{ selected: filter === key }}
               accessibilityLabel={`${label} messages`}
             >
-              <Text style={[styles.filterLabel, filter === key && styles.filterLabelActive]}>
+              <Text style={[styles.filterLabel, filter === key && styles.filterLabelActive]} numberOfLines={1}>
                 {label}
               </Text>
               {badge > 0 && filter !== key && (
@@ -428,57 +536,13 @@ export default function MessagesInboxScreen() {
             </View>
           }
           renderItem={({ item }) => {
-            const expanded = expandedArchiveTailor === item.tailorName
-            const unread = item.threads.reduce((sum, thread) => sum + thread.unreadCount, 0)
-            const latest = item.threads[0]
-            return (
-              <View style={styles.archiveGroupCard}>
-                <TouchableOpacity
-                  style={styles.archiveGroupRow}
-                  activeOpacity={0.75}
-                  onPress={() => setExpandedArchiveTailor(expanded ? null : item.tailorName)}
-                >
-                  <AvatarImage
-                    uri={latest?.tailorAvatarUrl ?? null}
-                    initials={item.tailorName}
-                    size={46}
-                    borderColor={unread > 0 ? Colors.needleGreen : Colors.lightGrey}
-                    borderWidth={unread > 0 ? 2 : 1}
-                  />
-                  <View style={styles.content}>
-                    <View style={styles.contentTop}>
-                      <Text style={[styles.name, unread > 0 && styles.nameBold]} numberOfLines={1}>{item.tailorName}</Text>
-                      <Feather name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color={Colors.midGrey} />
-                    </View>
-                    <View style={styles.contentBottom}>
-                      <Text style={styles.preview} numberOfLines={1}>
-                        {item.threads.length} past thread{item.threads.length === 1 ? '' : 's'}
-                      </Text>
-                      {unread > 0 ? (
-                        <View style={styles.badge}>
-                          <Text style={styles.badgeText}>{unread > 9 ? '9+' : unread}</Text>
-                        </View>
-                      ) : null}
-                    </View>
-                  </View>
-                </TouchableOpacity>
-                {expanded ? (
-                  <View style={styles.archiveThreadList}>
-                    {item.threads.map((thread) => (
-                      <View key={thread.orderId} style={styles.archiveThreadItem}>
-                        {renderConversationRow(thread, 'order')}
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
-              </View>
-            )
+            return renderConversationGroup(item, 'archive')
           }}
         />
         ) : (
         <FlatList
-          data={openConversations}
-          keyExtractor={(c) => c.orderId}
+          data={openGroups}
+          keyExtractor={(group) => group.tailorName}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
@@ -487,10 +551,17 @@ export default function MessagesInboxScreen() {
               tintColor={Colors.needleGreen}
             />
           }
-          contentContainerStyle={openConversations.length === 0 ? styles.emptyContainer : styles.listContent}
-          ItemSeparatorComponent={() => <View style={styles.separator} />}
+          contentContainerStyle={openGroups.length === 0 ? styles.emptyContainer : styles.listContent}
           ListHeaderComponent={
             <View>
+              {openGroups.some((group) => group.threads.length > 1) ? (
+                <View style={styles.archiveIntro}>
+                  <Text style={styles.archiveIntroTitle}>Grouped by tailor</Text>
+                  <Text style={styles.archiveIntroText}>
+                    Multiple live orders with the same tailor stay together. Open a tailor to choose the exact order thread.
+                  </Text>
+                </View>
+              ) : null}
               {archivedConversations.length > 0 ? (
                 <TouchableOpacity
                   style={styles.archiveShortcut}
@@ -530,7 +601,7 @@ export default function MessagesInboxScreen() {
               </StateCard>
             </View>
           }
-          renderItem={({ item }) => renderConversationRow(item)}
+          renderItem={({ item }) => renderConversationGroup(item, 'open')}
         />
         )
       )}
@@ -627,14 +698,14 @@ function SupportView({ onOpenMessages }: { onOpenMessages: () => void }) {
   ]
 
   async function openSupportEmail(subject?: string) {
-    const fallbackSubject = subject ?? 'Drape support request'
+    const fallbackSubject = subject ?? 'Drapeon support request'
     const url = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(fallbackSubject)}`
 
     const supported = await Linking.canOpenURL(url)
     if (!supported) {
       Alert.alert(
         'Unable to open email',
-        `Please email ${SUPPORT_EMAIL} directly with the subject "${fallbackSubject}". If this is about a live order, keep the order thread updated in Drape too.`
+        `Please email ${SUPPORT_EMAIL} directly with the subject "${fallbackSubject}". If this is about a live order, keep the order thread updated in Drapeon too.`
       )
       return
     }
@@ -644,7 +715,7 @@ function SupportView({ onOpenMessages }: { onOpenMessages: () => void }) {
     } catch {
       Alert.alert(
         'Unable to open email',
-        `Please email ${SUPPORT_EMAIL} directly with the subject "${fallbackSubject}". If this is about a live order, keep the order thread updated in Drape too.`
+        `Please email ${SUPPORT_EMAIL} directly with the subject "${fallbackSubject}". If this is about a live order, keep the order thread updated in Drapeon too.`
       )
     }
   }
@@ -734,20 +805,34 @@ function SupportView({ onOpenMessages }: { onOpenMessages: () => void }) {
           void openSupportEmail()
         }}
       >
-        <Text style={styles.supportEmailTitle}>Email Drape Support</Text>
+        <Text style={styles.supportEmailTitle}>Email Drapeon Support</Text>
         <Text style={styles.supportEmailText}>{SUPPORT_EMAIL} · replies usually arrive within a few hours</Text>
       </TouchableOpacity>
     </ScrollView>
   )
 }
 
-function groupConversationsByTailor(items: ConversationItem[]) {
+function groupConversationsByTailor(items: ConversationItem[]): ConversationGroup[] {
   const groups = new Map<string, ConversationItem[]>()
   for (const item of items) {
     const key = item.tailorName || 'Tailor'
     groups.set(key, [...(groups.get(key) ?? []), item])
   }
-  return Array.from(groups.entries()).map(([tailorName, threads]) => ({ tailorName, threads }))
+  return Array.from(groups.entries())
+    .map(([tailorName, threads]) => ({ tailorName, threads }))
+    .sort((a, b) => {
+      const aUnread = a.threads.reduce((sum, thread) => sum + thread.unreadCount, 0)
+      const bUnread = b.threads.reduce((sum, thread) => sum + thread.unreadCount, 0)
+      if (aUnread > 0 && bUnread === 0) return -1
+      if (bUnread > 0 && aUnread === 0) return 1
+      const aLatest = Math.max(
+        ...a.threads.map((thread) => new Date(thread.lastMessageAt ?? thread.createdAt).getTime())
+      )
+      const bLatest = Math.max(
+        ...b.threads.map((thread) => new Date(thread.lastMessageAt ?? thread.createdAt).getTime())
+      )
+      return bLatest - aLatest
+    })
 }
 
 const styles = StyleSheet.create({
@@ -945,19 +1030,27 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
 
-  filterRow: { flexDirection: 'row', gap: 8 },
-  filterChip: {
+  filterTabs: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.boneDeep,
+    borderRadius: Radius.lg,
+    padding: 4,
+    gap: 4,
+  },
+  filterTab: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: Radius.full,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+    borderRadius: Radius.md,
     backgroundColor: Colors.boneDeep,
     minHeight: 44,
     justifyContent: 'center',
   },
-  filterChipActive: { backgroundColor: Colors.needleGreen },
+  filterTabActive: { backgroundColor: Colors.needleGreen },
   filterLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.inkLight },
   filterLabelActive: { color: Colors.textInverse },
   filterBadge: {
@@ -1208,13 +1301,13 @@ const styles = StyleSheet.create({
   supportEmailCard: {
     marginHorizontal: Spacing.lg,
     marginTop: Spacing.xs,
-    backgroundColor: Colors.needleGreenLight,
+    backgroundColor: Colors.needleGreen,
     borderRadius: Radius.lg,
     padding: Spacing.md,
     gap: 4,
   },
-  supportEmailTitle: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
-  supportEmailText: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
+  supportEmailTitle: { fontSize: FontSize.sm, color: Colors.textInverse, fontWeight: FontWeight.semibold },
+  supportEmailText: { fontSize: FontSize.xs, color: Colors.textInverse, lineHeight: 18 },
   supportDivider: {
     height: 1,
     backgroundColor: Colors.lightGrey,

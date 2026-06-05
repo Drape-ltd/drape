@@ -4,7 +4,7 @@ Date: April 2, 2026
 
 ## Purpose
 
-This is the lightweight reviewer-facing note pack for Drape's first external mobile review cycles.
+This is the lightweight reviewer-facing note pack for Drapeon's first external mobile review cycles.
 
 Use it alongside:
 
@@ -13,7 +13,7 @@ Use it alongside:
 
 ## Product Summary
 
-Drape is a two-sided tailoring marketplace:
+Drapeon is a two-sided tailoring marketplace:
 
 - customers browse tailors, submit briefs, accept quotes, pay, and track orders
 - tailors review briefs, send quotes, update stages, and manage delivery or collection handoff
@@ -67,7 +67,7 @@ Drape is a two-sided tailoring marketplace:
 
 ## Weak-Network Behavior
 
-- Drape is designed to degrade gracefully on weak mobile networks.
+- Drapeon is designed to degrade gracefully on weak mobile networks.
 - Order and message flows should prefer retry-safe behavior over silent data loss.
 - External carrier/help/privacy links may fail open; when they do, the in-app order or privacy path remains the source of truth.
 

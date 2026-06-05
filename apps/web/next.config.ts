@@ -17,6 +17,8 @@ const supabaseStorageOrigin = supabaseStorageHostname ? `https://${supabaseStora
 
 function contentSecurityPolicy() {
   const imgSrc = ["'self'", 'data:', 'blob:', supabaseStorageOrigin].filter(Boolean).join(' ')
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? ''
+  const shouldUpgradeInsecureRequests = siteUrl.startsWith('https://') && !siteUrl.includes('localhost')
   const connectSrc = [
     "'self'",
     'https://*.supabase.co',
@@ -37,8 +39,8 @@ function contentSecurityPolicy() {
     `connect-src ${connectSrc}`,
     "font-src 'self' data:",
     "form-action 'self'",
-    'upgrade-insecure-requests',
-  ].join('; ')
+    shouldUpgradeInsecureRequests ? 'upgrade-insecure-requests' : '',
+  ].filter(Boolean).join('; ')
 }
 
 const nextConfig: NextConfig = {

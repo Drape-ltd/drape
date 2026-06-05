@@ -6,7 +6,7 @@ export default function Loading(): JSX.Element {
       <div className="mx-auto flex min-h-screen max-w-4xl flex-col justify-center px-6 py-16 sm:px-8">
         <div className="rounded-[2rem] border border-white/70 bg-white/86 p-8 shadow-[0_25px_80px_rgba(22,28,24,0.10)] backdrop-blur sm:p-12">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Loading</p>
-          <h1 className="mt-4 text-5xl leading-[0.95] text-ink sm:text-6xl">Pulling the next part of Drape into view.</h1>
+          <h1 className="mt-4 text-5xl leading-[0.95] text-ink sm:text-6xl">Pulling the next part of Drapeon into view.</h1>
           <p className="mt-6 max-w-2xl text-lg leading-8 text-ink/68">
             This should only take a moment while the page loads the right product context.
           </p>

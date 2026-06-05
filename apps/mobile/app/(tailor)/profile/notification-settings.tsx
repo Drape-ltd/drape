@@ -57,6 +57,9 @@ function PrefRow({
         value={value}
         onValueChange={onChange}
         disabled={disabled}
+        accessibilityLabel={`${title} notifications`}
+        accessibilityHint={value ? 'Double tap to turn this notification type off' : 'Double tap to turn this notification type on'}
+        accessibilityState={{ checked: value, disabled }}
         trackColor={{ false: Colors.lightGrey, true: Colors.needleGreen }}
         thumbColor={Colors.textInverse}
       />
@@ -99,7 +102,7 @@ export default function TailorNotificationSettingsScreen() {
     if (error) {
       setPrefs(previous)
       Alert.alert(
-        'Error',
+        'Could not save setting',
         isLikelyConnectivityIssue(error)
           ? 'Connection looks weak. We could not save your notification settings yet. Retry when the signal improves.'
           : 'Could not save your notification settings right now. Please try again in a moment.',
@@ -141,7 +144,7 @@ export default function TailorNotificationSettingsScreen() {
             <PrefRow
               icon="dollar-sign"
               title="Payment released"
-              description="Alert when Drape releases earnings or a payout needs your attention."
+              description="Alert when Drapeon releases earnings or a payout needs your attention."
               value={prefs.paymentReleased}
               onChange={(v) => toggle('paymentReleased', v)}
               disabled={saving}
@@ -182,12 +185,12 @@ export default function TailorNotificationSettingsScreen() {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Drape</Text>
+          <Text style={styles.sectionTitle}>Drapeon</Text>
           <View style={styles.card}>
             <PrefRow
               icon="zap"
               title="Platform updates"
-              description="Drape announcements, policy changes, and tailoring tips."
+              description="Drapeon announcements, policy changes, and tailoring tips."
               value={prefs.platformUpdates}
               onChange={(v) => toggle('platformUpdates', v)}
               disabled={saving}

@@ -4,6 +4,8 @@ import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
+import { rejectIfBlockedContact } from '../_shared/contact-bypass.ts'
+import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
 import { parseBody, z, uuid } from '../_shared/validate.ts'
 
 const FN = 'portfolio-item-action'
@@ -132,10 +134,43 @@ Deno.serve(async (req) => {
       }
 
       await syncProfilePhotoUrls(supabase, profile.id)
+      await queueMediaSafetyReview(supabase, {
+        fn: FN,
+        actorId: caller.id,
+        actorRole: 'TAILOR',
+        surface: 'portfolio.public',
+        publicUrls: seedPhotoUrls,
+        purpose: 'PORTFOLIO',
+        tailorProfileId: profile.id,
+        relatedEntityType: 'tailor_profile',
+        relatedEntityId: profile.id,
+        metadata: { action: body.action },
+      })
       return jsonResponse({ ok: true }, 200, cors)
     }
 
     if (body.action === 'create-item') {
+      const contactCheckedFields: Array<[string, string, string | null | undefined, string]> = [
+        ['portfolio_item.title', 'title', body.item.title, "Contact details can't be included in portfolio titles."],
+        ['portfolio_item.category', 'category', body.item.category, "Contact details can't be included in portfolio categories."],
+        ['portfolio_item.description', 'description', body.item.description, "Contact details can't be included in portfolio descriptions."],
+      ]
+
+      for (const [surface, field, text, message] of contactCheckedFields) {
+        const blocked = await rejectIfBlockedContact({
+          supabase,
+          fn: FN,
+          cors,
+          actorId: caller.id,
+          actorRole: 'TAILOR',
+          surface,
+          text,
+          message,
+          extra: { field, action: body.action },
+        })
+        if (blocked) return blocked
+      }
+
       const { data: created, error } = await supabase
         .from('portfolio_items')
         .insert({
@@ -151,10 +186,43 @@ Deno.serve(async (req) => {
 
       if (error || !created?.id) return jsonResponse({ error: 'We could not save this portfolio item right now. Please try again.' }, 500, cors)
       await syncProfilePhotoUrls(supabase, profile.id)
+      await queueMediaSafetyReview(supabase, {
+        fn: FN,
+        actorId: caller.id,
+        actorRole: 'TAILOR',
+        surface: 'portfolio.public',
+        publicUrls: [body.item.imageUrl],
+        purpose: 'PORTFOLIO',
+        tailorProfileId: profile.id,
+        relatedEntityType: 'portfolio_item',
+        relatedEntityId: created.id,
+        metadata: { action: body.action },
+      })
       return jsonResponse({ ok: true, itemId: created.id }, 200, cors)
     }
 
     if (body.action === 'update-item') {
+      const contactCheckedFields: Array<[string, string, string | null | undefined, string]> = [
+        ['portfolio_item.title', 'title', body.item.title, "Contact details can't be included in portfolio titles."],
+        ['portfolio_item.category', 'category', body.item.category, "Contact details can't be included in portfolio categories."],
+        ['portfolio_item.description', 'description', body.item.description, "Contact details can't be included in portfolio descriptions."],
+      ]
+
+      for (const [surface, field, text, message] of contactCheckedFields) {
+        const blocked = await rejectIfBlockedContact({
+          supabase,
+          fn: FN,
+          cors,
+          actorId: caller.id,
+          actorRole: 'TAILOR',
+          surface,
+          text,
+          message,
+          extra: { field, action: body.action, itemId: body.itemId },
+        })
+        if (blocked) return blocked
+      }
+
       const { error } = await supabase
         .from('portfolio_items')
         .update({
@@ -168,6 +236,18 @@ Deno.serve(async (req) => {
 
       if (error) return jsonResponse({ error: 'We could not update this portfolio item right now. Please try again.' }, 500, cors)
       await syncProfilePhotoUrls(supabase, profile.id)
+      await queueMediaSafetyReview(supabase, {
+        fn: FN,
+        actorId: caller.id,
+        actorRole: 'TAILOR',
+        surface: 'portfolio.public',
+        publicUrls: [body.item.imageUrl],
+        purpose: 'PORTFOLIO',
+        tailorProfileId: profile.id,
+        relatedEntityType: 'portfolio_item',
+        relatedEntityId: body.itemId,
+        metadata: { action: body.action },
+      })
       return jsonResponse({ ok: true }, 200, cors)
     }
 

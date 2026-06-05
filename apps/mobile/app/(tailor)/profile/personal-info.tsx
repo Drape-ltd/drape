@@ -175,7 +175,7 @@ export default function TailorPersonalInfoScreen() {
             <View style={styles.readOnly}>
               <Text style={styles.readOnlyText}>{user?.email}</Text>
             </View>
-            <Text style={styles.hint}>Change your email from Login & security so Drape can confirm your current password first.</Text>
+            <Text style={styles.hint}>Change your email from Login & security so Drapeon can confirm your current password first.</Text>
           </View>
 
           <View style={styles.divider} />
@@ -259,7 +259,7 @@ export default function TailorPersonalInfoScreen() {
             </View>
 
             <TouchableOpacity
-              style={[styles.saveBtn, reauthLoading && { opacity: 0.6 }]}
+              style={[styles.saveBtn, reauthLoading && styles.saveBtnDisabled]}
               onPress={verifyPhoneWithPassword}
               disabled={reauthLoading}
             >
@@ -271,13 +271,13 @@ export default function TailorPersonalInfoScreen() {
         ) : null}
 
         <TouchableOpacity
-          style={[styles.saveBtn, (!dirty || saving || reauthLoading || !!nameError || !!phoneError) && { opacity: 0.6 }]}
+          style={[styles.saveBtn, (!dirty || saving || reauthLoading || !!nameError || !!phoneError) && styles.saveBtnDisabled]}
           onPress={() => { void save() }}
           disabled={saving || reauthLoading || !dirty || !!nameError || !!phoneError}
         >
           {saving
             ? <ActivityIndicator color={Colors.textInverse} size="small" />
-            : <Text style={styles.saveBtnText}>Save changes</Text>
+            : <Text style={[styles.saveBtnText, (!dirty || reauthLoading || !!nameError || !!phoneError) && styles.saveBtnTextDisabled]}>Save changes</Text>
           }
         </TouchableOpacity>
       </ScrollView>
@@ -348,5 +348,10 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen, borderRadius: Radius.lg,
     padding: 12, alignItems: 'center',
   },
+  saveBtnDisabled: {
+    backgroundColor: Colors.disabledFill,
+    borderColor: Colors.disabledFill,
+  },
   saveBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
+  saveBtnTextDisabled: { color: Colors.disabledText },
 })

@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getCorsHeaders } from '../_shared/cors.ts'
-import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
+import { getServiceRoleKey, getSupabaseUrl, isTrustedServiceRoleToken } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
 import { partiallyRefundOrderPayments, refundSettledOrderPayments } from '../_shared/payment-refunds.ts'
 import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
@@ -31,18 +31,18 @@ function jsonResponse(body: Record<string, unknown>, status: number, headers: He
   })
 }
 
-function isServiceRoleCaller(req: Request) {
+async function isServiceRoleCaller(req: Request) {
   const authHeader = req.headers.get('Authorization')
   if (!authHeader?.startsWith('Bearer ')) return false
   const token = authHeader.slice('Bearer '.length).trim()
-  return token.length > 0 && token === getServiceRoleKey()
+  return isTrustedServiceRoleToken(token)
 }
 
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
 
-  if (!isServiceRoleCaller(req)) {
+  if (!(await isServiceRoleCaller(req))) {
     return jsonResponse({ error: 'This refund action requires a trusted service request.' }, 401, cors)
   }
 

@@ -24,7 +24,7 @@ type StripeProviderProps = {
 }
 
 const STRIPE_UNAVAILABLE_MESSAGE =
-  'Stripe checkout is not available in this app runtime yet. Open Drape in the rebuilt development client before testing Stripe payments.'
+  'Stripe checkout is not available in this app runtime yet. Open Drapeon in the rebuilt development client before testing Stripe payments.'
 
 let stripeRuntimeResolved = false
 let stripeProviderImpl: ComponentType<StripeProviderProps> | null = null

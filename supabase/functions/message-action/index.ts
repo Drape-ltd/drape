@@ -9,7 +9,9 @@ import { getClientIp, rateLimit, rateLimitExceededResponse } from '../_shared/ra
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
+import { queueMediaSafetyReview } from '../_shared/media-safety.ts'
 import { logPreflightFailure, preflightFailureResponse, runPreflight } from '../_shared/preflight.ts'
+import { enqueuePushJob } from '../_shared/side-effect-jobs.ts'
 import { parseBody, z, uuid } from '../_shared/validate.ts'
 
 const FN = 'message-action'
@@ -41,6 +43,14 @@ function jsonError(cors: HeadersInit, status: number, code: string, error: strin
 
 function hasThreateningLanguage(text: string) {
   return THREATENING_LANGUAGE_PATTERNS.some((pattern) => pattern.test(text))
+}
+
+function buildMessagePreview(type: 'TEXT' | 'PHOTO' | 'VOICE', text: string) {
+  if (type === 'PHOTO') return 'Photo'
+  if (type === 'VOICE') return 'Voice note'
+
+  const preview = text.trim().slice(0, 60)
+  return text.trim().length > 60 ? `${preview}...` : preview || 'Sent you a message.'
 }
 
 async function resolveSenderName(
@@ -255,10 +265,50 @@ Deno.serve(async (req) => {
     if (body.type === 'PHOTO') payload.photo_url = body.photoUrl!
     if (body.type === 'VOICE') payload.voice_url = body.voiceUrl!
 
-    const { error } = await supabase.from('messages').insert(payload)
+    const { data: insertedMessage, error } = await supabase
+      .from('messages')
+      .insert(payload)
+      .select('id')
+      .single()
     if (error) {
       log('error', FN, 'message.insert_failed', { actor_id: caller.id, error: error.message })
       return jsonError(cors, 500, 'MESSAGE_INSERT_FAILED', 'Could not send this message right now.')
+    }
+
+    const insertedMessageId =
+      typeof insertedMessage?.id === 'string' ? insertedMessage.id : crypto.randomUUID()
+    const recipientId = actorRole === 'CUSTOMER' ? orderRow.tailor_id : orderRow.customer_id
+    if (recipientId && recipientId !== caller.id) {
+      await enqueuePushJob(supabase, {
+        userId: recipientId,
+        source: FN,
+        orderId: body.orderId,
+        idempotencyKey: `message-created:${insertedMessageId}`,
+        priority: 20,
+        notification: {
+          title: senderName,
+          body: buildMessagePreview(body.type, messageText),
+          preferenceKey: 'messages',
+          data: {
+            orderId: body.orderId,
+            target: 'messages',
+          },
+        },
+      })
+    }
+
+    if (body.type === 'PHOTO' || body.type === 'VOICE') {
+      await queueMediaSafetyReview(supabase, {
+        fn: FN,
+        actorId: caller.id,
+        actorRole,
+        surface: body.type === 'PHOTO' ? 'messages.photo' : 'messages.voice',
+        publicUrls: body.type === 'PHOTO' ? [body.photoUrl!] : [body.voiceUrl!],
+        purpose: 'MESSAGE_MEDIA',
+        orderId: body.orderId,
+        relatedEntityType: 'message',
+        metadata: { messageType: body.type },
+      })
     }
 
     await audit(supabase, {

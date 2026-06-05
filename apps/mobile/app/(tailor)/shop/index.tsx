@@ -144,7 +144,7 @@ function getShopEmptyState(
     if (counts.soldCount > 0) {
       return {
         title: 'No live items right now',
-        hint: 'Sold items are archived here. Restock one or add a new ready-made piece when you are ready.',
+        hint: 'Your sold-out pieces are safe in Sold. Restock one or add a new ready-made piece when you are ready.',
         ctaLabel: 'Add item',
         action: 'ADD',
       }
@@ -508,12 +508,14 @@ export default function TailorShopScreen() {
           </View>
         ) : (
           <>
-            <View style={styles.filterRow}>
+            <View style={styles.filterTabs}>
               {FILTERS.map((value) => (
                 <TouchableOpacity
                   key={value}
-                  style={[styles.filterPill, filter === value && styles.filterPillActive]}
+                  style={[styles.filterTab, filter === value && styles.filterTabActive]}
                   onPress={() => setFilter(value)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: filter === value }}
                 >
                   <Text style={[styles.filterText, filter === value && styles.filterTextActive]}>
                     {value === 'LIVE'
@@ -808,19 +810,24 @@ const styles = StyleSheet.create({
   stockAlertTextWrap: { flex: 1, gap: 2 },
   stockAlertTitle: { fontSize: 13, fontWeight: FontWeight.semibold, color: Colors.ink },
   stockAlertDetail: { fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
-  filterRow: { flexDirection: 'row', gap: 8 },
-  filterPill: {
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
+  filterTabs: {
+    flexDirection: 'row',
+    gap: 4,
+    padding: 4,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.boneDeep,
+  },
+  filterTab: {
+    flex: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+    borderRadius: Radius.md,
     minHeight: 44,
     justifyContent: 'center',
+    alignItems: 'center',
   },
-  filterPillActive: { backgroundColor: Colors.needleGreen, borderColor: Colors.needleGreen },
-  filterText: { color: Colors.inkLight, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
+  filterTabActive: { backgroundColor: Colors.needleGreen },
+  filterText: { color: Colors.inkLight, fontSize: FontSize.sm, fontWeight: FontWeight.medium, textAlign: 'center' },
   filterTextActive: { color: Colors.textInverse },
   emptyCard: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: 16, gap: Spacing.sm, alignItems: 'center', ...Shadow.sm },
   emptyIcon: {

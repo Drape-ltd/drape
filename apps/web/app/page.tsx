@@ -4,7 +4,7 @@ import type { JSX } from 'react'
 import { buildMetadata } from '../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
-  title: 'Drape',
+  title: 'Drapeon',
   description: 'Find a tailor you trust, place one clear order, and follow it through.',
   path: '/',
 })
@@ -61,7 +61,7 @@ export default function Home(): JSX.Element {
 
             <div className="mt-10 grid gap-4 sm:grid-cols-3">
               {[
-                ['Choose well', 'See the right side of Drape before you join.'],
+                ['Choose well', 'See the right side of Drapeon before you join.'],
                 ['Order', 'Keep the brief, quote, and updates in one place.'],
                 ['Trust', 'Fit, progress, and handoff stay visible.'],
               ].map(([title, body]) => (

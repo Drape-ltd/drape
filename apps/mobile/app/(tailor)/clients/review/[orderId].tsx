@@ -305,7 +305,7 @@ export default function TailorCustomerReviewScreen() {
             <Text style={styles.eyebrow}>Customer review</Text>
             <Text style={styles.title}>Review already saved.</Text>
             <Text style={styles.stateHint}>
-              Drape keeps one internal customer review per order. You can review this customer again after a future order if the working relationship changes.
+              Drapeon keeps one internal customer review per order. You can review this customer again after a future order if the working relationship changes.
             </Text>
             <TouchableOpacity style={styles.secondaryBtn} onPress={goBack}>
               <Text style={styles.secondaryBtnText}>Back</Text>
@@ -329,7 +329,7 @@ export default function TailorCustomerReviewScreen() {
             <Text style={styles.eyebrow}>Customer review</Text>
             <Text style={styles.title}>Rate how it was working with {customerName}.</Text>
             <Text style={styles.stateHint}>
-              This note is for Drape’s internal trust record, not public profile feedback. Keep it factual and respectful, and submit it within {REVIEW_WINDOW_DAYS} days of delivery or collection.
+              This note is for Drapeon’s internal trust record, not public profile feedback. Keep it factual and respectful, and submit it within {REVIEW_WINDOW_DAYS} days of delivery or collection.
             </Text>
           </View>
 
