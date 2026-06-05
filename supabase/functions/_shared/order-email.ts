@@ -33,7 +33,7 @@ function getSiteUrl() {
 }
 
 function getResendFrom() {
-  return Deno.env.get('RESEND_FROM') ?? 'Drape <noreply@drapeon.co>'
+  return Deno.env.get('RESEND_FROM') ?? 'Drapeon <noreply@drapeon.co>'
 }
 
 function getResendApiKey() {
@@ -117,12 +117,12 @@ function customerOrderConfirmationEmail(input: {
       : 'Your order is confirmed'
   const nextStep =
     input.phase === 'CONSULTATION'
-      ? 'Drape has received your consultation payment. Join from your order or messages when the scheduled time arrives.'
+      ? 'Drapeon has received your consultation payment. Join from your order or messages when the scheduled time arrives.'
       : input.phase === 'FULFILLMENT'
-      ? `Drape has received your ${fulfillmentLabel(input.order.delivery_method).toLowerCase()} payment and the order can move into dispatch once the handoff is arranged.`
+      ? `Drapeon has received your ${fulfillmentLabel(input.order.delivery_method).toLowerCase()} payment and the order can move into dispatch once the handoff is arranged.`
       : input.order.order_kind === 'READY_MADE'
-        ? 'Your order is now placed. You will keep seeing progress inside Drape as the tailor prepares it.'
-        : 'Your order is now funded. The tailor can continue production inside Drape and you will see updates in your timeline.'
+        ? 'Your order is now placed. You will keep seeing progress inside Drapeon as the tailor prepares it.'
+        : 'Your order is now funded. The tailor can continue production inside Drapeon and you will see updates in your timeline.'
 
   return {
     subject,
@@ -138,7 +138,7 @@ function customerOrderConfirmationEmail(input: {
     <tr><td style="padding:8px 0;color:#6b7280">${input.phase === 'CONSULTATION' ? 'Consultation fee' : input.phase === 'FULFILLMENT' ? fulfillmentLabel(input.order.delivery_method) : 'Amount'}</td><td style="padding:8px 0;font-weight:600">${escapeHtml(amount)}</td></tr>
     ${input.phase === 'INITIAL_ORDER' && input.order.delivery_method ? `<tr><td style="padding:8px 0;color:#6b7280">Fulfillment</td><td style="padding:8px 0;font-weight:600">${escapeHtml(fulfillmentLabel(input.order.delivery_method))}</td></tr>` : ''}
   </table>
-  <a href="${appUrl}" style="display:inline-block;padding:12px 20px;background:#2f6844;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600">Open Drape</a>
+  <a href="${appUrl}" style="display:inline-block;padding:12px 20px;background:#2f6844;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600">Open Drapeon</a>
 </div>`,
   }
 }
@@ -177,12 +177,12 @@ function tailorOrderConfirmationEmail(input: {
         : 'A custom order is funded'
   const nextStep =
     input.phase === 'CONSULTATION'
-      ? 'The customer paid the consultation fee. Start the call from Drape at the scheduled time.'
+      ? 'The customer paid the consultation fee. Start the call from Drapeon at the scheduled time.'
       : input.phase === 'FULFILLMENT'
-      ? `Drape has received the ${fulfillmentLabel(input.order.delivery_method).toLowerCase()} payment, so you can move the order forward once dispatch is arranged.`
+      ? `Drapeon has received the ${fulfillmentLabel(input.order.delivery_method).toLowerCase()} payment, so you can move the order forward once dispatch is arranged.`
       : input.order.order_kind === 'READY_MADE'
-        ? 'This order is now paid and ready for fulfillment inside Drape.'
-        : 'This order is now paid and ready for production inside Drape.'
+        ? 'This order is now paid and ready for fulfillment inside Drapeon.'
+        : 'This order is now paid and ready for production inside Drapeon.'
 
   return {
     subject,
@@ -198,7 +198,7 @@ function tailorOrderConfirmationEmail(input: {
     ${input.order.item_size ? `<tr><td style="padding:8px 0;color:#6b7280">Size</td><td style="padding:8px 0;font-weight:600">${escapeHtml(input.order.item_size)}</td></tr>` : ''}
     <tr><td style="padding:8px 0;color:#6b7280">${input.phase === 'CONSULTATION' ? 'Consultation fee' : input.phase === 'FULFILLMENT' ? fulfillmentLabel(input.order.delivery_method) : 'Amount paid'}</td><td style="padding:8px 0;font-weight:600">${escapeHtml(amount)}</td></tr>
   </table>
-  <a href="${appUrl}" style="display:inline-block;padding:12px 20px;background:#2f6844;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600">Open Drape</a>
+  <a href="${appUrl}" style="display:inline-block;padding:12px 20px;background:#2f6844;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600">Open Drapeon</a>
 </div>`,
   }
 }
@@ -249,7 +249,7 @@ async function sendEmail(to: string, subject: string, html: string) {
   const apiKey = getResendApiKey()
   if (!apiKey) {
     log('warn', FN, 'resend.missing_api_key')
-    return
+    throw new Error('RESEND_API_KEY is not configured.')
   }
 
   const response = await fetch(RESEND_API, {
@@ -270,6 +270,7 @@ async function sendEmail(to: string, subject: string, html: string) {
   if (!response.ok) {
     const body = await response.text()
     log('warn', FN, 'resend.send_failed', { to, subject, status: response.status, body })
+    throw new Error(`Resend email failed with ${response.status}${body ? `: ${body}` : ''}`)
   }
 }
 
@@ -284,7 +285,7 @@ function orderEventEmail(input: {
   const ref = orderReference(input.order)
   const label = orderLabel(input.order)
   const appUrl = getSiteUrl()
-  const ctaLabel = input.ctaLabel?.trim() || 'Open Drape'
+  const ctaLabel = input.ctaLabel?.trim() || 'Open Drapeon'
   const evidenceImageUrl = input.evidenceImageUrl?.trim()
   const evidenceImageBlock = evidenceImageUrl && /\.(jpe?g|png|webp|gif)(?:[?#].*)?$/iu.test(evidenceImageUrl)
     ? `

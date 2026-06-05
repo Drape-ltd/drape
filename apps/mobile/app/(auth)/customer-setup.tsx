@@ -13,6 +13,7 @@ import {
 import { useRouter } from 'expo-router'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as ImageManipulator from 'expo-image-manipulator'
+import { Feather } from '@expo/vector-icons'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
@@ -363,7 +364,7 @@ export default function CustomerSetupScreen() {
           <View style={styles.content}>
             <AuthEntryHeader
               eyebrow="Finish customer setup"
-              title="Set up your side of Drape."
+              title="Set up your side of Drapeon."
               body="These basics shape your fit profile, order updates, account currency, and first booking."
               showWordmark={false}
             />
@@ -475,28 +476,29 @@ export default function CustomerSetupScreen() {
                     </Text>
                   </View>
                 )}
-                <View style={styles.currencyRow}>
+                <View style={styles.currencyList}>
                   {SUPPORTED_CURRENCIES.map((option) => (
                     <TouchableOpacity
                       key={option.code}
-                      style={[
-                        styles.currencyChip,
-                        defaultCurrency === option.code && styles.currencyChipActive,
-                      ]}
+                      style={styles.currencyOptionRow}
                       onPress={() => {
                         setDefaultCurrency(option.code)
                         setCurrencySource('USER_SELECTED')
                         setRegionCode(regionCode || detectedCurrency.regionCode)
                       }}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: defaultCurrency === option.code }}
                     >
-                      <Text
-                        style={[
-                          styles.currencyChipText,
-                          defaultCurrency === option.code && styles.currencyChipTextActive,
-                        ]}
-                      >
-                        {option.symbol} {option.code}
-                      </Text>
+                      <View style={styles.currencySymbolBadge}>
+                        <Text style={styles.currencySymbolText}>{option.symbol}</Text>
+                      </View>
+                      <View style={styles.currencyOptionCopy}>
+                        <Text style={styles.currencyOptionTitle}>{option.code}</Text>
+                        <Text style={styles.currencyOptionHint}>{option.name}</Text>
+                      </View>
+                      <View style={[styles.currencyRadio, defaultCurrency === option.code && styles.currencyRadioActive]}>
+                        {defaultCurrency === option.code ? <Feather name="check" size={14} color={Colors.textInverse} /> : null}
+                      </View>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -572,7 +574,7 @@ export default function CustomerSetupScreen() {
           </View>
           {saveError ? <Text style={styles.saveError}>{saveError}</Text> : null}
           <Button
-            label="Continue to Drape"
+            label="Continue to Drapeon"
             onPress={save}
             loading={saving}
             disabled={
@@ -714,24 +716,50 @@ const styles = StyleSheet.create({
     color: Colors.inkLight,
     lineHeight: 20,
   },
-  currencyRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  currencyChip: {
-    minHeight: 40,
-    paddingHorizontal: Spacing.md,
-    borderRadius: Radius.full,
-    borderWidth: 1.5,
-    borderColor: Colors.lightGrey,
+  currencyList: {
     backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+  },
+  currencyOptionRow: {
+    minHeight: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.lightGrey,
+  },
+  currencySymbolBadge: {
+    width: 42,
+    height: 42,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  currencyChipActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
-  currencyChipText: {
+  currencySymbolText: { color: Colors.needleGreenDark, fontSize: FontSize.xs, fontWeight: FontWeight.bold },
+  currencyOptionCopy: { flex: 1 },
+  currencyOptionTitle: { fontSize: FontSize.md, color: Colors.ink, fontWeight: FontWeight.semibold },
+  currencyOptionHint: {
     fontSize: FontSize.xs,
     color: Colors.inkLight,
     fontWeight: FontWeight.medium,
+    marginTop: 2,
   },
-  currencyChipTextActive: { color: Colors.needleGreen },
+  currencyRadio: {
+    width: 24,
+    height: 24,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  currencyRadioActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreen },
 
   unitRow: { gap: Spacing.sm },
   unitBtn: {

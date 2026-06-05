@@ -177,6 +177,35 @@ export type ConsultationMeta = {
   expiredAt?: string | null
 }
 
+export type OrderCallReason =
+  | 'SIZE_OR_FIT'
+  | 'ITEM_CONDITION'
+  | 'PICKUP_OR_DELIVERY'
+  | 'TIMELINE'
+  | 'OTHER'
+
+export type OrderCallStatus =
+  | 'SCHEDULED'
+  | 'COMPLETED'
+  | 'DECLINED'
+  | 'EXPIRED'
+
+export type OrderCallMeta = {
+  status?: OrderCallStatus | null
+  requestedBy?: ConsultationRequestedBy | null
+  reason?: OrderCallReason | null
+  note?: string | null
+  requestedAt?: string | null
+  scheduledStartAt?: string | null
+  scheduledEndAt?: string | null
+  timezone?: string | null
+  reminderEnabled?: boolean | null
+  reminder30SentAt?: string | null
+  reminder5SentAt?: string | null
+  completedAt?: string | null
+  expiredAt?: string | null
+}
+
 export type FabricPolicyMeta = {
   approvalRequiredForTailorSourcing?: boolean | null
   rejectionReasons?: string[] | null
@@ -192,11 +221,70 @@ export type BulkOrderMeta = {
   mode?: 'OPS_MANAGED_SPECIAL_CASE' | null
   label?: string | null
   recipientCount?: number | null
+  memberNames?: string[] | null
+  memberMeasurementPolicy?: string | null
   payerModel?: 'SINGLE_PAYER' | null
   measurementPrivacy?: 'TAILOR_ONLY' | null
   statusPolicy?: 'OPS_MANAGED_LINKED_CHILDREN' | null
   dyeLotConsistencyRequired?: boolean | null
   notes?: string | null
+}
+
+export type WearerContextMeta = {
+  mode?: 'SELF' | 'OTHER' | 'GROUP' | null
+  label?: string | null
+  measurementProfileLabel?: string | null
+  relationship?: 'BUYER' | 'NAMED_OTHER' | 'GROUP' | null
+  selectedAt?: string | null
+  note?: string | null
+}
+
+export type MeasurementAgeMeta = {
+  lastUpdatedAt?: string | null
+  ageMonths?: number | null
+  stale?: boolean | null
+  warningShown?: boolean | null
+}
+
+export type StyleAlignmentMeta = {
+  requiredBeforeCutting?: boolean | null
+  status?: 'NOT_REQUIRED' | 'NEEDS_TAILOR_CONFIRMATION' | 'PENDING_CUSTOMER_APPROVAL' | 'APPROVED' | 'CHANGES_REQUESTED' | null
+  referencePhotoCount?: number | null
+  styleReferenceLinkCount?: number | null
+  instruction?: string | null
+  customerExpectation?: string | null
+  tailorInterpretation?: string | null
+  approvalRequestedAt?: string | null
+  approvedAt?: string | null
+  changeRequestedAt?: string | null
+}
+
+export type OrderContractMeta = {
+  version?: number | null
+  orderKind?: 'CUSTOM' | 'READY_MADE' | null
+  createdAt?: string | null
+}
+
+export type ReceiptConfirmationMeta = {
+  required?: boolean | null
+  photoUrl?: string | null
+  confirmedAt?: string | null
+  confirmedBy?: 'CUSTOMER' | 'RECIPIENT' | null
+  source?: 'CUSTOMER_RECEIPT_PHOTO' | 'CUSTOMER_COMPLETE_PHOTO' | null
+}
+
+export type DeadlineContextMeta = {
+  warningCode?: 'PUBLIC_HOLIDAY' | 'CULTURAL_RUSH' | 'CUSTOMS_RISK' | 'NONE' | null
+  warningShown?: boolean | null
+  message?: string | null
+  suggestedDate?: string | null
+}
+
+export type ReferralTrustMeta = {
+  referrerUserId?: string | null
+  referrerName?: string | null
+  completedOrderCount?: number | null
+  visibleToTailor?: boolean | null
 }
 
 export type DispatchRecordMeta = {
@@ -259,6 +347,33 @@ export type DeliveryReviewReason =
   | 'WRONG_ITEM_RECEIVED'
   | 'RECIPIENT_UNREACHABLE'
   | 'OTHER'
+
+export type ScopeChangeType =
+  | 'MEASUREMENT_AMENDMENT'
+  | 'STYLE_OR_REFERENCE'
+  | 'FABRIC_OR_MATERIAL'
+  | 'ADD_OR_REMOVE_ITEM'
+  | 'DEADLINE_OR_EVENT'
+  | 'PAUSE_OR_RESTART'
+  | 'REWORK_OR_ALTERATION'
+  | 'OTHER'
+
+export type ScopeChangeStatus =
+  | 'OPEN'
+  | 'ACCEPTED'
+  | 'DECLINED'
+  | 'CANCELLED'
+  | 'SUPERSEDED'
+
+export type ScopeChangeRequestedBy = 'CUSTOMER' | 'TAILOR'
+
+export type ScopeChangeImpact =
+  | 'PRICE'
+  | 'DEADLINE'
+  | 'FIT'
+  | 'FABRIC'
+  | 'STYLE'
+  | 'FULFILLMENT'
 
 export type MeasurementSnapshotMeta = {
   fitPassportVersion?: number | null
@@ -350,6 +465,22 @@ export type DeliveryReviewMeta = {
   resolvedAt?: string | null
 }
 
+export type ScopeChangeMeta = {
+  status?: ScopeChangeStatus | null
+  requestedBy?: ScopeChangeRequestedBy | null
+  type?: ScopeChangeType | null
+  typeLabel?: string | null
+  summary?: string | null
+  impacts?: ScopeChangeImpact[] | null
+  priceImpactMinor?: number | null
+  deadlineImpact?: string | null
+  requestedAt?: string | null
+  requestedFromStage?: string | null
+  respondedAt?: string | null
+  respondedBy?: ScopeChangeRequestedBy | null
+  responseNote?: string | null
+}
+
 export type CustomOrderMeta = {
   garmentType?: string | null
   garmentTypeOther?: string | null
@@ -368,6 +499,7 @@ export type FabricSourcingMeta = {
 }
 
 export type OrderSupportMeta = {
+  orderContract?: OrderContractMeta | null
   fabricHandoffMode?: FabricHandoffMode | null
   fabricHandoffLabel?: string | null
   fabricReceivedAt?: string | null
@@ -380,14 +512,75 @@ export type OrderSupportMeta = {
   fabricSourcing?: FabricSourcingMeta | null
   deliveryInstructions?: string | null
   consultation?: ConsultationMeta | null
+  orderCall?: OrderCallMeta | null
   quoteBreakdown?: QuoteBreakdownMeta | null
   fabricPolicy?: FabricPolicyMeta | null
   bulkOrder?: BulkOrderMeta | null
+  wearerContext?: WearerContextMeta | null
+  measurementAge?: MeasurementAgeMeta | null
+  styleAlignment?: StyleAlignmentMeta | null
+  receiptConfirmation?: ReceiptConfirmationMeta | null
+  deadlineContext?: DeadlineContextMeta | null
+  referralTrust?: ReferralTrustMeta | null
   dispatchRecord?: DispatchRecordMeta | null
   fitProfile?: FitProfileMeta | null
   materialIssue?: MaterialIssueMeta | null
   cancellationReview?: CancellationReviewMeta | null
   deliveryReview?: DeliveryReviewMeta | null
+  scopeChange?: ScopeChangeMeta | null
+}
+
+export const STALE_MEASUREMENT_MONTHS = 6
+
+function recordOrNull(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function dateFromFields(record: Record<string, unknown> | null, fields: string[]) {
+  for (const field of fields) {
+    const raw = record?.[field]
+    if (typeof raw !== 'string' || raw.trim().length === 0) continue
+    const date = new Date(raw)
+    if (Number.isFinite(date.getTime())) return date
+  }
+  return null
+}
+
+export function resolveMeasurementAgeMeta(
+  meta: OrderSupportMeta | null | undefined,
+  snapshot: Record<string, unknown> | null | undefined,
+  now = new Date(),
+): MeasurementAgeMeta | null {
+  const source = recordOrNull(meta?.measurementAge) ?? recordOrNull(snapshot?.measurementAge)
+  const lastUpdated =
+    dateFromFields(source, ['lastUpdatedAt']) ??
+    dateFromFields(snapshot ?? null, ['measurementProfileUpdatedAt', 'capturedAt', 'confirmedAt'])
+  if (!lastUpdated) return null
+  const sourceAge = source?.ageMonths
+  const ageMonths =
+    typeof sourceAge === 'number' && Number.isFinite(sourceAge) && sourceAge >= 0
+      ? Math.floor(sourceAge)
+      : Math.max(
+          0,
+          Math.floor((now.getTime() - lastUpdated.getTime()) / (1000 * 60 * 60 * 24 * 30.44))
+        )
+  const stale = typeof source?.stale === 'boolean'
+    ? source.stale
+    : ageMonths >= STALE_MEASUREMENT_MONTHS
+  return {
+    lastUpdatedAt: lastUpdated.toISOString(),
+    ageMonths,
+    stale,
+    warningShown: typeof source?.warningShown === 'boolean' ? source.warningShown : stale,
+  }
+}
+
+export function measurementAgeLabel(age: MeasurementAgeMeta | null | undefined) {
+  if (!age || typeof age.ageMonths !== 'number') return null
+  if (age.ageMonths <= 0) return 'Updated this month'
+  return `Updated ${age.ageMonths} month${age.ageMonths === 1 ? '' : 's'} ago`
 }
 
 export const MEASUREMENT_SOURCE_LABELS: Record<MeasurementSource, string> = {
@@ -395,8 +588,8 @@ export const MEASUREMENT_SOURCE_LABELS: Record<MeasurementSource, string> = {
   HELPER_GUIDED: 'Measured with a helper',
   TAILOR_CAPTURED: 'Measured by a tailor',
   EXTERNAL_PRO_CAPTURED: 'Measured by another professional',
-  DRAPE_VISION: 'Drape Vision',
-  TAILOR_ASSISTED_DRAPE_VISION: 'Drape Vision with tailor',
+  DRAPE_VISION: 'Drapeon Vision',
+  TAILOR_ASSISTED_DRAPE_VISION: 'Drapeon Vision with tailor',
 }
 
 export const FIT_CONFIDENCE_LABELS: Record<MeasurementFitConfidence, string> = {
@@ -409,9 +602,9 @@ export const MEASUREMENT_SCAN_CAPTURE_METHOD_LABELS: Record<MeasurementScanCaptu
   GUIDED_MANUAL_BASELINE: 'Guided fit intake',
   GUIDED_HELPER_BASELINE: 'Guided fit intake with helper',
   TAILOR_REVIEWED_BASELINE: 'Tailor-reviewed fit intake',
-  DRAPE_VISION_ROTATION: 'Drape Vision scan',
-  TAILOR_ASSISTED_DRAPE_VISION_ROTATION: 'Tailor-assisted Drape Vision scan',
-  GARMENT_QC_VISION_FLAT_LAY: 'Drape Vision garment QC',
+  DRAPE_VISION_ROTATION: 'Drapeon Vision scan',
+  TAILOR_ASSISTED_DRAPE_VISION_ROTATION: 'Tailor-assisted Drapeon Vision scan',
+  GARMENT_QC_VISION_FLAT_LAY: 'Drapeon Vision garment QC',
 }
 
 export const MEASUREMENT_SCAN_STATUS_LABELS: Record<MeasurementScanStatus, string> = {
@@ -736,6 +929,34 @@ export const DELIVERY_REVIEW_REASON_LABELS: Record<DeliveryReviewReason, string>
   OTHER: 'Other',
 }
 
+export const SCOPE_CHANGE_TYPE_LABELS: Record<ScopeChangeType, string> = {
+  MEASUREMENT_AMENDMENT: 'Measurement update',
+  STYLE_OR_REFERENCE: 'Style or reference change',
+  FABRIC_OR_MATERIAL: 'Fabric or material change',
+  ADD_OR_REMOVE_ITEM: 'Add or remove item',
+  DEADLINE_OR_EVENT: 'Deadline or event change',
+  PAUSE_OR_RESTART: 'Pause or restart',
+  REWORK_OR_ALTERATION: 'Rework or alteration',
+  OTHER: 'Other change',
+}
+
+export const SCOPE_CHANGE_IMPACT_LABELS: Record<ScopeChangeImpact, string> = {
+  PRICE: 'Price',
+  DEADLINE: 'Deadline',
+  FIT: 'Fit',
+  FABRIC: 'Fabric',
+  STYLE: 'Style',
+  FULFILLMENT: 'Pickup or delivery',
+}
+
+export const SCOPE_CHANGE_STATUS_LABELS: Record<ScopeChangeStatus, string> = {
+  OPEN: 'Waiting for review',
+  ACCEPTED: 'Accepted',
+  DECLINED: 'Declined',
+  CANCELLED: 'Cancelled',
+  SUPERSEDED: 'Updated by a newer request',
+}
+
 export function deriveMeasurementFitConfidence(source: MeasurementSource | null | undefined): MeasurementFitConfidence {
   switch (source) {
     case 'HELPER_GUIDED':
@@ -983,4 +1204,41 @@ export function buildDeliveryReviewNote(
 
 export function hasOpenDeliveryReview(meta: OrderSupportMeta | null | undefined) {
   return meta?.deliveryReview?.status === 'OPEN'
+}
+
+export function buildScopeChangeRequestNote(
+  requestedBy: ScopeChangeRequestedBy,
+  typeLabel: string,
+  summary: string,
+  impacts?: ScopeChangeImpact[] | null,
+) {
+  const actor = requestedBy === 'CUSTOMER' ? 'Customer' : 'Tailor'
+  const impactLabels = (impacts ?? [])
+    .map((impact) => SCOPE_CHANGE_IMPACT_LABELS[impact])
+    .filter(Boolean)
+  const impactText = impactLabels.length > 0 ? ` Impact: ${impactLabels.join(', ')}.` : ''
+  return `${actor} requested a scope change: ${typeLabel}. ${summary.trim()}${impactText}`
+}
+
+export function buildScopeChangeResponseNote(
+  decidedBy: ScopeChangeRequestedBy,
+  status: Extract<ScopeChangeStatus, 'ACCEPTED' | 'DECLINED' | 'CANCELLED'>,
+  typeLabel: string,
+  note?: string | null,
+) {
+  const actor = decidedBy === 'CUSTOMER' ? 'Customer' : 'Tailor'
+  const action =
+    status === 'ACCEPTED'
+      ? 'accepted'
+      : status === 'DECLINED'
+        ? 'declined'
+        : 'cancelled'
+  const detail = note?.trim()
+  return detail
+    ? `${actor} ${action} the scope change: ${typeLabel}. Note: ${detail}`
+    : `${actor} ${action} the scope change: ${typeLabel}.`
+}
+
+export function hasOpenScopeChange(meta: OrderSupportMeta | null | undefined) {
+  return meta?.scopeChange?.status === 'OPEN'
 }

@@ -41,6 +41,7 @@ type ExistingPayoutRow = {
   id: string
   status: string
   blocked_reason: string | null
+  provider_response: Record<string, unknown> | null
 }
 
 async function notifyTailorPayoutFailure(
@@ -214,6 +215,17 @@ function errorMessage(error: unknown) {
   }
 
   return String(error)
+}
+
+function existingPayoutFailureMessage(payout: ExistingPayoutRow) {
+  const response = payout.provider_response
+  const providerError = response && typeof response.error === 'string' ? response.error.trim() : ''
+  if (providerError.length > 0) return providerError
+
+  const providerMessage = response && typeof response.message === 'string' ? response.message.trim() : ''
+  if (providerMessage.length > 0) return providerMessage
+
+  return `Existing payout is already in ${payout.status} state.`
 }
 
 function fallbackBlockedCurrency(order: PayoutCandidateOrder, tailorProfile: TailorPayoutProfile | null) {
@@ -438,7 +450,7 @@ async function hasOpenDispute(supabase: any, orderId: string) {
 async function findExistingPayout(supabase: any, orderId: string, statuses: string[]) {
   const { data, error } = await supabase
     .from('payouts')
-    .select('id, status, blocked_reason')
+    .select('id, status, blocked_reason, provider_response')
     .eq('order_id', orderId)
     .in('status', statuses)
     .order('processed_at', { ascending: false })
@@ -558,14 +570,16 @@ Deno.serve(async (req) => {
         const existingTriggered = await findExistingPayout(supabase, order.id, ['PROCESSING', 'PAID', 'FAILED', 'REVERSED'])
         if (existingTriggered?.id) {
           if (existingTriggered.status === 'FAILED' || existingTriggered.status === 'REVERSED') {
+            const existingFailureMessage = existingPayoutFailureMessage(existingTriggered)
             await refreshFailedPayoutIssue(
               supabase,
               order,
               order.tailor_id ? await fetchTailorProfile(supabase, order.tailor_id) : null,
-              `Existing payout is already in ${existingTriggered.status} state.`,
+              existingFailureMessage,
               {
                 payout_id: existingTriggered.id,
                 payout_status: existingTriggered.status,
+                existing_failure_replayed: true,
               },
             )
           }
@@ -581,10 +595,24 @@ Deno.serve(async (req) => {
           continue
         }
 
+        const earlyReleaseReason = payoutReleaseReason(order, now)
+        if (earlyReleaseReason === PAYOUT_BLOCKED_REASONS.DISPUTE_WINDOW_OPEN) {
+          skipped += 1
+          results.push({
+            orderId: order.id,
+            result: 'not_due_yet',
+            reason: earlyReleaseReason,
+            payoutReadyAt: order.customer_handoff_confirmed_at
+              ? payoutWindowClosesAt(order.customer_handoff_confirmed_at)
+              : null,
+          })
+          continue
+        }
+
         const tailorProfile = order.tailor_id ? await fetchTailorProfile(supabase, order.tailor_id) : null
         const settledPayment = await fetchSettledOrderPayment(supabase, order.id)
         const openDispute = await hasOpenDispute(supabase, order.id)
-        const baseBlockedReason = payoutReleaseReason(order, now)
+        const baseBlockedReason = earlyReleaseReason
         const settledPaymentRefunded = !!settledPayment && (
           settledPayment.status === 'PARTIAL_REFUND'
           || settledPayment.status === 'REFUNDED'

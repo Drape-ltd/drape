@@ -94,7 +94,7 @@ const MEASUREMENT_KEYS: Array<keyof MeasurementProfile> = [
 
 export default function CustomerProfileScreen() {
   const router = useRouter()
-  const { user, signOut } = useAuth()
+  const { user, signOut, switchRole } = useAuth()
   const { avatarUrl, setAvatarUrl } = useCustomerProfile()
 
   async function openExternalUrl(url: string, fallbackMessage: string) {
@@ -111,6 +111,7 @@ export default function CustomerProfileScreen() {
     }
   }
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
+  const [switchingRole, setSwitchingRole] = useState(false)
   const lastNotifCheck = user?.user_metadata?.last_notif_check ?? new Date(0).toISOString()
   const {
     data: overview,
@@ -143,7 +144,7 @@ export default function CustomerProfileScreen() {
       ?.split('@')[0]
       ?.replace(/[._-]+/gu, ' ')
       .trim() ||
-    'Drape customer'
+    'Drapeon customer'
   const initials =
     displayName
       .split(' ')
@@ -252,6 +253,32 @@ export default function CustomerProfileScreen() {
         },
       },
     ])
+  }
+
+  function switchToTailorMode() {
+    if (switchingRole) return
+    Alert.alert(
+      'Use Drapeon as a tailor',
+      'Your customer profile stays here. We will open the tailor workspace so you can finish setup or manage your storefront.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Continue',
+          onPress: () => {
+            setSwitchingRole(true)
+            void switchRole('TAILOR')
+              .then(({ error }) => {
+                if (error) {
+                  Alert.alert('Could not switch modes', error)
+                  return
+                }
+                router.replace('/(tailor)')
+              })
+              .finally(() => setSwitchingRole(false))
+          },
+        },
+      ]
+    )
   }
 
   if (isError && !overview) {
@@ -394,22 +421,22 @@ export default function CustomerProfileScreen() {
 
           {/* ── Become a tailor ── */}
           <TouchableOpacity
-            style={styles.becomeCard}
-            onPress={() => {
-              void openExternalUrl(
-                'https://drapeon.co/tailors',
-                'Please visit https://drapeon.co/tailors manually.'
-              )
-            }}
+            style={[styles.becomeCard, switchingRole && styles.becomeCardDisabled]}
+            onPress={switchToTailorMode}
+            disabled={switchingRole}
             activeOpacity={0.8}
           >
             <View style={styles.becomeIcon}>
-              <Feather name="scissors" size={20} color={Colors.needleGreen} />
+              {switchingRole ? (
+                <ActivityIndicator size="small" color={Colors.needleGreen} />
+              ) : (
+                <Feather name="scissors" size={20} color={Colors.needleGreen} />
+              )}
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.becomeTitle}>Are you a tailor?</Text>
+              <Text style={styles.becomeTitle}>Use Drapeon as a tailor</Text>
               <Text style={styles.becomeSub}>
-                Join Drape to offer custom work, consultations, or ready-made pieces.
+                Keep this account and open the tailor workspace for setup, shop, and orders.
               </Text>
             </View>
             <Feather name="chevron-right" size={18} color={Colors.inkLight} />
@@ -419,7 +446,7 @@ export default function CustomerProfileScreen() {
           <View style={styles.flatList}>
             <FlatRow
               icon="book-open"
-              label="Drape guide & help"
+              label="Drapeon guide & help"
               accent
               onPress={() => router.push('/(customer)/profile/help')}
             />
@@ -450,7 +477,7 @@ export default function CustomerProfileScreen() {
           <View style={styles.flatList}>
             <FlatRow
               icon="user-plus"
-              label="Invite a friend to Drape"
+              label="Invite a friend to Drapeon"
               onPress={() => shareCustomerReferral(user?.id ?? '', displayName)}
             />
             <FlatRow
@@ -514,11 +541,11 @@ function FlatRow({
       <Feather
         name={icon}
         size={20}
-        color={accent ? Colors.needleGreen : Colors.inkLight}
+        color={accent ? Colors.textInverse : Colors.inkLight}
         style={{ width: 24 }}
       />
       <Text style={[styles.flatRowLabel, accent && styles.flatRowLabelAccent]}>{label}</Text>
-      <Feather name="chevron-right" size={16} color={accent ? Colors.needleGreen : Colors.midGrey} />
+      <Feather name="chevron-right" size={16} color={accent ? Colors.textInverse : Colors.midGrey} />
     </TouchableOpacity>
   )
 }
@@ -867,6 +894,7 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
     ...Shadow.sm,
   },
+  becomeCardDisabled: { opacity: 0.72 },
   becomeIcon: {
     width: 44,
     height: 44,
@@ -899,10 +927,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Colors.lightGrey,
   },
-  flatRowAccent: { backgroundColor: Colors.needleGreenLight },
+  flatRowAccent: { backgroundColor: Colors.needleGreen },
   rowLast: { borderBottomWidth: 0 },
   flatRowLabel: { flex: 1, fontSize: FontSize.md, color: Colors.ink },
-  flatRowLabelAccent: { color: Colors.needleGreen, fontWeight: FontWeight.semibold },
+  flatRowLabelAccent: { color: Colors.textInverse, fontWeight: FontWeight.semibold },
 
   // Log out
   logOutRow: {

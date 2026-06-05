@@ -87,6 +87,8 @@ function assertMobileSupabaseConfig() {
 const { supabaseUrl, supabasePublishableKey } = assertMobileSupabaseConfig()
 const supabaseHost = new URL(supabaseUrl).host
 const supabaseStorageKey = `drape.auth.${supabaseHost}`
+const AUTH_NETWORK_TIMEOUT_MS = 12_000
+const DEFAULT_EDGE_FUNCTION_TIMEOUT_MS = 25_000
 const LEGACY_AUTH_STORAGE_KEYS = [
   'supabase.auth.token',
   'supabase.auth.token-user',
@@ -150,6 +152,26 @@ export const supabase = createClient(supabaseUrl, supabasePublishableKey, {
   },
 })
 
+async function withNetworkTimeout<Result>(
+  promise: Promise<Result>,
+  message: string,
+  timeoutMs = AUTH_NETWORK_TIMEOUT_MS,
+): Promise<Result> {
+  let timeout: ReturnType<typeof setTimeout> | null = null
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<Result>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(message))
+        }, timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
+}
+
 async function getFreshAccessToken(forceRefresh = false): Promise<string | null> {
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) {
@@ -157,7 +179,10 @@ async function getFreshAccessToken(forceRefresh = false): Promise<string | null>
   }
 
   const refresh = async () => {
-    const { data, error } = await supabase.auth.refreshSession()
+    const { data, error } = await withNetworkTimeout(
+      supabase.auth.refreshSession(),
+      'Connection timed out before Drapeon could refresh your session. Check your signal and try again.',
+    )
     if (!error) {
       return data.session?.access_token ?? null
     }
@@ -173,7 +198,10 @@ async function getFreshAccessToken(forceRefresh = false): Promise<string | null>
 
   // getSession() is local-only in React Native. Validate the current access
   // token with Auth so we don't send a stale or corrupted JWT to Edge Functions.
-  const { error: userError } = await supabase.auth.getUser()
+  const { error: userError } = await withNetworkTimeout(
+    supabase.auth.getUser(),
+    'Connection timed out before Drapeon could verify your session. Check your signal and try again.',
+  )
   if (userError) {
     const refreshed = await refresh()
     if (refreshed) return refreshed
@@ -193,9 +221,17 @@ async function getFreshAccessToken(forceRefresh = false): Promise<string | null>
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function invokeFunction<T = any>(
   fn: string,
-  options?: { body?: object; headers?: Record<string, string> },
+  options?: { body?: object; headers?: Record<string, string>; timeoutMs?: number },
 ): Promise<{ data: T | null; error: Error | null }> {
-  let token = await getFreshAccessToken(false)
+  let token: string | null = null
+  try {
+    token = await getFreshAccessToken(false)
+  } catch (error) {
+    return {
+      data: null,
+      error: error instanceof Error ? error : new Error(String(error)),
+    }
+  }
 
   if (!token) {
     return {
@@ -205,14 +241,37 @@ export async function invokeFunction<T = any>(
   }
 
   try {
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_EDGE_FUNCTION_TIMEOUT_MS
+    const withTimeout = async <Result,>(promise: Promise<Result>): Promise<Result> => {
+      let timeout: ReturnType<typeof setTimeout> | null = null
+      try {
+        return await Promise.race([
+          promise,
+          new Promise<Result>((_, reject) => {
+            timeout = setTimeout(() => {
+              reject(
+                new Error(
+                  'Connection timed out before Drapeon could confirm this action. Your work is still saved; check your signal and try again.'
+                )
+              )
+            }, timeoutMs)
+          }),
+        ])
+      } finally {
+        if (timeout) clearTimeout(timeout)
+      }
+    }
+
     const invokeOnce = async () =>
-      supabase.functions.invoke<T>(fn, {
-        body: options?.body ?? {},
-        headers: {
-          Authorization: `Bearer ${token}`,
-          ...options?.headers,
-        },
-      })
+      withTimeout(
+        supabase.functions.invoke<T>(fn, {
+          body: options?.body ?? {},
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...options?.headers,
+          },
+        })
+      )
 
     let { data, error } = await invokeOnce()
 

@@ -2,8 +2,8 @@ import type { MetadataRoute } from 'next'
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Drape',
-    short_name: 'Drape',
+    name: 'Drapeon',
+    short_name: 'Drapeon',
     description: 'Find a tailor you trust, place one clear order, and follow it all the way through.',
     start_url: '/',
     display: 'standalone',

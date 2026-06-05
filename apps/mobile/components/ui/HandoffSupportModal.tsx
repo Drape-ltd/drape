@@ -50,7 +50,7 @@ export function HandoffSupportModal({
   async function handleSubmit() {
     if (submitting || !selectedIssue) return
     if (description.trim().length < 10) {
-      setErrorText('Add a short note so the other side and Drape know what is actually happening.')
+      setErrorText('Add a short note so the other side and Drapeon know what is actually happening.')
       return
     }
 
@@ -89,7 +89,7 @@ export function HandoffSupportModal({
 
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
             <Text style={styles.helperText}>
-              Keep the live pickup or delivery problem inside Drape so the order timeline stays clear if support needs to step in.
+              Keep the live pickup or delivery problem inside Drapeon so the order timeline stays clear if support needs to step in.
             </Text>
 
             <View style={styles.optionGroup}>
@@ -137,7 +137,7 @@ export function HandoffSupportModal({
             {submitting ? (
               <View style={styles.sendingRow}>
                 <ActivityIndicator color={Colors.needleGreen} />
-                <Text style={styles.sendingText}>Sending this help request into Drape now.</Text>
+                <Text style={styles.sendingText}>Sending this help request into Drapeon now.</Text>
               </View>
             ) : null}
           </ScrollView>

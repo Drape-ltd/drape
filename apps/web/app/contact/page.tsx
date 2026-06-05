@@ -6,7 +6,7 @@ import { buildMetadata } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'Contact',
-  description: 'Reach the right Drape team directly across support, privacy, security, legal, press, and partnerships.',
+  description: 'Reach the right Drapeon team directly across support, privacy, security, legal, press, and partnerships.',
   path: '/contact',
 })
 
@@ -14,14 +14,14 @@ export default function ContactPage(): JSX.Element {
   return (
     <MarketingShell
       eyebrow="Contact"
-      title="Reach the right Drape team directly."
+      title="Reach the right Drapeon team directly."
       description="Find the right inbox fast."
       cta={
         <a
-          href={`mailto:${CONTACTS.hello}?subject=Drape%20website%20contact`}
+          href={`mailto:${CONTACTS.hello}?subject=Drapeon%20website%20contact`}
           className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
         >
-          Email Drape
+          Email Drapeon
         </a>
       }
     >

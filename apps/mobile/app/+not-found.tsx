@@ -36,9 +36,9 @@ export default function NotFoundScreen() {
         </View>
         <Text style={styles.title}>This screen is not available</Text>
         <Text style={styles.copy}>
-          The link may be old or incomplete. Head back to Drape and open the latest order or message from there.
+          The link may be old or incomplete. Head back to Drapeon and open the latest order or message from there.
         </Text>
-        <Button label="Open Drape" onPress={() => router.replace('/')} />
+        <Button label="Open Drapeon" onPress={() => router.replace('/')} />
       </View>
     </SafeAreaView>
   )

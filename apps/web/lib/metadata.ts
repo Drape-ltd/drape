@@ -20,23 +20,23 @@ export function buildMetadata({
       canonical: path,
     },
     openGraph: {
-      title: title === 'Drape' ? 'Drape | Custom clothing, handled beautifully' : `${title} | Drape`,
+      title: title === 'Drapeon' ? 'Drapeon | Custom clothing, handled beautifully' : `${title} | Drapeon`,
       description,
       url,
-      siteName: 'Drape',
+      siteName: 'Drapeon',
       type: 'website',
       images: [
         {
           url: '/opengraph-image',
           width: 1200,
           height: 630,
-          alt: 'Drape',
+          alt: 'Drapeon',
         },
       ],
     },
     twitter: {
       card: 'summary_large_image',
-      title: title === 'Drape' ? 'Drape | Custom clothing, handled beautifully' : `${title} | Drape`,
+      title: title === 'Drapeon' ? 'Drapeon | Custom clothing, handled beautifully' : `${title} | Drapeon`,
       description,
       images: ['/opengraph-image'],
     },

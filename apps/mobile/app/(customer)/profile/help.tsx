@@ -15,6 +15,7 @@ import {
 import { useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
+import { DRAPE_CUSTOMER_GUIDE_TOPICS, DRAPE_HELP_FAQ } from '@drape/shared'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { goBackOrFallback } from '@/lib/navigation'
 
@@ -27,26 +28,26 @@ const FAQ: Array<{ q: string; a: string }> = [
   },
   {
     q: "Can I cancel or change my order?",
-    a: "Before accepting a custom quote you can walk away with no charge. For ready-made, ask Drape to review cancellation before the seller starts preparing the order. Once preparation, pickup, or dispatch has started, cancellation is no longer automatic and support may need to review the next step.",
+    a: "Before accepting a custom quote you can walk away with no charge. For ready-made, ask Drapeon to review cancellation before the seller starts preparing the order. Once preparation, pickup, or dispatch has started, cancellation is no longer automatic and support may need to review the next step.",
   },
   {
     q: "How does payment work?",
-    a: "For custom, you pay only after reviewing and accepting your tailor's quote. For ready-made, you pay in checkout, including Drape's standard delivery or shipping fee if needed. Payment stays protected while the order is in progress, then releases under Drape's settlement rules once the handoff is confirmed and the order is closed out in the app.",
+    a: "For custom, you pay only after reviewing and accepting your tailor's quote. For ready-made, you pay in checkout, including Drapeon's standard delivery or shipping fee if needed. Payment stays protected while the order is in progress, then releases under Drapeon's settlement rules once the handoff is confirmed and the order is closed out in the app.",
   },
   {
     q: "What if my garment doesn't fit?",
-    a: "Raise a concern from the order screen before marking the order complete. Keep all communication in Drape so the full history stays visible while our team reviews what happened and helps mediate the next step.",
+    a: "Raise a concern from the order screen before marking the order complete. Keep all communication in Drapeon so the full history stays visible while our team reviews what happened and helps mediate the next step.",
   },
   {
     q: "Can I get a refund or exchange on ready-made?",
-    a: "If the wrong item arrives, the item is damaged, or Drape dispatch fails, raise it in Drape before you finish the order so support can review a refund or exchange. Change-of-mind return is not automatic once the seller has started preparing the order or the handoff has started.",
+    a: "If the wrong item arrives, the item is damaged, or Drapeon dispatch fails, raise it in Drapeon before you finish the order so support can review a refund or exchange. Change-of-mind return is not automatic once the seller has started preparing the order or the handoff has started.",
   },
   {
     q: "How are tailors verified?",
-    a: "Every tailor on Drape submits a government-issued ID and a portfolio before going live. Our ops team manually reviews each application. Verified tailors display a badge on their profile.",
+    a: "Every tailor on Drapeon submits a government-issued ID and a portfolio before going live. Our ops team manually reviews each application. Verified tailors display a badge on their profile.",
   },
   {
-    q: "How do I become a tailor on Drape?",
+    q: "How do I become a tailor on Drapeon?",
     a: "Visit drapeon.co/tailors to apply. You'll need to provide your portfolio, a valid ID, and details about your specialism. Once approved you can start receiving orders.",
   },
   {
@@ -57,39 +58,18 @@ const FAQ: Array<{ q: string; a: string }> = [
     q: "How do I update my profile photo or name?",
     a: "Tap your avatar on the Profile tab to upload a new photo. To change your display name, go to Profile → Account settings → Personal information.",
   },
+  ...DRAPE_HELP_FAQ.map((item) => ({ q: item.question, a: item.answer })),
 ]
 
 const GUIDE_TOPICS: Array<{
   icon: React.ComponentProps<typeof Feather>['name']
   title: string
   body: string
-}> = [
-  {
-    icon: 'search',
-    title: 'Finding a tailor',
-    body: 'Compare portfolio media, reviews, location, availability, and fulfillment before starting an order.',
-  },
-  {
-    icon: 'edit-3',
-    title: 'Measurements and fit',
-    body: 'Keep your fit profile current. Tailors can use your measurements and order notes to reduce back-and-forth.',
-  },
-  {
-    icon: 'credit-card',
-    title: 'Payments and protection',
-    body: 'Custom orders are paid after quote approval. Payment stays protected while the order is active.',
-  },
-  {
-    icon: 'package',
-    title: 'Pickup, delivery, and shipping',
-    body: 'Pickup is direct collection. Standard delivery and shipping are Drape-managed and may need final confirmation.',
-  },
-  {
-    icon: 'alert-triangle',
-    title: 'Concerns and aftercare',
-    body: 'Raise concerns from the live order before closing it, and keep evidence and communication inside Drape.',
-  },
-]
+}> = DRAPE_CUSTOMER_GUIDE_TOPICS.map((topic) => ({
+  icon: topic.icon as React.ComponentProps<typeof Feather>['name'],
+  title: topic.title,
+  body: topic.body,
+}))
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
@@ -127,7 +107,7 @@ export default function HelpScreen() {
         <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Feather name="arrow-left" size={20} color={Colors.ink} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Drape guide</Text>
+        <Text style={styles.headerTitle}>Drapeon guide</Text>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
@@ -180,7 +160,7 @@ export default function HelpScreen() {
               icon="mail"
               title="Email support"
               sub="support@drapeon.co · we reply within 24h"
-              onPress={() => { void openExternal('mailto:support@drapeon.co?subject=Drape%20support%20request') }}
+              onPress={() => { void openExternal('mailto:support@drapeon.co?subject=Drapeon%20support%20request') }}
             />
             <View style={styles.divider} />
             <ContactRow
@@ -238,12 +218,12 @@ export default function HelpScreen() {
 
 function alertOpenFailed(url: string) {
   if (url.startsWith('mailto:')) {
-    Alert.alert('Unable to open link', 'Please email support@drapeon.co directly with the subject "Drape support request". If this is about a live order, keep the order thread updated in Drape too.')
+    Alert.alert('Unable to open link', 'Please email support@drapeon.co directly with the subject "Drapeon support request". If this is about a live order, keep the order thread updated in Drapeon too.')
     return
   }
 
   if (url.startsWith('https://wa.me/')) {
-    Alert.alert('Unable to open link', 'Please open WhatsApp and message us directly, or email support@drapeon.co with the subject "Drape support request". Keep the live order as the source of truth while you wait.')
+    Alert.alert('Unable to open link', 'Please open WhatsApp and message us directly, or email support@drapeon.co with the subject "Drapeon support request". Keep the live order as the source of truth while you wait.')
     return
   }
 
@@ -252,7 +232,7 @@ function alertOpenFailed(url: string) {
     return
   }
 
-  Alert.alert('Unable to open link', 'Please try again in a moment or email support@drapeon.co directly with the subject "Drape support request". If this is tied to a live order, keep the updates in Drape first.')
+  Alert.alert('Unable to open link', 'Please try again in a moment or email support@drapeon.co directly with the subject "Drapeon support request". If this is tied to a live order, keep the updates in Drapeon first.')
 }
 
 // ─── FaqItem ─────────────────────────────────────────────────────────────────

@@ -111,8 +111,8 @@ export default function SignInScreen() {
     const subject = encodeURIComponent('Account access help')
     const body = encodeURIComponent(
       normalizedEmail
-        ? `Hi Drape support,\n\nI cannot access my account. The email I tried is ${normalizedEmail}.\n\nWhat I need help with:\n`
-        : 'Hi Drape support,\n\nI cannot access my account.\n\nWhat I need help with:\n'
+        ? `Hi Drapeon support,\n\nI cannot access my account. The email I tried is ${normalizedEmail}.\n\nWhat I need help with:\n`
+        : 'Hi Drapeon support,\n\nI cannot access my account.\n\nWhat I need help with:\n'
     )
     const url = `mailto:support@drapeon.co?subject=${subject}&body=${body}`
     try {
@@ -138,7 +138,7 @@ export default function SignInScreen() {
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <AuthEntryHeader
             eyebrow="Welcome back"
-            title="Sign in to Drape."
+            title="Sign in to Drapeon."
             body="Continue tracking orders, messages, measurements, and protected payments."
             showWordmark={false}
           />

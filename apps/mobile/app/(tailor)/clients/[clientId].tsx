@@ -720,7 +720,7 @@ export default function ClientDetailScreen() {
                 <Text style={styles.emptyCardEyebrow}>Order history</Text>
                 <Text style={styles.emptyCardText}>No orders yet.</Text>
                 <Text style={styles.emptyCardHint}>
-                  Orders with this client will appear here once they book through Drape.
+                  Orders with this client will appear here once they book through Drapeon.
                 </Text>
                 <Text style={styles.emptyCardHint}>
                   Until then, private notes and diary entries help you keep the relationship warm without losing fit context.

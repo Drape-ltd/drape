@@ -1,5 +1,5 @@
 /**
- * Drape — Sentry error monitoring
+ * Drapeon — Sentry error monitoring
  *
  * Setup:
  *   1. Create a project at sentry.io (React Native)

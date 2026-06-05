@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { CONTACTS } from '@drape/shared'
+import { CONTACTS, DRAPE_EXCEPTION_BUCKETS, DRAPE_HELP_FAQ } from '@drape/shared'
 import Link from 'next/link'
 import type { JSX } from 'react'
 import { MarketingShell, SectionTitle } from '../../components/marketing-shell'
@@ -7,7 +7,7 @@ import { buildMetadata } from '../../lib/metadata'
 
 const FAQ: Array<{ question: string; answer: string }> = [
   {
-    question: 'How do I track an order on Drape?',
+    question: 'How do I track an order on Drapeon?',
     answer:
       'Orders move through one clear thread, so customers can follow quote, consultation, production, delivery or collection, and final completion in one place.',
   },
@@ -31,11 +31,12 @@ const FAQ: Array<{ question: string; answer: string }> = [
     answer:
       'Use support for customer help, tailors for tailor-side help, privacy for privacy questions, security for security issues, and legal for formal matters.',
   },
+  ...DRAPE_HELP_FAQ,
 ]
 
 export const metadata: Metadata = buildMetadata({
   title: 'Help',
-  description: 'Get help with Drape and find the right team for support, privacy, security, or legal issues.',
+  description: 'Get help with Drapeon and find the right team for support, privacy, security, or legal issues.',
   path: '/help',
 })
 
@@ -48,7 +49,7 @@ export default function HelpPage(): JSX.Element {
       cta={
         <div className="flex flex-col gap-3 sm:flex-row">
           <a
-            href={`mailto:${CONTACTS.support}?subject=Drape%20support%20request`}
+            href={`mailto:${CONTACTS.support}?subject=Drapeon%20support%20request`}
             className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
           >
             Contact customer support
@@ -80,9 +81,27 @@ export default function HelpPage(): JSX.Element {
 
       <section className="border-t border-ink/6 py-16">
         <SectionTitle
+          eyebrow="Real-life exceptions"
+          title="When the normal path is not enough, Drapeon still has a path."
+          description="Most tailoring problems are not bugs. They are real-life moments that need clear ownership."
+        />
+        <div className="mt-10 grid gap-4 lg:grid-cols-3">
+          {DRAPE_EXCEPTION_BUCKETS.map((bucket) => (
+            <div key={bucket.id} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-5 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
+                {bucket.title}
+              </p>
+              <p className="mt-3 text-sm leading-7 text-ink/68">{bucket.launchRule}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="border-t border-ink/6 py-16">
+        <SectionTitle
           eyebrow="When Signal Is Weak"
           title="Use the durable path first."
-          description="Drape should still feel understandable when live features are delayed or connectivity is uneven."
+          description="Drapeon should still feel understandable when live features are delayed or connectivity is uneven."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           {[
@@ -91,7 +110,7 @@ export default function HelpPage(): JSX.Element {
               'Quotes, handoff status, and concern history should still be clearest from the order itself.',
             ],
             [
-              'Keep messages in Drape',
+              'Keep messages in Drapeon',
               'If a call or push fails, keep the conversation in the order thread so the shared timeline stays intact.',
             ],
             [

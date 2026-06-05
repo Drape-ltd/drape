@@ -166,6 +166,21 @@ If `TAILOR_SOURCES` fabric:
 - require clear direction on type, color, and quality level
 - if replacement fabric is needed later, get customer approval inside Drape first
 
+### Material Advance Rule
+
+If a tailor needs cash for fabric, embroidery, lining, beading, or another order-specific material:
+
+- do not release the main order escrow early
+- do not handle the request informally in messages
+- require a material advance request with the exact item, reason, amount, and currency
+- customer must approve the request before any payment starts
+- customer pays the advance separately from the main order payment
+- ops reviews the paid advance before release
+- release only the approved material advance amount, never the full order balance
+- require receipt proof from the tailor after purchase
+
+If the request feels like an upsell, vague working capital, or a price change, route it through scope-change or ops review instead of releasing money.
+
 ## Rush and Exception Dispatch
 
 - standard local delivery and shipping stay Drape-managed at the flat fee

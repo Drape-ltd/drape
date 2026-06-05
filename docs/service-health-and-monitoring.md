@@ -58,6 +58,7 @@ The readiness check verifies:
 - reauth proof secret is present
 - database is reachable
 - scheduled job visibility, when the service-health RPC migration is installed
+- payout watchdog state: any order more than 30 minutes past its 72-hour release point must already have a payout row
 
 It does not call Stripe, Paystack, or delivery-provider APIs. The first real provider operation remains the correct provider health signal.
 
@@ -81,8 +82,12 @@ The app maintenance cron jobs are expected to call:
 - `escalate-production-stalls` hourly
 - `release-order-payouts` hourly at `:15`
 - `auto-release` daily at 09:00
+- `process-notification-jobs` every minute for push/SMS/email delivery
+- `process-ops-jobs` every 5 minutes for internal issue creation
 
 These are not health checks. They are operational jobs that reconcile payment, quote, consultation, production, and payout state.
+
+The payout watchdog runs from the ops lane, not the every-minute notification lane. If an order is delivered or collected, the customer confirmed handoff, the exact 72-hour dispute window has elapsed, and no payout row exists after the 30-minute grace period, Drape opens an `ESCROW_STUCK` ops issue. That catches a missed scheduled payout before a tailor has to ask where their money is without making push/SMS/email delivery do financial scans every minute.
 
 ## Stripe 401 Interpretation
 

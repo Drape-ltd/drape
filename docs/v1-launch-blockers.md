@@ -84,6 +84,12 @@ Everything here should be treated as launch-critical unless explicitly moved out
 ### 5. Notifications
 
 - Push notifications work end to end
+- Android FCM credentials are present in the release/dev-client build:
+  - Firebase Android app for `com.drape.app` exists in Firebase project `drape-mobile-4729`
+  - `apps/mobile/google-services.json` exists locally and `GOOGLE_SERVICES_JSON` is configured as an EAS file env var for native Firebase initialization
+  - EAS Android FCM V1 service account key is assigned for the same Firebase project
+  - Rebuilt Android dev-client registered fresh Pixel and Samsung push tokens on 2026-05-21
+  - `expo-notifications` can generate an Expo push token on Pixel and Samsung test devices
 - Trigger coverage exists for:
   - new message
   - quote received

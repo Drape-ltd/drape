@@ -18,6 +18,7 @@ export default function TailorDataRequestScreen() {
   const { user } = useAuth()
   const [note, setNote] = useState('')
   const [submitted, setSubmitted] = useState(false)
+  const [tailorExportId, setTailorExportId] = useState<string | null>(null)
   const [opening, setOpening] = useState(false)
 
   async function openExternalUrl(url: string, fallbackMessage: string) {
@@ -41,7 +42,7 @@ export default function TailorDataRequestScreen() {
     setOpening(true)
 
     const bodyLines = [
-      'Hi Drape,',
+      'Hi Drapeon,',
       '',
       'I would like to request a copy of the data you hold about my account.',
       '',
@@ -51,8 +52,8 @@ export default function TailorDataRequestScreen() {
     ]
 
     await openExternalUrl(
-      `mailto:${CONTACTS.privacy}?subject=${encodeURIComponent('Drape tailor data access request')}&body=${encodeURIComponent(bodyLines.join('\n'))}`,
-      `Please email ${CONTACTS.privacy} from your account email with the subject "Drape tailor data access request".`,
+      `mailto:${CONTACTS.privacy}?subject=${encodeURIComponent('Drapeon tailor data access request')}&body=${encodeURIComponent(bodyLines.join('\n'))}`,
+      `Please email ${CONTACTS.privacy} from your account email with the subject "Drapeon tailor data access request".`,
     )
 
     setOpening(false)
@@ -72,6 +73,7 @@ export default function TailorDataRequestScreen() {
       return
     }
 
+    setTailorExportId(result.tailorExportId ?? null)
     setSubmitted(true)
   }
 
@@ -94,11 +96,22 @@ export default function TailorDataRequestScreen() {
             <View style={styles.heroBadge}>
               <Text style={styles.heroBadgeText}>Request received</Text>
             </View>
-            <Text style={styles.heroTitle}>Your data request is now in Drape.</Text>
+            <Text style={styles.heroTitle}>Your data request is now in Drapeon.</Text>
             <Text style={styles.heroCopy}>
-              The privacy team can now review this from the in-app request trail. We may still verify identity before releasing anything sensitive.
+              {tailorExportId
+                ? 'A launch-safe export package has been generated for ops review. We may still verify identity before releasing anything sensitive.'
+                : 'The privacy team can now review this from the in-app request trail. We may still verify identity before releasing anything sensitive.'}
             </Text>
           </View>
+
+          {tailorExportId ? (
+            <View style={styles.noteCard}>
+              <Text style={styles.noteTitle}>Export package ready</Text>
+              <Text style={styles.noteCopy}>
+                Reference {tailorExportId.slice(0, 8)}. It includes your tailor profile, portfolio, shop items, order history, reviews, payouts, and audit trail with sensitive customer details excluded.
+              </Text>
+            </View>
+          ) : null}
 
           <View style={styles.noteCard}>
             <Text style={styles.noteTitle}>Need to add context?</Text>
@@ -127,7 +140,7 @@ export default function TailorDataRequestScreen() {
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Access request</Text>
           </View>
-          <Text style={styles.heroTitle}>Request a copy of your Drape data.</Text>
+          <Text style={styles.heroTitle}>Request a copy of your Drapeon data.</Text>
           <Text style={styles.heroCopy}>
             We can route a formal data-access request to the privacy inbox. For security, we may verify identity before releasing anything sensitive.
           </Text>
@@ -162,7 +175,7 @@ export default function TailorDataRequestScreen() {
 
         <View style={styles.noteCard}>
           <Text style={styles.noteTitle}>Data export</Text>
-          <Text style={styles.noteCopy}>Use this if you want a copy of your account data. If you only need to correct profile details or privacy settings, it is usually faster to update them directly in Drape.</Text>
+          <Text style={styles.noteCopy}>Use this if you want a copy of your account data. If you only need to correct profile details or privacy settings, it is usually faster to update them directly in Drapeon.</Text>
         </View>
 
         <TouchableOpacity

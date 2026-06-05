@@ -78,9 +78,10 @@ const LIVE_BADGE: Record<string, { label: string; color: string; bg: string; dot
 
 export default function TailorProfileScreen() {
   const router = useRouter()
-  const { user, signOut } = useAuth()
+  const { user, signOut, switchRole } = useAuth()
   const { avatarUrl, setAvatarUrl } = useTailorProfile()
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
+  const [switchingRole, setSwitchingRole] = useState(false)
   const userId = user?.id
   const displayName = user?.user_metadata?.display_name ?? ''
   const dashboardQuery = useTailorDashboard(userId, displayName)
@@ -228,6 +229,32 @@ export default function TailorProfileScreen() {
         },
       },
     ])
+  }
+
+  function switchToCustomerMode() {
+    if (switchingRole) return
+    Alert.alert(
+      'Use Drapeon as a customer',
+      'Your tailor workspace stays intact. We will open the customer side so you can browse, order, and manage your own fit profile.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Continue',
+          onPress: () => {
+            setSwitchingRole(true)
+            void switchRole('CUSTOMER')
+              .then(({ error }) => {
+                if (error) {
+                  Alert.alert('Could not switch modes', error)
+                  return
+                }
+                router.replace('/(customer)')
+              })
+              .finally(() => setSwitchingRole(false))
+          },
+        },
+      ]
+    )
   }
 
   const idStatus = profile?.idVerificationStatus ?? 'NOT_SUBMITTED'
@@ -507,7 +534,7 @@ export default function TailorProfileScreen() {
             <View style={styles.flatList}>
               <FlatRow
                 icon="book-open"
-                label="Drape guide & help"
+                label="Drapeon guide & help"
                 accent
                 onPress={() => router.push('/(tailor)/profile/help')}
               />
@@ -542,6 +569,11 @@ export default function TailorProfileScreen() {
 
             {/* ── Account ── */}
             <View style={styles.flatList}>
+              <FlatRow
+                icon="shopping-bag"
+                label={switchingRole ? 'Opening customer mode...' : 'Use Drapeon as a customer'}
+                onPress={switchToCustomerMode}
+              />
               <FlatRow
                 icon="settings"
                 label="Account settings"

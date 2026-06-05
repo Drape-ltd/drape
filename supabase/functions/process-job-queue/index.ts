@@ -15,17 +15,24 @@ import { log } from '../_shared/logger.ts'
 import { sendPushToUser } from '../_shared/notify.ts'
 import { sendOrderConfirmationEmails, sendOrderEventEmail } from '../_shared/order-email.ts'
 import { createOrRefreshOpsIssue } from '../_shared/ops-issues.ts'
+import { createOverduePayoutIssues } from '../_shared/payout-watchdog.ts'
 import { Sentry } from '../_shared/sentry.ts'
 import { sendSmsToUser } from '../_shared/sms.ts'
 
 const FN = 'process-job-queue'
 const DEFAULT_LIMIT = 25
+const PAUSE_VALUES = new Set(['1', 'true', 'yes', 'on'])
 
 function jsonResponse(body: unknown, status: number, cors: Record<string, string>) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
   })
+}
+
+function backgroundWorkersPaused() {
+  const value = Deno.env.get('DRAPE_BACKGROUND_WORKERS_PAUSED')?.trim().toLowerCase()
+  return value ? PAUSE_VALUES.has(value) : false
 }
 
 async function readProcessingOptions(req: Request) {
@@ -84,12 +91,22 @@ async function processJob(supabase: any, job: JobRow) {
     case 'SEND_PUSH': {
       const userId = requireString(payload, 'userId')
       const notification = asRecord(payload.notification)
-      await sendPushToUser(supabase, userId, {
+      const result = await sendPushToUser(supabase, userId, {
         title: requireString(notification, 'title'),
         body: requireString(notification, 'body'),
         data: stringRecord(notification.data),
         preferenceKey: asString(notification.preferenceKey) as never,
       })
+      if (result.status === 'ERROR') {
+        throw new Error(`Push delivery failed: ${result.reason}`)
+      }
+      if (result.status === 'SKIPPED') {
+        log(result.reason === 'NO_TOKEN' ? 'warn' : 'info', FN, 'push.skipped', {
+          job_id: job.id,
+          user_id: userId,
+          reason: result.reason,
+        })
+      }
       return
     }
 
@@ -200,6 +217,31 @@ async function reportDeadJob(
   ])
 }
 
+async function runPayoutWatchdog(supabase: any) {
+  try {
+    const overdue = await createOverduePayoutIssues(supabase)
+    if (overdue.length > 0) {
+      log('warn', FN, 'payout_watchdog.overdue_without_row', {
+        count: overdue.length,
+        orders: overdue.map((item) => ({
+          order_id: item.order.id,
+          reference: item.order.reference,
+          payout_ready_at: item.payoutReadyAt,
+          minutes_past_ready: item.minutesPastReady,
+        })),
+      })
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    log('error', FN, 'payout_watchdog.failed', { error: message })
+    await Sentry.captureMessage('Payout watchdog failed during job processing', {
+      level: 'error',
+      tags: { fn: FN, watchdog: 'payout_overdue_no_row' },
+      extra: { error: message },
+    })
+  }
+}
+
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
@@ -211,9 +253,26 @@ Deno.serve(async (req) => {
   const unauthorized = await authorizeCronRequest(req, FN, cors)
   if (unauthorized) return unauthorized
 
-  const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
   const workerId = createWorkerId(FN)
   const { limit, jobTypes } = await readProcessingOptions(req)
+  if (backgroundWorkersPaused()) {
+    log('warn', FN, 'background_workers.paused', { worker_id: workerId, job_types: jobTypes })
+    return jsonResponse({
+      ok: true,
+      workerId,
+      jobTypes,
+      paused: true,
+      claimed: 0,
+      succeeded: 0,
+      retryable: 0,
+      dead: 0,
+      results: [],
+    }, 200, cors)
+  }
+
+  const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
+  const watchdogNeeded = !jobTypes || jobTypes.includes('CREATE_OPS_ISSUE')
+  if (watchdogNeeded) await runPayoutWatchdog(supabase)
   const jobs = await claimDueJobs(supabase, workerId, limit, jobTypes)
   const results: Array<{
     id: string
@@ -261,6 +320,7 @@ Deno.serve(async (req) => {
     ok: true,
     workerId,
     jobTypes,
+    watchdogRan: watchdogNeeded,
     claimed: jobs.length,
     succeeded: results.filter((result) => result.status === 'SUCCEEDED').length,
     retryable: results.filter((result) => result.status === 'RETRYABLE').length,

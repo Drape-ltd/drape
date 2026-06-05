@@ -729,7 +729,7 @@ export default function TailorPayoutSetupScreen() {
             <Text style={styles.heroCopy}>
               {showManualPendingSummary
                 ? MANUAL_BANK_ENTRY_NOTE
-                : 'Drape will only release earnings to a verified payout account. You can change this later, but changing payout currency or provider will require verification again.'}
+                : 'Drapeon will only release earnings to a verified payout account. You can change this later, but changing payout currency or provider will require verification again.'}
             </Text>
           </View>
 
@@ -795,7 +795,7 @@ export default function TailorPayoutSetupScreen() {
                   <BenefitRow
                     icon="clock"
                     title="Payments release automatically after delivery"
-                    body="Drape only releases earnings after delivery is confirmed and the dispute window closes."
+                    body="Drapeon only releases earnings after delivery is confirmed and the dispute window closes."
                   />
                   <BenefitRow
                     icon="credit-card"
@@ -805,7 +805,7 @@ export default function TailorPayoutSetupScreen() {
                   <BenefitRow
                     icon="shield"
                     title="Secure and verified"
-                    body="Your payout details are verified before Drape unlocks paid work or future releases."
+                    body="Your payout details are verified before Drapeon unlocks paid work or future releases."
                   />
                 </View>
               </>

@@ -217,7 +217,7 @@ export default function LoginSecurityScreen() {
 
     Alert.alert(
       'Check both inboxes',
-      'We sent confirmation links to your current and new email addresses. Your Drape email changes only after the confirmation step is complete.',
+      'We sent confirmation links to your current and new email addresses. Your Drapeon email changes only after the confirmation step is complete.',
     )
     setNewEmail('')
     setEmailPassword('')
@@ -229,7 +229,7 @@ export default function LoginSecurityScreen() {
     try {
       setTogglingBiometric(true)
       if (value) {
-        const ok = await authenticate(`Confirm ${biometricLabel} to enable it for Drape`)
+        const ok = await authenticate(`Confirm ${biometricLabel} to enable it for Drapeon`)
         if (!ok) return
       }
       await setBiometricEnabled(value)
@@ -266,7 +266,7 @@ export default function LoginSecurityScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.toggleTitle}>Use {biometricLabel}</Text>
                   <Text style={styles.toggleSub}>
-                    Lock Drape after 5 minutes in the background. {biometricLabel} will unlock it instantly.
+                    Lock Drapeon after 5 minutes in the background. {biometricLabel} will unlock it instantly.
                   </Text>
                 </View>
                 {togglingBiometric
@@ -360,13 +360,13 @@ export default function LoginSecurityScreen() {
               </View>
             </View>
             <TouchableOpacity
-              style={[styles.saveBtn, (savingEmail || !normalizedNewEmail || !!newEmailError || !emailPassword) && { opacity: 0.6 }]}
+              style={[styles.saveBtn, (savingEmail || !normalizedNewEmail || !!newEmailError || !emailPassword) && styles.saveBtnDisabled]}
               onPress={changeEmail}
               disabled={savingEmail || !normalizedNewEmail || !!newEmailError || !emailPassword}
             >
               {savingEmail
                 ? <ActivityIndicator color={Colors.textInverse} size="small" />
-                : <Text style={styles.saveBtnText}>Send confirmation</Text>
+                : <Text style={[styles.saveBtnText, (!normalizedNewEmail || !!newEmailError || !emailPassword) && styles.saveBtnTextDisabled]}>Send confirmation</Text>
               }
             </TouchableOpacity>
           </View>
@@ -395,7 +395,7 @@ export default function LoginSecurityScreen() {
                 </View>
               </View>
               <TouchableOpacity
-                style={[styles.saveBtn, reauthLoading && { opacity: 0.6 }]}
+                style={[styles.saveBtn, reauthLoading && styles.saveBtnDisabled]}
                 onPress={reauthWithPassword}
                 disabled={reauthLoading}
               >
@@ -453,13 +453,13 @@ export default function LoginSecurityScreen() {
                 </View>
               </View>
               <TouchableOpacity
-                style={[styles.saveBtn, savingPassword && { opacity: 0.6 }]}
+                style={[styles.saveBtn, (savingPassword || !newPassword || !confirmPassword || !!newPasswordError || newPassword !== confirmPassword) && styles.saveBtnDisabled]}
                 onPress={changePassword}
                 disabled={savingPassword || !newPassword || !confirmPassword || !!newPasswordError || newPassword !== confirmPassword}
               >
                 {savingPassword
                   ? <ActivityIndicator color={Colors.textInverse} size="small" />
-                  : <Text style={styles.saveBtnText}>Change password</Text>
+                  : <Text style={[styles.saveBtnText, (!newPassword || !confirmPassword || !!newPasswordError || newPassword !== confirmPassword) && styles.saveBtnTextDisabled]}>Change password</Text>
                 }
               </TouchableOpacity>
             </>
@@ -598,7 +598,12 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.needleGreen, borderRadius: Radius.lg,
     padding: 12, alignItems: 'center',
   },
+  saveBtnDisabled: {
+    backgroundColor: Colors.disabledFill,
+    borderColor: Colors.disabledFill,
+  },
   saveBtnText: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.textInverse },
+  saveBtnTextDisabled: { color: Colors.disabledText },
 
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, padding: Spacing.md },
   toggleTitle: { fontSize: FontSize.md, fontWeight: FontWeight.medium, color: Colors.ink, marginBottom: 4 },

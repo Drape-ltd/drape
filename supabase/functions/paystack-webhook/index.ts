@@ -69,7 +69,7 @@ type OrderRow = {
   fulfillment_payment_intent_id?: string | null
 }
 
-type PaymentPhase = 'INITIAL_ORDER' | 'FULFILLMENT' | 'CONSULTATION'
+type PaymentPhase = 'INITIAL_ORDER' | 'FULFILLMENT' | 'CONSULTATION' | 'MATERIAL_ADVANCE'
 
 async function findPayoutForReference(supabase: any, reference: string) {
   const { data, error } = await supabase
@@ -209,6 +209,8 @@ function paymentPhaseForTransaction(order: OrderRow, transaction: PaystackTransa
       ? 'CONSULTATION'
       : typeof transaction.metadata?.payment_phase === 'string' && transaction.metadata.payment_phase === 'FULFILLMENT'
       ? 'FULFILLMENT'
+      : typeof transaction.metadata?.payment_phase === 'string' && transaction.metadata.payment_phase === 'MATERIAL_ADVANCE'
+      ? 'MATERIAL_ADVANCE'
       : typeof transaction.metadata?.payment_phase === 'string' && transaction.metadata.payment_phase === 'INITIAL_ORDER'
         ? 'INITIAL_ORDER'
         : null
@@ -219,7 +221,102 @@ function paymentPhaseForTransaction(order: OrderRow, transaction: PaystackTransa
   return 'INITIAL_ORDER'
 }
 
-async function markOrderConfirmed(supabase: any, order: OrderRow, transaction: PaystackTransaction, phase: PaymentPhase) {
+async function markMaterialAdvancePayment(
+  supabase: any,
+  order: OrderRow,
+  transaction: PaystackTransaction,
+  status: 'SUCCEEDED' | 'FAILED' | 'CANCELED',
+) {
+  const advanceId =
+    typeof transaction.metadata?.material_advance_id === 'string' && transaction.metadata.material_advance_id.trim().length > 0
+      ? transaction.metadata.material_advance_id.trim()
+      : ''
+
+  let query = supabase
+    .from('order_material_advances')
+    .select('id, title, status, paid_at')
+    .eq('order_id', order.id)
+
+  query = advanceId
+    ? query.eq('id', advanceId)
+    : query.eq('payment_provider', 'PAYSTACK').eq('provider_payment_id', transaction.reference)
+
+  const { data: advance, error } = await query.maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!advance?.id) return false
+
+  if (status !== 'SUCCEEDED') {
+    const { error: updateError } = await supabase
+      .from('order_material_advances')
+      .update({
+        status: 'PAYMENT_FAILED',
+      })
+      .eq('id', advance.id)
+      .in('status', ['PAYMENT_PENDING', 'PAYMENT_FAILED'])
+    if (updateError) throw new Error(updateError.message)
+    await supabase.from('order_stage_updates').insert({
+      order_id: order.id,
+      stage: order.stage,
+      note: `Material advance payment failed for ${advance.title ?? 'materials'}.`,
+    })
+    return true
+  }
+
+  if (advance.paid_at || advance.status === 'OPS_REVIEW' || advance.status === 'RELEASED') return false
+
+  const { data: updated, error: updateError } = await supabase
+    .from('order_material_advances')
+    .update({
+      status: 'OPS_REVIEW',
+      release_status: 'OPS_REVIEW',
+      payment_provider: 'PAYSTACK',
+      provider_payment_id: transaction.reference,
+      provider_checkout_url: null,
+      paid_at: new Date().toISOString(),
+      release_requested_at: new Date().toISOString(),
+    })
+    .eq('id', advance.id)
+    .in('status', ['PAYMENT_PENDING', 'PAYMENT_FAILED', 'PAID', 'OPS_REVIEW'])
+    .select('id')
+    .maybeSingle()
+
+  if (updateError) throw new Error(updateError.message)
+  if (!updated?.id) return false
+
+  await supabase.from('order_stage_updates').insert({
+    order_id: order.id,
+    stage: order.stage,
+    note: `Material advance paid for ${advance.title ?? 'materials'}. Drape ops will review release before funds move.`,
+  })
+
+  await createOrRefreshOpsIssue(supabase, {
+    issueType: 'ORDER_REVIEW',
+    severity: 'HIGH',
+    source: FN,
+    actorRole: 'SYSTEM',
+    orderId: order.id,
+    userId: order.tailor_id ?? null,
+    provider: 'PAYSTACK',
+    title: 'Material advance paid',
+    description: `Customer paid a material advance for order ${order.reference ?? order.id}. Ops must review before releasing this material amount to the tailor.`,
+    recommendedAction: 'Confirm the expense is valid for the order, release only this material amount if appropriate, and require receipt proof after purchase.',
+    dedupeKey: `material-advance:paid-release-review:${advance.id}`,
+    relatedEntityType: 'order_material_advance',
+    relatedEntityId: advance.id,
+    metadata: {
+      material_advance_id: advance.id,
+      provider_payment_id: transaction.reference,
+      amount: transaction.amount,
+      currency: transaction.currency,
+    },
+  })
+
+  return true
+}
+
+type OrderPaymentPhase = Exclude<PaymentPhase, 'MATERIAL_ADVANCE'>
+
+async function markOrderConfirmed(supabase: any, order: OrderRow, transaction: PaystackTransaction, phase: OrderPaymentPhase) {
   if (phase === 'INITIAL_ORDER' && order.stage === 'CONFIRMED') return false
   if (phase === 'FULFILLMENT' && order.fulfillment_payment_paid_at) return false
 
@@ -717,11 +814,16 @@ Deno.serve(async (req) => {
     const phase = paymentPhaseForTransaction(order, transaction)
 
     if (event.event === 'charge.failed') {
-      const failure = await markInitialOrderPaymentFailed(supabase, order, {
-        provider: 'PAYSTACK',
-        paymentIntentId: transaction.reference,
-        phase,
-      }).catch(() => ({ changed: false as const, stage: order.stage }))
+      const failure = phase === 'MATERIAL_ADVANCE'
+        ? {
+            changed: await markMaterialAdvancePayment(supabase, order, transaction, 'FAILED'),
+            stage: order.stage,
+          }
+        : await markInitialOrderPaymentFailed(supabase, order, {
+            provider: 'PAYSTACK',
+            paymentIntentId: transaction.reference,
+            phase,
+          }).catch(() => ({ changed: false as const, stage: order.stage }))
       const matchedAttempt = await markPaymentAttemptStatus(supabase, {
         provider: 'PAYSTACK',
         providerPaymentId: transaction.reference,
@@ -752,6 +854,39 @@ Deno.serve(async (req) => {
       })
 
       return new Response(JSON.stringify({ ok: true, recorded: true, type: event.event }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (phase === 'MATERIAL_ADVANCE') {
+      const changed = await markMaterialAdvancePayment(supabase, order, transaction, 'SUCCEEDED')
+      const matchedAttempt = await markPaymentAttemptStatus(supabase, {
+        provider: 'PAYSTACK',
+        providerPaymentId: transaction.reference,
+        status: 'SUCCEEDED',
+        providerResponse: event as Record<string, unknown>,
+      }).catch(() => null)
+      await markWebhookEventProcessed(supabase, webhookEvent.id, {
+        orderId: order.id,
+        paymentId: matchedAttempt?.id ?? paymentAttempt?.id ?? null,
+        processingResult: changed ? 'material_advance_paid' : 'material_advance_already_recorded',
+      })
+
+      await audit(supabase, {
+        event: 'payment.material_advance_confirmed',
+        actor_role: 'SYSTEM',
+        order_id: order.id,
+        payload: {
+          function: FN,
+          provider: 'PAYSTACK',
+          paystack_event_type: event.event,
+          payment_intent_id: transaction.reference,
+          payment_phase: phase,
+          changed,
+        },
+      })
+
+      return new Response(JSON.stringify({ ok: true, confirmed: true, changed, phase }), {
         headers: { ...cors, 'Content-Type': 'application/json' },
       })
     }

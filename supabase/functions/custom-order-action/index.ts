@@ -29,8 +29,11 @@ import {
 } from '../../../packages/shared/src/custom-order-flow.ts'
 import { ORDER_CANCELLATION_POLICY_VERSION } from '../../../packages/shared/src/checkout-policy.ts'
 import { normalizeTaxCountryCode } from '../../../packages/shared/src/tax.ts'
+import { resolveDeadlineContextWarning } from '../../../packages/shared/src/deadline-context.ts'
 
 const FN = 'custom-order-action'
+const STALE_MEASUREMENT_MONTHS = 6
+const ORDER_CONTRACT_VERSION = 1
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
 }
@@ -159,6 +162,79 @@ function missingCoreMeasurements(snapshot: unknown, garmentType: string) {
   return required.filter((field) => measurementValue(snapshot, field) == null)
 }
 
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function normalizeWearerContext(supportMeta: Record<string, unknown> | null, snapshot: unknown) {
+  const snapshotRecord = objectRecord(snapshot)
+  const source =
+    objectRecord(supportMeta?.wearerContext) ??
+    objectRecord(snapshotRecord?.wearerContext) ??
+    {}
+  const rawMode = source.mode
+  const mode = rawMode === 'OTHER' || rawMode === 'GROUP' ? rawMode : 'SELF'
+  const rawLabel = typeof source.label === 'string' ? source.label.trim() : ''
+  const label = rawLabel || (mode === 'GROUP' ? 'Group order' : 'Me')
+  return {
+    mode,
+    label,
+    measurementProfileLabel:
+      typeof source.measurementProfileLabel === 'string' && source.measurementProfileLabel.trim()
+        ? source.measurementProfileLabel.trim()
+        : label,
+    relationship: mode === 'GROUP' ? 'GROUP' : mode === 'OTHER' ? 'NAMED_OTHER' : 'BUYER',
+    selectedAt: typeof source.selectedAt === 'string' && source.selectedAt.trim()
+      ? source.selectedAt
+      : new Date().toISOString(),
+    note: typeof source.note === 'string' && source.note.trim() ? source.note.trim() : null,
+  }
+}
+
+function dateFromRecord(record: Record<string, unknown> | null, fields: string[]) {
+  for (const field of fields) {
+    const value = record?.[field]
+    if (typeof value !== 'string' || value.trim().length === 0) continue
+    const date = new Date(value)
+    if (Number.isFinite(date.getTime())) return date
+  }
+  return null
+}
+
+function normalizeMeasurementAge(supportMeta: Record<string, unknown> | null, snapshot: unknown) {
+  const snapshotRecord = objectRecord(snapshot)
+  const source = objectRecord(supportMeta?.measurementAge)
+  const lastUpdated =
+    dateFromRecord(source, ['lastUpdatedAt']) ??
+    dateFromRecord(snapshotRecord, ['measurementProfileUpdatedAt', 'capturedAt', 'confirmedAt'])
+  if (!lastUpdated) return null
+  const sourceAge = source?.ageMonths
+  const ageMonths =
+    typeof sourceAge === 'number' && Number.isFinite(sourceAge) && sourceAge >= 0
+      ? Math.floor(sourceAge)
+      : Math.max(
+          0,
+          Math.floor((Date.now() - lastUpdated.getTime()) / (1000 * 60 * 60 * 24 * 30.44)),
+        )
+  const sourceStale = source?.stale
+  const stale =
+    typeof sourceStale === 'boolean' ? sourceStale : ageMonths >= STALE_MEASUREMENT_MONTHS
+  return {
+    lastUpdatedAt: lastUpdated.toISOString(),
+    ageMonths,
+    stale,
+    warningShown: typeof source?.warningShown === 'boolean' ? source.warningShown : stale,
+  }
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : []
+}
+
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
@@ -280,6 +356,16 @@ Deno.serve(async (req) => {
     const supportMeta = body.supportMeta && typeof body.supportMeta === 'object' && !Array.isArray(body.supportMeta)
       ? body.supportMeta as Record<string, unknown>
       : null
+    const wearerContext = normalizeWearerContext(supportMeta, body.customerMeasurementsSnapshot)
+    const measurementAge = normalizeMeasurementAge(supportMeta, body.customerMeasurementsSnapshot)
+    const measurementSnapshot = objectRecord(body.customerMeasurementsSnapshot)
+      ? {
+          ...(body.customerMeasurementsSnapshot as Record<string, unknown>),
+          wearerContext,
+          measurementProfileLabel: wearerContext.measurementProfileLabel,
+          measurementAge,
+        }
+      : body.customerMeasurementsSnapshot
 
     if (body.fabricSource === 'CUSTOMER_SUPPLIES' && !supportMeta?.fabricHandoffMode) {
       return jsonError(cors, 400, 'FABRIC_HANDOFF_REQUIRED', 'Tell the tailor how your fabric will reach them before submitting this order.')
@@ -299,16 +385,16 @@ Deno.serve(async (req) => {
       return rateLimitExceededResponse(cors)
     }
 
-    const missingMeasurements = missingCoreMeasurements(body.customerMeasurementsSnapshot, body.garmentType)
+    const missingMeasurements = missingCoreMeasurements(measurementSnapshot, body.garmentType)
     const measurementPreflight = runPreflight([
       {
         name: 'measurement_snapshot_present',
-        condition: !!body.customerMeasurementsSnapshot && typeof body.customerMeasurementsSnapshot === 'object' && !Array.isArray(body.customerMeasurementsSnapshot),
+        condition: !!measurementSnapshot && typeof measurementSnapshot === 'object' && !Array.isArray(measurementSnapshot),
         errorCode: 'MEASUREMENTS_REQUIRED',
         message: 'Add your measurement profile before placing this order.',
         field: 'customerMeasurementsSnapshot',
         severity: 'BLOCKING',
-        actual: { hasMeasurements: !!body.customerMeasurementsSnapshot },
+        actual: { hasMeasurements: !!measurementSnapshot },
       },
       {
         name: 'core_measurements_present',
@@ -398,6 +484,27 @@ Deno.serve(async (req) => {
       })
       if (blocked) return blocked
     }
+
+    const bulkMeta = objectRecord(supportMeta?.bulkOrder)
+    const blockedStructuredContext = await rejectIfBlockedContact({
+      supabase,
+      fn: FN,
+      cors,
+      actorId: caller.id,
+      actorRole: 'CUSTOMER',
+      surface: 'custom_order.structured_context',
+      text: [
+        wearerContext.label,
+        typeof bulkMeta?.label === 'string' ? bulkMeta.label : null,
+        typeof bulkMeta?.notes === 'string' ? bulkMeta.notes : null,
+        ...stringList(bulkMeta?.memberNames),
+      ]
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .join('\n'),
+      message: "Contact details can't be included in group or wearer details.",
+      extra: { field: 'support_meta' },
+    })
+    if (blockedStructuredContext) return blockedStructuredContext
 
     const { data: accountRow, error: accountError } = await supabase
       .from('users')
@@ -590,8 +697,60 @@ Deno.serve(async (req) => {
         customerCurrency: orderCurrency,
       })
     const lockedTailorPayoutProvider = resolvePaymentProviderForCurrency(lockedTailorPayoutCurrency)
+    const deadlineContextWarning = resolveDeadlineContextWarning({
+      deadline: body.deadline,
+      fulfillmentOption: body.deliveryMethod,
+      shippingCountry: body.deliveryCountryCode,
+      tailorCountry: null,
+    })
+    const { data: referralRow, error: referralError } = await supabase
+      .from('referrals')
+      .select('referrer_user_id, trust_context, claimed_at')
+      .eq('referred_user_id', caller.id)
+      .eq('status', 'CLAIMED')
+      .order('claimed_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (referralError) {
+      log('warn', FN, 'referral_trust.lookup_failed', {
+        actor_id: caller.id,
+        error: referralError.message,
+      })
+    }
+
+    const referralTrustContext = objectRecord((referralRow as { trust_context?: unknown } | null)?.trust_context)
+    const referralTrust = referralRow
+      ? {
+        referrerUserId: (referralRow as { referrer_user_id?: string }).referrer_user_id ?? null,
+        referrerName: typeof referralTrustContext?.referrerName === 'string'
+          ? referralTrustContext.referrerName
+          : null,
+        completedOrderCount: typeof referralTrustContext?.completedOrderCount === 'number'
+          ? referralTrustContext.completedOrderCount
+          : null,
+        visibleToTailor: true,
+      }
+      : (objectRecord(supportMeta?.referralTrust) ? supportMeta?.referralTrust : null)
+
     const nextSupportMeta = {
       ...(supportMeta ?? {}),
+      orderContract: {
+        version: ORDER_CONTRACT_VERSION,
+        orderKind: 'CUSTOM',
+        createdAt: new Date().toISOString(),
+      },
+      wearerContext,
+      measurementAge,
+      deadlineContext: deadlineContextWarning
+        ? {
+          warningCode: deadlineContextWarning.code,
+          warningShown: true,
+          message: deadlineContextWarning.message,
+          suggestedDate: deadlineContextWarning.suggestedDate ?? null,
+        }
+        : null,
+      referralTrust,
       customOrder: {
         garmentType: body.garmentType,
         garmentTypeOther: normalizedGarmentTypeOther,
@@ -602,6 +761,18 @@ Deno.serve(async (req) => {
         shippingPreference: normalizedShippingPreference,
       },
       styleReferenceLinks,
+      styleAlignment: {
+        requiredBeforeCutting: true,
+        status: referencePhotos.length > 0 || styleReferenceLinks.length > 0
+          ? 'NEEDS_TAILOR_CONFIRMATION'
+          : 'NOT_REQUIRED',
+        referencePhotoCount: referencePhotos.length,
+        styleReferenceLinkCount: styleReferenceLinks.length,
+        instruction:
+          'Before cutting, confirm what can and cannot be matched from the customer references inside Drape.',
+        customerExpectation:
+          'Reference photos guide the garment. Exact replication depends on fabric, budget, measurements, and agreed finish.',
+      },
       styleNotes: normalizeText(body.styleNotes),
       bodyNote: normalizedBodyNote,
       fabricSourcing: body.fabricSource === 'TAILOR_SOURCES'
@@ -635,7 +806,7 @@ Deno.serve(async (req) => {
         occasion: body.occasion?.trim() || null,
         deadline: body.deadline ?? null,
         reference_photos: referencePhotos,
-        customer_measurements_snapshot: body.customerMeasurementsSnapshot ?? null,
+        customer_measurements_snapshot: measurementSnapshot ?? null,
         fit_note: normalizedBodyNote,
         fabric_source: body.fabricSource,
         special_note: serializeOrderSupportMeta(nextSupportMeta as any),
@@ -703,6 +874,66 @@ Deno.serve(async (req) => {
       return jsonError(cors, 500, 'ORDER_CREATE_FAILED', 'Could not submit your order right now.')
     }
 
+    if (wearerContext.mode === 'OTHER' && objectRecord(measurementSnapshot)) {
+      const { error: namedProfileError } = await supabase
+        .from('customer_measurement_profiles')
+        .insert({
+          customer_id: caller.id,
+          label: wearerContext.measurementProfileLabel,
+          relationship: 'OTHER',
+          measurements: measurementSnapshot,
+          unit_preference: typeof (measurementSnapshot as Record<string, unknown>).unit === 'string'
+            ? (measurementSnapshot as Record<string, unknown>).unit
+            : 'cm',
+          source: 'IMPORT',
+          is_default: false,
+          last_measured_at: measurementAge?.lastUpdatedAt ?? new Date().toISOString(),
+        })
+
+      if (namedProfileError) {
+        log('warn', FN, 'measurement_profile.create_failed', {
+          actor_id: caller.id,
+          order_id: created.id,
+          error: namedProfileError.message,
+        })
+      }
+    }
+
+    const createdGroupMembers: string[] = []
+    const groupMeta = objectRecord((nextSupportMeta as Record<string, unknown>).bulkOrder)
+    const rawGroupCount = typeof groupMeta?.recipientCount === 'number' ? groupMeta.recipientCount : null
+    const groupCount = rawGroupCount != null && Number.isFinite(rawGroupCount)
+      ? Math.max(0, Math.trunc(rawGroupCount))
+      : 0
+    const groupNames = stringList(groupMeta?.memberNames)
+    if (wearerContext.mode === 'GROUP' && groupCount >= 2) {
+      const memberNames = Array.from({ length: groupCount }, (_, index) =>
+        groupNames[index]?.trim() || `Group member ${index + 1}`
+      )
+      const { data: groupRows, error: groupMemberError } = await supabase
+        .from('order_group_members')
+        .insert(memberNames.map((name) => ({
+          order_id: created.id,
+          owner_customer_id: caller.id,
+          display_name: name,
+          role: 'WEARER',
+          status: 'DRAFT',
+        })))
+        .select('id')
+
+      if (groupMemberError) {
+        await supabase.from('custom_order_details').delete().eq('order_id', created.id)
+        await supabase.from('orders').delete().eq('id', created.id)
+        log('error', FN, 'group_members.create_failed', {
+          actor_id: caller.id,
+          order_id: created.id,
+          error: groupMemberError.message,
+        })
+        return jsonError(cors, 500, 'GROUP_MEMBERS_SAVE_FAILED', 'Could not save the group members for this order. Please try again.')
+      }
+      createdGroupMembers.push(...((groupRows ?? []) as Array<{ id: string }>).map((row) => row.id))
+    }
+
     await queueMediaSafetyReview(supabase, {
       fn: FN,
       actorId: caller.id,
@@ -721,7 +952,12 @@ Deno.serve(async (req) => {
       actor_id: caller.id,
       actor_role: 'CUSTOMER',
       order_id: created.id,
-      payload: { function: FN, tailor_profile_id: body.tailorProfileId },
+      payload: {
+        function: FN,
+        tailor_profile_id: body.tailorProfileId,
+        group_member_count: createdGroupMembers.length,
+        wearer_mode: wearerContext.mode,
+      },
     })
 
     const orderNotificationContext = {

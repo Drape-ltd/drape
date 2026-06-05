@@ -41,7 +41,7 @@ export default function DataRequestScreen() {
     setOpening(true)
 
     const bodyLines = [
-      'Hi Drape,',
+      'Hi Drapeon,',
       '',
       'I would like to request a copy of the data you hold about my account.',
       '',
@@ -51,8 +51,8 @@ export default function DataRequestScreen() {
     ]
 
     await openExternalUrl(
-      `mailto:${CONTACTS.privacy}?subject=${encodeURIComponent('Drape data access request')}&body=${encodeURIComponent(bodyLines.join('\n'))}`,
-      `Please email ${CONTACTS.privacy} with the subject "Drape data access request".`,
+      `mailto:${CONTACTS.privacy}?subject=${encodeURIComponent('Drapeon data access request')}&body=${encodeURIComponent(bodyLines.join('\n'))}`,
+      `Please email ${CONTACTS.privacy} with the subject "Drapeon data access request".`,
     )
 
     setOpening(false)
@@ -94,7 +94,7 @@ export default function DataRequestScreen() {
             <View style={styles.heroBadge}>
               <Text style={styles.heroBadgeText}>Request received</Text>
             </View>
-            <Text style={styles.heroTitle}>Your data request is now in Drape.</Text>
+            <Text style={styles.heroTitle}>Your data request is now in Drapeon.</Text>
             <Text style={styles.heroCopy}>
               The privacy team can now pick this up from the in-app request trail. We may still verify identity before releasing anything sensitive.
             </Text>
@@ -127,7 +127,7 @@ export default function DataRequestScreen() {
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>Access request</Text>
           </View>
-          <Text style={styles.heroTitle}>Request a copy of your Drape data.</Text>
+          <Text style={styles.heroTitle}>Request a copy of your Drapeon data.</Text>
           <Text style={styles.heroCopy}>
             We can route a formal data-access request to the privacy inbox. For security, we may verify identity before releasing anything sensitive.
           </Text>
@@ -162,7 +162,7 @@ export default function DataRequestScreen() {
 
         <View style={styles.noteCard}>
           <Text style={styles.noteTitle}>Data export</Text>
-          <Text style={styles.noteCopy}>Use this if you want a copy of your account data. If you only need to correct something, it is usually faster to update it directly in Drape.</Text>
+          <Text style={styles.noteCopy}>Use this if you want a copy of your account data. If you only need to correct something, it is usually faster to update it directly in Drapeon.</Text>
         </View>
 
         <TouchableOpacity

@@ -1,5 +1,5 @@
 /**
- * Drape — PostHog analytics wrapper
+ * Drapeon — PostHog analytics wrapper
  *
  * Setup:
  *   1. Create a project at posthog.com (or posthog.eu)

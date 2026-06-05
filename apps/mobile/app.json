@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Drape",
+    "name": "Drapeon",
     "slug": "drape",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -11,7 +11,7 @@
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#1A1A18"
+      "backgroundColor": "#F9F7F3"
     },
     "assetBundlePatterns": [
       "**/*"
@@ -43,11 +43,11 @@
       },
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSCameraUsageDescription": "Drape uses your camera to upload reference photos, progress updates, and Drape Vision scans.",
-        "NSPhotoLibraryUsageDescription": "Drape accesses your photo library for order references and portfolio photos.",
-        "NSMicrophoneUsageDescription": "Drape uses your microphone for voice note messages.",
-        "NSMotionUsageDescription": "Drape uses device motion to keep Drape Vision scans calibrated while you turn.",
-        "NSFaceIDUsageDescription": "Drape uses Face ID to quickly and securely verify your identity when you return to the app."
+        "NSCameraUsageDescription": "Drapeon uses your camera to upload reference photos, progress updates, and Drapeon Vision scans.",
+        "NSPhotoLibraryUsageDescription": "Drapeon accesses your photo library for order references and portfolio photos.",
+        "NSMicrophoneUsageDescription": "Drapeon uses your microphone for voice note messages.",
+        "NSMotionUsageDescription": "Drapeon uses device motion to keep Drapeon Vision scans calibrated while you turn.",
+        "NSFaceIDUsageDescription": "Drapeon uses Face ID to quickly and securely verify your identity when you return to the app."
       }
     },
     "android": {
@@ -58,6 +58,7 @@
       "package": "com.drape.app",
       "permissions": [
         "android.permission.CAMERA",
+        "android.permission.POST_NOTIFICATIONS",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.RECORD_AUDIO",
         "android.permission.USE_BIOMETRIC",
@@ -76,20 +77,20 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Drape uses your camera for photos and video."
+          "cameraPermission": "Drapeon uses your camera for photos and video."
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Drape uses your photo library so you can upload portfolio photos and order references. Your photos are only accessed when you choose to upload.",
-          "cameraPermission": "Drape uses your camera to take portfolio photos and order references."
+          "photosPermission": "Drapeon uses your photo library so you can upload portfolio photos and order references. Your photos are only accessed when you choose to upload.",
+          "cameraPermission": "Drapeon uses your camera to take portfolio photos and order references."
         }
       ],
       [
         "expo-sensors",
         {
-          "motionPermission": "Drape uses device motion to keep Drape Vision scans calibrated while you turn."
+          "motionPermission": "Drapeon uses device motion to keep Drapeon Vision scans calibrated while you turn."
         }
       ],
       [
@@ -103,7 +104,7 @@
       [
         "expo-av",
         {
-          "microphonePermission": "Drape uses your microphone to record voice note messages."
+          "microphonePermission": "Drapeon uses your microphone to record voice note messages."
         }
       ],
       "expo-apple-authentication",

@@ -46,16 +46,20 @@ import {
   buildFitProfileReviewedNote,
   buildMaterialIssueNote,
   buildMeasurementConfirmationRequestNote,
+  buildScopeChangeRequestNote,
+  buildScopeChangeResponseNote,
   CANCELLATION_REVIEW_REASON_LABELS,
   DELIVERY_REVIEW_REASON_LABELS,
   FABRIC_HANDOFF_LABELS,
   fitProfileNeedsTailorReview,
+  hasOpenScopeChange,
   MATERIAL_ISSUE_REASON_LABELS,
   materialIssueBlocksCutting,
   MEASUREMENT_SOURCE_LABELS,
   parseMeasurementSnapshot,
   parseOrderSupportMeta,
   serializeOrderSupportMeta,
+  SCOPE_CHANGE_TYPE_LABELS,
 } from '../_shared/order-support.ts'
 import { finalizeOrderTerminal } from '../_shared/order-terminal.ts'
 import { refundSettledOrderPayments } from '../_shared/payment-refunds.ts'
@@ -204,6 +208,12 @@ const BodySchema = z.discriminatedUnion('action', [
   }),
   z.object({
     orderId: uuid,
+    action:  z.literal('request-style-alignment'),
+    note:    z.string().trim().min(10).max(500),
+    photoUrl: z.string().url().optional(),
+  }),
+  z.object({
+    orderId: uuid,
     action:  z.literal('confirm-fabric-received'),
     note:    z.string().trim().max(300).optional(),
     photoUrl: z.string().url().optional(),
@@ -223,6 +233,37 @@ const BodySchema = z.discriminatedUnion('action', [
     }).default({}),
     confidence: z.enum(['PASS', 'NEEDS_REVIEW']).default('PASS'),
     captureVersion: z.string().trim().max(40).optional(),
+  }),
+  z.object({
+    orderId: uuid,
+    action: z.literal('request-scope-change'),
+    scopeChangeType: z.enum([
+      'MEASUREMENT_AMENDMENT',
+      'STYLE_OR_REFERENCE',
+      'FABRIC_OR_MATERIAL',
+      'ADD_OR_REMOVE_ITEM',
+      'DEADLINE_OR_EVENT',
+      'PAUSE_OR_RESTART',
+      'REWORK_OR_ALTERATION',
+      'OTHER',
+    ]),
+    scopeChangeSummary: z.string().trim().min(10).max(500),
+    scopeChangeImpacts: z.array(z.enum([
+      'PRICE',
+      'DEADLINE',
+      'FIT',
+      'FABRIC',
+      'STYLE',
+      'FULFILLMENT',
+    ])).max(6).optional(),
+    priceImpactMinor: z.number().int().min(-MAX_MONEY_MINOR_UNITS).max(MAX_MONEY_MINOR_UNITS).optional(),
+    deadlineImpact: z.string().trim().max(120).optional(),
+  }),
+  z.object({
+    orderId: uuid,
+    action: z.literal('respond-scope-change'),
+    scopeChangeDecision: z.enum(['ACCEPTED', 'DECLINED', 'CANCELLED']),
+    scopeChangeResponseNote: z.string().trim().max(300).optional(),
   }),
   z.object({
     orderId: uuid,
@@ -325,8 +366,11 @@ type Action =
   | 'confirm-collection'
   | 'request-measurement-confirmation'
   | 'confirm-fit-readiness'
+  | 'request-style-alignment'
   | 'confirm-fabric-received'
   | 'save-garment-qc'
+  | 'request-scope-change'
+  | 'respond-scope-change'
   | 'open-material-issue'
   | 'request-cancellation-review'
   | 'request-delivery-review'
@@ -390,6 +434,20 @@ const ADVANCE_VALID_FROM: Record<string, string[]> = {
 }
 
 const PRE_CUTTING_STAGES = ['PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING', 'CONFIRMED', 'DESIGNING', 'SOURCING']
+const SCOPE_CHANGE_STAGES = [
+  'PENDING_QUOTE',
+  'CONSULTATION',
+  'QUOTE_SENT',
+  'PAYMENT_PENDING',
+  'CONFIRMED',
+  'DESIGNING',
+  'SOURCING',
+  'CUTTING',
+  'SEWING',
+  'FINISHING',
+  'READY_FOR_COLLECTION',
+  'READY_FOR_DRAPE_DISPATCH',
+]
 
 // Push notification sent to the CUSTOMER after each tailor action
 const CUSTOMER_NOTIFICATION: Record<string, { title: string; body: string }> = {
@@ -407,8 +465,11 @@ const CUSTOMER_NOTIFICATION: Record<string, { title: string; body: string }> = {
   READY_FOR_DRAPE_DISPATCH:{ title: 'Ready for Drape dispatch 📦', body: 'Your order is packed and ready for Drape dispatch.' },
   'request-measurement-confirmation': { title: 'Measurement check needed', body: 'Your tailor wants you to confirm your measurements before cutting starts.' },
   'confirm-fit-readiness': { title: 'Fit intake reviewed', body: 'Your tailor reviewed the guided fit intake attached to this order.' },
+  'request-style-alignment': { title: 'Style approval needed', body: 'Your tailor explained how they will interpret your references before cutting.' },
   'confirm-fabric-received': { title: 'Fabric received', body: 'Your tailor confirmed they received your fabric.' },
   'save-garment-qc': { title: 'Quality check saved', body: 'Your tailor added a Drape Vision quality check to your order timeline.' },
+  'request-scope-change': { title: 'Order change proposed', body: 'Your tailor proposed a formal change. Review it before production continues.' },
+  'respond-scope-change': { title: 'Order change updated', body: 'Your tailor responded to the change request on this order.' },
   'open-material-issue': { title: 'Fabric issue needs your decision', body: 'Your tailor reviewed the fabric and needs your choice before production can continue.' },
   'request-cancellation-review': { title: 'Cancellation review requested', body: 'Your tailor asked Drape to review cancelling this order before handoff.' },
   'request-delivery-review': { title: 'Delivery review requested', body: 'Your tailor asked Drape to review a dispatch or delivery issue.' },
@@ -791,6 +852,316 @@ Deno.serve(async (req) => {
       extra: { action },
     })
     if (blockedNote) return blockedNote
+
+    if (action === 'request-style-alignment') {
+      if (order.order_kind !== 'CUSTOM') {
+        return jsonErrorResponse(cors, 409, 'STYLE_ALIGNMENT_NOT_AVAILABLE', 'Style approval only applies to custom orders.')
+      }
+      if (!PRE_CUTTING_STAGES.includes(order.stage)) {
+        return jsonErrorResponse(cors, 409, 'STYLE_ALIGNMENT_STAGE_CLOSED', 'This order is too far along for pre-cutting style approval.')
+      }
+
+      const meta = parseOrderSupportMeta(order.special_note)
+      const now = new Date().toISOString()
+      const nextMeta = {
+        ...meta,
+        styleAlignment: {
+          ...(meta.styleAlignment ?? {}),
+          requiredBeforeCutting: true,
+          status: 'PENDING_CUSTOMER_APPROVAL' as const,
+          tailorInterpretation: body.note.trim(),
+          approvalRequestedAt: now,
+          referencePhotoCount: meta.styleAlignment?.referencePhotoCount ?? null,
+          styleReferenceLinkCount: meta.styleAlignment?.styleReferenceLinkCount ?? null,
+          instruction: meta.styleAlignment?.instruction ??
+            'Before cutting, confirm what can and cannot be matched from the customer references inside Drape.',
+          customerExpectation: meta.styleAlignment?.customerExpectation ??
+            'Reference photos guide the garment. Exact replication depends on fabric, budget, measurements, and agreed finish.',
+        },
+      }
+
+      const { error } = await supabase
+        .from('orders')
+        .update({ special_note: serializeOrderSupportMeta(nextMeta) })
+        .eq('id', orderId)
+
+      if (error) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
+        return jsonErrorResponse(cors, 500, 'STYLE_ALIGNMENT_SAVE_FAILED', 'Could not request style approval right now.')
+      }
+
+      await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: order.stage,
+        note: `Tailor requested style approval before cutting: ${body.note.trim()}`,
+        photo_url: body.photoUrl ?? null,
+      })
+
+      await audit(supabase, {
+        event: 'style_alignment.requested',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        order_id: orderId,
+        severity: 'warn',
+        payload: {
+          stage: order.stage,
+          has_photo: !!body.photoUrl,
+        },
+      })
+
+      if (order.customer_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.customer_id.toString(), {
+            ...CUSTOMER_NOTIFICATION['request-style-alignment'],
+            preferenceKey: 'orderUpdates',
+            data: { orderId, type: 'style_alignment' },
+          }),
+        )
+        queueCustomerOrderEmail(
+          supabase,
+          order,
+          'Style approval needed',
+          'Your tailor explained how they will interpret your references. Approve it or request changes before cutting starts.',
+        )
+      }
+
+      return jsonResponse({ ok: true, styleAlignmentStatus: 'PENDING_CUSTOMER_APPROVAL' }, 200, cors)
+    }
+
+    if (action === 'request-scope-change') {
+      if (order.order_kind && order.order_kind !== 'CUSTOM') {
+        return jsonErrorResponse(
+          cors,
+          409,
+          'SCOPE_CHANGE_NOT_AVAILABLE',
+          'Ready-made orders use dispatch, delivery, or aftercare review instead of scope changes.',
+        )
+      }
+
+      if (!SCOPE_CHANGE_STAGES.includes(order.stage)) {
+        return jsonErrorResponse(
+          cors,
+          409,
+          'SCOPE_CHANGE_STAGE_CLOSED',
+          'This order is too far along for a standard change request. Use delivery review or aftercare instead.',
+        )
+      }
+
+      const blockedSummary = await rejectIfBlockedContact({
+        supabase,
+        fn: FN,
+        cors,
+        actorId: caller.id,
+        actorRole: 'TAILOR',
+        surface: 'tailor_order.request-scope-change.summary',
+        text: body.scopeChangeSummary,
+        message: "Contact details can't be included in a change request.",
+        orderId,
+        extra: { action, scopeChangeType: body.scopeChangeType },
+      })
+      if (blockedSummary) return blockedSummary
+
+      const meta = parseOrderSupportMeta(order.special_note)
+      if (hasOpenScopeChange(meta)) {
+        return jsonErrorResponse(cors, 409, 'SCOPE_CHANGE_ALREADY_OPEN', 'There is already an open change request on this order.')
+      }
+
+      const typeLabel = SCOPE_CHANGE_TYPE_LABELS[body.scopeChangeType]
+      const impacts = body.scopeChangeImpacts ?? []
+      const now = new Date().toISOString()
+      const nextMeta = {
+        ...meta,
+        scopeChange: {
+          status: 'OPEN' as const,
+          requestedBy: 'TAILOR' as const,
+          type: body.scopeChangeType,
+          typeLabel,
+          summary: body.scopeChangeSummary.trim(),
+          impacts,
+          priceImpactMinor: typeof body.priceImpactMinor === 'number' ? body.priceImpactMinor : null,
+          deadlineImpact: body.deadlineImpact?.trim() || null,
+          requestedAt: now,
+          requestedFromStage: order.stage,
+          respondedAt: null,
+          respondedBy: null,
+          responseNote: null,
+        },
+      }
+
+      const { error } = await supabase
+        .from('orders')
+        .update({ special_note: serializeOrderSupportMeta(nextMeta) })
+        .eq('id', orderId)
+
+      if (error) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
+        return jsonErrorResponse(cors, 500, 'SCOPE_CHANGE_FAILED', 'Could not send this change request right now.')
+      }
+
+      await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: order.stage,
+        note: buildScopeChangeRequestNote('TAILOR', typeLabel, body.scopeChangeSummary.trim(), impacts),
+      })
+
+      await audit(supabase, {
+        event: 'order.scope_change_requested',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        order_id: orderId,
+        severity: impacts.includes('PRICE') || impacts.includes('DEADLINE') ? 'warn' : 'info',
+        payload: {
+          requested_by: 'TAILOR',
+          type: body.scopeChangeType,
+          impacts,
+          price_impact_minor: typeof body.priceImpactMinor === 'number' ? body.priceImpactMinor : null,
+          deadline_impact: body.deadlineImpact?.trim() || null,
+          from_stage: order.stage,
+        },
+      })
+
+      const needsOpsAwareness =
+        ['CUTTING', 'SEWING', 'FINISHING', 'READY_FOR_COLLECTION', 'READY_FOR_DRAPE_DISPATCH'].includes(order.stage) ||
+        impacts.includes('PRICE') ||
+        impacts.includes('DEADLINE')
+
+      if (needsOpsAwareness) {
+        await createOrRefreshOpsIssue(supabase, {
+          issueType: 'ORDER_REVIEW',
+          severity: 'MEDIUM',
+          source: FN,
+          actorId: caller.id,
+          actorRole: 'TAILOR',
+          orderId,
+          userId: caller.id,
+          stage: order.stage,
+          title: 'Scope change proposed',
+          description: `Tailor proposed a ${typeLabel.toLowerCase()} from ${order.stage}.`,
+          recommendedAction: 'Confirm whether the customer needs to approve price, deadline, fit, or fabric changes before production continues.',
+          dedupeKey: `order-review:scope-change:${orderId}`,
+          metadata: {
+            review_type: 'SCOPE_CHANGE',
+            requested_by: 'TAILOR',
+            type: body.scopeChangeType,
+            impacts,
+            price_impact_minor: typeof body.priceImpactMinor === 'number' ? body.priceImpactMinor : null,
+            deadline_impact: body.deadlineImpact?.trim() || null,
+            from_stage: order.stage,
+          },
+        })
+      }
+
+      if (order.customer_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.customer_id.toString(), {
+            ...CUSTOMER_NOTIFICATION['request-scope-change'],
+            preferenceKey: 'orderUpdates',
+            data: { orderId, type: 'scope_change' },
+          }),
+        )
+        queueCustomerOrderEmail(
+          supabase,
+          order,
+          'Order change proposed',
+          `Your tailor proposed a ${typeLabel.toLowerCase()}. Review the order before production continues so price, deadline, fit, or fabric changes stay on record.`,
+        )
+      }
+
+      return jsonResponse({ ok: true }, 200, cors)
+    }
+
+    if (action === 'respond-scope-change') {
+      const meta = parseOrderSupportMeta(order.special_note)
+      if (!meta.scopeChange || meta.scopeChange.status !== 'OPEN') {
+        return jsonErrorResponse(cors, 409, 'SCOPE_CHANGE_NOT_OPEN', 'There is no open change request on this order.')
+      }
+      if (body.scopeChangeDecision === 'CANCELLED' && meta.scopeChange.requestedBy !== 'TAILOR') {
+        return jsonErrorResponse(cors, 403, 'SCOPE_CHANGE_CANCEL_FORBIDDEN', 'Only the person who opened this proposal can cancel it.')
+      }
+      if (body.scopeChangeDecision !== 'CANCELLED' && meta.scopeChange.requestedBy !== 'CUSTOMER') {
+        return jsonErrorResponse(cors, 403, 'SCOPE_CHANGE_RESPONSE_FORBIDDEN', 'The customer still needs to respond to this proposal.')
+      }
+
+      const responseNote = body.scopeChangeResponseNote?.trim() ?? ''
+      if (responseNote) {
+        const blockedResponse = await rejectIfBlockedContact({
+          supabase,
+          fn: FN,
+          cors,
+          actorId: caller.id,
+          actorRole: 'TAILOR',
+          surface: 'tailor_order.respond-scope-change.note',
+          text: responseNote,
+          message: "Contact details can't be included in a change response.",
+          orderId,
+          extra: { action, decision: body.scopeChangeDecision },
+        })
+        if (blockedResponse) return blockedResponse
+      }
+
+      const typeLabel =
+        meta.scopeChange.typeLabel ??
+        (meta.scopeChange.type ? SCOPE_CHANGE_TYPE_LABELS[meta.scopeChange.type] : 'Order change')
+      const now = new Date().toISOString()
+      const nextMeta = {
+        ...meta,
+        scopeChange: {
+          ...meta.scopeChange,
+          status: body.scopeChangeDecision,
+          respondedAt: now,
+          respondedBy: 'TAILOR' as const,
+          responseNote: responseNote || null,
+        },
+      }
+
+      const { error } = await supabase
+        .from('orders')
+        .update({ special_note: serializeOrderSupportMeta(nextMeta) })
+        .eq('id', orderId)
+
+      if (error) {
+        log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: error.message })
+        return jsonErrorResponse(cors, 500, 'SCOPE_CHANGE_RESPONSE_FAILED', 'Could not update this change request right now.')
+      }
+
+      await supabase.from('order_stage_updates').insert({
+        order_id: orderId,
+        stage: order.stage,
+        note: buildScopeChangeResponseNote('TAILOR', body.scopeChangeDecision, typeLabel, responseNote || null),
+      })
+
+      await audit(supabase, {
+        event: 'order.scope_change_responded',
+        actor_id: caller.id,
+        actor_role: 'TAILOR',
+        order_id: orderId,
+        severity: body.scopeChangeDecision === 'DECLINED' ? 'warn' : 'info',
+        payload: {
+          decision: body.scopeChangeDecision,
+          requested_by: meta.scopeChange.requestedBy ?? null,
+          type: meta.scopeChange.type ?? null,
+          from_stage: meta.scopeChange.requestedFromStage ?? order.stage,
+        },
+      })
+
+      if (order.customer_id) {
+        EdgeRuntime.waitUntil(
+          sendPushToUser(supabase, order.customer_id.toString(), {
+            ...CUSTOMER_NOTIFICATION['respond-scope-change'],
+            preferenceKey: 'orderUpdates',
+            data: { orderId, type: 'scope_change_response' },
+          }),
+        )
+        queueCustomerOrderEmail(
+          supabase,
+          order,
+          'Order change updated',
+          `Your tailor ${body.scopeChangeDecision === 'ACCEPTED' ? 'accepted' : body.scopeChangeDecision === 'DECLINED' ? 'declined' : 'cancelled'} the ${typeLabel.toLowerCase()} request. Review the order timeline before continuing.`,
+        )
+      }
+
+      return jsonResponse({ ok: true }, 200, cors)
+    }
 
     if (action === 'request-measurement-confirmation') {
       if (!PRE_CUTTING_STAGES.includes(order.stage)) {
@@ -2303,6 +2674,7 @@ Deno.serve(async (req) => {
         ? parseOrderSupportMeta(order.special_note)
         : null
       const cuttingMaterialIssue = cuttingSupportMeta?.materialIssue
+      const cuttingStyleAlignment = cuttingSupportMeta?.styleAlignment
       const waitingOnTailorSourcing =
         cuttingMaterialIssue?.status === 'CUSTOMER_RESPONDED' &&
         cuttingMaterialIssue.response === 'ASK_TAILOR_TO_SOURCE'
@@ -2485,6 +2857,22 @@ Deno.serve(async (req) => {
           severity: 'BLOCKING',
           actual: { requiresTailorReview: cuttingSupportMeta?.fitProfile?.requiresTailorReview ?? null },
         },
+        {
+          name: 'style_alignment_approved_before_cutting',
+          condition:
+            targetStage !== 'CUTTING' ||
+            cuttingStyleAlignment?.requiredBeforeCutting !== true ||
+            cuttingStyleAlignment.status === 'NOT_REQUIRED' ||
+            cuttingStyleAlignment.status === 'APPROVED',
+          errorCode: 'STYLE_ALIGNMENT_REQUIRED',
+          message: 'Get customer approval on your style interpretation before cutting starts.',
+          field: 'special_note',
+          severity: 'BLOCKING',
+          actual: {
+            requiredBeforeCutting: cuttingStyleAlignment?.requiredBeforeCutting ?? null,
+            status: cuttingStyleAlignment?.status ?? null,
+          },
+        },
       ])
 
       if (!advancePreflight.passed) {
@@ -2635,6 +3023,18 @@ Deno.serve(async (req) => {
         if (materialIssueBlocksCutting(supportMeta)) {
           return new Response(
             JSON.stringify({ error: 'This order has an open material issue. Resolve it before cutting starts.' }),
+            { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
+          )
+        }
+
+        const styleAlignment = supportMeta.styleAlignment
+        if (
+          styleAlignment?.requiredBeforeCutting === true &&
+          styleAlignment.status !== 'NOT_REQUIRED' &&
+          styleAlignment.status !== 'APPROVED'
+        ) {
+          return new Response(
+            JSON.stringify({ error: 'Get customer approval on your style interpretation before cutting starts.' }),
             { status: 409, headers: { ...cors, 'Content-Type': 'application/json' } },
           )
         }

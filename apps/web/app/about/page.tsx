@@ -5,7 +5,7 @@ import { buildMetadata } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'About',
-  description: 'Learn why Drape exists and how it turns a fragmented custom-clothing process into one clearer order system.',
+  description: 'Learn why Drapeon exists and how it turns a fragmented custom-clothing process into one clearer order system.',
   path: '/about',
 })
 
@@ -13,14 +13,14 @@ export default function AboutPage(): JSX.Element {
   return (
     <MarketingShell
       eyebrow="About"
-      title="Drape exists to make custom clothing feel clear."
+      title="Drapeon exists to make custom clothing feel clear."
       description="Custom clothing should not require scattered chats, guesswork, and invisible handoffs just to feel trustworthy."
     >
       <section className="py-8">
         <SectionTitle
-          eyebrow="Why Drape"
+          eyebrow="Why Drapeon"
           title="A better system for a messy real-world process."
-          description="Custom clothing often breaks down because discovery, briefing, quoting, production, and handoff happen across disconnected channels. Drape brings that into one clearer order flow."
+          description="Custom clothing often breaks down because discovery, briefing, quoting, production, and handoff happen across disconnected channels. Drapeon brings that into one clearer order flow."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           <MarketingCard
@@ -42,7 +42,7 @@ export default function AboutPage(): JSX.Element {
         <SectionTitle
           eyebrow="What we are building"
           title="Not just a directory. Not just messaging. A working order system."
-          description="Drape is designed to keep the right things visible at the right time."
+          description="Drapeon is designed to keep the right things visible at the right time."
         />
         <div className="mt-10 grid gap-4 lg:grid-cols-2">
           {[

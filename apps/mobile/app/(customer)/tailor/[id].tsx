@@ -27,8 +27,9 @@ import {
 } from '@/lib/image-url'
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window')
-const HERO_HEIGHT = 264
+const HERO_HEIGHT = Math.min(Math.max(Math.round(SCREEN_WIDTH * 0.72), 252), 320)
 const PORTFOLIO_COLS = 3
+const PORTFOLIO_TILE_RATIO = 1.18
 const PORTFOLIO_SIZE = (SCREEN_WIDTH - Spacing.lg * 2 - Spacing.sm * 2) / PORTFOLIO_COLS
 const PREVIEW_MEDIA_HEIGHT = Math.min(SCREEN_HEIGHT * 0.76, 680)
 
@@ -497,7 +498,7 @@ export default function TailorProfileScreen() {
               label="Reviews"
               value={reviewSummary.count > 0 ? reviewSummary.average.toFixed(1) : 'New'}
               subvalue={reviewSummary.count > 0 ? `${reviewSummary.count} review${reviewSummary.count === 1 ? '' : 's'}` : 'No reviews yet'}
-              actionLabel={reviewSummary.count > 0 ? 'See' : undefined}
+              actionLabel={reviewSummary.count > 0 ? 'Read reviews' : undefined}
               onPress={() => setShowReviewsModal(true)}
             />
             <StatPill
@@ -509,14 +510,14 @@ export default function TailorProfileScreen() {
               label="Photos"
               value={String(portfolioCount)}
               subvalue={portfolioCount > 0 ? 'Portfolio' : 'No uploads yet'}
-              actionLabel={portfolioCount > 0 ? 'Open' : undefined}
+              actionLabel={portfolioCount > 0 ? 'Open gallery' : undefined}
               onPress={openPortfolio}
             />
             <StatPill
               label="Styles"
               value={String(profile.specialtyTags.length)}
               subvalue={profile.specialtyTags.length > 0 ? 'Specialties' : 'No styles listed'}
-              actionLabel={profile.specialtyTags.length > 0 ? 'View' : undefined}
+              actionLabel={profile.specialtyTags.length > 0 ? 'View styles' : undefined}
               onPress={profile.specialtyTags.length > 0 ? () => setShowStylesModal(true) : undefined}
             />
           </View>
@@ -893,8 +894,8 @@ export default function TailorProfileScreen() {
                 <Text style={styles.emptyReviewTitle}>No reviews yet</Text>
                 <Text style={styles.emptyReviewHint}>
                   {profile.totalOrders > 0
-                    ? 'This seller is still waiting on their first Drape review.'
-                    : 'Be among the first customers to order from this seller on Drape.'}
+                    ? 'This seller is still waiting on their first Drapeon review.'
+                    : 'Be among the first customers to order from this seller on Drapeon.'}
                 </Text>
               </View>
             )}
@@ -1119,7 +1120,7 @@ const styles = StyleSheet.create({
   portfolioGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   portfolioTile: {
     width: PORTFOLIO_SIZE,
-    height: PORTFOLIO_SIZE,
+    height: PORTFOLIO_SIZE * PORTFOLIO_TILE_RATIO,
     borderRadius: Radius.md,
     overflow: 'hidden',
     backgroundColor: Colors.lightGrey,

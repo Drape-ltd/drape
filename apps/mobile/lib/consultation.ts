@@ -6,8 +6,10 @@ type ConsultationAudience = 'customer' | 'tailor' | 'generic'
 type ConsultationCallType = 'audio' | 'video'
 
 type ConsultationRoomResponse = {
-  url: string
+  url?: string | null
   existing?: boolean
+  fallback?: 'MESSAGES'
+  message?: string
 }
 
 function readPayloadString(payload: Record<string, unknown> | null, key: string) {
@@ -72,6 +74,18 @@ export async function createConsultationRoom(
     return {
       url: data.url,
       existing: data.existing === true,
+    }
+  }
+
+  if (!error && data?.fallback === 'MESSAGES') {
+    const message =
+      typeof data.message === 'string' && data.message.trim().length > 0
+        ? data.message.trim()
+        : 'Consultation calling is unavailable right now. Continue inside Messages so Drapeon keeps the record complete.'
+    Alert.alert('Use order messages', message)
+    return {
+      fallback: 'MESSAGES' as const,
+      message,
     }
   }
 

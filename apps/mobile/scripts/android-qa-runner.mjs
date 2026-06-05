@@ -452,7 +452,7 @@ function printCheckpoint(checkpoint) {
 }
 
 function printHelp() {
-  console.log(`Drape Android QA runner
+  console.log(`Drapeon Android QA runner
 
 Usage:
   pnpm qa:android

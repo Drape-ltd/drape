@@ -10,6 +10,7 @@ import { supabase } from './supabase'
 import { clearRecentReauth } from './recent-reauth'
 import { queryClient } from './queryClient'
 import { clearPersistedQueryCache } from './queryPersistence'
+import { syncUserRow } from './syncUserRow'
 
 // Required for expo-web-browser OAuth redirect handling on Android
 WebBrowser.maybeCompleteAuthSession()
@@ -27,6 +28,7 @@ interface AuthContextValue {
   signIn: (email: string, password: string) => Promise<{ error: string | null }>
   signInWithGoogle: () => Promise<{ error: string | null }>
   signInWithApple: () => Promise<{ error: string | null }>
+  switchRole: (role: 'CUSTOMER' | 'TAILOR') => Promise<{ error: string | null }>
   signOut: () => Promise<void>
 }
 
@@ -53,10 +55,10 @@ function mapAuthErrorMessage(message: string | null | undefined, fallback = 'We 
     return 'Incorrect password. Try again.'
   }
   if (normalized.includes('user already registered') || normalized.includes('already registered') || normalized.includes('already exists')) {
-    return 'This email is already associated with a Drape account. Sign in or reset your password.'
+    return 'This email is already associated with a Drapeon account. Sign in or reset your password.'
   }
   if (normalized.includes('email not confirmed') || normalized.includes('confirm your email')) {
-    return 'Check your email and confirm your Drape account before signing in.'
+    return 'Check your email and confirm your Drapeon account before signing in.'
   }
   if (normalized.includes('rate limit') || normalized.includes('too many') || normalized.includes('over_email_send_rate_limit')) {
     return 'Please wait a minute before trying again.'
@@ -93,12 +95,104 @@ function parseAuthTokensFromUrl(url: string) {
   }
 }
 
+function createOAuthNonce(byteLength = 32) {
+  const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-._'
+  const randomBytes = new Uint8Array(byteLength)
+  const webCrypto = globalThis.crypto
+
+  if (webCrypto && typeof webCrypto.getRandomValues === 'function') {
+    webCrypto.getRandomValues(randomBytes)
+  } else {
+    for (let index = 0; index < byteLength; index += 1) {
+      randomBytes[index] = Math.floor(Math.random() * 256)
+    }
+  }
+
+  return Array.from(randomBytes, (byte) => alphabet[byte % alphabet.length]).join('')
+}
+
+function rightRotate(value: number, amount: number) {
+  return (value >>> amount) | (value << (32 - amount))
+}
+
+function sha256Hex(input: string) {
+  const bytes = new TextEncoder().encode(input)
+  const bitLength = bytes.length * 8
+  const withOne = bytes.length + 1
+  const paddedLength = Math.ceil((withOne + 8) / 64) * 64
+  const buffer = new Uint8Array(paddedLength)
+  buffer.set(bytes)
+  buffer[bytes.length] = 0x80
+
+  const view = new DataView(buffer.buffer)
+  view.setUint32(paddedLength - 4, bitLength, false)
+
+  const hash = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+  ]
+  const constants = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+  ]
+
+  for (let chunk = 0; chunk < paddedLength; chunk += 64) {
+    const words = new Array<number>(64)
+    for (let index = 0; index < 16; index += 1) {
+      words[index] = view.getUint32(chunk + index * 4, false)
+    }
+    for (let index = 16; index < 64; index += 1) {
+      const s0 = rightRotate(words[index - 15], 7) ^ rightRotate(words[index - 15], 18) ^ (words[index - 15] >>> 3)
+      const s1 = rightRotate(words[index - 2], 17) ^ rightRotate(words[index - 2], 19) ^ (words[index - 2] >>> 10)
+      words[index] = (words[index - 16] + s0 + words[index - 7] + s1) >>> 0
+    }
+
+    let [a, b, c, d, e, f, g, h] = hash
+    for (let index = 0; index < 64; index += 1) {
+      const s1 = rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25)
+      const ch = (e & f) ^ (~e & g)
+      const temp1 = (h + s1 + ch + constants[index] + words[index]) >>> 0
+      const s0 = rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22)
+      const maj = (a & b) ^ (a & c) ^ (b & c)
+      const temp2 = (s0 + maj) >>> 0
+      h = g
+      g = f
+      f = e
+      e = (d + temp1) >>> 0
+      d = c
+      c = b
+      b = a
+      a = (temp1 + temp2) >>> 0
+    }
+
+    hash[0] = (hash[0] + a) >>> 0
+    hash[1] = (hash[1] + b) >>> 0
+    hash[2] = (hash[2] + c) >>> 0
+    hash[3] = (hash[3] + d) >>> 0
+    hash[4] = (hash[4] + e) >>> 0
+    hash[5] = (hash[5] + f) >>> 0
+    hash[6] = (hash[6] + g) >>> 0
+    hash[7] = (hash[7] + h) >>> 0
+  }
+
+  return hash.map((value) => value.toString(16).padStart(8, '0')).join('')
+}
+
 async function signInWithPasswordResilient(email: string, password: string) {
   const normalizedEmail = normalizeEmail(email)
-  const firstAttempt = await supabase.auth.signInWithPassword({
-    email: normalizedEmail,
-    password,
-  })
+  const firstAttempt = await withAuthBootstrapTimeout(
+    supabase.auth.signInWithPassword({
+      email: normalizedEmail,
+      password,
+    }),
+    'Password sign in'
+  )
 
   const trimmedPassword = password.trim()
   const shouldRetryWithTrimmedPassword =
@@ -111,10 +205,13 @@ async function signInWithPasswordResilient(email: string, password: string) {
     return firstAttempt
   }
 
-  return supabase.auth.signInWithPassword({
-    email: normalizedEmail,
-    password: trimmedPassword,
-  })
+  return withAuthBootstrapTimeout(
+    supabase.auth.signInWithPassword({
+      email: normalizedEmail,
+      password: trimmedPassword,
+    }),
+    'Password sign in'
+  )
 }
 
 const AUTH_BOOTSTRAP_TIMEOUT_MS = 8000
@@ -134,7 +231,10 @@ function withAuthBootstrapTimeout<T>(promise: Promise<T>, label: string): Promis
 }
 
 async function clearStoredAuthSession() {
-  await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+  await withAuthBootstrapTimeout(
+    supabase.auth.signOut({ scope: 'local' }),
+    'Local auth cleanup',
+  ).catch(() => {})
 }
 
 async function clearUserScopedLocalState(userId: string | null | undefined) {
@@ -333,9 +433,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!isValidEmail(normalizedEmail)) {
       return { error: 'Enter a valid email address.' }
     }
-    const { error } = await signInWithPasswordResilient(normalizedEmail, password)
-    return {
-      error: error ? mapAuthErrorMessage(error.message, 'We could not sign you in right now. Please try again in a moment.') : null,
+    try {
+      const { error } = await signInWithPasswordResilient(normalizedEmail, password)
+      return {
+        error: error ? mapAuthErrorMessage(error.message, 'We could not sign you in right now. Please try again in a moment.') : null,
+      }
+    } catch (error) {
+      return {
+        error: mapAuthErrorMessage(
+          error instanceof Error ? error.message : String(error),
+          'We could not sign you in right now. Please try again in a moment.'
+        ),
+      }
     }
   }
 
@@ -368,7 +477,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         refresh_token: refreshToken,
       })
       if (sessionError) {
-        return { error: mapAuthErrorMessage(sessionError.message, 'Google sign-in completed, but Drape could not open your session. Please try again.') }
+        return { error: mapAuthErrorMessage(sessionError.message, 'Google sign-in completed, but Drapeon could not open your session. Please try again.') }
       }
 
       return { error: null }
@@ -382,24 +491,73 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       // Dynamic import so Android doesn't crash on missing native module
       const AppleAuthentication = await import('expo-apple-authentication')
+      const rawNonce = createOAuthNonce()
+      const hashedNonce = sha256Hex(rawNonce)
       const credential = await AppleAuthentication.signInAsync({
         requestedScopes: [
           AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
           AppleAuthentication.AppleAuthenticationScope.EMAIL,
         ],
+        nonce: hashedNonce,
       })
       if (!credential.identityToken) return { error: 'Apple did not return an identity token' }
 
       const { error } = await supabase.auth.signInWithIdToken({
         provider: 'apple',
         token: credential.identityToken,
+        nonce: rawNonce,
       })
-      return { error: error ? mapAuthErrorMessage(error.message, 'Apple sign-in completed, but Drape could not open your session. Please try again.') : null }
+      return { error: error ? mapAuthErrorMessage(error.message, 'Apple sign-in completed, but Drapeon could not open your session. Please try again.') : null }
     } catch (e: unknown) {
       const err = e as { code?: string; message?: string }
       if (err.code === 'ERR_REQUEST_CANCELED') return { error: null } // user cancelled
       return { error: mapAuthErrorMessage(err.message, 'Apple sign-in failed. Please try again in a moment.') }
     }
+  }
+
+  async function switchRole(role: 'CUSTOMER' | 'TAILOR'): Promise<{ error: string | null }> {
+    if (!session?.user?.id) {
+      return { error: 'Sign in again before switching Drapeon modes.' }
+    }
+    if (role !== 'CUSTOMER' && role !== 'TAILOR') {
+      return { error: 'Choose a valid Drapeon mode.' }
+    }
+
+    const displayName =
+      typeof session.user.user_metadata?.display_name === 'string'
+        ? session.user.user_metadata.display_name
+        : typeof session.user.user_metadata?.full_name === 'string'
+          ? session.user.user_metadata.full_name
+          : typeof session.user.user_metadata?.name === 'string'
+            ? session.user.user_metadata.name
+            : null
+
+    const { error } = await supabase.auth.updateUser({ data: { role } })
+    if (error) {
+      return {
+        error: mapAuthErrorMessage(
+          error.message,
+          'We could not switch Drapeon modes right now. Please try again in a moment.'
+        ),
+      }
+    }
+
+    await syncUserRow({ userId: session.user.id, role, displayName })
+
+    const { data, error: refreshError } = await supabase.auth.refreshSession()
+    if (refreshError) {
+      return {
+        error: mapAuthErrorMessage(
+          refreshError.message,
+          'Drapeon mode changed, but your session did not refresh cleanly. Sign out and back in if the app does not move.'
+        ),
+      }
+    }
+
+    queryClient.clear()
+    await clearPersistedQueryCache()
+    setSession(data.session)
+    return { error: null }
   }
 
   async function signOut() {
@@ -416,7 +574,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ session, user: session?.user ?? null, loading, signUp, signIn, signInWithGoogle, signInWithApple, signOut }}>
+    <AuthContext.Provider value={{ session, user: session?.user ?? null, loading, signUp, signIn, signInWithGoogle, signInWithApple, switchRole, signOut }}>
       {children}
     </AuthContext.Provider>
   )

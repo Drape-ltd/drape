@@ -14,7 +14,9 @@
  *
  * - Uses Expo Push API (free, no Apple/Google dev account needed for Expo Go).
  * - Automatically removes stale tokens (DeviceNotRegistered).
- * - Failures are swallowed — notifications must never break the main request.
+ * - Failures are returned to queued workers, not thrown from inline callers.
+ *   Notifications must never break the main request, but background workers
+ *   should be able to retry real provider failures.
  */
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -37,6 +39,11 @@ export type PushPreferenceKey =
   | 'platformUpdates'
   | 'promotions'
   | 'reviews'
+
+export type PushSendResult =
+  | { status: 'SENT' }
+  | { status: 'SKIPPED'; reason: 'PREFERENCE_DISABLED' | 'NO_TOKEN' | 'DEVICE_NOT_REGISTERED' }
+  | { status: 'ERROR'; reason: string }
 
 const DEFAULT_PUSH_PREFS: Record<PushPreferenceKey, boolean> = {
   orderUpdates: true,
@@ -140,19 +147,20 @@ export async function sendPushToUser(
   supabase: SupabaseClient,
   userId: string,
   notification: PushPayload,
-): Promise<void> {
+): Promise<PushSendResult> {
   try {
     const preferenceKey = resolvePreferenceKey(notification)
     const allowed = await userAllowsPush(supabase, userId, preferenceKey)
-    if (!allowed) return
+    if (!allowed) return { status: 'SKIPPED', reason: 'PREFERENCE_DISABLED' }
 
-    const { data: row } = await supabase
+    const { data: row, error } = await supabase
       .from('push_tokens')
       .select('token')
       .eq('user_id', userId)
       .maybeSingle()
 
-    if (!row?.token) return // User has no registered device
+    if (error) return { status: 'ERROR', reason: `push-token-lookup-failed:${error.message}` }
+    if (!row?.token) return { status: 'SKIPPED', reason: 'NO_TOKEN' }
 
     const res = await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
@@ -171,7 +179,7 @@ export async function sendPushToUser(
       }),
     })
 
-    if (!res.ok) return
+    if (!res.ok) return { status: 'ERROR', reason: `expo-push-http-${res.status}` }
 
     const json = await res.json()
     const result = json?.data
@@ -180,8 +188,16 @@ export async function sendPushToUser(
     // keep sending to dead tokens and wasting API quota.
     if (result?.status === 'error' && result?.details?.error === 'DeviceNotRegistered') {
       await supabase.from('push_tokens').delete().eq('user_id', userId)
+      return { status: 'SKIPPED', reason: 'DEVICE_NOT_REGISTERED' }
     }
+    if (result?.status === 'error') {
+      return {
+        status: 'ERROR',
+        reason: String(result?.message ?? result?.details?.error ?? 'expo-push-error'),
+      }
+    }
+    return { status: 'SENT' }
   } catch {
-    // Non-fatal — push failures must never propagate to the caller
+    return { status: 'ERROR', reason: 'push-send-exception' }
   }
 }

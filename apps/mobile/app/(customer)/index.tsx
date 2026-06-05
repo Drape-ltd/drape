@@ -42,6 +42,7 @@ const CUSTOMER_ONBOARDING_KEY = 'drape_customer_onboarding_seen'
 const MAX_RECENT_SEARCHES = 5
 const PAGE_SIZE = 20
 const EXPLORE_FOCUS_REFRESH_MS = 60_000
+const EXPLORE_CARD_IMAGE_RATIO = 1.04
 const HOME_BG = Colors.bone
 const PRIMARY_GREEN = Colors.needleGreen
 const CHARCOAL = Colors.ink
@@ -316,7 +317,7 @@ function mapTailor(t: TailorDiscoveryRow): TailorCard {
 
   return {
     id: t.id,
-    displayName: t.display_name ?? 'Drape tailor',
+    displayName: t.display_name ?? 'Drapeon tailor',
     location: t.location ?? 'Location not listed',
     sellerType: t.seller_type ?? 'TAILOR',
     specialtyTags: asStringList(t.specialty_tags),
@@ -403,7 +404,7 @@ export default function CustomerHomeScreen() {
   const [minRatingFilter, setMinRatingFilter] = useState<MinRatingFilter>(null)
   const [priceMaxFilter, setPriceMaxFilter] = useState('')
   const [recentSearches, setRecentSearches] = useState<string[]>([])
-  const [lastSearch, setLastSearch] = useState<LastSearch | null>(null)
+  const [, setLastSearch] = useState<LastSearch | null>(null)
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [onboardingStep, setOnboardingStep] = useState(0)
 
@@ -762,6 +763,11 @@ export default function CustomerHomeScreen() {
 
       {/* ── Sticky header ── */}
       <View style={styles.stickyHeader}>
+        {!searchFocused && !isSearchActive ? (
+          <View style={styles.exploreHeader}>
+            <Text style={styles.exploreTitle}>Find your tailor</Text>
+          </View>
+        ) : null}
         {/* Search row */}
         <View style={styles.searchRow}>
           <View style={styles.searchBar}>
@@ -769,9 +775,9 @@ export default function CustomerHomeScreen() {
             <TextInput
               ref={inputRef}
               style={styles.searchInput}
-              placeholder="Search tailors, styles, or locations"
+              placeholder="Search by style, location, tailor"
               placeholderTextColor={Colors.midGrey}
-              accessibilityLabel="Search tailors, styles, or locations"
+              accessibilityLabel="Search by style, location, tailor"
               value={query}
               onChangeText={setQuery}
               onFocus={() => setSearchFocused(true)}
@@ -817,18 +823,6 @@ export default function CustomerHomeScreen() {
             </TouchableOpacity>
           )}
         </View>
-        {!searchFocused && !isSearchActive ? (
-          <View style={styles.exploreHeader}>
-            <View style={styles.exploreHeaderText}>
-              <Text style={styles.exploreTitle}>Find your tailor</Text>
-              <Text style={styles.exploreSubtitle}>
-                {allTailors.length === 1
-                  ? '1 vetted profile ready to browse'
-                  : `${allTailors.length} vetted profiles ready to browse`}
-              </Text>
-            </View>
-          </View>
-        ) : null}
       </View>
 
       <SearchFilterSheet
@@ -901,7 +895,7 @@ export default function CustomerHomeScreen() {
           )}
           <View style={styles.suggestSection}>
             <Text style={styles.suggestTitle}>Try searching</Text>
-            <View style={styles.suggestChips}>
+            <View style={styles.suggestRows}>
               {[
                 'Suits in Lagos',
                 'Tailors in London',
@@ -910,8 +904,10 @@ export default function CustomerHomeScreen() {
                 'Traditional',
                 'Bespoke suits',
               ].map((s) => (
-                <TouchableOpacity key={s} style={styles.suggestChip} onPress={() => applyQuery(s)}>
-                  <Text style={styles.suggestChipText}>{s}</Text>
+                <TouchableOpacity key={s} style={styles.suggestRow} onPress={() => applyQuery(s)} activeOpacity={0.76}>
+                  <Feather name="search" size={15} color={Colors.midGrey} />
+                  <Text style={styles.suggestRowText}>{s}</Text>
+                  <Feather name="chevron-right" size={17} color={Colors.midGrey} />
                 </TouchableOpacity>
               ))}
             </View>
@@ -1051,52 +1047,90 @@ export default function CustomerHomeScreen() {
             </View>
           )}
 
-          {/* Continue searching card */}
-          {lastSearch && lastSearch.count > 0 && (
-            <View style={styles.section}>
-              <TouchableOpacity
-                style={styles.continueCard}
-                onPress={() => applyQuery(lastSearch.query)}
-                activeOpacity={0.88}
-              >
-                <View style={{ flex: 1, gap: 4 }}>
-                  <Text style={styles.continueLabel}>Continue searching</Text>
-                  <Text style={styles.continueQuery} numberOfLines={1}>
-                    "{lastSearch.query}"
-                  </Text>
-                  <Text style={styles.continueMeta}>
-                    {lastSearch.count} {lastSearch.count === 1 ? 'tailor' : 'tailors'} found ›
+          {/* Active orders */}
+          {activeOrders.length > 0 ? (
+            <View style={styles.continueSection}>
+              <View style={styles.continueSectionHeader}>
+                <View style={styles.sectionTitleBlock}>
+                  <Text style={styles.sectionEyebrow}>Continue</Text>
+                  <Text style={styles.sectionTitle}>
+                    {activeOrders.length === 1 ? 'Your active order' : 'Your active orders'}
                   </Text>
                 </View>
-                {lastSearch.thumbnail ? (
-                  <RemoteImage
-                    uri={lastSearch.thumbnail}
-                    bucket={lastSearch.thumbnailBucket ?? 'portfolio-photos'}
-                    style={styles.continueThumbnail}
-                    contentFit="cover"
-                    transition={120}
-                    surface="customer_continue_search"
-                    fallback={
-                      <ExploreMediaPlaceholder
-                        style={styles.continueThumbnail}
-                        name={lastSearch.query}
-                        size={18}
-                      />
-                    }
-                  />
-                ) : (
-                  <ExploreMediaPlaceholder
-                    style={styles.continueThumbnail}
-                    name={lastSearch.query}
-                    size={18}
-                  />
-                )}
-              </TouchableOpacity>
+                <TouchableOpacity onPress={() => router.navigate('/(customer)/orders')}>
+                  <Text style={styles.sectionLink}>See all →</Text>
+                </TouchableOpacity>
+              </View>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.ordersScroll}
+                contentContainerStyle={styles.ordersRow}
+              >
+                {activeOrders.map((order) => {
+                  const c = STAGE_PILL_COLOR[order.stage as OrderStage]
+                  return (
+                    <TouchableOpacity
+                      key={order.id}
+                      style={styles.orderCard}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/(customer)/orders/[id]',
+                          params: { id: order.id, returnTo: '/(customer)' },
+                        })
+                      }
+                    >
+                      <View
+                        style={[
+                          styles.orderStagePill,
+                          { backgroundColor: c?.bg ?? Colors.needleGreenLight },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.orderStageText,
+                            { color: c?.text ?? Colors.needleGreen },
+                          ]}
+                        >
+                          {customerOrderStageLabel(order.stage as OrderStage, order.orderKind)}
+                        </Text>
+                      </View>
+                      <Text style={styles.orderGarment} numberOfLines={1}>
+                        {order.garmentType}
+                      </Text>
+                      <Text style={styles.orderTailor} numberOfLines={1}>
+                        {order.tailorName}
+                      </Text>
+                      {order.estimatedDate && (
+                        <Text style={styles.orderEta}>
+                          Ready{' '}
+                          {new Date(order.estimatedDate).toLocaleDateString('en-GB', {
+                            day: 'numeric',
+                            month: 'short',
+                          })}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  )
+                })}
+              </ScrollView>
             </View>
-          )}
+          ) : null}
 
           {/* Top tailors grid */}
-          <View style={styles.section}>
+          <View style={[styles.section, activeOrders.length > 0 && styles.tailorGridSection]}>
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionTitleBlock}>
+                <Text style={styles.sectionEyebrow}>Explore</Text>
+                <Text style={styles.sectionTitle}>Recommended tailors</Text>
+              </View>
+              {recentlyViewed.length > 0 ? (
+                <View style={styles.recentLegend}>
+                  <Feather name="clock" size={12} color={PRIMARY_GREEN} />
+                  <Text style={styles.recentLegendText}>Recently viewed</Text>
+                </View>
+              ) : null}
+            </View>
             {allTailors.length > 0 ? (
               <View style={styles.cardsGrid}>
                 {allTailors.map((tailor) => (
@@ -1128,72 +1162,6 @@ export default function CustomerHomeScreen() {
             )}
           </View>
 
-          {/* Active orders */}
-          {activeOrders.length > 0 ? (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>Your orders</Text>
-                <TouchableOpacity onPress={() => router.navigate('/(customer)/orders')}>
-                  <Text style={styles.sectionLink}>See all →</Text>
-                </TouchableOpacity>
-              </View>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                style={styles.ordersScroll}
-              >
-                <View style={styles.ordersRow}>
-                  {activeOrders.map((order) => {
-                    const c = STAGE_PILL_COLOR[order.stage as OrderStage]
-                    return (
-                      <TouchableOpacity
-                        key={order.id}
-                        style={styles.orderCard}
-                        onPress={() =>
-                          router.push({
-                            pathname: '/(customer)/orders/[id]',
-                            params: { id: order.id, returnTo: '/(customer)' },
-                          })
-                        }
-                      >
-                        <View
-                          style={[
-                            styles.orderStagePill,
-                            { backgroundColor: c?.bg ?? Colors.needleGreenLight },
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.orderStageText,
-                              { color: c?.text ?? Colors.needleGreen },
-                            ]}
-                          >
-                            {customerOrderStageLabel(order.stage as OrderStage, order.orderKind)}
-                          </Text>
-                        </View>
-                        <Text style={styles.orderGarment} numberOfLines={1}>
-                          {order.garmentType}
-                        </Text>
-                        <Text style={styles.orderTailor} numberOfLines={1}>
-                          {order.tailorName}
-                        </Text>
-                        {order.estimatedDate && (
-                          <Text style={styles.orderEta}>
-                            Ready{' '}
-                            {new Date(order.estimatedDate).toLocaleDateString('en-GB', {
-                              day: 'numeric',
-                              month: 'short',
-                            })}
-                          </Text>
-                        )}
-                      </TouchableOpacity>
-                    )
-                  })}
-                </View>
-              </ScrollView>
-            </View>
-          ) : null}
-
         </ScrollView>
       )}
     </SafeAreaView>
@@ -1212,7 +1180,8 @@ function GridCard({
   recentlyViewed?: boolean
 }) {
   const { width: screenWidth } = useWindowDimensions()
-  const cardWidth = (screenWidth - Spacing.lg * 2 - 10) / 2
+  const cardWidth = Math.min(156, Math.floor((screenWidth - Spacing.lg * 2 - 18) / 2))
+  const cardImageHeight = Math.round(cardWidth * EXPLORE_CARD_IMAGE_RATIO)
   const specialty = tailor.specialtyTags[0]
   const metaParts = [
     tailor.avgRating > 0 ? tailor.avgRating.toFixed(1) : null,
@@ -1226,13 +1195,14 @@ function GridCard({
       onPress={onPress}
       activeOpacity={0.88}
     >
-      <View style={styles.gridImageWrap}>
+      <View style={[styles.gridImageWrap, { height: cardImageHeight }]}>
         {tailor.portfolioPhoto ? (
           <RemoteImage
             uri={tailor.portfolioPhoto}
             bucket={tailor.exploreImageBucket ?? 'portfolio-photos'}
             style={styles.gridImage}
             contentFit="cover"
+            contentPosition="top center"
             transition={120}
             surface="customer_explore_grid"
             fallback={
@@ -1366,6 +1336,25 @@ function SearchFilterSheet({
   onChangeAvailability: (value: AvailFilter) => void
   onClear: () => void
 }) {
+  const [specialtyOpen, setSpecialtyOpen] = useState(false)
+  const specialtySummary =
+    specialtyFilters.length === 0
+      ? 'Any specialty'
+      : specialtyFilters.length <= 2
+        ? specialtyFilters.join(' · ')
+        : `${specialtyFilters.slice(0, 2).join(' · ')} +${specialtyFilters.length - 2} more`
+  const ratingOptions: { value: MinRatingFilter; title: string; subtitle: string }[] = [
+    { value: null, title: 'Any rating', subtitle: 'Show every vetted profile' },
+    { value: 4, title: '4.0 and up', subtitle: 'Strong customer feedback' },
+    { value: 4.5, title: '4.5 and up', subtitle: 'Highly rated work' },
+    { value: 5, title: '5.0 only', subtitle: 'Perfect rating so far' },
+  ]
+  const availabilityOptions: { value: AvailFilter; title: string; subtitle: string }[] = [
+    { value: 'ALL', title: 'All tailors', subtitle: 'Include every live profile' },
+    { value: 'OPEN', title: 'Available now', subtitle: 'Accepting new order requests' },
+    { value: 'LIMITED', title: 'Limited availability', subtitle: 'Taking fewer orders' },
+  ]
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView
@@ -1399,101 +1388,146 @@ function SearchFilterSheet({
             </View>
           </View>
 
-          <Text style={styles.filterSectionTitle}>Specialty</Text>
-          <View style={styles.filterChipWrap}>
-            {FILTER_SPECIALTIES.map((specialty) => {
-              const selected = specialtyFilters.includes(specialty)
-              return (
-                <TouchableOpacity
-                  key={specialty}
-                  style={[styles.filterSheetChip, selected && styles.filterSheetChipActive]}
-                  onPress={() => onToggleSpecialty(specialty)}
-                >
-                  <Text
+          <ScrollView
+            style={styles.filterSheetBody}
+            contentContainerStyle={styles.filterSheetBodyContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <Text style={styles.filterSectionTitle}>Specialty</Text>
+            <TouchableOpacity
+              style={styles.filterSelectRow}
+              onPress={() => setSpecialtyOpen((open) => !open)}
+              activeOpacity={0.82}
+            >
+              <View style={styles.filterOptionCopy}>
+                <Text style={styles.filterOptionTitle}>Choose specialties</Text>
+                <Text style={styles.filterOptionMeta} numberOfLines={1}>
+                  {specialtySummary}
+                </Text>
+              </View>
+              <Feather
+                name={specialtyOpen ? 'chevron-up' : 'chevron-down'}
+                size={22}
+                color={Colors.inkLight}
+              />
+            </TouchableOpacity>
+            {specialtyOpen ? (
+              <View style={styles.filterOptionCard}>
+                {FILTER_SPECIALTIES.map((specialty, index) => {
+                  const selected = specialtyFilters.includes(specialty)
+                  return (
+                    <TouchableOpacity
+                      key={specialty}
+                      style={[
+                        styles.filterOptionRow,
+                        index === FILTER_SPECIALTIES.length - 1 && styles.filterOptionRowLast,
+                      ]}
+                      onPress={() => onToggleSpecialty(specialty)}
+                      activeOpacity={0.82}
+                    >
+                      <View
+                        style={[
+                          styles.filterOptionCheck,
+                          selected && styles.filterOptionCheckActive,
+                        ]}
+                      >
+                        {selected ? (
+                          <Feather name="check" size={14} color={Colors.textInverse} />
+                        ) : null}
+                      </View>
+                      <Text style={styles.filterOptionTitle}>{specialty}</Text>
+                    </TouchableOpacity>
+                  )
+                })}
+              </View>
+            ) : null}
+
+            <Text style={styles.filterSectionTitle}>Location</Text>
+            <TextInput
+              value={locationFilter}
+              onChangeText={onChangeLocation}
+              placeholder="City or country"
+              placeholderTextColor={Colors.midGrey}
+              style={styles.filterInput}
+              returnKeyType="done"
+            />
+
+            <Text style={styles.filterSectionTitle}>Rating</Text>
+            <View style={styles.filterOptionCard}>
+              {ratingOptions.map((option, index) => {
+                const selected = minRatingFilter === option.value
+                return (
+                  <TouchableOpacity
+                    key={option.title}
                     style={[
-                      styles.filterSheetChipText,
-                      selected && styles.filterSheetChipTextActive,
+                      styles.filterOptionRow,
+                      selected && styles.filterOptionRowActive,
+                      index === ratingOptions.length - 1 && styles.filterOptionRowLast,
                     ]}
+                    onPress={() => onChangeMinRating(option.value)}
+                    activeOpacity={0.82}
                   >
-                    {specialty}
-                  </Text>
-                </TouchableOpacity>
-              )
-            })}
-          </View>
+                    <View
+                      style={[
+                        styles.filterOptionRadio,
+                        selected && styles.filterOptionRadioActive,
+                      ]}
+                    >
+                      {selected ? <View style={styles.filterOptionRadioDot} /> : null}
+                    </View>
+                    <View style={styles.filterOptionCopy}>
+                      <Text style={styles.filterOptionTitle}>{option.title}</Text>
+                      <Text style={styles.filterOptionMeta}>{option.subtitle}</Text>
+                    </View>
+                  </TouchableOpacity>
+                )
+              })}
+            </View>
 
-          <Text style={styles.filterSectionTitle}>Location</Text>
-          <TextInput
-            value={locationFilter}
-            onChangeText={onChangeLocation}
-            placeholder="City or country"
-            placeholderTextColor={Colors.midGrey}
-            style={styles.filterInput}
-            returnKeyType="done"
-          />
-
-          <Text style={styles.filterSectionTitle}>Rating</Text>
-          <View style={styles.filterChipWrap}>
-            {([null, 4, 4.5, 5] as MinRatingFilter[]).map((rating) => {
-              const selected = minRatingFilter === rating
-              return (
-                <TouchableOpacity
-                  key={rating ?? 'any'}
-                  style={[styles.filterSheetChip, selected && styles.filterSheetChipActive]}
-                  onPress={() => onChangeMinRating(rating)}
-                >
-                  <Text
+            <Text style={styles.filterSectionTitle}>Availability</Text>
+            <View style={styles.filterOptionCard}>
+              {availabilityOptions.map((option, index) => {
+                const selected = availFilter === option.value
+                return (
+                  <TouchableOpacity
+                    key={option.value}
                     style={[
-                      styles.filterSheetChipText,
-                      selected && styles.filterSheetChipTextActive,
+                      styles.filterOptionRow,
+                      selected && styles.filterOptionRowActive,
+                      index === availabilityOptions.length - 1 && styles.filterOptionRowLast,
                     ]}
+                    onPress={() => onChangeAvailability(option.value)}
+                    activeOpacity={0.82}
                   >
-                    {rating == null ? 'Any' : `${rating}+`}
-                  </Text>
-                </TouchableOpacity>
-              )
-            })}
-          </View>
+                    <View
+                      style={[
+                        styles.filterOptionRadio,
+                        selected && styles.filterOptionRadioActive,
+                      ]}
+                    >
+                      {selected ? <View style={styles.filterOptionRadioDot} /> : null}
+                    </View>
+                    <View style={styles.filterOptionCopy}>
+                      <Text style={styles.filterOptionTitle}>{option.title}</Text>
+                      <Text style={styles.filterOptionMeta}>{option.subtitle}</Text>
+                    </View>
+                  </TouchableOpacity>
+                )
+              })}
+            </View>
 
-          <Text style={styles.filterSectionTitle}>Availability</Text>
-          <View style={styles.filterChipWrap}>
-            {(
-              [
-                { key: 'ALL', label: 'All' },
-                { key: 'OPEN', label: 'Available now' },
-                { key: 'LIMITED', label: 'Limited' },
-              ] as { key: AvailFilter; label: string }[]
-            ).map((option) => {
-              const selected = availFilter === option.key
-              return (
-                <TouchableOpacity
-                  key={option.key}
-                  style={[styles.filterSheetChip, selected && styles.filterSheetChipActive]}
-                  onPress={() => onChangeAvailability(option.key)}
-                >
-                  <Text
-                    style={[
-                      styles.filterSheetChipText,
-                      selected && styles.filterSheetChipTextActive,
-                    ]}
-                  >
-                    {option.label}
-                  </Text>
-                </TouchableOpacity>
-              )
-            })}
-          </View>
-
-          <Text style={styles.filterSectionTitle}>Price ceiling</Text>
-          <TextInput
-            value={priceMaxFilter}
-            onChangeText={onChangePriceMax}
-            placeholder="Max starting price"
-            placeholderTextColor={Colors.midGrey}
-            style={styles.filterInput}
-            keyboardType="decimal-pad"
-            returnKeyType="done"
-          />
+            <Text style={styles.filterSectionTitle}>Price ceiling</Text>
+            <TextInput
+              value={priceMaxFilter}
+              onChangeText={onChangePriceMax}
+              placeholder="Max starting price"
+              placeholderTextColor={Colors.midGrey}
+              style={styles.filterInput}
+              keyboardType="decimal-pad"
+              returnKeyType="done"
+            />
+          </ScrollView>
 
           <TouchableOpacity style={styles.filterApplyButton} onPress={onClose}>
             <Text style={styles.filterApplyButtonText}>Show results</Text>
@@ -1595,16 +1629,14 @@ const styles = StyleSheet.create({
   stickyHeader: {
     backgroundColor: HOME_BG,
     paddingHorizontal: Spacing.lg,
-    paddingTop: 10,
-    paddingBottom: 10,
+    paddingTop: 14,
+    paddingBottom: 14,
     borderBottomWidth: 1,
     borderBottomColor: Colors.lightGrey,
+    gap: 14,
   },
   exploreHeader: {
-    marginTop: 14,
-  },
-  exploreHeaderText: {
-    gap: 3,
+    marginTop: 0,
   },
   exploreTitle: {
     fontFamily: Fonts.bodyBold,
@@ -1613,12 +1645,6 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     color: CHARCOAL,
   },
-  exploreSubtitle: {
-    fontFamily: Fonts.body,
-    fontSize: FontSize.sm,
-    lineHeight: 20,
-    color: Colors.inkLight,
-  },
   searchRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   searchBar: {
     flex: 1,
@@ -1626,11 +1652,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.sm,
     backgroundColor: Colors.white,
-    borderRadius: Radius.full,
-    minHeight: 44,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    ...Shadow.sm,
+    borderRadius: Radius.md,
+    minHeight: 52,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
   },
   searchInput: { flex: 1, fontSize: 14, color: CHARCOAL, padding: 0 },
   clearBtn: { minWidth: 24, minHeight: 24, alignItems: 'center', justifyContent: 'center' },
@@ -1704,16 +1731,20 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.lightGrey,
   },
   recentSearchText: { flex: 1, fontSize: 14, color: CHARCOAL },
-  suggestChips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  suggestChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: Radius.full,
+  suggestRows: { gap: Spacing.sm },
+  suggestRow: {
+    minHeight: 50,
+    borderRadius: Radius.md,
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
   },
-  suggestChipText: { fontSize: 13, color: CHARCOAL },
+  suggestRowText: { flex: 1, fontSize: 14, color: CHARCOAL, fontWeight: FontWeight.medium },
 
   // Search results (FlatList)
   resultsList: { padding: Spacing.lg, gap: Spacing.sm, paddingBottom: 28 },
@@ -1825,6 +1856,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: Radius.xl,
     padding: Spacing.xl,
     gap: Spacing.sm,
+    maxHeight: '88%',
   },
   filterSheetHandle: {
     alignSelf: 'center',
@@ -1870,24 +1902,82 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
   },
-  filterChipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs },
-  filterSheetChip: {
-    minHeight: 40,
-    borderRadius: Radius.full,
+  filterSheetBody: { flexGrow: 0 },
+  filterSheetBodyContent: { gap: Spacing.sm, paddingBottom: Spacing.xs },
+  filterSelectRow: {
+    minHeight: 62,
+    borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
     paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.bone,
+    gap: Spacing.md,
+  },
+  filterOptionCard: {
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    overflow: 'hidden',
+  },
+  filterOptionRow: {
+    minHeight: 58,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.lightGrey,
+  },
+  filterOptionRowActive: { backgroundColor: Colors.needleGreenLight },
+  filterOptionRowLast: { borderBottomWidth: 0 },
+  filterOptionCopy: { flex: 1, gap: 2 },
+  filterOptionTitle: {
+    fontSize: FontSize.xs,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+  },
+  filterOptionMeta: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    lineHeight: 17,
+  },
+  filterOptionCheck: {
+    width: 22,
+    height: 22,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.bone,
+  },
+  filterOptionCheckActive: {
+    backgroundColor: Colors.needleGreen,
+    borderColor: Colors.needleGreen,
+  },
+  filterOptionRadio: {
+    width: 22,
+    height: 22,
+    borderRadius: Radius.full,
+    borderWidth: 1.5,
+    borderColor: Colors.lightGrey,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: Colors.white,
   },
-  filterSheetChipActive: { backgroundColor: Colors.needleGreen, borderColor: Colors.needleGreen },
-  filterSheetChipText: {
-    fontSize: FontSize.xs,
-    color: Colors.inkLight,
-    fontWeight: FontWeight.medium,
+  filterOptionRadioActive: { borderColor: Colors.needleGreen },
+  filterOptionRadioDot: {
+    width: 10,
+    height: 10,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreen,
   },
-  filterSheetChipTextActive: { color: Colors.textInverse },
   filterInput: {
     minHeight: 48,
     borderRadius: Radius.md,
@@ -1985,6 +2075,7 @@ const styles = StyleSheet.create({
 
   // Section
   section: { paddingTop: Spacing.md },
+  tailorGridSection: { paddingTop: Spacing.lg },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -2003,13 +2094,28 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
     color: CHARCOAL,
   },
-  sectionSubtitle: {
-    fontFamily: Fonts.body,
-    fontSize: FontSize.sm,
-    lineHeight: 20,
-    color: Colors.inkLight,
+  sectionEyebrow: {
+    fontSize: 11,
+    lineHeight: 14,
+    color: MUTED_GREY,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
   },
   sectionLink: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
+  recentLegend: {
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  recentLegendText: {
+    fontSize: 11,
+    color: PRIMARY_GREEN,
+    fontWeight: FontWeight.semibold,
+  },
 
   // Continue searching card
   continueCard: {
@@ -2033,12 +2139,25 @@ const styles = StyleSheet.create({
   continueThumbnail: { width: 52, height: 52, borderRadius: Radius.md, overflow: 'hidden' },
 
   // Orders
-  ordersScroll: { marginLeft: Spacing.lg },
-  ordersRow: { flexDirection: 'row', gap: Spacing.sm, paddingRight: Spacing.lg },
+  continueSection: {
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.xs,
+  },
+  continueSectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    paddingHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
+  },
+  ordersScroll: {},
+  ordersRow: { flexDirection: 'row', gap: Spacing.sm, paddingHorizontal: Spacing.lg },
   orderCard: {
-    width: 126,
+    width: 154,
     backgroundColor: Colors.white,
     borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
     padding: 10,
     gap: 4,
     ...Shadow.sm,
@@ -2060,8 +2179,14 @@ const styles = StyleSheet.create({
   orderTailor: { fontSize: 12, color: MUTED_GREY },
   orderEta: { fontSize: 12, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
   // Tailor grid
-  cardsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingHorizontal: Spacing.lg },
+  cardsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 18,
+    paddingHorizontal: Spacing.lg,
+  },
   gridCard: {
+    minHeight: 220,
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
@@ -2069,7 +2194,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     ...Shadow.sm,
   },
-  gridImageWrap: { width: '100%', aspectRatio: 1.12, position: 'relative' },
+  gridImageWrap: { width: '100%', position: 'relative', padding: 10 },
   gridImage: { width: '100%', height: '100%' },
   gridImagePlaceholder: {
     backgroundColor: Colors.boneDeep,
@@ -2094,14 +2219,12 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
     color: Colors.textInverse,
   },
-  gridInfo: { paddingHorizontal: 10, paddingVertical: 10, gap: 4, minHeight: 66 },
+  gridInfo: { paddingHorizontal: 10, paddingTop: 10, paddingBottom: 14, gap: 4 },
   gridName: {
     fontFamily: Fonts.bodySemiBold,
     fontSize: 14,
     fontWeight: FontWeight.semibold,
     color: CHARCOAL,
-    flex: 1,
-    marginRight: 4,
   },
   gridLocation: { fontSize: 12, lineHeight: 17, color: MUTED_GREY },
   gridTags: { fontSize: 12, color: Colors.inkLight, marginTop: 2 },

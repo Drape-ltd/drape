@@ -35,6 +35,7 @@ import {
   type SizeInventory,
   type TailorStockAlert,
 } from '@/lib/ready-made-stock'
+import { parseOrderSupportMeta, type OrderSupportMeta } from '@/lib/order-support'
 
 // ─── Query Key Factory ───────────────────────────────────────────────────────
 
@@ -419,6 +420,7 @@ type CustomerMessageOrderQueryRow = {
   stage: OrderStage
   customer_id: string
   video_call_url: string | null
+  special_note: string | null
   tailor_profiles: ProfileJoinRow | ProfileJoinRow[] | null
   customer_profiles: ProfileJoinRow | ProfileJoinRow[] | null
 }
@@ -647,6 +649,7 @@ export type CustomerMessageOrderInfo = {
   customerAvatarUrl: string | null
   stage: OrderStage
   videoCallUrl: string | null
+  supportMeta: OrderSupportMeta
   resolvedOrderId: string
 } | null
 
@@ -1927,7 +1930,7 @@ async function fetchCustomerMessageOrderInfo(
     .from('orders')
     .select(
       `
-      id, garment_type, order_kind, seller_item_id, stage, customer_id, video_call_url,
+      id, garment_type, order_kind, seller_item_id, stage, customer_id, video_call_url, special_note,
       tailor_profiles!tailor_profile_id(id, display_name, avatar_url, portfolio_photo_urls),
       customer_profiles!customer_id(display_name, avatar_url)
     `
@@ -1953,6 +1956,7 @@ async function fetchCustomerMessageOrderInfo(
       customerAvatarUrl: customerProfile?.avatar_url ?? null,
       stage: o.stage,
       videoCallUrl: o.video_call_url ?? null,
+      supportMeta: parseOrderSupportMeta(o.special_note),
       resolvedOrderId: o.id,
     }
   }
@@ -1965,7 +1969,7 @@ async function fetchCustomerMessageOrderInfo(
     .from('orders')
     .select(
       `
-      id, garment_type, order_kind, seller_item_id, stage, customer_id, video_call_url,
+      id, garment_type, order_kind, seller_item_id, stage, customer_id, video_call_url, special_note,
       tailor_profiles!inner(id, display_name, avatar_url, portfolio_photo_urls),
       customer_profiles(display_name, avatar_url)
     `
@@ -1999,6 +2003,7 @@ async function fetchCustomerMessageOrderInfo(
     customerAvatarUrl: customerProfile?.avatar_url ?? null,
     stage: o.stage,
     videoCallUrl: o.video_call_url ?? null,
+    supportMeta: parseOrderSupportMeta(o.special_note),
     resolvedOrderId: o.id,
   }
 }

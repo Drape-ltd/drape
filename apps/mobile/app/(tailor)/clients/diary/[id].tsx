@@ -166,7 +166,7 @@ export default function DiaryEntryScreen() {
 
   function openDrapeVisionClientScan() {
     if (isNew) {
-      Alert.alert('Save client first', 'Save this diary entry once, then use Drape Vision so the scan has a client record to update.')
+      Alert.alert('Save client first', 'Save this diary entry once, then use Drapeon Vision so the scan has a client record to update.')
       return
     }
 
@@ -470,7 +470,7 @@ export default function DiaryEntryScreen() {
             <Text style={styles.stateEyebrow}>Diary entry</Text>
             <Text style={styles.stateTitle}>Couldn't load this diary entry.</Text>
             <Text style={styles.stateHint}>
-              This page should help you carry an offline measurement session into Drape without losing fit details or client context.
+              This page should help you carry an offline measurement session into Drapeon without losing fit details or client context.
             </Text>
             <TouchableOpacity style={styles.errorBtn} onPress={() => { void loadEntry() }}>
               <Text style={styles.errorBtnText}>Try again</Text>
@@ -537,7 +537,7 @@ export default function DiaryEntryScreen() {
             </View>
             <Text style={styles.heroTitle}>New diary client</Text>
             <Text style={styles.heroSub}>
-              Save measurements, fitting notes, and consented scans here. Send a passport invite only when the client is ready to continue on Drape.
+              Save measurements, fitting notes, and consented scans here. Send a passport invite only when the client is ready to continue on Drapeon.
             </Text>
           </View>
 
@@ -587,7 +587,7 @@ export default function DiaryEntryScreen() {
           <Section title="Measurements">
             <TouchableOpacity
               accessibilityRole="button"
-              accessibilityLabel="Open Drape Vision client scan"
+              accessibilityLabel="Open Drapeon Vision client scan"
               onPress={openDrapeVisionClientScan}
               style={styles.visionDiaryCard}
             >
@@ -595,7 +595,7 @@ export default function DiaryEntryScreen() {
                 <Feather name="user-check" size={18} color={Colors.needleGreen} />
               </View>
               <View style={styles.visionDiaryCopy}>
-                <Text style={styles.visionDiaryTitle}>Drape Vision client scan</Text>
+                <Text style={styles.visionDiaryTitle}>Drapeon Vision client scan</Text>
                 <Text style={styles.visionDiaryText}>
                   Measure in person with consent, then keep every value editable before sending a passport invite.
                 </Text>
@@ -724,10 +724,10 @@ export default function DiaryEntryScreen() {
                     </Text>
                     <Text style={styles.passportSub}>
                       {inviteStatus === 'CLAIMED'
-                        ? 'This client has claimed their measurement passport on Drape.'
+                        ? 'This client has claimed their measurement passport on Drapeon.'
                         : inviteStatus === 'INVITE_SENT'
                           ? 'Invite sent. Waiting for the client to claim their passport.'
-                          : 'Send this client a link to claim their measurements on Drape.'}
+                          : 'Send this client a link to claim their measurements on Drapeon.'}
                     </Text>
                   </View>
                 </View>

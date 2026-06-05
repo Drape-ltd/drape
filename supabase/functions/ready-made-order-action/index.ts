@@ -32,6 +32,7 @@ import { ORDER_CANCELLATION_POLICY_VERSION } from '../../../packages/shared/src/
 import { normalizeTaxCountryCode } from '../../../packages/shared/src/tax.ts'
 
 const FN = 'ready-made-order-action'
+const ORDER_CONTRACT_VERSION = 1
 const MAX_READY_MADE_CHECKOUT_QUANTITY = 3
 
 declare const EdgeRuntime: {
@@ -831,6 +832,11 @@ Deno.serve(async (req) => {
         recipient_name: needsAddress ? recipientName : null,
         recipient_phone: needsAddress ? recipientPhone : null,
         special_note: serializeOrderSupportMeta({
+          orderContract: {
+            version: ORDER_CONTRACT_VERSION,
+            orderKind: 'READY_MADE',
+            createdAt: new Date().toISOString(),
+          },
           checkoutPolicy: {
             cancellationPolicyVersion: ORDER_CANCELLATION_POLICY_VERSION,
             acknowledgedAt: new Date().toISOString(),

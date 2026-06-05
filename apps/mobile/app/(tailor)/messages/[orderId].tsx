@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native'
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+} from 'react-native'
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
@@ -12,23 +21,71 @@ import {
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { createConsultationRoom, openConsultationCallUrl } from '@/lib/consultation'
+import { createOrderCallRoom, openDrapeCallUrl } from '@/lib/order-call'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { MessageThread } from '@/components/ui/MessageThread'
 import { AvatarImage } from '@/components/ui/AvatarImage'
+import { OrderCallScheduleModal } from '@/components/ui/OrderCallScheduleModal'
 import { goBackOrReturnTo } from '@/lib/navigation'
+import { parseOrderSupportMeta, type OrderCallMeta, type OrderSupportMeta } from '@/lib/order-support'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { TERMINAL_STAGES, type OrderStage } from '@drape/shared/order-machine'
 
 const SUPPORT_EMAIL = 'support@drapeon.co'
 type SafetyReportCategory = 'ABUSIVE_LANGUAGE' | 'OFF_PLATFORM_PRESSURE' | 'UNSAFE_BEHAVIOR'
+const ORDER_CALL_STAGES: OrderStage[] = [
+  'CONFIRMED',
+  'DESIGNING',
+  'SOURCING',
+  'CUTTING',
+  'SEWING',
+  'FINISHING',
+  'READY_FOR_COLLECTION',
+  'READY_FOR_DRAPE_DISPATCH',
+  'OUT_FOR_DELIVERY',
+  'SHIPPED',
+  'DELIVERED',
+  'COLLECTED',
+]
+
+function isOrderCallStage(stage: OrderStage | null | undefined) {
+  return !!stage && ORDER_CALL_STAGES.includes(stage)
+}
+
+function readyMadeCallJoinState(orderCall: OrderCallMeta | null | undefined) {
+  if (!orderCall || orderCall.status !== 'SCHEDULED' || !orderCall.scheduledStartAt) return 'needs-schedule' as const
+  if (orderCall.expiredAt) return 'expired' as const
+  const startsAt = new Date(orderCall.scheduledStartAt).getTime()
+  if (!Number.isFinite(startsAt)) return 'expired' as const
+  const now = Date.now()
+  if (now < startsAt - 10 * 60 * 1000) return 'too-early' as const
+  if (now > startsAt + 45 * 60 * 1000) return 'expired' as const
+  return 'join' as const
+}
+
+function formatOrderCallTime(value: string | null | undefined) {
+  if (!value) return 'the scheduled time'
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return 'the scheduled time'
+  return date.toLocaleString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
 type ProfileJoinRow = {
   display_name: string | null
   avatar_url: string | null
 }
 type TailorMessageOrderRow = {
   garment_type: string | null
+  order_kind: 'CUSTOM' | 'READY_MADE' | null
   stage: OrderStage
   video_call_url: string | null
+  special_note: string | null
   customer_profiles: ProfileJoinRow | ProfileJoinRow[] | null
   tailor_profiles: ProfileJoinRow | ProfileJoinRow[] | null
 }
@@ -47,17 +104,20 @@ export default function TailorMessagesScreen() {
 
   const [orderInfo, setOrderInfo] = useState<{
     garmentType: string
+    orderKind: 'CUSTOM' | 'READY_MADE'
     customerName: string
     customerAvatarUrl: string | null
     tailorName: string
     tailorAvatarUrl: string | null
     stage: OrderStage
     videoCallUrl: string | null
+    supportMeta: OrderSupportMeta
   } | null>(null)
   const [loading, setLoading] = useState(true)
   const [fetchErrorMessage, setFetchErrorMessage] = useState<string | null>(null)
   const [startingCall, setStartingCall] = useState(false)
   const [reportingSafety, setReportingSafety] = useState(false)
+  const [showOrderCallScheduler, setShowOrderCallScheduler] = useState(false)
   const [conversationAccess, setConversationAccess] = useState<ConversationAccessState>(
     getEmptyConversationAccessState()
   )
@@ -65,10 +125,6 @@ export default function TailorMessagesScreen() {
 
   function goBack() {
     goBackOrReturnTo(router, navigation, returnTo, '/(tailor)/orders')
-  }
-
-  async function openCallUrl(url: string) {
-    await openConsultationCallUrl(url, 'tailor')
   }
 
   const refreshConversationAccess = useCallback(async () => {
@@ -106,7 +162,7 @@ export default function TailorMessagesScreen() {
 
     Alert.alert(
       'Report received',
-      'Drape logged this concern for review. Keep the conversation in Drape and leave the message thread intact as evidence.'
+      'Drapeon logged this concern for review. Keep the conversation in Drapeon and leave the message thread intact as evidence.'
     )
   }
 
@@ -118,7 +174,7 @@ export default function TailorMessagesScreen() {
       setConversationAccess(nextState)
       Alert.alert(
         'Conversation paused',
-        nextState.userMessage ?? 'This conversation is paused while Drape reviews a safety concern.'
+        nextState.userMessage ?? 'This conversation is paused while Drapeon reviews a safety concern.'
       )
     } catch (error) {
       Alert.alert(
@@ -144,7 +200,7 @@ export default function TailorMessagesScreen() {
         },
       },
       {
-        text: 'Move off Drape',
+        text: 'Move off Drapeon',
         onPress: () => {
           void submitSafetyReport('OFF_PLATFORM_PRESSURE')
         },
@@ -179,7 +235,7 @@ export default function TailorMessagesScreen() {
         .from('orders')
         .select(
           `
-          garment_type, stage, video_call_url,
+          garment_type, order_kind, stage, video_call_url, special_note,
           customer_profiles!customer_id(display_name, avatar_url),
           tailor_profiles!tailor_profile_id(display_name, avatar_url)
         `
@@ -198,12 +254,14 @@ export default function TailorMessagesScreen() {
         const tailorProfile = firstJoinedRow(d.tailor_profiles)
         setOrderInfo({
           garmentType: d.garment_type ?? 'Order',
+          orderKind: d.order_kind ?? 'CUSTOM',
           customerName: customerProfile?.display_name ?? 'Customer',
           customerAvatarUrl: customerProfile?.avatar_url ?? null,
           tailorName: (tailorProfile?.display_name ?? displayName) || 'Tailor',
           tailorAvatarUrl: tailorProfile?.avatar_url ?? null,
           stage: d.stage,
           videoCallUrl: d.video_call_url ?? null,
+          supportMeta: parseOrderSupportMeta(d.special_note),
         })
       } else {
         setOrderInfo(null)
@@ -240,50 +298,103 @@ export default function TailorMessagesScreen() {
     }, [fetchOrder, refreshConversationAccess])
   )
 
-  async function startCall(callType: 'audio' | 'video') {
+  const startCall = useCallback(async (callType: 'audio' | 'video') => {
     if (startingCall) return
     setStartingCall(true)
     try {
-      const room = await createConsultationRoom(orderId, callType)
+      const consultation = orderInfo?.stage === 'CONSULTATION'
+      const room = consultation
+        ? await createConsultationRoom(orderId, callType)
+        : await createOrderCallRoom(orderId, callType)
       if (!room?.url) {
         return
       }
       await fetchOrder()
-      await openCallUrl(room.url)
+      await (consultation ? openConsultationCallUrl(room.url, 'tailor') : openDrapeCallUrl(room.url))
     } catch (error) {
       Alert.alert(
         'Call unavailable',
         isLikelyConnectivityIssue(error)
-          ? 'Your connection looks weak. Keep the order thread updated and try starting the consultation again when the signal improves.'
-          : 'Could not start the consultation call. Keep using the order thread and try again in a moment.'
+          ? 'Your connection looks weak. Keep the order thread updated and try starting the Drapeon call again when the signal improves.'
+          : 'Could not start the Drapeon call. Keep using the order thread and try again in a moment.'
       )
     } finally {
       setStartingCall(false)
     }
-  }
+  }, [fetchOrder, orderId, orderInfo, startingCall])
 
-  async function showCallOptions() {
-    if (startingCall) return
-    const url = orderInfo?.videoCallUrl
-    if (url) {
-      // Room exists — just open it
-      Alert.alert('Join call', 'Rejoin your consultation call.', [
+  const showReadyMadeOrderCallOptions = useCallback(() => {
+    if (!orderInfo || startingCall) return
+    const orderCall = orderInfo.supportMeta.orderCall ?? null
+    const state = readyMadeCallJoinState(orderCall)
+
+    if (state === 'needs-schedule') {
+      setShowOrderCallScheduler(true)
+      return
+    }
+
+    if (state === 'too-early') {
+      Alert.alert(
+        'Call is scheduled',
+        `This ready-made order call is set for ${formatOrderCallTime(orderCall?.scheduledStartAt)}. The room opens shortly before the scheduled time.`,
+        [
+          { text: 'Close', style: 'cancel' },
+          { text: 'Reschedule', onPress: () => setShowOrderCallScheduler(true) },
+        ]
+      )
+      return
+    }
+
+    if (state === 'expired') {
+      Alert.alert(
+        'Schedule a new call',
+        'That ready-made order call window has passed. Set a new time from Messages.',
+        [
+          { text: 'Close', style: 'cancel' },
+          { text: 'Schedule', onPress: () => setShowOrderCallScheduler(true) },
+        ]
+      )
+      return
+    }
+
+    Alert.alert(
+      'Join order call',
+      'This ready-made call is free and stays inside Drapeon. Use it for pickup, delivery, sizing, or item-condition clarity; keep final decisions in Messages.',
+      [
         { text: 'Cancel', style: 'cancel' },
+        { text: 'Reschedule', onPress: () => setShowOrderCallScheduler(true) },
         {
-          text: 'Video',
+          text: 'Video call',
           onPress: () => {
-            void openCallUrl(url)
+            void startCall('video')
           },
         },
         {
-          text: 'Audio only',
+          text: 'Audio call',
           onPress: () => {
-            void openCallUrl(url)
+            void startCall('audio')
           },
         },
-      ])
-    } else {
-      Alert.alert('Start consultation call', 'Start a call with this customer.', [
+      ]
+    )
+  }, [orderInfo, startCall, startingCall])
+
+  const showCallOptions = useCallback(() => {
+    if (startingCall) return
+    const consultation = orderInfo?.stage === 'CONSULTATION'
+    const readyMade = orderInfo?.orderKind === 'READY_MADE'
+    if (readyMade && !consultation) {
+      showReadyMadeOrderCallOptions()
+      return
+    }
+    Alert.alert(
+      consultation ? 'Consultation call' : readyMade ? 'Order call' : 'Drapeon call',
+      consultation
+        ? 'Start or join the scheduled consultation. Any fee must be the consultation fee already shown on the order; do not charge outside Drapeon.'
+        : readyMade
+          ? 'Start a Drapeon call for pickup, delivery, sizing, or item-condition questions. Do not request extra payment outside Drapeon.'
+        : 'Start a Drapeon call for fit, fabric, delivery, or timeline questions. Keep final decisions in Messages after the call.',
+      [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Video call',
@@ -297,11 +408,12 @@ export default function TailorMessagesScreen() {
             void startCall('audio')
           },
         },
-      ])
-    }
-  }
+      ]
+    )
+  }, [orderInfo?.orderKind, orderInfo?.stage, showReadyMadeOrderCallOptions, startCall, startingCall])
 
   const isConsultation = orderInfo?.stage === 'CONSULTATION'
+  const callAvailable = isConsultation || isOrderCallStage(orderInfo?.stage)
 
   if (loading) {
     return (
@@ -383,6 +495,10 @@ export default function TailorMessagesScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
       <View style={styles.header}>
         <TouchableOpacity onPress={goBack}>
           <Text style={styles.backText}>← Back</Text>
@@ -401,17 +517,6 @@ export default function TailorMessagesScreen() {
           </View>
         </View>
         <View style={styles.headerActions}>
-          {isConsultation && (
-            <TouchableOpacity
-              style={styles.callBtn}
-              onPress={showCallOptions}
-              disabled={startingCall}
-              accessibilityRole="button"
-              accessibilityLabel="Open consultation call options"
-            >
-              <Feather name="phone-call" size={18} color={Colors.textInverse} />
-            </TouchableOpacity>
-          )}
           <TouchableOpacity
             style={styles.orderBtn}
             onPress={() =>
@@ -433,12 +538,17 @@ export default function TailorMessagesScreen() {
         <View style={styles.safetyCopy}>
           <Text style={styles.safetyTitle}>Protected chat</Text>
           <Text style={styles.safetyText}>
-            Keep approvals, pickup details, and payments inside Drape.
+            Keep approvals, pickup details, and payments inside Drapeon.
           </Text>
           {conversationAccess.blocked ? (
             <Text style={styles.safetyWarning}>
               {conversationAccess.userMessage ??
-                'This conversation is paused while Drape reviews a safety concern.'}
+                'This conversation is paused while Drapeon reviews a safety concern.'}
+            </Text>
+          ) : null}
+          {orderInfo.stage === 'IN_DISPUTE' && !conversationAccess.blocked ? (
+            <Text style={styles.safetyWarning}>
+              Calls are paused while Drapeon reviews this concern. Keep updates and evidence in this thread.
             </Text>
           ) : null}
           {loadingConversationAccess && !conversationAccess.blocked ? (
@@ -470,14 +580,30 @@ export default function TailorMessagesScreen() {
         tailorAvatarUrl={orderInfo.tailorAvatarUrl}
         customerName={orderInfo.customerName}
         customerAvatarUrl={orderInfo.customerAvatarUrl}
+        callAvailable={callAvailable}
+        callLoading={startingCall}
+        onPressCall={showCallOptions}
+        callAccessibilityLabel={isConsultation ? 'Open consultation call options' : 'Schedule or join order call'}
         locked={TERMINAL_STAGES.includes(orderInfo.stage) || conversationAccess.blocked}
         lockedMessage={
           conversationAccess.blocked
             ? (conversationAccess.userMessage ??
-              'This conversation is paused while Drape reviews a safety concern.')
+              'This conversation is paused while Drapeon reviews a safety concern.')
             : undefined
         }
       />
+      <OrderCallScheduleModal
+        visible={showOrderCallScheduler}
+        orderId={orderId}
+        counterpartName={orderInfo.customerName}
+        actorLabel="tailor"
+        existingOrderCall={orderInfo.supportMeta.orderCall ?? null}
+        onClose={() => setShowOrderCallScheduler(false)}
+        onScheduled={() => {
+          void fetchOrder()
+        }}
+      />
+      </KeyboardAvoidingView>
     </SafeAreaView>
   )
 }
@@ -620,14 +746,6 @@ const styles = StyleSheet.create({
     color: Colors.kanteRust,
   },
   safetyMeta: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
-  callBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.needleGreen,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   orderBtn: {
     backgroundColor: Colors.white,
     borderWidth: 1,

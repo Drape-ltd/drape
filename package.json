@@ -26,7 +26,11 @@
     "supabase:functions:deploy:prod": "node scripts/supabase-target-guard.mjs functions:deploy production",
     "supabase:functions:deploy:all:dev": "node scripts/supabase-target-guard.mjs functions:deploy-all development",
     "supabase:functions:deploy:all:prod": "node scripts/supabase-target-guard.mjs functions:deploy-all production",
-    "load:smoke": "node scripts/load-smoke.mjs"
+    "launch:contracts": "node scripts/launch-contract-check.mjs",
+    "launch:contracts:linked": "node scripts/launch-contract-check.mjs --with-supabase",
+    "load:smoke": "node scripts/load-smoke.mjs",
+    "seed:store-demo": "node scripts/seed-store-demo.mjs",
+    "seed:stripe-qa": "node scripts/seed-stripe-qa.mjs"
   },
   "devDependencies": {
     "prettier": "^3.4.2",

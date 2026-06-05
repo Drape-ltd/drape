@@ -387,7 +387,7 @@ export default function EditProfileScreen() {
       try {
         const res = await fetch(
           `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&addressdetails=1&limit=6&featuretype=city`,
-          { headers: { 'Accept-Language': 'en', 'User-Agent': 'Drape/1.0' } }
+          { headers: { 'Accept-Language': 'en', 'User-Agent': 'Drapeon/1.0' } }
         )
         const data = (await res.json()) as NominatimSuggestion[]
         const labels = data.map((item) => {
@@ -655,11 +655,12 @@ export default function EditProfileScreen() {
               maxLength={500}
             />
             <Text style={styles.charCount}>{bio.trim().length}/500</Text>
-            <Text style={styles.fieldHint}>Try covering:</Text>
-            <View style={styles.helperRow}>
+            <Text style={styles.fieldHint}>What customers look for</Text>
+            <View style={styles.helperPromptList}>
               {BIO_PROMPTS.map((prompt) => (
-                <View key={prompt} style={styles.helperChip}>
-                  <Text style={styles.helperChipText}>{prompt}</Text>
+                <View key={prompt} style={styles.helperPromptRow}>
+                  <View style={styles.helperPromptDot} />
+                  <Text style={styles.helperPromptText}>{prompt}</Text>
                 </View>
               ))}
             </View>
@@ -680,18 +681,10 @@ export default function EditProfileScreen() {
               <Feather name="chevron-right" size={18} color={Colors.midGrey} />
             </TouchableOpacity>
             {specialties.length > 0 ? (
-              <View style={styles.selectedPreviewRow}>
-                {specialties.slice(0, 5).map((specialty) => (
-                  <View key={specialty} style={styles.selectedPreviewChip}>
-                    <Text style={styles.selectedPreviewText}>{specialty}</Text>
-                  </View>
-                ))}
-                {specialties.length > 5 ? (
-                  <View style={styles.selectedPreviewChip}>
-                    <Text style={styles.selectedPreviewText}>+{specialties.length - 5}</Text>
-                  </View>
-                ) : null}
-              </View>
+              <Text style={styles.selectedPreviewSummary} numberOfLines={2}>
+                {specialties.slice(0, 5).join(' · ')}
+                {specialties.length > 5 ? ` · +${specialties.length - 5} more` : ''}
+              </Text>
             ) : null}
           </Field>
 
@@ -826,9 +819,9 @@ export default function EditProfileScreen() {
             ) : null}
             {deliveryAvailable || shippingAvailable ? (
               <View style={styles.fulfillmentFeeBlock}>
-                <Text style={styles.fieldLabel}>Standard Drape dispatch fees</Text>
+                <Text style={styles.fieldLabel}>Standard Drapeon dispatch fees</Text>
                 <Text style={styles.fieldHint}>
-                  Drape now collects the standard delivery or shipping fee at checkout based on the buyer address and your location. You only need to keep your location and fulfillment options accurate here.
+                  Drapeon now collects the standard delivery or shipping fee at checkout based on the buyer address and your location. You only need to keep your location and fulfillment options accurate here.
                 </Text>
               </View>
             ) : null}
@@ -1148,16 +1141,15 @@ const styles = StyleSheet.create({
   fieldLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.ink, marginBottom: Spacing.sm },
   fieldHint: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 18 },
   helperError: { fontSize: FontSize.xs, color: Colors.kanteRust, lineHeight: 18 },
-  helperRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginTop: Spacing.sm },
-  helperChip: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
+  helperPromptList: { gap: 6, marginTop: Spacing.sm },
+  helperPromptRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
+  helperPromptDot: {
+    width: 5,
+    height: 5,
     borderRadius: Radius.full,
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.needleGreen,
   },
-  helperChipText: { fontSize: FontSize.xs, color: Colors.ink, fontWeight: FontWeight.medium },
+  helperPromptText: { flex: 1, fontSize: FontSize.xs, color: Colors.inkLight, lineHeight: 18 },
 
   selectorSummary: {
     minHeight: 68,
@@ -1187,22 +1179,12 @@ const styles = StyleSheet.create({
     color: Colors.midGrey,
     lineHeight: 18,
   },
-  selectedPreviewRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.xs,
+  selectedPreviewSummary: {
     marginTop: Spacing.xs,
-  },
-  selectedPreviewChip: {
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 5,
-  },
-  selectedPreviewText: {
     fontSize: FontSize.xs,
     color: Colors.needleGreen,
     fontWeight: FontWeight.medium,
+    lineHeight: 18,
   },
 
   // Location suggestions

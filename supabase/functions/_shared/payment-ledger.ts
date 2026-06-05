@@ -1,5 +1,5 @@
 type PaymentProvider = 'STRIPE' | 'PAYSTACK'
-type PaymentPhase = 'INITIAL_ORDER' | 'CONSULTATION' | 'FULFILLMENT'
+type PaymentPhase = 'INITIAL_ORDER' | 'CONSULTATION' | 'FULFILLMENT' | 'MATERIAL_ADVANCE'
 type PaymentStatus = 'INITIATED' | 'PENDING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED' | 'REFUNDED'
 
 export type PaymentAttempt = {

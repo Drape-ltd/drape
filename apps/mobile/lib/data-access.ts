@@ -4,9 +4,10 @@ import { isLikelyConnectivityIssue, readFunctionErrorMessage } from './function-
 export async function requestDataAccess(note?: string): Promise<{
   error: string | null
   alreadyPending?: boolean
+  tailorExportId?: string | null
 }> {
   const payload = note?.trim() ? { note: note.trim() } : {}
-  const { data, error } = await invokeFunction<{ ok?: boolean; alreadyPending?: boolean }>(
+  const { data, error } = await invokeFunction<{ ok?: boolean; alreadyPending?: boolean; tailorExportId?: string | null }>(
     'request-data-access',
     { body: payload }
   )
@@ -22,5 +23,6 @@ export async function requestDataAccess(note?: string): Promise<{
   return {
     error: null,
     alreadyPending: data?.alreadyPending === true,
+    tailorExportId: data?.tailorExportId ?? null,
   }
 }

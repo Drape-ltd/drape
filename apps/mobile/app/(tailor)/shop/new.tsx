@@ -182,7 +182,7 @@ function buildLiveReadinessChecks(input: {
     {
       label: input.hasFitGuide ? 'Fit guide ready' : 'Fit guide required',
       ready: input.hasFitGuide,
-      blockingMessage: 'Before this item can go live, add a fit guide so buyers can see what each size means and Drape can recommend the right fit.',
+      blockingMessage: 'Before this item can go live, add a fit guide so buyers can see what each size means and Drapeon can recommend the right fit.',
     },
     {
       label: input.description.trim().length >= 24 ? 'Description ready' : 'Fuller description',
@@ -490,7 +490,7 @@ export default function NewShopItemScreen() {
 
   function openDrapeVisionSizeGuide() {
     if (!itemId) {
-      Alert.alert('Save draft first', 'Save this item once, then use Drape Vision to create a size guide without losing your listing work.')
+      Alert.alert('Save draft first', 'Save this item once, then use Drapeon Vision to create a size guide without losing your listing work.')
       return
     }
 
@@ -830,7 +830,7 @@ export default function NewShopItemScreen() {
   const isHeadwearCategory = ['Fila', 'Gele', 'Headwear'].includes(category)
   const fitGuideBodyCopy = isHeadwearCategory
     ? 'Set head and crown ranges so buyers know how this piece should sit before they order.'
-    : "Drape can recommend a size from the customer's saved measurements when you set real body ranges here."
+    : "Drapeon can recommend a size from the customer's saved measurements when you set real body ranges here."
   const visionSizeGuideCopy = isHeadwearCategory
     ? 'Capture headwear fit ranges so shoppers can match their Fit Passport to this listing.'
     : 'Capture real fit ranges so shoppers can match their Fit Passport to this listing.'
@@ -1052,7 +1052,7 @@ export default function NewShopItemScreen() {
             </Text>
             <TouchableOpacity
               accessibilityRole="button"
-              accessibilityLabel="Open Drape Vision size guide"
+              accessibilityLabel="Open Drapeon Vision size guide"
               onPress={openDrapeVisionSizeGuide}
               style={styles.visionFitGuideCallout}
             >
@@ -1060,7 +1060,7 @@ export default function NewShopItemScreen() {
                 <Feather name="grid" size={16} color={PRIMARY_GREEN} />
               </View>
               <View style={styles.visionFitGuideCopy}>
-                <Text style={styles.visionFitGuideTitle}>Drape Vision size guide</Text>
+                <Text style={styles.visionFitGuideTitle}>Drapeon Vision size guide</Text>
                 <Text style={styles.visionFitGuideText}>{visionSizeGuideCopy}</Text>
               </View>
               <Feather name="chevron-right" size={18} color={Colors.midGrey} />
@@ -1156,7 +1156,7 @@ export default function NewShopItemScreen() {
             />
             <Text style={styles.fieldHint}>
               {hasFitGuide
-                ? 'Fit guide ready. Drape can now suggest a size when the buyer has saved measurements.'
+                ? 'Fit guide ready. Drapeon can now suggest a size when the buyer has saved measurements.'
                 : 'Drafts can save without a fit guide, but live items require one so buyers know what each size means.'}
             </Text>
           </View>
@@ -1372,9 +1372,7 @@ function SelectorCard({
         <Text style={styles.selectorValue} numberOfLines={1}>{value}</Text>
         <Text style={styles.selectorHint} numberOfLines={2}>{hint}</Text>
       </View>
-      <View style={styles.selectorEditPill}>
-        <Text style={styles.selectorEditText}>Choose</Text>
-      </View>
+      <Feather name="chevron-right" size={20} color={Colors.midGrey} />
     </TouchableOpacity>
   )
 }
@@ -1505,8 +1503,8 @@ function ListingChoiceSheet({
               <Text style={styles.sheetSubtitle}>
                 {mode === 'photo'
                   ? photoRemainingSlots === 1
-                    ? 'One photo slot left. Drape crops product photos to 4:5 so cards look consistent.'
-                    : `${photoRemainingSlots} photo slots left. Drape crops product photos to 4:5 so cards look consistent.`
+                    ? 'One photo slot left. Drapeon crops product photos to 4:5 so cards look consistent.'
+                    : `${photoRemainingSlots} photo slots left. Drapeon crops product photos to 4:5 so cards look consistent.`
                   : mode === 'sizes'
                     ? 'Add standard sizes or create one custom size.'
                     : mode === 'fit-fields'
@@ -1571,11 +1569,12 @@ function ListingChoiceSheet({
           ) : null}
 
           {mode === 'category' ? (
-            <View style={styles.sheetGrid}>
+            <View style={styles.sheetRows}>
               {ITEM_CATEGORIES.map((value) => (
-                <SheetPill
+                <SheetChoiceRow
                   key={value}
-                  label={value}
+                  title={value}
+                  body="Use the category customers would naturally browse."
                   selected={category === value}
                   onPress={() => onCategory(value)}
                 />
@@ -1584,11 +1583,12 @@ function ListingChoiceSheet({
           ) : null}
 
           {mode === 'currency' ? (
-            <View style={styles.sheetGrid}>
+            <View style={styles.sheetRows}>
               {CURRENCIES.map((value) => (
-                <SheetPill
+                <SheetChoiceRow
                   key={value}
-                  label={value}
+                  title={value}
+                  body="Checkout and payouts use this listing currency."
                   selected={currency === value}
                   onPress={() => onCurrency(value)}
                 />
@@ -1598,11 +1598,12 @@ function ListingChoiceSheet({
 
           {mode === 'sizes' ? (
             <>
-              <View style={styles.sheetGrid}>
+              <View style={styles.sheetRows}>
                 {COMMON_SIZES.map((value) => (
-                  <SheetPill
+                  <SheetCheckRow
                     key={value}
-                    label={value}
+                    title={value}
+                    body={value === 'One size' ? 'Use for pieces with flexible fit.' : 'Add this size to the listing.'}
                     selected={sizes.includes(value)}
                     onPress={() => onToggleSize(value)}
                   />
@@ -1650,11 +1651,12 @@ function ListingChoiceSheet({
                   {category ? `Use ${category} defaults` : 'Use recommended fields'}
                 </Text>
               </TouchableOpacity>
-              <View style={styles.sheetGrid}>
+              <View style={styles.sheetRows}>
                 {fitFieldOptions.map((field) => (
-                  <SheetPill
+                  <SheetCheckRow
                     key={field.key}
-                    label={field.shortLabel}
+                    title={field.label}
+                    body="Customers compare this measurement against the item fit guide."
                     selected={fitGuideFields.includes(field.key)}
                     onPress={() => onToggleFitField(field.key)}
                   />
@@ -1786,22 +1788,6 @@ function SheetCheckRow({
         <Text style={styles.sheetChoiceTitle}>{title}</Text>
         <Text style={styles.sheetChoiceBody}>{body}</Text>
       </View>
-    </TouchableOpacity>
-  )
-}
-
-function SheetPill({
-  label,
-  selected,
-  onPress,
-}: {
-  label: string
-  selected: boolean
-  onPress: () => void
-}) {
-  return (
-    <TouchableOpacity style={[styles.sheetPill, selected && styles.sheetPillSelected]} onPress={onPress}>
-      <Text style={[styles.sheetPillText, selected && styles.sheetPillTextSelected]}>{label}</Text>
     </TouchableOpacity>
   )
 }
@@ -1955,17 +1941,6 @@ const styles = StyleSheet.create({
     color: Colors.inkLight,
     lineHeight: 17,
   },
-  selectorEditPill: {
-    borderRadius: Radius.full,
-    backgroundColor: Colors.needleGreenLight,
-    paddingHorizontal: 11,
-    paddingVertical: 6,
-  },
-  selectorEditText: {
-    fontSize: FontSize.xs,
-    color: PRIMARY_GREEN,
-    fontWeight: FontWeight.semibold,
-  },
   inlineSelectorRow: {
     minHeight: 68,
     borderRadius: Radius.md,
@@ -2011,17 +1986,6 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
   },
-  chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    minHeight: 40,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    justifyContent: 'center',
-  },
-  chipText: { color: Colors.inkLight, fontSize: 13, fontWeight: FontWeight.medium },
   customSizeRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   customSizeInput: { flex: 1 },
   stockHelperCard: {
@@ -2235,11 +2199,6 @@ const styles = StyleSheet.create({
   sheetRows: {
     gap: Spacing.sm,
   },
-  sheetGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.sm,
-  },
   sheetOption: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2315,29 +2274,6 @@ const styles = StyleSheet.create({
   sheetCheckSelected: {
     borderColor: PRIMARY_GREEN,
     backgroundColor: PRIMARY_GREEN,
-  },
-  sheetPill: {
-    minHeight: 42,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    backgroundColor: Colors.white,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    justifyContent: 'center',
-  },
-  sheetPillSelected: {
-    borderColor: PRIMARY_GREEN,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  sheetPillText: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    fontWeight: FontWeight.medium,
-  },
-  sheetPillTextSelected: {
-    color: PRIMARY_GREEN,
-    fontWeight: FontWeight.semibold,
   },
   sheetCustomRow: {
     flexDirection: 'row',

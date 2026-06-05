@@ -88,7 +88,7 @@ function getWaitlistRecipients(role: WaitlistRole) {
 }
 
 function getLeadNotificationFrom() {
-  return process.env.RESEND_FROM ?? `Drape Leads <${CONTACTS.noreply}>`
+  return process.env.RESEND_FROM ?? `Drapeon Leads <${CONTACTS.noreply}>`
 }
 
 async function sendLeadEmail(args: {
@@ -145,7 +145,7 @@ function buildWaitlistSubject(input: WaitlistLeadNotificationInput) {
 
 function buildWaitlistText(input: WaitlistLeadNotificationInput) {
   return [
-    input.mode === 'created' ? 'New Drape waitlist signup' : 'Updated Drape waitlist signup',
+    input.mode === 'created' ? 'New Drapeon waitlist signup' : 'Updated Drapeon waitlist signup',
     '',
     `Role: ${input.role}`,
     `Name: ${input.name}`,
@@ -163,7 +163,7 @@ function buildWaitlistHtml(input: WaitlistLeadNotificationInput) {
 
   return `
 <div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1a1a1a">
-  <p style="margin:0 0 8px;color:#2d6a4f;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Drape waitlist</p>
+  <p style="margin:0 0 8px;color:#2d6a4f;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Drapeon waitlist</p>
   <h1 style="margin:0 0 16px;font-size:28px;line-height:1.1">${heading}</h1>
   <table style="width:100%;border-collapse:collapse">
     <tr><td style="padding:8px 0;color:#666">Role</td><td style="padding:8px 0;font-weight:600">${escapeHtml(input.role)}</td></tr>
@@ -212,7 +212,7 @@ function buildTailorApplicationSubject(input: TailorApplicationNotificationInput
 
 function buildTailorApplicationText(input: TailorApplicationNotificationInput) {
   return [
-    input.mode === 'created' ? 'New Drape tailor application' : 'Updated Drape tailor application',
+    input.mode === 'created' ? 'New Drapeon tailor application' : 'Updated Drapeon tailor application',
     '',
     `Business: ${input.businessName}`,
     `Display name: ${input.displayName}`,
@@ -242,7 +242,7 @@ function buildTailorApplicationHtml(input: TailorApplicationNotificationInput) {
 
   return `
 <div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1a1a1a">
-  <p style="margin:0 0 8px;color:#2d6a4f;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Drape applications</p>
+  <p style="margin:0 0 8px;color:#2d6a4f;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Drapeon applications</p>
   <h1 style="margin:0 0 16px;font-size:28px;line-height:1.1">${heading}</h1>
   <table style="width:100%;border-collapse:collapse">
     <tr><td style="padding:8px 0;color:#666">Business</td><td style="padding:8px 0;font-weight:600">${escapeHtml(input.businessName)}</td></tr>

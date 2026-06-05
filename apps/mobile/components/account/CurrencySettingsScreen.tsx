@@ -19,6 +19,7 @@ export function CurrencySettingsScreen({ role }: { role: AccountRole }) {
   const [selected, setSelected] = useState<CurrencyCode>(currency)
   const [saving, setSaving] = useState(false)
   const isTailor = role === 'TAILOR'
+  const hasPendingChange = selected !== currency
 
   useEffect(() => {
     if (!saving) {
@@ -60,7 +61,10 @@ export function CurrencySettingsScreen({ role }: { role: AccountRole }) {
       </View>
 
       <ScrollView
-        contentContainerStyle={[styles.body, { paddingBottom: Math.max(insets.bottom + 128, 112) }]}
+        contentContainerStyle={[
+          styles.body,
+          { paddingBottom: hasPendingChange || saving ? Math.max(insets.bottom + 128, 112) : Math.max(insets.bottom + Spacing.lg, Spacing.xl) },
+        ]}
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.infoCard}>
@@ -119,14 +123,16 @@ export function CurrencySettingsScreen({ role }: { role: AccountRole }) {
         </View>
       </ScrollView>
 
-      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom + Spacing.sm, Spacing.lg) }]}>
-        <Button
-          label={saving ? 'Saving...' : selected === currency ? 'Currency saved' : `Use ${selected}`}
-          onPress={save}
-          loading={saving}
-          disabled={saving || selected === currency}
-        />
-      </View>
+      {hasPendingChange || saving ? (
+        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom + Spacing.sm, Spacing.lg) }]}>
+          <Button
+            label={saving ? 'Saving...' : `Use ${selected}`}
+            onPress={save}
+            loading={saving}
+            disabled={saving}
+          />
+        </View>
+      ) : null}
     </SafeAreaView>
   )
 }

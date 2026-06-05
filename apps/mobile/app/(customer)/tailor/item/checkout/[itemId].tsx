@@ -12,6 +12,7 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  Modal,
 } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { qk, useCustomerMeasurements, useRefreshOnFocus, useSellerItem } from '@/lib/queries'
@@ -34,7 +35,7 @@ import {
 import { phoneHintForContext } from '@/lib/phone-context'
 import { READY_MADE_CHECKOUT_REMINDER, READY_MADE_POLICY_ROWS } from '@/lib/ready-made-policy'
 import { normalizeReadyMadeSizeGuide, recommendReadyMadeSize } from '@/lib/ready-made-fit'
-import { Colors, Fonts, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
+import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 import { paymentRouteCopyForCurrency, useOrderPaymentFlow } from '@/lib/payments'
 import { queryClient } from '@/lib/queryClient'
 import { Sentry } from '@/lib/sentry'
@@ -111,6 +112,7 @@ export default function ReadyMadeCheckoutScreen() {
   const [checkoutInFlight, setCheckoutInFlight] = useState(false)
   const [checkoutItemSnapshot, setCheckoutItemSnapshot] = useState<ItemDetail | null>(null)
   const [selectedSize, setSelectedSize] = useState('')
+  const [sizeSheetOpen, setSizeSheetOpen] = useState(false)
   const [quantity, setQuantity] = useState(1)
   const [fulfillment, setFulfillment] = useState<FulfillmentOption | null>(null)
   const [addressSearch, setAddressSearch] = useState('')
@@ -208,7 +210,7 @@ export default function ReadyMadeCheckoutScreen() {
       try {
         const res = await fetch(
           `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&addressdetails=1&limit=5`,
-          { headers: { 'Accept-Language': 'en', 'User-Agent': 'Drape/1.0' } }
+          { headers: { 'Accept-Language': 'en', 'User-Agent': 'Drapeon/1.0' } }
         )
         const data = (await res.json()) as unknown
         const filtered = Array.isArray(data)
@@ -699,52 +701,26 @@ export default function ReadyMadeCheckoutScreen() {
                       </Text>
                     </View>
                   ) : null}
-                  <View style={styles.optionWrap}>
-                    {activeItem.sizes.map((size) => (
-                      <TouchableOpacity
-                        key={size}
-                        style={[
-                          styles.pill,
-                          selectedSize === size && styles.pillActive,
-                          quantityForSize(
-                            activeItem.sizeInventory,
-                            size,
-                            activeItem.inventoryQuantity
-                          ) <= 0 && styles.pillDisabled,
-                        ]}
-                        onPress={() => {
-                          if (
-                            quantityForSize(
-                              activeItem.sizeInventory,
-                              size,
-                              activeItem.inventoryQuantity
-                            ) <= 0
-                          )
-                            return
-                          setSelectedSize(size)
-                        }}
-                      >
-                        <Text
-                          style={[
-                            styles.pillText,
-                            selectedSize === size && styles.pillTextActive,
-                            quantityForSize(
-                              activeItem.sizeInventory,
-                              size,
-                              activeItem.inventoryQuantity
-                            ) <= 0 && styles.pillTextDisabled,
-                          ]}
-                        >
-                          {size} ·{' '}
-                          {quantityForSize(
-                            activeItem.sizeInventory,
-                            size,
-                            activeItem.inventoryQuantity
-                          )}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
+                  <TouchableOpacity
+                    style={[styles.selectCard, !selectedSize && styles.selectCardWarning]}
+                    onPress={() => setSizeSheetOpen(true)}
+                    activeOpacity={0.78}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Choose size. Current size ${selectedSize || 'not selected'}`}
+                  >
+                    <View style={styles.selectCopy}>
+                      <Text style={[styles.selectLabel, !selectedSize && styles.selectLabelWarning]}>
+                        Size
+                      </Text>
+                      <Text style={styles.selectValue}>{selectedSize || 'Choose a size'}</Text>
+                      <Text style={styles.selectHint}>
+                        {selectedSize
+                          ? sizeStockHelperText(selectedSize, selectedSizeInventory)
+                          : 'Pick one available size before checkout.'}
+                      </Text>
+                    </View>
+                    <Feather name="chevron-right" size={20} color={Colors.midGrey} />
+                  </TouchableOpacity>
                 </View>
               ) : null}
 
@@ -1034,12 +1010,12 @@ export default function ReadyMadeCheckoutScreen() {
               </View>
 
               <PaymentTrustCard
-                body="Drape keeps your payment protected until pickup, delivery, or dispatch is confirmed. If something goes wrong, raise it inside Drape before closing the order."
+                body="Drapeon keeps your payment protected until pickup, delivery, or dispatch is confirmed. If something goes wrong, raise it inside Drapeon before closing the order."
                 actionLabel="Learn more"
                 onPressAction={() => {
                   Alert.alert(
                     'Payment protected',
-                    'Your payment is processed through the provider for this order currency. Drape records the order state, keeps the handoff clear, and gives you a dispute or aftercare path if the item is not right.'
+                    'Your payment is processed through the provider for this order currency. Drapeon records the order state, keeps the handoff clear, and gives you a dispute or aftercare path if the item is not right.'
                   )
                 }}
               />
@@ -1049,7 +1025,12 @@ export default function ReadyMadeCheckoutScreen() {
                 <Text style={styles.bestUseText}>
                   {fulfillment === 'PICKUP'
                     ? 'Pickup has no delivery fee, but tax can still apply based on the order location. Pickup details stay private until the seller marks the order ready. Bring your collection code and inspect the item before closing the order.'
-                    : 'Drape collects the standard delivery or shipping fee in this checkout. Carrier surcharges, customs, or import duties are not charged automatically; if anything extra is needed, Drape will ask you to approve it before dispatch.'}
+                    : 'Drapeon collects the standard delivery or shipping fee in this checkout. Carrier surcharges, customs, or import duties are not charged automatically; if anything extra is needed, Drapeon will ask you to approve it before dispatch.'}
+                </Text>
+                <Text style={styles.bestUseText}>
+                  Handmade or small-batch pieces can vary slightly from photos. If the item arrives
+                  damaged, wrong, missing, or materially different from the listing, raise it inside
+                  Drapeon before closing the order.
                 </Text>
               </View>
 
@@ -1117,13 +1098,97 @@ export default function ReadyMadeCheckoutScreen() {
                 !fulfillment ||
                 sellerUnavailable ||
                 !cancellationPolicyAcknowledged ||
+                (activeItem.sizes.length > 0 && !selectedSize.trim()) ||
                 (activeItem.sizes.length > 0 && selectedSizeInventory <= 0)
               }
             />
           </View>
         ) : null}
+        {activeItem ? (
+          <SizeChoiceSheet
+            visible={sizeSheetOpen}
+            sizes={activeItem.sizes}
+            selectedSize={selectedSize}
+            sizeInventory={activeItem.sizeInventory}
+            inventoryQuantity={activeItem.inventoryQuantity}
+            onClose={() => setSizeSheetOpen(false)}
+            onSelect={(size) => {
+              setSelectedSize(size)
+              setSizeSheetOpen(false)
+            }}
+          />
+        ) : null}
       </KeyboardAvoidingView>
     </SafeAreaView>
+  )
+}
+
+function SizeChoiceSheet({
+  visible,
+  sizes,
+  selectedSize,
+  sizeInventory,
+  inventoryQuantity,
+  onClose,
+  onSelect,
+}: {
+  visible: boolean
+  sizes: string[]
+  selectedSize: string
+  sizeInventory: ItemDetail['sizeInventory']
+  inventoryQuantity: number
+  onClose: () => void
+  onSelect: (size: string) => void
+}) {
+  const insets = useSafeAreaInsets()
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.sheetOverlay}>
+        <TouchableOpacity style={styles.sheetScrim} activeOpacity={1} onPress={onClose} />
+        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom + Spacing.lg, 40) }]}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.sheetHeader}>
+            <View style={styles.sheetTitleWrap}>
+              <Text style={styles.sheetTitle}>Choose size</Text>
+              <Text style={styles.sheetSubtitle}>
+                Select one available size. Low-stock sizes show the exact quantity left.
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.sheetClose} onPress={onClose} accessibilityLabel="Close size picker">
+              <Feather name="x" size={18} color={Colors.ink} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={styles.sheetRows} showsVerticalScrollIndicator={false}>
+            {sizes.map((size) => {
+              const remaining = quantityForSize(sizeInventory, size, inventoryQuantity)
+              const disabled = remaining <= 0
+              const selected = selectedSize === size
+              return (
+                <TouchableOpacity
+                  key={size}
+                  style={[
+                    styles.sheetChoiceRow,
+                    selected && styles.sheetChoiceRowSelected,
+                    disabled && styles.sheetChoiceRowDisabled,
+                  ]}
+                  disabled={disabled}
+                  onPress={() => onSelect(size)}
+                  activeOpacity={0.78}
+                >
+                  <View style={styles.sheetChoiceText}>
+                    <Text style={styles.sheetChoiceTitle}>{size}</Text>
+                    <Text style={styles.sheetChoiceBody}>{sizeStockHelperText(size, remaining)}</Text>
+                  </View>
+                  {selected ? (
+                    <Feather name="check-circle" size={18} color={Colors.needleGreen} />
+                  ) : null}
+                </TouchableOpacity>
+              )
+            })}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
   )
 }
 
@@ -1272,22 +1337,100 @@ const styles = StyleSheet.create({
   recommendationLabel: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
   recommendationDetail: { fontSize: 12, color: Colors.inkLight, lineHeight: 16 },
   helperText: { fontSize: 12, color: MUTED_GREY, lineHeight: 16 },
-  optionWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  pill: {
-    minHeight: 40,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: Radius.full,
-    backgroundColor: HOME_BG,
+  selectCard: {
+    minHeight: 74,
+    borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
-    justifyContent: 'center',
+    backgroundColor: HOME_BG,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
-  pillActive: { backgroundColor: Colors.needleGreenLight, borderColor: PRIMARY_GREEN },
-  pillDisabled: { opacity: 0.5 },
-  pillText: { fontSize: 13, color: Colors.inkLight, fontWeight: FontWeight.medium },
-  pillTextActive: { color: PRIMARY_GREEN },
-  pillTextDisabled: { color: MUTED_GREY },
+  selectCardWarning: { borderColor: Colors.statusPending },
+  selectCopy: { flex: 1, gap: 2 },
+  selectLabel: {
+    fontSize: 12,
+    color: Colors.inkLight,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+  },
+  selectLabelWarning: { color: Colors.statusPending },
+  selectValue: { fontSize: 15, color: CHARCOAL, fontWeight: FontWeight.semibold },
+  selectHint: { fontSize: 12, color: MUTED_GREY, lineHeight: 16 },
+  sheetOverlay: { flex: 1, justifyContent: 'flex-end' },
+  sheetScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.42)',
+  },
+  sheet: {
+    maxHeight: '78%',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.sm,
+    gap: Spacing.md,
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 4,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.lightGrey,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.md,
+  },
+  sheetTitleWrap: { flex: 1, gap: 3 },
+  sheetTitle: {
+    fontSize: 20,
+    color: CHARCOAL,
+    fontWeight: FontWeight.semibold,
+    fontFamily: Fonts.display,
+  },
+  sheetSubtitle: { fontSize: 13, color: Colors.inkLight, lineHeight: 18 },
+  sheetClose: {
+    width: 38,
+    height: 38,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.white,
+  },
+  sheetRows: { gap: Spacing.sm, paddingBottom: Spacing.sm },
+  sheetChoiceRow: {
+    minHeight: 68,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    padding: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  sheetChoiceRowSelected: {
+    borderColor: PRIMARY_GREEN,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  sheetChoiceRowDisabled: { opacity: 0.48 },
+  sheetChoiceText: { flex: 1, gap: 2 },
+  sheetChoiceTitle: {
+    fontSize: FontSize.sm,
+    color: CHARCOAL,
+    fontWeight: FontWeight.semibold,
+  },
+  sheetChoiceBody: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    lineHeight: 18,
+  },
   quantityRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   quantityBtn: {
     width: 44,

@@ -100,7 +100,7 @@ export default function ForgotPasswordScreen() {
                 <Text style={styles.nextTitle}>Open the link from this device if you can.</Text>
                 <Text style={styles.nextCopy}>
                   We’ll bring you into a secure password-reset screen, then send you back to sign in
-                  with the same Drape account.
+                  with the same Drapeon account.
                 </Text>
               </View>
               <Button
@@ -114,7 +114,7 @@ export default function ForgotPasswordScreen() {
               <AuthEntryHeader
                 eyebrow="Account recovery"
                 title="Reset your password without losing your place."
-                body="Enter the email address on your Drape account and we’ll send you a secure link to set a new password."
+                body="Enter the email address on your Drapeon account and we’ll send you a secure link to set a new password."
                 showWordmark={false}
               />
               <View style={styles.reassuranceCard}>

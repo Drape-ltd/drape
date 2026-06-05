@@ -66,7 +66,7 @@ export function RecoveryBridge(): any {
             textTransform: 'uppercase',
           }}
         >
-          Drape account recovery
+          Drapeon account recovery
         </p>
         <h1
           style={{
@@ -75,7 +75,7 @@ export function RecoveryBridge(): any {
             lineHeight: 1.05,
           }}
         >
-          Opening Drape
+          Opening Drapeon
         </h1>
         <p
           style={{
@@ -109,7 +109,7 @@ export function RecoveryBridge(): any {
                 fontWeight: 700,
               }}
             >
-              Open Drape
+              Open Drapeon
             </a>
             <p
               style={{
@@ -119,7 +119,7 @@ export function RecoveryBridge(): any {
                 lineHeight: 1.6,
               }}
             >
-              If the app does not open, use this same device with Drape installed and request a new
+              If the app does not open, use this same device with Drapeon installed and request a new
               password reset link if needed.
             </p>
           </div>

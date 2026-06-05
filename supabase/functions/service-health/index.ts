@@ -6,6 +6,10 @@ import {
   getSupabaseUrl,
 } from '../_shared/env.ts'
 import { log } from '../_shared/logger.ts'
+import {
+  findOverduePayoutsWithoutRows,
+  PAYOUT_WATCHDOG_GRACE_MINUTES,
+} from '../_shared/payout-watchdog.ts'
 
 const FN = 'service-health'
 
@@ -14,6 +18,7 @@ type Check = {
   status: 'ok' | 'warn' | 'fail'
   message: string
   latencyMs?: number
+  details?: Record<string, unknown>
 }
 
 const REQUIRED_CRON_JOBS = [
@@ -83,6 +88,33 @@ function anyEnvCheck(names: string[], label: string, required = true): Check {
   }
 }
 
+function smsSecretCheck(): Check {
+  const provider = (Deno.env.get('SMS_PROVIDER') ?? '').trim().toLowerCase()
+  const termiiConfigured = !!(Deno.env.get('TERMII_API_KEY') && (Deno.env.get('TERMII_SENDER_ID') ?? Deno.env.get('TERMII_FROM')))
+  const twilioConfigured = !!(Deno.env.get('TWILIO_ACCOUNT_SID') && Deno.env.get('TWILIO_AUTH_TOKEN') && Deno.env.get('TWILIO_FROM_NUMBER'))
+
+  if (provider === 'termii') {
+    return termiiConfigured
+      ? { ok: true, status: 'ok', message: 'Termii SMS configured' }
+      : { ok: false, status: 'fail', message: 'SMS_PROVIDER=termii but TERMII_API_KEY or TERMII_SENDER_ID is missing' }
+  }
+
+  if (provider === 'twilio') {
+    return twilioConfigured
+      ? { ok: true, status: 'ok', message: 'Twilio SMS configured' }
+      : { ok: false, status: 'fail', message: 'SMS_PROVIDER=twilio but Twilio credentials are missing' }
+  }
+
+  if (termiiConfigured) return { ok: true, status: 'ok', message: 'Termii SMS configured' }
+  if (twilioConfigured) return { ok: true, status: 'ok', message: 'Twilio SMS configured' }
+
+  return {
+    ok: true,
+    status: 'warn',
+    message: 'SMS provider is not configured. Push and email fallback can still run.',
+  }
+}
+
 async function databaseCheck(supabase: any): Promise<Check> {
   const startedAt = performance.now()
   const { error } = await supabase
@@ -123,6 +155,9 @@ async function cronCheck(supabase: any): Promise<Check> {
   }
 
   const payload = data && typeof data === 'object' ? data as Record<string, unknown> : {}
+  const vaultAvailable = payload.vaultAvailable === true
+  const vaultProjectUrlConfigured = payload.vaultProjectUrlConfigured === true
+  const vaultServiceRoleConfigured = payload.vaultServiceRoleConfigured === true
   const jobs = Array.isArray(payload.jobs) ? payload.jobs as Array<Record<string, unknown>> : []
   const installedNames = new Set(
     jobs
@@ -130,6 +165,15 @@ async function cronCheck(supabase: any): Promise<Check> {
       .filter(Boolean),
   )
   const missing = REQUIRED_CRON_JOBS.filter((job) => !installedNames.has(job))
+
+  if (!vaultAvailable || !vaultProjectUrlConfigured || !vaultServiceRoleConfigured) {
+    return {
+      ok: false,
+      status: 'fail',
+      message: 'Cron cannot invoke Edge Functions until DB Vault has project_url and service_role_key configured',
+      latencyMs,
+    }
+  }
 
   if (missing.length > 0) {
     return {
@@ -247,11 +291,109 @@ async function providerHealthCheck(supabase: any): Promise<Check> {
   }
 }
 
+async function payoutWatchdogCheck(supabase: any): Promise<Check> {
+  const startedAt = performance.now()
+
+  try {
+    const overdue = await findOverduePayoutsWithoutRows(supabase)
+    const latencyMs = Math.round(performance.now() - startedAt)
+
+    if (overdue.length > 0) {
+      const oldest = overdue[0]
+      return {
+        ok: false,
+        status: 'fail',
+        message: `${overdue.length} payout(s) are overdue without a payout row. Oldest is ${oldest.minutesPastReady} minutes past ready.`,
+        latencyMs,
+        details: {
+          grace_minutes: PAYOUT_WATCHDOG_GRACE_MINUTES,
+          orders: overdue.map((item) => ({
+            order_id: item.order.id,
+            reference: item.order.reference,
+            stage: item.order.stage,
+            payout_ready_at: item.payoutReadyAt,
+            minutes_past_ready: item.minutesPastReady,
+            payout_amount: item.amount,
+            payout_currency: item.currency,
+            payout_provider: item.provider,
+          })),
+        },
+      }
+    }
+
+    return {
+      ok: true,
+      status: 'ok',
+      message: 'No overdue payout releases without payout rows',
+      latencyMs,
+    }
+  } catch (error) {
+    const latencyMs = Math.round(performance.now() - startedAt)
+    const message = error instanceof Error ? error.message : String(error)
+    return {
+      ok: false,
+      status: 'fail',
+      message: `Payout watchdog check failed: ${message}`,
+      latencyMs,
+    }
+  }
+}
+
+async function androidPushRegistrationCheck(supabase: any): Promise<Check> {
+  const startedAt = performance.now()
+  const { data, error } = await supabase
+    .from('push_tokens')
+    .select('platform, updated_at')
+    .eq('platform', 'android')
+    .order('updated_at', { ascending: false })
+    .limit(1)
+
+  const latencyMs = Math.round(performance.now() - startedAt)
+  if (error) {
+    return {
+      ok: true,
+      status: 'warn',
+      message: `Could not inspect Android push token registration: ${error.message}`,
+      latencyMs,
+    }
+  }
+
+  const latest = Array.isArray(data) && data.length > 0 ? data[0] as Record<string, unknown> : null
+  const updatedAt = typeof latest?.updated_at === 'string' ? latest.updated_at : null
+  if (!updatedAt) {
+    return {
+      ok: true,
+      status: 'warn',
+      message: 'No Android push token has registered yet. Confirm Firebase google-services.json, EAS FCM credentials, rebuild, then open Android QA devices.',
+      latencyMs,
+    }
+  }
+
+  const ageMs = Date.now() - new Date(updatedAt).getTime()
+  if (!Number.isFinite(ageMs) || ageMs > 7 * 24 * 60 * 60 * 1000) {
+    return {
+      ok: true,
+      status: 'warn',
+      message: `Latest Android push token is stale (${updatedAt}). Reopen a rebuilt Android app and confirm expo-notifications stores a fresh token.`,
+      latencyMs,
+    }
+  }
+
+  return {
+    ok: true,
+    status: 'ok',
+    message: `Android push token registered recently (${updatedAt})`,
+    latencyMs,
+  }
+}
+
 function providerSecretChecks() {
   return {
     stripeSecret: anyEnvCheck(['STRIPE_SECRET_KEY', 'STRIPE_SECRET_KEY_SANDBOX'], 'STRIPE_SECRET_KEY'),
     stripeWebhookSecret: anyEnvCheck(['STRIPE_WEBHOOK_SECRET', 'STRIPE_WEBHOOK_SECRETS'], 'STRIPE_WEBHOOK_SECRET'),
     paystackSecret: anyEnvCheck(['PAYSTACK_SECRET_KEY', 'PAYSTACK_SECRET_KEY_TEST'], 'PAYSTACK_SECRET_KEY'),
+    smsProvider: smsSecretCheck(),
+    authSmsHookSecret: anyEnvCheck(['AUTH_SMS_HOOK_SECRET', 'SUPABASE_AUTH_HOOK_SECRET'], 'AUTH_SMS_HOOK_SECRET', false),
     reauthProofSecret: envCheck('REAUTH_PROOF_SECRET'),
     healthcheckSecret: anyEnvCheck(['DRAPE_HEALTHCHECK_SECRET', 'HEALTHCHECK_SECRET'], 'DRAPE_HEALTHCHECK_SECRET'),
     sentryDsn: anyEnvCheck(['SENTRY_DSN', 'SUPABASE_SENTRY_DSN'], 'SENTRY_DSN', false),
@@ -312,6 +454,8 @@ Deno.serve(async (req) => {
     database: await databaseCheck(supabase),
     cron: await cronCheck(supabase),
     jobQueue: await jobQueueCheck(supabase),
+    payoutWatchdog: await payoutWatchdogCheck(supabase),
+    androidPushRegistration: await androidPushRegistrationCheck(supabase),
     providers: await providerHealthCheck(supabase),
   }
 

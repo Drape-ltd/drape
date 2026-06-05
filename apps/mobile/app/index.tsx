@@ -6,7 +6,7 @@ export default function AppIndex() {
   return (
     <View style={styles.container}>
       <ActivityIndicator size="large" color={Colors.needleGreen} />
-      <Text style={styles.label}>Loading Drape</Text>
+      <Text style={styles.label}>Loading Drapeon</Text>
     </View>
   )
 }

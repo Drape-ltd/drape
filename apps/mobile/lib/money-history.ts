@@ -9,7 +9,7 @@ import { supabase } from './supabase'
 import { loadPayoutAccountStatus } from './payout-setup'
 
 type PaymentProvider = 'STRIPE' | 'PAYSTACK'
-type OrderPaymentPhase = 'INITIAL_ORDER' | 'CONSULTATION' | 'FULFILLMENT'
+type OrderPaymentPhase = 'INITIAL_ORDER' | 'CONSULTATION' | 'FULFILLMENT' | 'MATERIAL_ADVANCE'
 type OrderPaymentStatus = 'INITIATED' | 'PENDING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED' | 'PARTIAL_REFUND' | 'REFUNDED'
 type PayoutStatus = 'PENDING' | 'PROCESSING' | 'BLOCKED' | 'PAID' | 'FAILED' | 'REVERSED' | 'CANCELED'
 

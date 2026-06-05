@@ -85,7 +85,7 @@ export default function RoleSelectScreen() {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <AuthEntryHeader
           eyebrow="Almost there"
-          title="Choose how you’ll use Drape first."
+          title="Choose how you’ll use Drapeon first."
           body="This sets up your first dashboard. You can switch later from account settings."
           showWordmark={false}
         />
@@ -95,7 +95,7 @@ export default function RoleSelectScreen() {
             style={[styles.roleCard, role === 'CUSTOMER' && styles.roleCardActive]}
             onPress={() => setRole('CUSTOMER')}
             accessibilityRole="button"
-            accessibilityLabel="Use Drape as a customer"
+            accessibilityLabel="Use Drapeon as a customer"
             accessibilityState={{ selected: role === 'CUSTOMER' }}
           >
             <View style={[styles.roleIconWrap, role === 'CUSTOMER' && styles.roleIconWrapActive]}>
@@ -124,7 +124,7 @@ export default function RoleSelectScreen() {
             style={[styles.roleCard, role === 'TAILOR' && styles.roleCardActive]}
             onPress={() => setRole('TAILOR')}
             accessibilityRole="button"
-            accessibilityLabel="Use Drape as a tailor"
+            accessibilityLabel="Use Drapeon as a tailor"
             accessibilityState={{ selected: role === 'TAILOR' }}
           >
             <View style={[styles.roleIconWrap, role === 'TAILOR' && styles.roleIconWrapActive]}>
@@ -151,7 +151,7 @@ export default function RoleSelectScreen() {
         <View style={styles.actionCard}>
           <View style={styles.nextCard}>
             <Text style={styles.nextEyebrow}>Next</Text>
-            <Text style={styles.nextTitle}>You’ll go into setup for this side of Drape.</Text>
+            <Text style={styles.nextTitle}>You’ll go into setup for this side of Drapeon.</Text>
             {accountEmail ? <Text style={styles.nextMeta}>{accountEmail}</Text> : null}
           </View>
           <TouchableOpacity

@@ -1,22 +1,30 @@
 import type { Metadata } from 'next'
-import { CONTACTS, OPS_ISSUE_SEVERITIES, OPS_ISSUE_TYPES } from '@drape/shared'
-import Link from 'next/link'
+import {
+  CONTACTS,
+  DRAPE_EXCEPTION_BUCKETS,
+  DRAPE_EXCEPTION_RUNBOOK_ENTRIES,
+  OPS_ISSUE_SEVERITIES,
+  OPS_ISSUE_TYPES,
+} from '@drape/shared'
 import type { JSX, ReactNode } from 'react'
 import {
   getOpsAccessMode,
   getOpsBootstrapRole,
   getOpsSession,
   hasOpsWorkforceAccessConfig,
+  type OpsSession,
 } from '../../lib/ops-auth'
 import {
   buildOpsHref,
   buildOpsRedirectTarget,
   canAccessOpsSection,
   getOpsSection,
+  getOpsRoleActions,
+  getOpsRoleSections,
   getVisibleOpsSections,
-  OPS_FUTURE_SURFACES,
-  OPS_LIVE_SECTIONS,
   parseOpsView,
+  type OpsRole,
+  type OpsTeam,
   type OpsView,
 } from '../../lib/ops-console'
 import {
@@ -29,17 +37,38 @@ import {
   type OpsOrderReviewItem,
   type OpsPayout,
   type OpsReviewQueueItem,
+  type OpsShopItem,
   type OpsTailorApplication,
   type OpsVerification,
   type OpsIssueHistoryEntry,
+  type OpsSupportThread,
   type OpsWorkflowIssue,
 } from '../../lib/ops-data'
 
 export const dynamic = 'force-dynamic'
 
+type OpsRenderContext = {
+  accessMode: ReturnType<typeof getOpsAccessMode>
+  session: OpsSession
+  query: string
+}
+
+type OpsProviderHealth = OpsDashboardData['systemHealth']['providers'][number]
+type OpsJobQueueHealth = OpsDashboardData['systemHealth']['jobQueue']
+type OpsVisibleSection = ReturnType<typeof getVisibleOpsSections>[number]
+
+type OpsQueueItem = {
+  view: OpsView
+  label: string
+  count: number
+  description: string
+  team: string
+  urgency: 'critical' | 'watch' | 'normal'
+}
+
 export const metadata: Metadata = {
-  title: 'Ops | Drape',
-  description: 'Internal Drape ops dashboard for disputes, review moderation, abuse review, verification, privacy and trust requests, workflow issues, account deletion follow-up, and payout visibility.',
+  title: 'Ops | Drapeon',
+  description: 'Internal Drapeon ops dashboard for disputes, review moderation, abuse review, verification, privacy and trust requests, workflow issues, account deletion follow-up, and payout visibility.',
   robots: {
     index: false,
     follow: false,
@@ -64,11 +93,14 @@ const NOTICE_COPY: Record<string, string> = {
   'order-review-refunded': 'Order review approved and refund resolution recorded.',
   'order-review-continued': 'Order review closed and the order was returned to its live stage.',
   'payout-release-triggered': 'Payout release was triggered for that order.',
+  'material-advance-release-triggered': 'Material advance release was triggered.',
   'payout-resolution-applied': 'Payout resolution was saved and payout release was retried.',
   'payout-resolution-refunded': 'Customer refund completed for that payout-blocked order.',
   'partial-refund-issued': 'Partial refund issued and logged to the order timeline.',
   'workflow-issue-saved': 'Workflow issue status updated.',
   'manual-issue-created': 'Manual ops issue created.',
+  'seller-item-hidden': 'Ready-made item is hidden from buyers.',
+  'seller-item-restored': 'Ready-made item is live again.',
 }
 
 const ERROR_COPY: Record<string, string> = {
@@ -76,7 +108,7 @@ const ERROR_COPY: Record<string, string> = {
   forbidden: 'This bootstrap role does not have access to that control-plane surface.',
   'setup-needed': 'Add OPS_DASHBOARD_TOKEN before using the ops surface.',
   'invalid-token': 'That token did not match the configured ops access token.',
-  'workforce-login-required': 'This control plane is protected by workforce access. Sign in through the Drape Access gate with your @drapeon.co account.',
+  'workforce-login-required': 'This control plane is protected by workforce access. Sign in through the Drapeon Access gate with your @drapeon.co account.',
   'workforce-unassigned': 'Your workforce identity is valid, but no control-plane role is assigned to it yet.',
   'service-role-missing': 'Add the server-side Supabase service role env vars to load ops data.',
   'invalid-action': 'That ops action was not recognized.',
@@ -85,10 +117,41 @@ const ERROR_COPY: Record<string, string> = {
   'refund-failed': 'The provider refund did not complete, so the order was not marked refunded.',
   'partial-refund-invalid': 'Enter a refund amount greater than zero and below the remaining refundable balance.',
   'payout-release-failed': 'The payout release could not be triggered right now.',
+  'material-advance-release-failed': 'The material advance could not be released right now.',
   'workflow-issue-save-failed': 'That workflow issue could not be updated right now.',
   'manual-issue-create-failed': 'That manual issue could not be created right now.',
+  'seller-item-save-failed': 'That ready-made item could not be updated right now.',
   'verification-rejection-reason-required': 'Add a rejection reason before rejecting verification.',
 }
+
+const OPS_ROLE_ORDER: OpsRole[] = ['admin', 'ops', 'customer_success', 'trust', 'finance', 'engineering']
+
+const OPS_ROLE_DESCRIPTIONS: Record<OpsRole, string> = {
+  admin: 'Full launch control across every internal surface and every mutation.',
+  ops: 'Dispatch, ready-made inventory, intake, payout blockers, and operational follow-up.',
+  customer_success: 'Customer-facing order help, disputes, conversation safety, and refund review.',
+  trust: 'Identity, privacy, review moderation, contact bypass, and safety enforcement.',
+  finance: 'Payout review, refund exposure, and payment-linked release checks.',
+  engineering: 'Incidents, provider circuits, dead jobs, workflow issues, and system recovery.',
+}
+
+type OpsRunbookEntry = {
+  title: string
+  owner: OpsTeam
+  severity: 'Critical' | 'High' | 'Medium' | 'Standard'
+  bucket?: string
+  keywords: string[]
+  useWhen: string
+  firstMove: string
+  customerCopy: string
+  tailorCopy: string
+  opsActions: string[]
+}
+
+const OPS_RUNBOOK_ENTRIES: OpsRunbookEntry[] = DRAPE_EXCEPTION_RUNBOOK_ENTRIES
+const OPS_RUNBOOK_BUCKET_LABELS = Object.fromEntries(
+  DRAPE_EXCEPTION_BUCKETS.map((bucket) => [bucket.id, bucket.title]),
+) as Record<string, string>
 
 function readParam(
   params: Record<string, string | string[] | undefined>,
@@ -125,10 +188,48 @@ function formatMoney(amount: number | null, currency: string | null) {
   }
 }
 
+function formatRelativeTime(value: string | null) {
+  if (!value) return '—'
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) return formatDateTime(value)
+
+  const diffMs = timestamp - Date.now()
+  const absMs = Math.abs(diffMs)
+  const units: Array<[Intl.RelativeTimeFormatUnit, number]> = [
+    ['day', 24 * 60 * 60 * 1000],
+    ['hour', 60 * 60 * 1000],
+    ['minute', 60 * 1000],
+  ]
+  const formatter = new Intl.RelativeTimeFormat('en-US', { numeric: 'auto' })
+  for (const [unit, size] of units) {
+    if (absMs >= size || unit === 'minute') {
+      return formatter.format(Math.round(diffMs / size), unit)
+    }
+  }
+
+  return formatter.format(0, 'minute')
+}
+
+function releaseWindowLabel(payout: OpsPayout) {
+  if (payout.escrowReleased) return `Released ${formatRelativeTime(payout.escrowReleasedAt)}`
+  if (!payout.customerHandoffConfirmedAt) return 'Waiting for customer handoff confirmation'
+  if (!payout.payoutReadyAt) return 'Release timing unavailable'
+  return Date.parse(payout.payoutReadyAt) <= Date.now()
+    ? '72-hour window closed'
+    : `Release window closes ${formatRelativeTime(payout.payoutReadyAt)}`
+}
+
+function isClosedConversationStage(stage: string | null) {
+  return ['CANCELLED', 'DECLINED', 'REFUNDED', 'COMPLETE', 'COMPLETED'].includes((stage ?? '').toUpperCase())
+}
+
 function statusPillClass(status: string) {
   const normalized = status.toUpperCase()
 
   if (normalized === 'OPEN' || normalized === 'PENDING') {
+    return 'border-rust/20 bg-rust/10 text-rust-700'
+  }
+  if (normalized === 'CRITICAL' || normalized === 'HIGH' || normalized === 'FAILED' || normalized === 'DEAD') {
     return 'border-rust/20 bg-rust/10 text-rust-700'
   }
   if (normalized === 'ESCALATED') {
@@ -257,6 +358,140 @@ function SummaryCard({
   )
 }
 
+function CompactMetric({
+  label,
+  value,
+  tone = 'normal',
+}: {
+  label: string
+  value: number | string
+  tone?: 'normal' | 'attention' | 'good'
+}): JSX.Element {
+  const toneClass =
+    tone === 'attention'
+      ? 'border-rust/16 bg-rust/8 text-rust-700'
+      : tone === 'good'
+        ? 'border-needle/16 bg-needle/8 text-needle-700'
+        : 'border-ink/8 bg-white text-ink/72'
+
+  return (
+    <div className={`rounded-[1.15rem] border px-4 py-3 ${toneClass}`}>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] opacity-70">{label}</p>
+      <p className="mt-1 text-2xl text-ink">{value}</p>
+    </div>
+  )
+}
+
+function buildPriorityQueueItems(
+  data: OpsDashboardData,
+  visibleSections: OpsVisibleSection[],
+): OpsQueueItem[] {
+  const allowed = new Set(visibleSections.map((section) => section.key))
+  const maybeItems: OpsQueueItem[] = [
+    {
+      view: 'support',
+      label: 'Unread order conversations',
+      count: data.summary.activeSupportThreads,
+      description: 'Customer or tailor messages that support can inspect before escalation.',
+      team: 'Customer success',
+      urgency: data.summary.activeSupportThreads > 0 ? 'watch' : 'normal',
+    },
+    {
+      view: 'payouts',
+      label: 'Payouts needing review',
+      count: data.summary.pendingPayoutCount,
+      description: 'Pending or blocked release checks tied back to customer handoff and escrow.',
+      team: 'Finance',
+      urgency: data.summary.pendingPayoutCount > 0 ? 'critical' : 'normal',
+    },
+    {
+      view: 'dispatch',
+      label: 'Dispatch handoffs',
+      count: data.summary.pendingDispatch,
+      description: 'Delivery and shipping orders ready for Drapeon-managed handoff.',
+      team: 'Ops',
+      urgency: data.summary.pendingDispatch > 0 ? 'watch' : 'normal',
+    },
+    {
+      view: 'shop',
+      label: 'Shop listing alerts',
+      count: data.summary.shopInventoryAlerts,
+      description: 'Ready-made stock, media, visibility, or fulfillment issues.',
+      team: 'Ops',
+      urgency: data.summary.shopInventoryAlerts > 0 ? 'watch' : 'normal',
+    },
+    {
+      view: 'workflow-issues',
+      label: 'Workflow issues',
+      count: data.summary.openWorkflowIssues,
+      description: 'Open safety, payment, payout, privacy, shipping, and aftercare exceptions.',
+      team: 'Engineering',
+      urgency: data.summary.openWorkflowIssues > 0 ? 'critical' : 'normal',
+    },
+    {
+      view: 'incidents',
+      label: 'Provider and queue health',
+      count: data.summary.providersDegraded + data.summary.deadJobs + data.summary.retryableJobs,
+      description: 'Provider circuits, dead-lettered jobs, and retry pressure.',
+      team: 'Engineering',
+      urgency: data.summary.providersDegraded + data.summary.deadJobs > 0 ? 'critical' : data.summary.retryableJobs > 0 ? 'watch' : 'normal',
+    },
+    {
+      view: 'disputes',
+      label: 'Open disputes',
+      count: data.summary.openDisputes,
+      description: 'Customer or tailor conflicts that need human resolution.',
+      team: 'Customer success',
+      urgency: data.summary.openDisputes > 0 ? 'critical' : 'normal',
+    },
+    {
+      view: 'order-reviews',
+      label: 'Order reviews',
+      count: data.summary.pendingOrderReviews,
+      description: 'Cancellation and delivery reviews before they become disputes.',
+      team: 'Customer success',
+      urgency: data.summary.pendingOrderReviews > 0 ? 'watch' : 'normal',
+    },
+  ]
+
+  return maybeItems
+    .filter((item) => allowed.has(item.view))
+    .sort((left, right) => {
+      const rank = { critical: 0, watch: 1, normal: 2 }
+      return rank[left.urgency] - rank[right.urgency] || right.count - left.count
+    })
+}
+
+function QueueRow({ item }: { item: OpsQueueItem }): JSX.Element {
+  const toneClass =
+    item.urgency === 'critical'
+      ? 'border-rust/18 bg-rust/8'
+      : item.urgency === 'watch'
+        ? 'border-needle/18 bg-needle/8'
+        : 'border-ink/8 bg-white'
+
+  return (
+    <a
+      href={buildOpsHref(item.view)}
+      className={`grid gap-3 rounded-[1.25rem] border px-4 py-4 transition hover:-translate-y-0.5 hover:bg-white sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center ${toneClass}`}
+    >
+      <div className="flex size-11 items-center justify-center rounded-full border border-white/70 bg-white text-lg text-ink shadow-sm">
+        {item.count}
+      </div>
+      <div>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-sm font-semibold text-ink">{item.label}</p>
+          <span className="rounded-full border border-ink/8 bg-white/72 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/50">
+            {item.team}
+          </span>
+        </div>
+        <p className="mt-1 text-sm leading-6 text-ink/60">{item.description}</p>
+      </div>
+      <span className="text-sm font-semibold text-needle">Open</span>
+    </a>
+  )
+}
+
 function SectionFrame({
   id,
   eyebrow,
@@ -273,18 +508,18 @@ function SectionFrame({
   return (
     <section
       id={id}
-      className="rounded-[2rem] border border-ink/8 bg-white/86 p-6 shadow-[0_24px_80px_rgba(22,28,24,0.08)] sm:p-7"
+      className="rounded-[1.6rem] border border-ink/8 bg-white/86 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.08)] sm:p-6"
     >
-      <div className="flex flex-col gap-3 border-b border-ink/6 pb-5">
+      <div className="flex flex-col gap-3 border-b border-ink/6 pb-4">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">{eyebrow}</p>
         <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <h2 className="text-3xl text-ink sm:text-4xl">{title}</h2>
+            <h2 className="text-2xl text-ink sm:text-3xl">{title}</h2>
             <p className="mt-2 max-w-3xl text-sm leading-7 text-ink/65">{description}</p>
           </div>
         </div>
       </div>
-      <div className="mt-6">{children}</div>
+      <div className="mt-5">{children}</div>
     </section>
   )
 }
@@ -318,6 +553,111 @@ function DetailList({
         </div>
       ))}
     </dl>
+  )
+}
+
+function JobQueueCard({ queue }: { queue: OpsJobQueueHealth }): JSX.Element {
+  const queueRisk = queue.dead > 0 ? 'CRITICAL' : queue.retryable > 0 ? 'ESCALATED' : queue.pending > 25 ? 'IN_REVIEW' : 'RESOLVED'
+
+  return (
+    <article className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Background queue</p>
+          <h3 className="mt-2 text-2xl text-ink">Async work health</h3>
+        </div>
+        <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(queueRisk)}`}>
+          {queueRisk === 'RESOLVED' ? 'Healthy' : queueRisk.toLowerCase()}
+        </span>
+      </div>
+      <div className="mt-5">
+        <DetailList
+          items={[
+            { label: 'Pending', value: String(queue.pending) },
+            { label: 'Processing', value: String(queue.processing) },
+            { label: 'Retrying', value: String(queue.retryable) },
+            { label: 'Dead', value: String(queue.dead) },
+            { label: 'Oldest pending', value: formatDateTime(queue.oldestPendingAt) },
+            { label: 'Oldest processing', value: formatDateTime(queue.oldestProcessingAt) },
+          ]}
+        />
+      </div>
+    </article>
+  )
+}
+
+function ProviderCircuitCard({ provider }: { provider: OpsProviderHealth }): JSX.Element {
+  const normalizedStatus = provider.status.toUpperCase()
+  const status = normalizedStatus === 'OK' ? 'RESOLVED' : normalizedStatus === 'OPEN' ? 'ESCALATED' : normalizedStatus
+
+  return (
+    <article className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-lg text-ink">{provider.provider}</span>
+            <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(status)}`}>
+              {provider.status.replace(/_/g, ' ')}
+            </span>
+          </div>
+          <p className="mt-2 text-sm leading-7 text-ink/66">{provider.operation.replace(/_/g, ' ')}</p>
+        </div>
+        <a
+          href={sectionMailto(`Provider circuit review: ${provider.provider} ${provider.operation}`)}
+          className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-bone"
+        >
+          Email incident note
+        </a>
+      </div>
+      <div className="mt-5">
+        <DetailList
+          items={[
+            { label: 'Failures', value: String(provider.failureCount) },
+            { label: 'Circuit open until', value: formatDateTime(provider.circuitOpenUntil) },
+            { label: 'Updated', value: formatDateTime(provider.updatedAt) },
+          ]}
+        />
+      </div>
+      {provider.lastError ? (
+        <div className="mt-5 rounded-[1.2rem] border border-rust/14 bg-rust/8 p-4 text-sm leading-7 text-rust-700">
+          {provider.lastError}
+        </div>
+      ) : null}
+    </article>
+  )
+}
+
+function RoleAccessCard({ role }: { role: OpsRole }): JSX.Element {
+  const sections = getOpsRoleSections(role)
+  const actions = getOpsRoleActions(role)
+
+  return (
+    <article className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Role</p>
+          <h3 className="mt-2 text-2xl text-ink">{role.replace(/_/g, ' ')}</h3>
+          <p className="mt-2 text-sm leading-7 text-ink/64">{OPS_ROLE_DESCRIPTIONS[role]}</p>
+        </div>
+        <span className="rounded-full border border-ink/8 bg-bone px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-ink/56">
+          {sections.length} sections
+        </span>
+      </div>
+      <div className="mt-5 grid gap-4 lg:grid-cols-2">
+        <div className="rounded-[1.2rem] border border-ink/6 bg-bone/50 p-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Visible sections</p>
+          <p className="mt-2 text-sm leading-7 text-ink/72">
+            {sections.map((section) => getOpsSection(section).label).join(', ')}
+          </p>
+        </div>
+        <div className="rounded-[1.2rem] border border-ink/6 bg-bone/50 p-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Allowed actions</p>
+          <p className="mt-2 text-sm leading-7 text-ink/72">
+            {actions.length > 0 ? actions.map((action) => action.replace(/-/g, ' ')).join(', ') : 'Read only'}
+          </p>
+        </div>
+      </div>
+    </article>
   )
 }
 
@@ -480,7 +820,7 @@ function ManualIssueCreateCard({
             Provider
             <input
               name="provider"
-              placeholder="PAYSTACK, STRIPE, Drape"
+              placeholder="PAYSTACK, STRIPE, Drapeon"
               className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
             />
           </label>
@@ -742,7 +1082,7 @@ function ApplicationCard({
           </p>
         </div>
         <a
-          href={`mailto:${application.email}?subject=${encodeURIComponent(`Drape tailor application: ${application.businessName}`)}`}
+          href={`mailto:${application.email}?subject=${encodeURIComponent(`Drapeon tailor application: ${application.businessName}`)}`}
           className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-bone"
         >
           Email applicant
@@ -998,6 +1338,7 @@ function DeletionRequestCard({
 function PayoutCard({ payout }: { payout: OpsPayout }): JSX.Element {
   const canRetryRelease =
     !!payout.orderId && ['BLOCKED', 'FAILED', 'PENDING'].includes(payout.status.toUpperCase())
+  const releaseLabel = releaseWindowLabel(payout)
 
   return (
     <article className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
@@ -1015,6 +1356,9 @@ function PayoutCard({ payout }: { payout: OpsPayout }): JSX.Element {
           <p className="mt-2 text-sm leading-7 text-ink/66">
             {payout.tailorEmail ?? 'No email on file'}
           </p>
+          <p className="mt-1 text-sm leading-7 text-ink/62">
+            {payout.orderReference ? `Order #${payout.orderReference}` : payout.orderId ?? 'No linked order'} · {releaseLabel}
+          </p>
         </div>
         <a
           href={`mailto:${CONTACTS.payouts}?subject=${encodeURIComponent(`Payout review: ${payout.orderReference ?? payout.id}`)}`}
@@ -1028,14 +1372,30 @@ function PayoutCard({ payout }: { payout: OpsPayout }): JSX.Element {
         <DetailList
           items={[
             { label: 'Amount', value: formatMoney(payout.amount, payout.currency) },
+            { label: 'Order total', value: formatMoney(payout.orderTotalAmount, payout.orderCurrency) },
+            { label: 'Tailor earning source', value: formatMoney(payout.sourceAmount, payout.sourceCurrency) },
+            { label: 'Platform fee', value: formatMoney(payout.platformFeeAmount, payout.orderCurrency) },
+            { label: 'Tax collected', value: formatMoney(payout.taxAmount, payout.orderCurrency) },
+            { label: 'Fulfillment fee', value: formatMoney(payout.shippingAmount, payout.orderCurrency) },
             { label: 'Status', value: payout.status.replace(/_/g, ' ') },
+            { label: 'Order stage', value: payout.orderStage?.replace(/_/g, ' ') ?? '—' },
+            { label: 'Order kind', value: payout.orderKind?.replace(/_/g, ' ') ?? '—' },
+            { label: 'Payment', value: payout.paymentProvider ? `${payout.paymentProvider} · ${payout.paymentStatus ?? '—'}` : payout.paymentStatus ?? '—' },
+            { label: 'Captured', value: formatMoney(payout.capturedAmount, payout.orderCurrency) },
+            { label: 'Already refunded', value: formatMoney(payout.alreadyRefundedAmount, payout.orderCurrency) },
+            { label: 'Refundable remaining', value: formatMoney(payout.maxRefundableAmount, payout.orderCurrency) },
+            { label: 'Handoff complete', value: formatDateTime(payout.handoffCompletedAt) },
+            { label: 'Customer confirmed', value: formatDateTime(payout.customerHandoffConfirmedAt) },
+            { label: 'Confirmation source', value: payout.handoffConfirmationSource?.replace(/_/g, ' ') ?? '—' },
+            { label: 'Release window', value: payout.payoutReadyAt ? `${formatDateTime(payout.payoutReadyAt)} · ${releaseLabel}` : releaseLabel },
+            { label: 'Escrow released', value: payout.escrowReleased ? 'Yes' : 'No' },
             { label: 'Processed', value: formatDateTime(payout.processedAt) },
             { label: 'Initiated', value: formatDateTime(payout.initiatedAt) },
             { label: 'Completed', value: formatDateTime(payout.completedAt) },
             { label: 'Failed', value: formatDateTime(payout.failedAt) },
             { label: 'Order', value: payout.orderReference ? `#${payout.orderReference}` : payout.orderId ?? '—' },
             { label: 'Provider ID', value: payout.providerPayoutId ?? '—' },
-            { label: 'Blocked reason', value: payout.blockedReason ? payout.blockedReason.replace(/_/g, ' ') : '—' },
+            { label: 'Blocked reason', value: payout.blockedReasonMessage ?? (payout.blockedReason ? payout.blockedReason.replace(/_/g, ' ') : '—') },
           ]}
         />
       </div>
@@ -1048,7 +1408,7 @@ function PayoutCard({ payout }: { payout: OpsPayout }): JSX.Element {
           <div className="flex-1">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Direct payout action</p>
             <p className="mt-2 text-sm leading-7 text-ink/68">
-              Retry payout release for the related order after you have confirmed the payout account, delivery state, and dispute window are all clean.
+              Retry payout release only after the customer confirmation, 72-hour window, dispute state, payment status, and payout account are clean.
             </p>
           </div>
           <button
@@ -1063,22 +1423,259 @@ function PayoutCard({ payout }: { payout: OpsPayout }): JSX.Element {
   )
 }
 
+function ShopItemCard({
+  item,
+  redirectTo,
+}: {
+  item: OpsShopItem
+  redirectTo: string
+}): JSX.Element {
+  const canRestore = !item.isLive || item.stockStatus === 'HIDDEN'
+  const imageUrl = item.photoUrls[0] ?? null
+
+  return (
+    <article className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
+      <div className="grid gap-5 lg:grid-cols-[12rem_minmax(0,1fr)]">
+        <div className="overflow-hidden rounded-[1.2rem] border border-ink/8 bg-bone">
+          {imageUrl ? (
+            <a href={imageUrl} target="_blank" rel="noreferrer" className="block">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={imageUrl} alt="" className="aspect-[4/3] w-full object-cover" />
+            </a>
+          ) : (
+            <div className="flex aspect-[4/3] items-center justify-center px-4 text-center text-sm font-semibold text-ink/42">
+              No product photo
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-lg text-ink">{item.title}</span>
+                <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(item.isLive ? item.stockStatus : 'REJECTED')}`}>
+                  {item.isLive ? item.stockStatus.replace(/_/g, ' ') : 'Hidden'}
+                </span>
+              </div>
+              <p className="mt-2 text-sm leading-7 text-ink/66">
+                {item.tailorDisplayName}{item.tailorEmail ? ` · ${item.tailorEmail}` : ''} · {formatMoney(item.priceAmount, item.currency)}
+              </p>
+            </div>
+            <a
+              href={sectionMailto(`Ready-made listing review: ${item.title}`)}
+              className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-bone"
+            >
+              Email ops
+            </a>
+          </div>
+
+          <div className="mt-5">
+            <DetailList
+              items={[
+                { label: 'Category', value: item.category ?? '—' },
+                { label: 'Inventory', value: String(item.inventoryQuantity) },
+                { label: 'Sizes', value: item.sizes.length > 0 ? item.sizes.join(', ') : '—' },
+                { label: 'Size stock', value: item.sizeInventoryLabel },
+                { label: 'Fulfillment', value: item.fulfillment.length > 0 ? item.fulfillment.join(', ') : '—' },
+                { label: 'Photos', value: String(item.photoUrls.length) },
+                { label: 'Created', value: formatDateTime(item.createdAt) },
+                { label: 'Updated', value: formatDateTime(item.updatedAt) },
+              ]}
+            />
+          </div>
+
+          {item.riskLabels.length > 0 ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {item.riskLabels.map((risk) => (
+                <span
+                  key={risk}
+                  className="rounded-full border border-rust/14 bg-rust/8 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-rust-700"
+                >
+                  {risk}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-4 rounded-[1rem] border border-needle/12 bg-needle/8 px-4 py-3 text-sm leading-6 text-needle-700">
+              This listing has photos, stock, and at least one fulfillment path.
+            </div>
+          )}
+
+          <form action="/ops/action" method="post" className="mt-5 grid gap-3 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+            <input type="hidden" name="kind" value="seller-item-visibility" />
+            <input type="hidden" name="redirectTo" value={redirectTo} />
+            <input type="hidden" name="itemId" value={item.id} />
+            <label className="grid gap-2 text-sm text-ink/70">
+              Ops note
+              <input
+                name="note"
+                placeholder="Why this listing is being changed"
+                className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+              />
+            </label>
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="submit"
+                name="visibilityAction"
+                value="HIDE"
+                className="inline-flex items-center justify-center rounded-full border border-rust/18 bg-rust/8 px-5 py-3 text-sm font-semibold text-rust-700 transition hover:bg-rust/12"
+              >
+                Hide from buyers
+              </button>
+              {canRestore ? (
+                <button
+                  type="submit"
+                  name="visibilityAction"
+                  value="RESTORE"
+                  className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90"
+                >
+                  Restore listing
+                </button>
+              ) : null}
+            </div>
+          </form>
+        </div>
+      </div>
+    </article>
+  )
+}
+
+function SupportThreadCard({
+  thread,
+  redirectTo,
+}: {
+  thread: OpsSupportThread
+  redirectTo: string
+}): JSX.Element {
+  const closedThread = isClosedConversationStage(thread.orderStage)
+
+  return (
+    <article className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-lg text-ink">{thread.orderReference ? `Order #${thread.orderReference}` : `Order ${thread.orderId.slice(0, 8)}`}</span>
+            <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusPillClass(thread.conversationBlocked ? 'ESCALATED' : thread.orderStage ?? 'OPEN')}`}>
+              {thread.conversationBlocked ? 'Paused' : thread.orderStage?.replace(/_/g, ' ') ?? 'Open'}
+            </span>
+            {thread.unreadCount > 0 ? (
+              <span className="inline-flex rounded-full border border-rust/16 bg-rust/8 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-rust-700">
+                {thread.unreadCount} unread
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-2 text-sm leading-7 text-ink/66">
+            Latest from {thread.latestSenderName} · {thread.latestSenderRole} · {formatRelativeTime(thread.latestMessageAt)}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          {thread.customerEmail ? (
+            <a
+              href={`mailto:${thread.customerEmail}?subject=${encodeURIComponent(`Drapeon order ${thread.orderReference ?? thread.orderId} support`)}`}
+              className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-bone"
+            >
+              Email customer
+            </a>
+          ) : null}
+          {thread.tailorEmail ? (
+            <a
+              href={`mailto:${thread.tailorEmail}?subject=${encodeURIComponent(`Drapeon order ${thread.orderReference ?? thread.orderId} support`)}`}
+              className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-bone"
+            >
+              Email tailor
+            </a>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-[1.2rem] border border-ink/6 bg-bone/56 p-4">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Latest message</p>
+        <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-ink/78">{thread.latestMessagePreview}</p>
+      </div>
+
+      <div className="mt-5">
+        <DetailList
+          items={[
+            { label: 'Customer', value: thread.customerEmail ? `${thread.customerName} · ${thread.customerEmail}` : thread.customerName },
+            { label: 'Tailor', value: thread.tailorEmail ? `${thread.tailorName} · ${thread.tailorEmail}` : thread.tailorName },
+            { label: 'Order kind', value: thread.orderKind?.replace(/_/g, ' ') ?? '—' },
+            { label: 'Stage', value: thread.orderStage?.replace(/_/g, ' ') ?? '—' },
+            { label: 'Delivery', value: thread.deliveryMethod?.replace(/_/g, ' ') ?? '—' },
+            { label: 'Payment', value: thread.paymentProvider ? `${thread.paymentStatus ?? '—'} · ${thread.paymentProvider}` : thread.paymentStatus ?? '—' },
+            { label: 'Messages', value: String(thread.messageCount) },
+            { label: 'Media', value: String(thread.mediaCount) },
+            { label: 'Last message', value: formatDateTime(thread.latestMessageAt) },
+            { label: 'Conversation paused', value: thread.conversationBlocked ? `Yes · ${formatDateTime(thread.blockedAt)}` : 'No' },
+            { label: 'Paused by', value: thread.blockedByRole ?? '—' },
+          ]}
+        />
+      </div>
+
+      {closedThread ? (
+        <div className="mt-5 rounded-[1.2rem] border border-ink/6 bg-bone/56 p-4 text-sm leading-7 text-ink/64">
+          This order thread is closed in the app. Use the email links above for aftercare or account support instead of changing conversation access.
+        </div>
+      ) : (
+        <form action="/ops/action" method="post" className="mt-5 grid gap-3 rounded-[1.2rem] border border-ink/6 bg-white/82 p-4">
+          <input type="hidden" name="kind" value="conversation-access" />
+          <input type="hidden" name="redirectTo" value={redirectTo} />
+          <input type="hidden" name="orderId" value={thread.orderId} />
+          <label className="grid gap-2 text-sm text-ink/70">
+            Safety note
+            <input
+              name="reason"
+              placeholder={thread.conversationBlocked ? 'Why this conversation can reopen safely' : 'Why support is pausing this conversation'}
+              className="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+            />
+          </label>
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="submit"
+              name="accessAction"
+              value={thread.conversationBlocked ? 'UNBLOCK' : 'BLOCK'}
+              className={
+                thread.conversationBlocked
+                  ? 'inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90'
+                  : 'inline-flex items-center justify-center rounded-full border border-rust/18 bg-rust/8 px-5 py-3 text-sm font-semibold text-rust-700 transition hover:bg-rust/12'
+              }
+            >
+              {thread.conversationBlocked ? 'Reopen conversation' : 'Pause conversation'}
+            </button>
+          </div>
+        </form>
+      )}
+    </article>
+  )
+}
+
 function WorkflowIssueCard({
   issue,
   redirectTo,
+  role,
 }: {
   issue: OpsWorkflowIssue
   redirectTo: string
+  role: OpsRole
 }): JSX.Element {
+  const issueOpen = issue.status !== 'RESOLVED'
   const canManageConversation =
+    issueOpen
+    &&
     (issue.issueType === 'CONVERSATION_SAFETY' || issue.event === 'conversation.safety_reported')
     && !!issue.orderId
   const canUpdateIssueStatus = issue.source !== 'audit_logs'
-  const canResolveBlockedPayout = issue.issueType === 'PAYOUT_BLOCKED' && !!issue.orderId
+  const canResolveBlockedPayout = issueOpen && issue.issueType === 'PAYOUT_BLOCKED' && !!issue.orderId
   const canPartialRefund =
+    issueOpen
+    &&
     !!issue.orderId
     && issue.maxRefundableAmount > 0
     && ['AFTERCARE_REQUEST', 'ORDER_REVIEW', 'DELIVERY_REVIEW', 'PAYMENT_BLOCKED', 'PAYOUT_BLOCKED'].includes(issue.issueType)
+  const canReleaseMaterialAdvance =
+    issueOpen
+    && !!issue.materialAdvanceId
+    && getOpsRoleActions(role).includes('material-advance-release')
 
   return (
     <article className="rounded-[1.5rem] border border-ink/8 bg-[linear-gradient(180deg,#fffdf9_0%,#f4eee3_100%)] p-5 shadow-sm">
@@ -1200,8 +1797,22 @@ function WorkflowIssueCard({
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-rust-700">Payout resolution</p>
             <p className="mt-2 text-sm leading-7 text-ink/72">
-              Resolve this payout block from ops without touching the database. Use the locked order currency, convert to the current payout currency, or refund the customer if the order cannot be settled safely.
+              These actions run immediately and leave an audit trail. Retry the payout in the order currency, convert the payout to the tailor&apos;s current payout currency, or refund the customer if this order cannot be settled safely.
             </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-[1rem] border border-ink/8 bg-white/82 px-4 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Order total</p>
+              <p className="mt-2 text-sm text-ink">{formatMoney(issue.orderTotalAmount, issue.lockedPayoutCurrency ?? issue.orderCurrency)}</p>
+            </div>
+            <div className="rounded-[1rem] border border-ink/8 bg-white/82 px-4 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Current setup</p>
+              <p className="mt-2 text-sm text-ink">{issue.payoutCurrency ?? 'No payout currency'}</p>
+            </div>
+            <div className="rounded-[1rem] border border-ink/8 bg-white/82 px-4 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Refundable</p>
+              <p className="mt-2 text-sm text-ink">{formatMoney(issue.maxRefundableAmount, issue.orderCurrency)}</p>
+            </div>
           </div>
           <label className="grid gap-2 text-sm text-ink/70">
             Resolution note
@@ -1220,7 +1831,7 @@ function WorkflowIssueCard({
               value="ORIGINAL_CURRENCY"
               className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink transition hover:bg-bone"
             >
-              Pay original currency
+              Retry payout in order currency
             </button>
             <button
               type="submit"
@@ -1228,7 +1839,7 @@ function WorkflowIssueCard({
               value="CONVERT_TO_CURRENT"
               className="inline-flex items-center justify-center rounded-full border border-needle/18 bg-needle/8 px-5 py-3 text-sm font-semibold text-needle-700 transition hover:bg-needle/12"
             >
-              Convert and pay out
+              Convert, then retry payout
             </button>
             <button
               type="submit"
@@ -1236,9 +1847,57 @@ function WorkflowIssueCard({
               value="REFUND_CUSTOMER"
               className="inline-flex items-center justify-center rounded-full border border-rust/18 bg-rust/10 px-5 py-3 text-sm font-semibold text-rust-700 transition hover:bg-rust/14"
             >
-              Refund customer
+              Refund customer instead
             </button>
           </div>
+        </form>
+      ) : null}
+
+      {canReleaseMaterialAdvance ? (
+        <form action="/ops/action" method="post" className="mt-5 flex flex-col gap-3 rounded-[1.2rem] border border-needle/14 bg-needle/6 p-4">
+          <input type="hidden" name="kind" value="material-advance-release" />
+          <input type="hidden" name="redirectTo" value={redirectTo} />
+          <input type="hidden" name="advanceId" value={issue.materialAdvanceId ?? ''} />
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Material advance release</p>
+            <p className="mt-2 text-sm leading-7 text-ink/72">
+              Release only the customer-approved material amount. This does not touch the main order escrow; the tailor must still upload receipt proof for the order record.
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-[1rem] border border-ink/8 bg-white/82 px-4 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Advance</p>
+              <p className="mt-2 text-sm text-ink">
+                {issue.materialAdvanceAmount && issue.materialAdvanceAmount > 0
+                  ? formatMoney(issue.materialAdvanceAmount, issue.materialAdvanceCurrency ?? issue.orderCurrency)
+                  : 'Customer-approved amount'}
+              </p>
+            </div>
+            <div className="rounded-[1rem] border border-ink/8 bg-white/82 px-4 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Order</p>
+              <p className="mt-2 text-sm text-ink">{issue.orderReference ? `#${issue.orderReference}` : issue.orderId ?? '—'}</p>
+            </div>
+            <div className="rounded-[1rem] border border-ink/8 bg-white/82 px-4 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/46">Record</p>
+              <p className="mt-2 break-all text-sm text-ink">{issue.materialAdvanceId}</p>
+            </div>
+          </div>
+          <label className="grid gap-2 text-sm text-ink/70">
+            Release note
+            <textarea
+              name="note"
+              required
+              rows={3}
+              placeholder="Confirm what was reviewed before releasing this material advance."
+              className="rounded-[1.25rem] border border-ink/10 bg-white px-4 py-3 text-ink outline-none transition focus:border-needle/40"
+            />
+          </label>
+          <button
+            type="submit"
+            className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white transition hover:bg-needle/90"
+          >
+            Release approved material advance
+          </button>
         </form>
       ) : null}
 
@@ -1252,7 +1911,7 @@ function WorkflowIssueCard({
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-rust-700">Partial refund</p>
             <p className="mt-2 text-sm leading-7 text-ink/72">
-              Refund part of the customer payment without leaving ops. Use this for aftercare resolutions, delivery make-goods, or a payout block that only needs a partial customer return.
+              Refund part of the customer payment now. The provider refund runs first; only after it succeeds does Drapeon update the order timeline and resolve this issue.
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
@@ -1293,13 +1952,13 @@ function WorkflowIssueCard({
           </label>
           <label className="inline-flex items-center gap-3 text-sm text-ink/72">
             <input type="checkbox" name="notifyCustomer" value="yes" className="h-4 w-4 rounded border border-ink/18 text-needle" />
-            Email the customer after the refund completes
+            Email the customer after the provider confirms the refund
           </label>
           <button
             type="submit"
             className="inline-flex items-center justify-center rounded-full border border-rust/18 bg-rust px-5 py-3 text-sm font-semibold text-white transition hover:bg-rust/92"
           >
-            Issue partial refund
+            Refund this amount
           </button>
         </form>
       ) : null}
@@ -1313,7 +1972,7 @@ function WorkflowIssueCard({
           <div className="flex-1">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/44">Conversation safety control</p>
             <p className="mt-2 text-sm leading-7 text-ink/68">
-              Pause the chat while ops reviews the report, or reopen it if the thread can continue safely in Drape.
+              Pause the chat while ops reviews the report, or reopen it if the thread can continue safely in Drapeon.
             </p>
           </div>
           <div className="flex flex-col gap-3 sm:flex-row">
@@ -1440,8 +2099,8 @@ function DispatchCard({
   const providerLabel = isLocalDelivery ? 'Rider or provider' : 'Courier or provider'
   const actionLabel = isLocalDelivery ? 'Mark out for delivery' : 'Mark shipped'
   const description = isLocalDelivery
-    ? 'Drape handles the rider handoff here once the seller says the parcel is packed and ready.'
-    : 'Drape handles the courier handoff here once the seller says the parcel is packed and ready.'
+    ? 'Drapeon handles the rider handoff here once the seller says the parcel is packed and ready.'
+    : 'Drapeon handles the courier handoff here once the seller says the parcel is packed and ready.'
 
   return (
     <article className="rounded-[1.5rem] border border-ink/8 bg-[linear-gradient(180deg,#fffdf9_0%,#f5eee3_100%)] p-5 shadow-sm">
@@ -1783,7 +2442,7 @@ function WorkforceAccessView({
       <div className="mx-auto flex min-h-screen max-w-4xl items-center px-5 py-12 sm:px-8">
         <section className="w-full rounded-[2.4rem] border border-white/70 bg-white/82 p-7 shadow-[0_28px_90px_rgba(22,28,24,0.12)] backdrop-blur sm:p-10">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Internal ops</p>
-          <h1 className="mt-4 text-5xl leading-[0.94] text-ink sm:text-6xl">Use Drape workforce access, not a shared token.</h1>
+          <h1 className="mt-4 text-5xl leading-[0.94] text-ink sm:text-6xl">Use Drapeon workforce access, not a shared token.</h1>
           <p className="mt-5 max-w-2xl text-lg leading-8 text-ink/68">
             This control plane is configured for workforce login. Cloudflare Access should challenge the request before the app loads, and only `@drapeon.co` identities with an assigned role should reach this page.
           </p>
@@ -1805,7 +2464,7 @@ function WorkforceAccessView({
                 <p>1. The route is behind Cloudflare Access.</p>
                 <p>2. Your sign-in identity uses `@drapeon.co`.</p>
                 <p>3. The Access application audience is configured in web envs.</p>
-                <p>4. Your email or group is assigned to a Drape control-plane role.</p>
+                <p>4. Your email or group is assigned to a Drapeon control-plane role.</p>
               </div>
               {error ? (
                 <div className="mt-5 rounded-[1.25rem] border border-rust/16 bg-rust/8 px-4 py-3 text-sm leading-7 text-rust-700">
@@ -1894,24 +2553,385 @@ function OpsNavItem({
   )
 }
 
-function FutureSurfaceCard({
-  label,
-  team,
-  note,
+function matchesOpsSearch(value: unknown, query: string) {
+  return JSON.stringify(value).toLowerCase().includes(query.toLowerCase())
+}
+
+function filterOpsDashboardData(data: OpsDashboardData, query: string): OpsDashboardData {
+  const trimmed = query.trim()
+  if (!trimmed) return data
+
+  return {
+    ...data,
+    disputes: data.disputes.filter((item) => matchesOpsSearch(item, trimmed)),
+    bypassLogs: data.bypassLogs.filter((item) => matchesOpsSearch(item, trimmed)),
+    applications: data.applications.filter((item) => matchesOpsSearch(item, trimmed)),
+    pendingVerifications: data.pendingVerifications.filter((item) => matchesOpsSearch(item, trimmed)),
+    deletionRequests: data.deletionRequests.filter((item) => matchesOpsSearch(item, trimmed)),
+    reviewQueue: data.reviewQueue.filter((item) => matchesOpsSearch(item, trimmed)),
+    payouts: data.payouts.filter((item) => matchesOpsSearch(item, trimmed)),
+    shopItems: data.shopItems.filter((item) => matchesOpsSearch(item, trimmed)),
+    supportThreads: data.supportThreads.filter((item) => matchesOpsSearch(item, trimmed)),
+    orderReviews: data.orderReviews.filter((item) => matchesOpsSearch(item, trimmed)),
+    workflowIssues: data.workflowIssues.filter((item) => matchesOpsSearch(item, trimmed)),
+    dispatchQueue: data.dispatchQueue.filter((item) => matchesOpsSearch(item, trimmed)),
+  }
+}
+
+function IncidentSurface({
+  data,
+  currentView,
+  role,
 }: {
-  label: string
-  team: string
-  note: string
+  data: OpsDashboardData
+  currentView: OpsView
+  role: OpsRole
 }): JSX.Element {
+  const degradedProviders = data.systemHealth.providers.filter((provider) => provider.status.toUpperCase() !== 'OK')
+  const incidentIssues = data.workflowIssues.filter((issue) => {
+    const severity = issue.severity.toUpperCase()
+    const status = issue.status.toUpperCase()
+    return ['CRITICAL', 'HIGH'].includes(severity) || ['OPEN', 'ESCALATED'].includes(status)
+  })
+  const queueHasRisk =
+    data.systemHealth.jobQueue.dead > 0 || data.systemHealth.jobQueue.retryable > 0 || data.systemHealth.jobQueue.pending > 25
+
   return (
-    <div className="rounded-[1.2rem] border border-dashed border-ink/10 bg-white/62 p-4">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm font-semibold text-ink">{label}</p>
-        <span className="rounded-full border border-ink/8 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-ink/48">
-          {team}
-        </span>
+    <SectionFrame
+      id="incidents"
+      eyebrow="Incident command"
+      title="Provider and queue failures need one owner before they turn into customer pain."
+      description="This is the live launch incident board: provider circuits, retry pressure, dead-lettered jobs, and high-severity workflow issues. It stays inside ops, uses server-only data, and creates manual issues instead of hiding work in Slack."
+    >
+      <div className="grid gap-5">
+        <JobQueueCard queue={data.systemHealth.jobQueue} />
+
+        <div className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Incident posture</p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <SummaryCard
+              label="Provider alerts"
+              value={degradedProviders.length}
+              hint="Tracked provider lanes currently degraded or open."
+            />
+            <SummaryCard
+              label="Queue risk"
+              value={queueHasRisk ? 1 : 0}
+              hint="Raised when jobs are dead-lettered, retrying, or backing up."
+            />
+            <SummaryCard
+              label="Open incident candidates"
+              value={incidentIssues.length}
+              hint="High-severity workflow issues that deserve incident-style handling."
+            />
+          </div>
+        </div>
+
+        <ManualIssueCreateCard redirectTo={buildOpsRedirectTarget(currentView, 'incidents')} />
+
+        {degradedProviders.length > 0 ? (
+          <div className="grid gap-5">
+            {degradedProviders.map((provider) => (
+              <ProviderCircuitCard
+                key={`${provider.provider}:${provider.operation}`}
+                provider={provider}
+              />
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            title="No provider circuits are degraded right now."
+            body="When Stripe, Paystack, push, email, SMS, or shipping circuit health degrades, the affected lane will show here with the latest provider error."
+          />
+        )}
+
+        {incidentIssues.length > 0 ? (
+          <div className="grid gap-5">
+            {incidentIssues.map((issue) => (
+              <WorkflowIssueCard
+                key={issue.id}
+                issue={issue}
+                redirectTo={buildOpsRedirectTarget(currentView, 'incidents')}
+                role={role}
+              />
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            title="No high-severity workflow issues need incident handling."
+            body="Lower-severity support and workflow issues stay in the workflow lane so engineering can focus on true launch incidents here."
+          />
+        )}
       </div>
-      <p className="mt-2 text-sm leading-6 text-ink/60">{note}</p>
+    </SectionFrame>
+  )
+}
+
+function AccessControlSurface({ context }: { context: OpsRenderContext }): JSX.Element {
+  const accessModeLabel =
+    context.accessMode === 'cloudflare-access'
+      ? 'Cloudflare Access'
+      : context.accessMode === 'bootstrap-token'
+        ? 'Bootstrap token'
+        : 'Unconfigured'
+  const currentSections = getOpsRoleSections(context.session.role)
+  const currentActions = getOpsRoleActions(context.session.role)
+
+  return (
+    <SectionFrame
+      id="access"
+      eyebrow="People and access"
+      title="Every ops control should have an owner and a guard."
+      description="This is the launch access map for the internal control plane. It keeps the current auth mode, current role, section visibility, and action permissions visible before we move fully to workforce SSO."
+    >
+      <div className="grid gap-5">
+        <div className="grid gap-5 lg:grid-cols-3">
+          <div className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Access mode</p>
+            <h3 className="mt-3 text-2xl text-ink">{accessModeLabel}</h3>
+            <p className="mt-3 text-sm leading-7 text-ink/64">
+              {context.accessMode === 'cloudflare-access'
+                ? 'Workforce login is gating the route before this app loads.'
+                : 'This environment is using the shared bootstrap token. Keep it dev-only and move production behind workforce access.'}
+            </p>
+          </div>
+          <div className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Current session</p>
+            <h3 className="mt-3 text-2xl text-ink">{context.session.role.replace(/_/g, ' ')}</h3>
+            <p className="mt-3 text-sm leading-7 text-ink/64">
+              {context.session.email ?? 'Shared-token session without an individual email claim.'}
+            </p>
+          </div>
+          <div className="rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Current reach</p>
+            <h3 className="mt-3 text-2xl text-ink">{currentSections.length} sections</h3>
+            <p className="mt-3 text-sm leading-7 text-ink/64">
+              {currentActions.length} mutation types are allowed for this role. Everything else is blocked server-side by the action route.
+            </p>
+          </div>
+        </div>
+
+        <div className="rounded-[1.5rem] border border-ink/8 bg-bone/58 p-5">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Launch rule</p>
+          <p className="mt-2 text-sm leading-7 text-ink/68">
+            Production should use Cloudflare Access plus app-level role checks. The shared token is useful for dev unblockers, but it should never become the long-term production control plane.
+          </p>
+        </div>
+
+        <div className="grid gap-5">
+          {OPS_ROLE_ORDER.map((role) => (
+            <RoleAccessCard key={role} role={role} />
+          ))}
+        </div>
+      </div>
+    </SectionFrame>
+  )
+}
+
+function OpsRunbookSurface({ context }: { context: OpsRenderContext }): JSX.Element {
+  const normalizedQuery = context.query.trim().toLowerCase()
+  const entries = normalizedQuery
+    ? OPS_RUNBOOK_ENTRIES.filter((entry) => {
+        const haystack = [
+          entry.title,
+          entry.owner,
+          entry.severity,
+          entry.bucket ?? '',
+          entry.useWhen,
+          entry.firstMove,
+          entry.customerCopy,
+          entry.tailorCopy,
+          ...entry.keywords,
+          ...entry.opsActions,
+        ]
+          .join(' ')
+          .toLowerCase()
+        return haystack.includes(normalizedQuery)
+      })
+    : OPS_RUNBOOK_ENTRIES
+
+  return (
+    <SectionFrame
+      id="runbook"
+      eyebrow="Ops knowledge"
+      title="Search the next move before replying."
+      description="Use this when a live order, payout, message, dispatch, or fit problem needs a consistent Drapeon response. The copy is written to protect the trust chain without overpromising."
+    >
+      <div className="grid gap-5">
+        {entries.length > 0 ? (
+          entries.map((entry) => (
+            <article
+              key={entry.title}
+              className="rounded-[1.5rem] border border-ink/8 bg-white/88 p-5 shadow-sm"
+            >
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full border border-needle/14 bg-needle/8 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-needle-700">
+                      {entry.owner}
+                    </span>
+                    <span className="rounded-full border border-ink/8 bg-bone px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/56">
+                      {entry.severity}
+                    </span>
+                    {entry.bucket ? (
+                      <span className="rounded-full border border-ink/8 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/50">
+                        {OPS_RUNBOOK_BUCKET_LABELS[entry.bucket] ?? entry.bucket}
+                      </span>
+                    ) : null}
+                  </div>
+                  <h3 className="mt-3 text-2xl text-ink">{entry.title}</h3>
+                  <p className="mt-2 text-sm leading-7 text-ink/64">{entry.useWhen}</p>
+                </div>
+              </div>
+
+              <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_1fr]">
+                <div className="rounded-[1.2rem] border border-needle/12 bg-needle/8 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">First move</p>
+                  <p className="mt-2 text-sm leading-7 text-ink/70">{entry.firstMove}</p>
+                </div>
+                <div className="rounded-[1.2rem] border border-ink/8 bg-bone/62 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">Search terms</p>
+                  <p className="mt-2 text-sm leading-7 text-ink/62">{entry.keywords.join(', ')}</p>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                <div className="rounded-[1.2rem] border border-ink/8 bg-white p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">Customer copy</p>
+                  <p className="mt-2 text-sm leading-7 text-ink/68">{entry.customerCopy}</p>
+                </div>
+                <div className="rounded-[1.2rem] border border-ink/8 bg-white p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">Tailor copy</p>
+                  <p className="mt-2 text-sm leading-7 text-ink/68">{entry.tailorCopy}</p>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-[1.2rem] border border-ink/8 bg-bone/52 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/45">Ops actions</p>
+                <ul className="mt-3 grid gap-2 text-sm leading-7 text-ink/68">
+                  {entry.opsActions.map((action) => (
+                    <li key={action} className="flex gap-3">
+                      <span className="mt-2 size-1.5 shrink-0 rounded-full bg-needle" />
+                      <span>{action}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </article>
+          ))
+        ) : (
+          <EmptyState
+            title="No runbook entry matches that search."
+            body="Try a word like payout, stale, fit, delivery, refund, bypass, deletion, or fabric. If this keeps happening, add a new runbook entry before the answer lives only in someone's head."
+          />
+        )}
+      </div>
+    </SectionFrame>
+  )
+}
+
+function OpsOverviewSurface({
+  data,
+  context,
+  visibleSections,
+}: {
+  data: OpsDashboardData
+  context: OpsRenderContext
+  visibleSections: OpsVisibleSection[]
+}): JSX.Element {
+  const priorityItems = buildPriorityQueueItems(data, visibleSections)
+  const providerIssueCount = data.summary.providersDegraded + data.summary.deadJobs + data.summary.retryableJobs
+  const moneyNeedsAttention = data.summary.pendingPayoutCount + data.summary.openDisputes + data.summary.pendingOrderReviews
+
+  return (
+    <div className="grid gap-6">
+      <section className="rounded-[1.6rem] border border-ink/8 bg-white/86 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.08)] sm:p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Today</p>
+            <h2 className="mt-2 text-2xl text-ink sm:text-3xl">Start with what needs a human.</h2>
+            <p className="mt-2 max-w-2xl text-sm leading-7 text-ink/62">
+              Pick the hottest queue, resolve it, and return here. The sidebar owns navigation so this page stays focused.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <span className="rounded-full border border-needle/14 bg-needle/8 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-needle-700">
+              {context.session.role.replace(/_/g, ' ')}
+            </span>
+            <span className="rounded-full border border-ink/8 bg-bone px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-ink/56">
+              {context.accessMode.replace(/-/g, ' ')}
+            </span>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <CompactMetric
+            label="Money queue"
+            value={moneyNeedsAttention}
+            tone={moneyNeedsAttention > 0 ? 'attention' : 'good'}
+          />
+          <CompactMetric
+            label="Support threads"
+            value={data.summary.activeSupportThreads}
+            tone={data.summary.activeSupportThreads > 0 ? 'attention' : 'good'}
+          />
+          <CompactMetric
+            label="Shop alerts"
+            value={data.summary.shopInventoryAlerts}
+            tone={data.summary.shopInventoryAlerts > 0 ? 'attention' : 'good'}
+          />
+          <CompactMetric
+            label="System risk"
+            value={providerIssueCount}
+            tone={providerIssueCount > 0 ? 'attention' : 'good'}
+          />
+        </div>
+      </section>
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(20rem,0.75fr)]">
+        <section className="rounded-[1.6rem] border border-ink/8 bg-white/82 p-5 shadow-sm sm:p-6">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Needs attention</p>
+              <h3 className="mt-2 text-2xl text-ink">Priority queues</h3>
+            </div>
+            <span className="rounded-full border border-ink/8 bg-bone px-3 py-1 text-xs font-semibold text-ink/58">
+              {priorityItems.filter((item) => item.count > 0).length} active
+            </span>
+          </div>
+          <div className="mt-5 grid gap-3">
+            {priorityItems.map((item) => (
+              <QueueRow key={item.view} item={item} />
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-[1.6rem] border border-ink/8 bg-white/82 p-5 shadow-sm sm:p-6">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">System pulse</p>
+          <div className="mt-4 grid gap-3">
+            <div className="rounded-[1.2rem] border border-ink/8 bg-bone/48 p-4">
+              <p className="text-sm font-semibold text-ink">Background queue</p>
+              <p className="mt-2 text-sm leading-7 text-ink/62">
+                {data.systemHealth.jobQueue.pending} pending · {data.systemHealth.jobQueue.processing} processing · {data.systemHealth.jobQueue.retryable} retrying · {data.systemHealth.jobQueue.dead} dead.
+              </p>
+            </div>
+            <div className="rounded-[1.2rem] border border-ink/8 bg-bone/48 p-4">
+              <p className="text-sm font-semibold text-ink">Provider circuits</p>
+              <p className="mt-2 text-sm leading-7 text-ink/62">
+                {data.systemHealth.providers.length === 0
+                  ? 'No provider circuit records yet.'
+                  : `${data.summary.providersDegraded} degraded across ${data.systemHealth.providers.length} tracked lanes.`}
+              </p>
+            </div>
+            <div className="rounded-[1.2rem] border border-ink/8 bg-bone/48 p-4">
+              <p className="text-sm font-semibold text-ink">Escrow</p>
+              <p className="mt-2 text-sm leading-7 text-ink/62">
+                {data.summary.ordersInEscrowValueLabel} protected across {data.summary.ordersInEscrowCount} paid orders.
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
     </div>
   )
 }
@@ -1920,8 +2940,71 @@ function renderOpsSection(
   sectionKey: OpsView,
   data: OpsDashboardData,
   currentView: OpsView,
+  context: OpsRenderContext,
 ): JSX.Element {
   switch (sectionKey) {
+    case 'incidents':
+      return (
+        <IncidentSurface
+          data={data}
+          currentView={currentView}
+          role={context.session.role}
+        />
+      )
+    case 'access':
+      return <AccessControlSurface context={context} />
+    case 'support':
+      return (
+        <SectionFrame
+          id="support"
+          eyebrow="Support"
+          title="Order conversations should stay visible enough for support to step in fast."
+          description="This lane shows recent order threads, unread state, latest message context, payment state, and the safety switch to pause or reopen a conversation when trust breaks down."
+        >
+          {data.supportThreads.length > 0 ? (
+            <div className="grid gap-5">
+              {data.supportThreads.map((thread) => (
+                <SupportThreadCard
+                  key={thread.orderId}
+                  thread={thread}
+                  redirectTo={buildOpsRedirectTarget(currentView, 'support')}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No recent order conversations are showing."
+              body="When customers or tailors send order messages, this lane gives support enough context to help without opening the mobile app."
+            />
+          )}
+        </SectionFrame>
+      )
+    case 'shop':
+      return (
+        <SectionFrame
+          id="shop"
+          eyebrow="Ready-made"
+          title="Ready-made inventory needs the same trust posture as custom orders."
+          description="This lane shows recent shop listings, stock risks, missing product photos, and fulfillment gaps so ops can catch checkout issues before buyers do."
+        >
+          {data.shopItems.length > 0 ? (
+            <div className="grid gap-5">
+              {data.shopItems.map((item) => (
+                <ShopItemCard
+                  key={item.id}
+                  item={item}
+                  redirectTo={buildOpsRedirectTarget(currentView, 'shop')}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No ready-made listings are showing yet."
+              body="When tailors publish or edit ready-made pieces, this lane will show the items that need inventory, media, or fulfillment attention."
+            />
+          )}
+        </SectionFrame>
+      )
     case 'disputes':
       return (
         <SectionFrame
@@ -1953,7 +3036,7 @@ function renderOpsSection(
         <SectionFrame
           id="order-reviews"
           eyebrow="Order reviews"
-          title="Cancellation and delivery reviews should become visible the moment either side asks Drape to step in."
+          title="Cancellation and delivery reviews should become visible the moment either side asks Drapeon to step in."
           description="These reviews come straight from the order timeline before handoff finishes cleanly. Use them to spot cancellation and delivery trouble early, not after it becomes a full dispute."
         >
           {data.orderReviews.length > 0 ? (
@@ -1969,7 +3052,7 @@ function renderOpsSection(
           ) : (
             <EmptyState
               title="No order reviews are open right now."
-              body="If a customer or tailor asks Drape to review a cancellation or dispatch issue, it will appear here with full order context."
+              body="If a customer or tailor asks Drapeon to review a cancellation or dispatch issue, it will appear here with full order context."
             />
           )}
         </SectionFrame>
@@ -2084,7 +3167,7 @@ function renderOpsSection(
           id="dispatch"
           eyebrow="Dispatch queue"
           title="Standard delivery and shipping handoff should happen from one ops queue."
-          description="These orders already collected the flat Drape-managed fulfillment fee at checkout. Once the seller has packed the parcel, ops owns the actual rider or courier handoff from here."
+          description="These orders already collected the flat Drapeon-managed fulfillment fee at checkout. Once the seller has packed the parcel, ops owns the actual rider or courier handoff from here."
         >
           {data.dispatchQueue.length > 0 ? (
             <div className="grid gap-5">
@@ -2098,8 +3181,8 @@ function renderOpsSection(
             </div>
           ) : (
             <EmptyState
-              title="Nothing is waiting for Drape dispatch right now."
-              body="When a seller marks a delivery or shipping order ready for Drape dispatch, it will land here with the recipient details ops needs."
+              title="Nothing is waiting for Drapeon dispatch right now."
+              body="When a seller marks a delivery or shipping order ready for Drapeon dispatch, it will land here with the recipient details ops needs."
             />
           )}
         </SectionFrame>
@@ -2124,6 +3207,7 @@ function renderOpsSection(
                   key={issue.id}
                   issue={issue}
                   redirectTo={buildOpsRedirectTarget(currentView, 'workflow-issues')}
+                  role={context.session.role}
                 />
               ))}
             </div>
@@ -2135,6 +3219,8 @@ function renderOpsSection(
           )}
         </SectionFrame>
       )
+    case 'runbook':
+      return <OpsRunbookSurface context={context} />
     case 'deletions':
       return (
         <SectionFrame
@@ -2166,8 +3252,8 @@ function renderOpsSection(
         <SectionFrame
           id="payouts"
           eyebrow="Payout visibility"
-          title="Recent payouts should be visible enough to answer trust questions quickly."
-          description="This is intentionally read-only for now. The goal is simple operational context: who was paid, how much, when, and whether the payout maps back to an order."
+          title="Payouts should explain exactly why money is pending, released, or blocked."
+          description="Finance can see payment capture, refund exposure, handoff confirmation, the 72-hour release window, escrow state, and retry payout release when the checks are clean."
         >
           {data.payouts.length > 0 ? (
             <div className="grid gap-5">
@@ -2186,11 +3272,11 @@ function renderOpsSection(
     case 'overview':
     default:
       return (
-        <div className="grid gap-8">
-          {OPS_LIVE_SECTIONS.filter((section) => section.key !== 'overview').map((section) => (
-            <div key={section.key}>{renderOpsSection(section.key, data, currentView)}</div>
-          ))}
-        </div>
+        <OpsOverviewSurface
+          data={data}
+          context={context}
+          visibleSections={getVisibleOpsSections(context.session.role)}
+        />
       )
   }
 }
@@ -2204,7 +3290,9 @@ export default async function OpsPage({
   const accessMode = getOpsAccessMode()
   const noticeKey = readParam(params, 'notice')
   const errorKey = readParam(params, 'error')
+  const errorDetail = readParam(params, 'errorDetail')
   const view = parseOpsView(readParam(params, 'view'))
+  const query = readParam(params, 'q')?.trim() ?? ''
   const notice = noticeKey ? NOTICE_COPY[noticeKey] ?? null : null
   const error = errorKey ? ERROR_COPY[errorKey] ?? 'Something went wrong while opening the ops surface.' : null
 
@@ -2222,24 +3310,38 @@ export default async function OpsPage({
   const safeSection = getOpsSection(safeView)
   const roleError = safeView !== view ? ERROR_COPY.forbidden : error
 
-  const data = await loadOpsDashboardData()
-  if (!data) {
+  const loadedData = await loadOpsDashboardData()
+  if (!loadedData) {
     return <LoginView error={ERROR_COPY['service-role-missing'] ?? 'Add the server-side Supabase service role env vars to load ops data.'} />
+  }
+  const data = filterOpsDashboardData(loadedData, query)
+  const renderContext: OpsRenderContext = {
+    accessMode,
+    session,
+    query,
   }
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(45,106,79,0.16),transparent_34%),radial-gradient(circle_at_82%_10%,rgba(216,90,48,0.10),transparent_26%),linear-gradient(180deg,#f7f1e8_0%,#f1eadf_100%)]">
       <div className="mx-auto max-w-[95rem] px-5 py-6 sm:px-8 lg:px-12">
-        <header className="rounded-[2rem] border border-white/72 bg-white/72 px-5 py-5 shadow-[0_18px_60px_rgba(22,28,24,0.08)] backdrop-blur sm:px-6">
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+        <header className="rounded-[1.6rem] border border-white/72 bg-white/78 px-5 py-5 shadow-[0_18px_60px_rgba(22,28,24,0.08)] backdrop-blur sm:px-6">
+          <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Internal ops</p>
-              <h1 className="mt-3 text-4xl text-ink sm:text-5xl">Drape control plane for launch-critical operations.</h1>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-ink/64">
-                The public website keeps serving waitlist and growth. This protected surface is where Drape resolves dispatch, payouts, verification, privacy requests, deletion follow-up, review moderation, disputes, and operational exceptions without leaving an audit trail gap.
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Drapeon Ops</p>
+              <h1 className="mt-2 text-3xl text-ink sm:text-4xl">{safeSection.label}</h1>
+              <p className="mt-2 max-w-2xl text-sm leading-7 text-ink/62">
+                One lane at a time. Pick the next action, resolve it, and keep the launch trust chain moving.
               </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <span className="rounded-full border border-needle/14 bg-needle/8 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-needle-700">
+                  {session.role.replace(/_/g, ' ')}
+                </span>
+                <span className="rounded-full border border-ink/8 bg-bone px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/56">
+                  {accessMode.replace(/-/g, ' ')}
+                </span>
+              </div>
             </div>
-            <div className="flex flex-col gap-3 sm:flex-row">
+            <div className="flex flex-col gap-3 sm:flex-row xl:shrink-0">
               <a
                 href={`mailto:${CONTACTS.ops}`}
                 className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink transition hover:bg-bone"
@@ -2256,17 +3358,33 @@ export default async function OpsPage({
               </form>
             </div>
           </div>
-          <div className="mt-5 flex flex-wrap gap-3">
-            <div className="rounded-full border border-needle/18 bg-needle/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-needle">
-              Bootstrap access mode
+          <form action="/ops" method="get" className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+            <input type="hidden" name="view" value={safeView} />
+            <label className="sr-only" htmlFor="ops-search">Search ops</label>
+            <input
+              id="ops-search"
+              name="q"
+              defaultValue={query}
+              placeholder="Search order ref, email, tailor, payout, item, or issue"
+              className="h-12 rounded-full border border-ink/10 bg-white/88 px-5 text-sm text-ink outline-none transition placeholder:text-ink/35 focus:border-needle/40"
+            />
+            <div className="flex gap-3">
+              <button
+                type="submit"
+                className="inline-flex h-12 items-center justify-center rounded-full bg-needle px-5 text-sm font-semibold text-white transition hover:bg-needle/90"
+              >
+                Search
+              </button>
+              {query ? (
+                <a
+                  href={buildOpsHref(safeView)}
+                  className="inline-flex h-12 items-center justify-center rounded-full border border-ink/10 bg-white px-5 text-sm font-semibold text-ink transition hover:bg-bone"
+                >
+                  Clear
+                </a>
+              ) : null}
             </div>
-            <div className="rounded-full border border-ink/8 bg-white/84 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-ink/56">
-              Shared token today
-            </div>
-            <div className="rounded-full border border-ink/8 bg-white/84 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-ink/56">
-              Workforce SSO next
-            </div>
-          </div>
+          </form>
         </header>
 
         {notice ? (
@@ -2277,7 +3395,8 @@ export default async function OpsPage({
 
         {roleError ? (
           <div className="mt-6 rounded-[1.3rem] border border-rust/16 bg-rust/8 px-5 py-4 text-sm leading-7 text-rust-700">
-            {roleError}
+            <p>{roleError}</p>
+            {errorDetail ? <p className="mt-2 text-xs text-rust-700/78">{errorDetail}</p> : null}
           </div>
         ) : null}
 
@@ -2292,12 +3411,17 @@ export default async function OpsPage({
           </div>
         ) : null}
 
-        <div className="mt-8 grid gap-8 xl:grid-cols-[19rem_minmax(0,1fr)]">
-          <aside className="h-fit rounded-[2rem] border border-ink/8 bg-white/80 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.08)] backdrop-blur">
-            <div className="rounded-[1.4rem] border border-needle/12 bg-needle/8 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Current focus</p>
-              <h2 className="mt-2 text-2xl text-ink">{safeSection.label}</h2>
-              <p className="mt-2 text-sm leading-7 text-ink/62">{safeSection.description}</p>
+        {query ? (
+          <div className="mt-6 rounded-[1.3rem] border border-needle/16 bg-needle/8 px-5 py-4 text-sm leading-7 text-needle-700">
+            Showing records that match “{query}”. Global queue counts remain visible so ops can still see the full workload.
+          </div>
+        ) : null}
+
+        <div className="mt-8 grid gap-8 xl:grid-cols-[18rem_minmax(0,1fr)]">
+          <aside className="h-fit rounded-[1.6rem] border border-ink/8 bg-white/86 p-4 shadow-[0_18px_60px_rgba(22,28,24,0.08)] backdrop-blur xl:sticky xl:top-6">
+            <div className="rounded-[1.2rem] border border-needle/12 bg-needle/8 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/78">Current</p>
+              <h2 className="mt-2 text-xl text-ink">{safeSection.label}</h2>
               <div className="mt-4 flex flex-wrap gap-2">
                 <span className="rounded-full border border-ink/8 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/56">
                   {safeSection.team}
@@ -2323,143 +3447,10 @@ export default async function OpsPage({
                 />
               ))}
             </div>
-
-            <div className="mt-6 border-t border-ink/6 pt-5">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/46">Next surfaces</p>
-              <div className="mt-3 grid gap-3">
-                {OPS_FUTURE_SURFACES.map((surface) => (
-                  <FutureSurfaceCard
-                    key={surface.key}
-                    label={surface.label}
-                    team={surface.team}
-                    note={surface.note}
-                  />
-                ))}
-              </div>
-            </div>
           </aside>
 
-          <div className="grid gap-8">
-            <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
-              <SummaryCard
-                label="Open disputes"
-                value={data.summary.openDisputes}
-                hint="Live disputes still waiting for human attention."
-              />
-              <SummaryCard
-                label="Workflow issues"
-                value={data.summary.openWorkflowIssues}
-                hint="Open safety, payment, payout, privacy, and shipping issues that still need human action."
-              />
-              <SummaryCard
-                label="Order reviews"
-                value={data.summary.pendingOrderReviews}
-                hint="Cancellation and delivery reviews waiting on Drape ops."
-              />
-              <SummaryCard
-                label="Orders in escrow"
-                value={data.summary.ordersInEscrowCount}
-                hint={`${data.summary.ordersInEscrowValueLabel} gross still protected across active paid orders.`}
-              />
-              <SummaryCard
-                label="Pending payouts"
-                value={data.summary.pendingPayoutCount}
-                hint={`${data.summary.pendingPayoutValueLabel} still needs release, completion, or manual ops review.`}
-              />
-              <SummaryCard
-                label="Dispatch"
-                value={data.summary.pendingDispatch}
-                hint="Orders packed and waiting for Drape to hand off delivery or shipping."
-              />
-              <SummaryCard
-                label="Verification"
-                value={data.summary.pendingVerifications}
-                hint="Profiles still waiting on verification review."
-              />
-              <SummaryCard
-                label="Flagged content"
-                value={data.summary.flaggedContentCount}
-                hint="Unreviewed bypass attempts, flagged reviews, and safety reports now visible in ops."
-              />
-              <SummaryCard
-                label="Deletion queue"
-                value={data.summary.pendingDeletionRequests}
-                hint="Account deletion requests still waiting on a first response."
-              />
-              <SummaryCard
-                label="Dead jobs"
-                value={data.summary.deadJobs}
-                hint="Background work that exhausted retries and needs manual review."
-              />
-              <SummaryCard
-                label="Retrying jobs"
-                value={data.summary.retryableJobs}
-                hint="Background work waiting for another attempt."
-              />
-              <SummaryCard
-                label="Provider alerts"
-                value={data.summary.providersDegraded}
-                hint="Payment, payout, SMS, email, or shipping providers marked degraded."
-              />
-            </section>
-
-            {safeView === 'overview' ? (
-              <>
-                <section className="rounded-[2rem] border border-ink/8 bg-white/80 p-6 shadow-[0_20px_70px_rgba(22,28,24,0.08)]">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/80">System health</p>
-                  <div className="mt-3 grid gap-4 lg:grid-cols-3">
-                    <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
-                      <p className="text-sm font-semibold text-ink">Background queue</p>
-                      <p className="mt-2 text-sm leading-7 text-ink/62">
-                        {data.systemHealth.jobQueue.pending} pending, {data.systemHealth.jobQueue.processing} processing, {data.systemHealth.jobQueue.retryable} retrying, {data.systemHealth.jobQueue.dead} dead-lettered.
-                      </p>
-                    </div>
-                    <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
-                      <p className="text-sm font-semibold text-ink">Provider circuits</p>
-                      <p className="mt-2 text-sm leading-7 text-ink/62">
-                        {data.systemHealth.providers.length === 0
-                          ? 'No provider circuit records yet. They will appear after payment, payout, SMS, email, or shipping events run.'
-                          : `${data.summary.providersDegraded} degraded across ${data.systemHealth.providers.length} tracked provider lanes.`}
-                      </p>
-                    </div>
-                    <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
-                      <p className="text-sm font-semibold text-ink">Oldest queued work</p>
-                      <p className="mt-2 text-sm leading-7 text-ink/62">
-                        {data.systemHealth.jobQueue.oldestPendingAt
-                          ? `Oldest pending job started waiting at ${new Date(data.systemHealth.jobQueue.oldestPendingAt).toLocaleString()}.`
-                          : 'No pending jobs waiting right now.'}
-                      </p>
-                    </div>
-                  </div>
-                </section>
-
-                <section className="rounded-[2rem] border border-ink/8 bg-white/80 p-6 shadow-[0_20px_70px_rgba(22,28,24,0.08)]">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/80">Architecture stance</p>
-                  <div className="mt-3 grid gap-4 lg:grid-cols-3">
-                    <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
-                      <p className="text-sm font-semibold text-ink">Public web stays public</p>
-                      <p className="mt-2 text-sm leading-7 text-ink/62">
-                        Waitlist, marketing, and future customer acquisition stay clean. Internal ops should never leak into the public nav.
-                      </p>
-                    </div>
-                    <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
-                      <p className="text-sm font-semibold text-ink">Drape owns the workflow</p>
-                      <p className="mt-2 text-sm leading-7 text-ink/62">
-                        Refunds, verification, deletion, dispatch, review moderation, and trust decisions live here with audit history.
-                      </p>
-                    </div>
-                    <div className="rounded-[1.3rem] border border-ink/8 bg-bone/44 p-4">
-                      <p className="text-sm font-semibold text-ink">Security gets stricter from here</p>
-                      <p className="mt-2 text-sm leading-7 text-ink/62">
-                        Today is token bootstrap mode. Next is workforce SSO, @drapeon.co gating, team roles, and app-level permission checks.
-                      </p>
-                    </div>
-                  </div>
-                </section>
-              </>
-            ) : null}
-
-            {renderOpsSection(safeView, data, safeView)}
+          <div>
+            {renderOpsSection(safeView, data, safeView, renderContext)}
           </div>
         </div>
       </div>

@@ -19,6 +19,39 @@ type PortfolioCoverRow = {
   image_url?: string | null
 }
 
+type GatewayCacheEntry<T> = {
+  expiresAt: number
+  data: T
+}
+
+const gatewayCache = new Map<string, GatewayCacheEntry<unknown>>()
+const MAX_CACHE_ENTRIES = 250
+
+function getCached<T>(key: string): T | null {
+  const cached = gatewayCache.get(key)
+  if (!cached) return null
+  if (cached.expiresAt <= Date.now()) {
+    gatewayCache.delete(key)
+    return null
+  }
+  return cached.data as T
+}
+
+function setCached<T>(key: string, data: T, ttlMs: number): T {
+  if (gatewayCache.size >= MAX_CACHE_ENTRIES) {
+    const firstKey = gatewayCache.keys().next().value
+    if (firstKey) gatewayCache.delete(firstKey)
+  }
+  gatewayCache.set(key, { data, expiresAt: Date.now() + ttlMs })
+  return data
+}
+
+async function cachedRead<T>(key: string, ttlMs: number, loader: () => Promise<T>): Promise<T> {
+  const cached = getCached<T>(key)
+  if (cached) return cached
+  return setCached(key, await loader(), ttlMs)
+}
+
 function jsonResponse(
   body: unknown,
   status: number,
@@ -359,7 +392,7 @@ async function fetchExploreTailors(supabase: any, payload: Record<string, unknow
   return attachExploreCovers(supabase, ((data ?? []) as TailorDiscoveryGatewayRow[]))
 }
 
-async function fetchTailorProfile(supabase: any, req: Request, tailorId: string) {
+async function fetchTailorProfilePublic(supabase: any, tailorId: string) {
   const [profileRes, reviewsRes, portfolioRes] = await Promise.allSettled([
     supabase
       .from('tailor_profiles')
@@ -425,18 +458,6 @@ async function fetchTailorProfile(supabase: any, req: Request, tailorId: string)
     ? reviewsData.reduce((sum, row) => sum + (typeof row.rating === 'number' ? row.rating : 0), 0) / derivedReviewCount
     : null
 
-  const authUserId = await resolveAuthenticatedUserId(req, supabase)
-  let isSaved = false
-  if (authUserId) {
-    const { data: savedData } = await supabase
-      .from('saved_tailors')
-      .select('id')
-      .eq('user_id', authUserId)
-      .eq('tailor_profile_id', tailorId)
-      .maybeSingle()
-    isSaved = !!savedData
-  }
-
   return {
     profile: {
       id: profileRow.id,
@@ -481,6 +502,29 @@ async function fetchTailorProfile(supabase: any, req: Request, tailorId: string)
         createdAt: asString(row.created_at) ?? new Date().toISOString(),
       }
     }),
+  }
+}
+
+async function fetchTailorProfile(supabase: any, req: Request, tailorId: string) {
+  const publicData = await cachedRead(`tailor-profile-public:${tailorId}`, 120_000, () =>
+    fetchTailorProfilePublic(supabase, tailorId)
+  )
+  if (!publicData) return null
+
+  const authUserId = await resolveAuthenticatedUserId(req, supabase)
+  let isSaved = false
+  if (authUserId) {
+    const { data: savedData } = await supabase
+      .from('saved_tailors')
+      .select('id')
+      .eq('user_id', authUserId)
+      .eq('tailor_profile_id', tailorId)
+      .maybeSingle()
+    isSaved = !!savedData
+  }
+
+  return {
+    ...asRecord(publicData),
     isSaved,
   }
 }
@@ -500,17 +544,38 @@ Deno.serve(async (req) => {
     if (action === 'tailor-shop') {
       const tailorId = asString(payload.tailorId)
       if (!tailorId) return jsonResponse({ error: 'TAILOR_REQUIRED', message: 'Tailor id is required.' }, 400, cors)
-      return jsonResponse({ ok: true, data: await fetchTailorShop(supabase, tailorId) }, 200, cors)
+      return jsonResponse({
+        ok: true,
+        data: await cachedRead(`tailor-shop:${tailorId}`, 120_000, () =>
+          fetchTailorShop(supabase, tailorId)
+        ),
+      }, 200, cors)
     }
 
     if (action === 'seller-item') {
       const itemId = asString(payload.itemId)
       if (!itemId) return jsonResponse({ error: 'ITEM_REQUIRED', message: 'Item id is required.' }, 400, cors)
-      return jsonResponse({ ok: true, data: await fetchSellerItem(supabase, itemId) }, 200, cors)
+      return jsonResponse({
+        ok: true,
+        data: await cachedRead(`seller-item:${itemId}`, 120_000, () =>
+          fetchSellerItem(supabase, itemId)
+        ),
+      }, 200, cors)
     }
 
     if (action === 'explore-tailors') {
-      return jsonResponse({ ok: true, data: await fetchExploreTailors(supabase, payload) }, 200, cors)
+      const limit = Math.max(1, Math.min(40, Number(payload.limit) || 20))
+      const offset = Math.max(0, Number(payload.offset) || 0)
+      const query = safeSearchTerm(payload.query) ?? ''
+      const specialty = safeSearchTerm(payload.specialty) ?? ''
+      const general = safeSearchTerm(payload.general) ?? ''
+      const location = safeSearchTerm(payload.location) ?? ''
+      const strictLocation = payload.strictLocation === true ? '1' : '0'
+      const key = `explore:${limit}:${offset}:${query}:${specialty}:${general}:${location}:${strictLocation}`
+      return jsonResponse({
+        ok: true,
+        data: await cachedRead(key, 90_000, () => fetchExploreTailors(supabase, payload)),
+      }, 200, cors)
     }
 
     if (action === 'tailor-profile') {

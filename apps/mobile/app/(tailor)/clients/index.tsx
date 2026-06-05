@@ -455,7 +455,7 @@ export default function TailorClientsScreen() {
                   <Text style={styles.stateEyebrow}>Client diary</Text>
                   <Text style={styles.stateTitle}>Couldn't load your diary.</Text>
                   <Text style={styles.stateHint}>
-                    This tab should help you carry offline clients and measurements into Drape without losing context.
+                    This tab should help you carry offline clients and measurements into Drapeon without losing context.
                   </Text>
                   <TouchableOpacity
                     style={styles.addDiaryBtn}
@@ -486,17 +486,28 @@ export default function TailorClientsScreen() {
                   <Text style={styles.emptyPillText}>Client diary</Text>
                 </View>
                 <Feather name="book" size={36} color={Colors.lightGrey} style={{ marginBottom: Spacing.md }} />
-                <Text style={styles.emptyTitle}>{diarySearch ? 'No results' : 'Diary is empty'}</Text>
+                <Text style={styles.emptyTitle}>
+                  {diarySearch ? 'No results' : 'Build your client passport book'}
+                </Text>
                 <Text style={styles.emptyHint}>
                   {diarySearch
                     ? 'Try a different name.'
-                    : 'Add offline clients you\'ve measured. Their data becomes a portable Client Passport they can claim.'}
+                    : 'Add walk-in clients, record measurements, and share a claim link when they are ready to join Drapeon.'}
                 </Text>
+                {!diarySearch ? (
+                  <TouchableOpacity
+                    style={styles.addDiaryBtn}
+                    onPress={() => router.push('/(tailor)/clients/diary/new')}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.addDiaryBtnText}>Add first client</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
             )
           }
           ListHeaderComponent={
-            showDiaryBanner ? (
+            showDiaryBanner && diary.length > 0 ? (
               <View style={styles.diaryBanner}>
                 <TouchableOpacity style={styles.diaryBannerDismiss} onPress={dismissDiaryBanner} hitSlop={10}>
                   <Feather name="x" size={13} color={Colors.midGrey} />
@@ -507,7 +518,7 @@ export default function TailorClientsScreen() {
                 <View style={styles.diaryBannerBody}>
                   <Text style={styles.diaryBannerTitle}>Build your client passport book</Text>
                   <Text style={styles.diaryBannerText}>
-                    Record measurements for walk-in clients. Share a link so they can claim their profile when they join Drape.
+                    Record measurements for walk-in clients. Share a link so they can claim their profile when they join Drapeon.
                   </Text>
                 </View>
                 <TouchableOpacity
@@ -732,12 +743,12 @@ function ClientsEmptyState({
       <View style={clientEmptyStyles.badge}>
         <Text style={clientEmptyStyles.badgeText}>Clients</Text>
       </View>
-      <Text style={clientEmptyStyles.heading}>{hasDiaryClients ? 'No Drape customers yet' : 'No clients yet'}</Text>
+      <Text style={clientEmptyStyles.heading}>{hasDiaryClients ? 'No Drapeon customers yet' : 'No clients yet'}</Text>
       <Text style={clientEmptyStyles.sub}>
         {hasDiaryClients
-          ? 'Your diary clients are saved. This tab fills when someone places an order through Drape.'
+          ? 'Your diary clients are saved. This tab fills when someone places an order through Drapeon.'
           : 'Client relationships start here once someone places an order or you add them to your diary.'}
-        {isLive ? ' Invite a client when you are ready to bring them into Drape.' : ' Complete your profile before customers can book you.'}
+        {isLive ? ' Invite a client when you are ready to bring them into Drapeon.' : ' Complete your profile before customers can book you.'}
       </Text>
       <View style={clientEmptyStyles.ctaStack}>
         {isLive && profileId ? (
@@ -767,7 +778,7 @@ function ClientsEmptyState({
         )}
       </View>
       <Text style={clientEmptyStyles.ctaHint}>
-        Use the diary for walk-in clients; use this tab for customers with Drape order history.
+        Use the diary for walk-in clients; use this tab for customers with Drapeon order history.
       </Text>
     </View>
   )

@@ -6,7 +6,7 @@ import { buildMetadata } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'How It Works',
-  description: 'Understand the trust-first Drape order loop from brief to review.',
+  description: 'Understand the trust-first Drapeon order loop from brief to review.',
   path: '/how-it-works',
 })
 

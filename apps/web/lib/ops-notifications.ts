@@ -27,7 +27,7 @@ function getOpsRecipients() {
 }
 
 function getOpsNotificationFrom() {
-  return process.env.RESEND_FROM ?? `Drape Ops <${CONTACTS.noreply}>`
+  return process.env.RESEND_FROM ?? `Drapeon Ops <${CONTACTS.noreply}>`
 }
 
 function escapeHtml(value: string) {

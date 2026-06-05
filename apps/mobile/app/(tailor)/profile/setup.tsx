@@ -131,7 +131,7 @@ const PORTFOLIO_MIN_MARKER_LEFT = `${(MIN_PORTFOLIO_ITEMS / MAX_PORTFOLIO_ITEMS)
 
 const STEP_TITLES = ['Your identity', 'What you make', 'Portfolio', 'Selling setup']
 const STEP_SUBS = [
-  'This is your public tailor profile. No contact details here. Buyers find you through Drape.',
+  'This is your public tailor profile. No contact details here. Buyers find you through Drapeon.',
   'Tell people what you make and what to expect on price.',
   'Add at least one real work sample. More photos help buyers trust your profile faster.',
   'Choose what you sell, how people receive orders, and verify your identity to go live.',
@@ -264,7 +264,7 @@ const PRICE_PRESETS: Array<{
 export default function TailorSetupScreen() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
-  const { user, signOut } = useAuth()
+  const { user, signOut, switchRole } = useAuth()
   const detectedCurrency = useMemo(() => detectDeviceCurrencyPreference(), [])
   const oauthName =
     user?.user_metadata?.display_name ??
@@ -317,8 +317,35 @@ export default function TailorSetupScreen() {
     ])
   }
 
+  function switchBackToCustomer() {
+    if (switchingToCustomer) return
+    Alert.alert(
+      'Return to customer mode?',
+      'Your tailor setup can wait. Drapeon will take you back to the customer side with this same account.',
+      [
+        { text: 'Stay here', style: 'cancel' },
+        {
+          text: 'Return to customer',
+          onPress: () => {
+            setSwitchingToCustomer(true)
+            void switchRole('CUSTOMER')
+              .then(({ error }) => {
+                if (error) {
+                  Alert.alert('Could not switch modes', error)
+                  return
+                }
+                router.replace('/(customer)')
+              })
+              .finally(() => setSwitchingToCustomer(false))
+          },
+        },
+      ]
+    )
+  }
+
   const [step, setStep] = useState<TailorSetupStep>(0)
   const [saving, setSaving] = useState(false)
+  const [switchingToCustomer, setSwitchingToCustomer] = useState(false)
   const [visibleErrors, setVisibleErrors] = useState<TailorSetupFieldErrors>({})
   const [profileHydrated, setProfileHydrated] = useState(false)
   const [pickupHydrated, setPickupHydrated] = useState(false)
@@ -595,7 +622,7 @@ export default function TailorSetupScreen() {
       try {
         const res = await fetch(
           `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&addressdetails=1&limit=6&featuretype=city`,
-          { headers: { 'Accept-Language': 'en', 'User-Agent': 'Drape/1.0' } }
+          { headers: { 'Accept-Language': 'en', 'User-Agent': 'Drapeon/1.0' } }
         )
         const data = (await res.json()) as NominatimSuggestion[]
         const labels = data
@@ -1254,9 +1281,10 @@ export default function TailorSetupScreen() {
     }
     Alert.alert(
       'Leave setup?',
-      'Your tailor profile is not finished yet. You can stay here and continue, or sign out and come back later.',
+      'Your tailor profile is not finished yet. You can stay here, return to customer mode, or sign out and come back later.',
       [
         { text: 'Stay', style: 'cancel' },
+        { text: 'Return to customer', onPress: switchBackToCustomer },
         { text: 'Sign out', style: 'destructive', onPress: handleSignOut },
       ]
     )
@@ -1413,7 +1441,7 @@ export default function TailorSetupScreen() {
               })}
               <View style={styles.setupChecklistFooter}>
                 <Text style={styles.setupChecklistFooterText}>
-                  After profile review, Drape will guide you through payout setup before paid work can release earnings.
+                  After profile review, Drapeon will guide you through payout setup before paid work can release earnings.
                 </Text>
               </View>
             </View>
@@ -1541,11 +1569,12 @@ export default function TailorSetupScreen() {
                     hint={`Min 80 characters · ${bio.trim().length}/500. No social handles, phone numbers, or URLs.`}
                     testID="bio-input"
                   />
-                  <Text style={styles.fieldHint}>Try covering:</Text>
-                  <View style={styles.templateRow}>
+                  <Text style={styles.fieldHint}>What customers look for</Text>
+                  <View style={styles.helperList}>
                     {BIO_PROMPTS.map((prompt) => (
-                      <View key={prompt} style={styles.helperChip}>
-                        <Text style={styles.helperChipText}>{prompt}</Text>
+                      <View key={prompt} style={styles.helperListRow}>
+                        <View style={styles.helperBullet} />
+                        <Text style={styles.helperListText}>{prompt}</Text>
                       </View>
                     ))}
                   </View>
@@ -1611,19 +1640,26 @@ export default function TailorSetupScreen() {
                       onPress={() => setChoiceSheetMode('currency')}
                     />
                     {currency === 'NGN' ? (
-                      <View style={styles.templateRow}>
+                      <View style={styles.quickRangeList}>
                         {PRICE_PRESETS.map((preset) => (
                           <TouchableOpacity
                             key={preset.label}
-                            style={styles.helperChip}
+                            style={styles.quickRangeRow}
                             onPress={() => {
                               setCurrency(preset.currency)
                               setPriceMin(preset.min)
                               setPriceMax(preset.max)
                               clearVisibleError('priceRange')
                             }}
+                            activeOpacity={0.78}
                           >
-                            <Text style={styles.helperChipText}>{preset.label}</Text>
+                            <View>
+                              <Text style={styles.quickRangeTitle}>{preset.label}</Text>
+                              <Text style={styles.quickRangeBody}>
+                                {preset.currency} {preset.min}–{preset.max}
+                              </Text>
+                            </View>
+                            <Feather name="plus" size={17} color={Colors.needleGreen} />
                           </TouchableOpacity>
                         ))}
                       </View>
@@ -1827,9 +1863,9 @@ export default function TailorSetupScreen() {
                     ) : null}
                     {deliveryAvailable || shippingAvailable ? (
                       <View style={styles.fulfillmentFeeBlock}>
-                        <Text style={styles.fieldLabel}>Standard Drape dispatch fees</Text>
+                        <Text style={styles.fieldLabel}>Standard Drapeon dispatch fees</Text>
                         <Text style={styles.fieldHint}>
-                          Drape now collects the standard delivery or shipping fee at checkout based
+                          Drapeon now collects the standard delivery or shipping fee at checkout based
                           on the buyer address and your location. You only need to choose whether
                           you offer delivery or shipping here.
                         </Text>
@@ -1914,13 +1950,26 @@ export default function TailorSetupScreen() {
             disabled={saving || uploadingId || uploadingMedia}
           />
           {step === 0 && (
-            <TouchableOpacity
-              onPress={handleSignOut}
-              style={styles.signOutLink}
-              disabled={saving || uploadingId || uploadingMedia}
-            >
-              <Text style={styles.signOutText}>Sign out</Text>
-            </TouchableOpacity>
+            <>
+              <TouchableOpacity
+                onPress={switchBackToCustomer}
+                style={styles.modeSwitchLink}
+                disabled={saving || uploadingId || uploadingMedia || switchingToCustomer}
+              >
+                {switchingToCustomer ? (
+                  <ActivityIndicator size="small" color={Colors.needleGreen} />
+                ) : (
+                  <Text style={styles.modeSwitchText}>Use Drapeon as customer instead</Text>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleSignOut}
+                style={styles.signOutLink}
+                disabled={saving || uploadingId || uploadingMedia || switchingToCustomer}
+              >
+                <Text style={styles.signOutText}>Sign out</Text>
+              </TouchableOpacity>
+            </>
           )}
           {stepBlockingNote ? <Text style={styles.minNote}>{stepBlockingNote}</Text> : null}
         </View>
@@ -2018,9 +2067,7 @@ function SetupSelectorCard({
         <Text style={styles.selectorTitle}>{title}</Text>
         <Text style={styles.selectorBody}>{body}</Text>
       </View>
-      <View style={styles.selectorEditPill}>
-        <Text style={styles.selectorEditText}>Edit</Text>
-      </View>
+      <Feather name="chevron-right" size={20} color={Colors.midGrey} />
     </TouchableOpacity>
   )
 }
@@ -2560,22 +2607,58 @@ const styles = StyleSheet.create({
     marginTop: Spacing.sm,
   },
   required: { color: Colors.error },
-  templateRow: {
+  helperList: {
+    gap: Spacing.sm,
+    marginTop: -Spacing.xs,
+    marginBottom: Spacing.md,
+  },
+  helperListRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+  },
+  helperBullet: {
+    width: 6,
+    height: 6,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreen,
+    marginTop: 6,
+  },
+  helperListText: {
+    flex: 1,
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    lineHeight: 18,
+    fontWeight: FontWeight.medium,
+  },
+  quickRangeList: {
     gap: Spacing.sm,
     marginTop: Spacing.sm,
-    marginBottom: Spacing.sm,
+    marginBottom: Spacing.md,
   },
-  helperChip: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.white,
+  quickRangeRow: {
+    minHeight: 58,
+    borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
   },
-  helperChipText: { fontSize: FontSize.xs, color: Colors.ink, fontWeight: FontWeight.medium },
+  quickRangeTitle: {
+    fontSize: FontSize.sm,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+  },
+  quickRangeBody: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    lineHeight: 17,
+  },
   selectorCard: {
     minHeight: 96,
     borderRadius: Radius.lg,
@@ -2611,42 +2694,6 @@ const styles = StyleSheet.create({
     color: Colors.midGrey,
     lineHeight: 18,
   },
-  selectorEditPill: {
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    backgroundColor: Colors.bone,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-  },
-  selectorEditText: {
-    fontSize: FontSize.xs,
-    color: Colors.needleGreen,
-    fontWeight: FontWeight.semibold,
-  },
-
-  // Currency selector
-  currencyRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.sm,
-    marginBottom: Spacing.md,
-  },
-  currencyChip: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    borderRadius: Radius.full,
-    borderWidth: 1.5,
-    borderColor: Colors.lightGrey,
-    backgroundColor: Colors.white,
-  },
-  currencyChipActive: { borderColor: Colors.needleGreen, backgroundColor: Colors.needleGreenLight },
-  currencyChipText: {
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    fontWeight: FontWeight.medium,
-  },
-  currencyChipTextActive: { color: Colors.needleGreen },
 
   // Pricing
   priceRow: { flexDirection: 'row', gap: Spacing.md },
@@ -2837,6 +2884,8 @@ const styles = StyleSheet.create({
     borderTopColor: Colors.lightGrey,
     gap: Spacing.sm,
   },
+  modeSwitchLink: { alignSelf: 'center', minHeight: 28, alignItems: 'center', justifyContent: 'center' },
+  modeSwitchText: { fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.semibold },
   signOutLink: { alignSelf: 'center' },
   signOutText: { fontSize: FontSize.sm, color: Colors.error },
   minNote: { fontSize: FontSize.xs, color: Colors.midGrey, textAlign: 'center' },

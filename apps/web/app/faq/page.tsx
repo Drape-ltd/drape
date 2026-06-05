@@ -5,9 +5,9 @@ import { buildMetadata } from '../../lib/metadata'
 
 const FAQ: Array<{ question: string; answer: string }> = [
   {
-    question: 'How does Drape work?',
+    question: 'How does Drapeon work?',
     answer:
-      'Drape gives customers one clear order flow and gives tailors one calm workspace. Discovery, briefing, quote review, progress updates, delivery or collection, and review all stay in one trusted thread.',
+      'Drapeon gives customers one clear order flow and gives tailors one calm workspace. Discovery, briefing, quote review, progress updates, delivery or collection, and review all stay in one trusted thread.',
   },
   {
     question: 'How do customers start an order?',
@@ -17,12 +17,12 @@ const FAQ: Array<{ question: string; answer: string }> = [
   {
     question: 'How do tailors receive work?',
     answer:
-      'Tailors who are live on Drape receive stronger briefs instead of scattered messages. They can review the order, consult if needed, send a quote, and manage production from one pipeline.',
+      'Tailors who are live on Drapeon receive stronger briefs instead of scattered messages. They can review the order, consult if needed, send a quote, and manage production from one pipeline.',
   },
   {
     question: 'How does payment work?',
     answer:
-      'Drape is designed so the commercial agreement becomes clear before production begins. Customers review and accept the quote, and the order then moves forward through the tracked workflow.',
+      'Drapeon is designed so the commercial agreement becomes clear before production begins. Customers review and accept the quote, and the order then moves forward through the tracked workflow.',
   },
   {
     question: 'How are tailors verified?',
@@ -37,10 +37,10 @@ const FAQ: Array<{ question: string; answer: string }> = [
   {
     question: 'What if something goes wrong?',
     answer:
-      'Drape keeps the important communication and stage history close to the order so concerns can be raised with the right context attached.',
+      'Drapeon keeps the important communication and stage history close to the order so concerns can be raised with the right context attached.',
   },
   {
-    question: 'Is Drape live everywhere on web yet?',
+    question: 'Is Drapeon live everywhere on web yet?',
     answer:
       'Not yet. The website is currently focused on early access, applications, and company information while the product continues to roll out.',
   },
@@ -48,7 +48,7 @@ const FAQ: Array<{ question: string; answer: string }> = [
 
 export const metadata: Metadata = buildMetadata({
   title: 'FAQ',
-  description: 'Read the public Drape FAQ and understand the core customer, tailor, and trust flows.',
+  description: 'Read the public Drapeon FAQ and understand the core customer, tailor, and trust flows.',
   path: '/faq',
 })
 
@@ -75,7 +75,7 @@ export default function FaqPage(): JSX.Element {
       <MarketingShell
         eyebrow="FAQ"
         title="Questions should resolve into clarity, not more guesswork."
-        description="A quick guide to the most common questions about Drape."
+        description="A quick guide to the most common questions about Drapeon."
       >
         <section className="py-8">
           <SectionTitle

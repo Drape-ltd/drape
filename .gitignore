@@ -55,6 +55,8 @@ supabase/functions/.cache
 *.key
 *.mobileprovision
 *.orig.*
+google-services.json
+apps/mobile/android/app/google-services.json
 web-build/
 android/
 ios/

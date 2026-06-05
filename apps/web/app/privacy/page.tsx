@@ -31,7 +31,7 @@ const dataCategories = [
   },
   {
     title: 'Device, diagnostics, and analytics',
-    body: 'App version, device type, crash reports, performance data, IP-derived security signals, push tokens, and product analytics events that help Drape operate and improve the service.',
+    body: 'App version, device type, crash reports, performance data, IP-derived security signals, push tokens, and product analytics events that help Drapeon operate and improve the service.',
   },
 ]
 
@@ -43,7 +43,7 @@ const useCases = [
   'Send order updates, messages, payment confirmations, payout alerts, support notices, and security notices.',
   'Detect fraud, abuse, payment risk, bypass attempts, account takeover risk, and policy violations.',
   'Debug crashes, broken uploads, failed images, payment errors, and performance issues.',
-  'Improve Drape through aggregate analytics and product research.',
+  'Improve Drapeon through aggregate analytics and product research.',
 ]
 
 const providers = [
@@ -57,9 +57,9 @@ const providers = [
 ]
 
 const rights = [
-  'Access a copy of personal data Drape can reasonably provide.',
+  'Access a copy of personal data Drapeon can reasonably provide.',
   'Correct inaccurate account, contact, or profile information.',
-  'Request deletion or anonymization of personal data that Drape no longer needs to keep.',
+  'Request deletion or anonymization of personal data that Drapeon no longer needs to keep.',
   'Object to or limit certain processing where applicable law gives that right.',
   'Withdraw optional marketing or promotional communication preferences.',
   'Ask privacy questions at privacy@drapeon.co.',
@@ -67,7 +67,7 @@ const rights = [
 
 export const metadata: Metadata = buildMetadata({
   title: 'Privacy Policy',
-  description: 'Read how Drape collects, uses, shares, protects, and deletes personal data.',
+  description: 'Read how Drapeon collects, uses, shares, protects, and deletes personal data.',
   path: '/privacy',
 })
 
@@ -76,7 +76,7 @@ export default function PrivacyPage(): JSX.Element {
     <MarketingShell
       eyebrow="Privacy Policy"
       title="Privacy for real orders, real money, and real fit data."
-      description="Drape handles personal profiles, messages, measurements, photos, payments, payouts, and support cases. This policy explains what we collect, why we use it, who helps us process it, and how deletion works."
+      description="Drapeon handles personal profiles, messages, measurements, photos, payments, payouts, and support cases. This policy explains what we collect, why we use it, who helps us process it, and how deletion works."
       cta={
         <Link
           href={accountDeletionRoute}
@@ -90,7 +90,7 @@ export default function PrivacyPage(): JSX.Element {
         <div className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
           <p className="font-semibold text-ink">Last updated: {lastUpdated}</p>
           <p className="mt-3">
-            This Privacy Policy applies to Drape&apos;s mobile apps, web pages, support channels, marketplace, order flows, payment flows, and operational tools. If you use Drape as a customer, tailor, applicant, visitor, or support contact, this policy explains how your information is handled.
+            This Privacy Policy applies to Drapeon&apos;s mobile apps, web pages, support channels, marketplace, order flows, payment flows, and operational tools. If you use Drapeon as a customer, tailor, applicant, visitor, or support contact, this policy explains how your information is handled.
           </p>
         </div>
       </section>
@@ -99,7 +99,7 @@ export default function PrivacyPage(): JSX.Element {
         <SectionTitle
           eyebrow="Data we collect"
           title="We collect what the marketplace needs to work."
-          description="Drape relies on visual trust, communication, measurement context, payment status, and operational records. We do not collect these casually."
+          description="Drapeon relies on visual trust, communication, measurement context, payment status, and operational records. We do not collect these casually."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           {dataCategories.map((item) => (
@@ -128,8 +128,8 @@ export default function PrivacyPage(): JSX.Element {
       <section className="border-t border-ink/6 py-16">
         <SectionTitle
           eyebrow="Sharing"
-          title="We share data with service providers that help Drape run."
-          description="Drape does not sell personal data. We share data with providers when needed for payments, storage, security, analytics, messaging, compliance, and support."
+          title="We share data with service providers that help Drapeon run."
+          description="Drapeon does not sell personal data. We share data with providers when needed for payments, storage, security, analytics, messaging, compliance, and support."
         />
         <div className="mt-10 grid gap-4">
           {providers.map(([name, body]) => (
@@ -148,12 +148,12 @@ export default function PrivacyPage(): JSX.Element {
         <SectionTitle
           eyebrow="Retention"
           title="Deletion is real, but it is staged when money or safety is involved."
-          description="Drape deletes or anonymizes data when it is no longer needed. Some records must be retained for active orders, payments, payouts, disputes, fraud prevention, legal obligations, tax/accounting needs, safety, support, or claims."
+          description="Drapeon deletes or anonymizes data when it is no longer needed. Some records must be retained for active orders, payments, payouts, disputes, fraud prevention, legal obligations, tax/accounting needs, safety, support, or claims."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           <MarketingCard
             title="Active accounts"
-            body="We keep account, profile, measurement, message, order, and preference data while your account is active and as needed to provide Drape."
+            body="We keep account, profile, measurement, message, order, and preference data while your account is active and as needed to provide Drapeon."
           />
           <MarketingCard
             title="Closed accounts"
@@ -169,7 +169,7 @@ export default function PrivacyPage(): JSX.Element {
           <Link href={accountDeletionRoute} className="font-semibold text-needle">
             drapeon.co/account-deletion
           </Link>
-          . If a deletion request collides with an active order, payout, refund, dispute, chargeback, or legal hold, Drape may restrict new activity first and finish deletion or anonymization after the obligation is resolved.
+          . If a deletion request collides with an active order, payout, refund, dispute, chargeback, or legal hold, Drapeon may restrict new activity first and finish deletion or anonymization after the obligation is resolved.
         </div>
       </section>
 
@@ -190,7 +190,7 @@ export default function PrivacyPage(): JSX.Element {
         </div>
         <div className="mt-8 grid gap-5 lg:grid-cols-3">
           <a
-            href={`mailto:${CONTACTS.privacy}?subject=Drape%20privacy%20question`}
+            href={`mailto:${CONTACTS.privacy}?subject=Drapeon%20privacy%20question`}
             className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
           >
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Privacy</p>
@@ -198,7 +198,7 @@ export default function PrivacyPage(): JSX.Element {
             <p className="mt-3 text-sm leading-7 text-ink/68">Privacy questions, rights requests, and deletion follow-up.</p>
           </a>
           <a
-            href={`mailto:${CONTACTS.support}?subject=Drape%20support%20request`}
+            href={`mailto:${CONTACTS.support}?subject=Drapeon%20support%20request`}
             className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
           >
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Support</p>
@@ -206,7 +206,7 @@ export default function PrivacyPage(): JSX.Element {
             <p className="mt-3 text-sm leading-7 text-ink/68">Order, account access, delivery, and general support questions.</p>
           </a>
           <a
-            href={`mailto:${CONTACTS.security}?subject=Drape%20security%20report`}
+            href={`mailto:${CONTACTS.security}?subject=Drapeon%20security%20report`}
             className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
           >
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Security</p>
@@ -219,11 +219,11 @@ export default function PrivacyPage(): JSX.Element {
       <section className="border-t border-ink/6 py-16">
         <SectionTitle
           eyebrow="International users"
-          title="Drape is built for cross-border tailoring."
+          title="Drapeon is built for cross-border tailoring."
           description="Users may be in the United States, Nigeria, Ghana, Kenya, the United Kingdom, the European Union, Canada, and other countries. Privacy rights and retention rules can vary by location."
         />
         <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
-          Drape aims to honor applicable privacy rights, including access, correction, deletion, objection, and complaint rights where the law gives them. If local law requires Drape to keep certain records, we will keep only what is reasonably necessary and restrict access to the people and systems that need it.
+          Drapeon aims to honor applicable privacy rights, including access, correction, deletion, objection, and complaint rights where the law gives them. If local law requires Drapeon to keep certain records, we will keep only what is reasonably necessary and restrict access to the people and systems that need it.
         </div>
       </section>
     </MarketingShell>
