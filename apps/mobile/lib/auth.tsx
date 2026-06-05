@@ -15,6 +15,8 @@ import { syncUserRow } from './syncUserRow'
 // Required for expo-web-browser OAuth redirect handling on Android
 WebBrowser.maybeCompleteAuthSession()
 
+type DrapeRole = 'CUSTOMER' | 'TAILOR'
+
 interface AuthContextValue {
   session: Session | null
   user: User | null
@@ -23,12 +25,12 @@ interface AuthContextValue {
     email: string,
     password: string,
     displayName: string,
-    role: 'CUSTOMER' | 'TAILOR'
+    role: DrapeRole
   ) => Promise<{ error: string | null; requiresEmailConfirmation: boolean }>
-  signIn: (email: string, password: string) => Promise<{ error: string | null }>
-  signInWithGoogle: () => Promise<{ error: string | null }>
-  signInWithApple: () => Promise<{ error: string | null }>
-  switchRole: (role: 'CUSTOMER' | 'TAILOR') => Promise<{ error: string | null }>
+  signIn: (email: string, password: string, roleIntent?: DrapeRole | null) => Promise<{ error: string | null }>
+  signInWithGoogle: (roleIntent?: DrapeRole | null) => Promise<{ error: string | null }>
+  signInWithApple: (roleIntent?: DrapeRole | null) => Promise<{ error: string | null }>
+  switchRole: (role: DrapeRole) => Promise<{ error: string | null }>
   signOut: () => Promise<void>
 }
 
@@ -40,6 +42,23 @@ function normalizeEmail(email: string) {
 
 function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+}
+
+function isDrapeRole(value: unknown): value is DrapeRole {
+  return value === 'CUSTOMER' || value === 'TAILOR'
+}
+
+function displayNameFromMetadata(metadata: User['user_metadata']) {
+  if (typeof metadata?.display_name === 'string' && metadata.display_name.trim().length > 0) {
+    return metadata.display_name.trim()
+  }
+  if (typeof metadata?.full_name === 'string' && metadata.full_name.trim().length > 0) {
+    return metadata.full_name.trim()
+  }
+  if (typeof metadata?.name === 'string' && metadata.name.trim().length > 0) {
+    return metadata.name.trim()
+  }
+  return null
 }
 
 function isInvalidCredentialError(message: string | null | undefined) {
@@ -380,11 +399,58 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     lastSessionUserIdRef.current = nextUserId
   }, [loading, session?.user?.id])
 
+  async function applyRoleIntent(roleIntent?: DrapeRole | null): Promise<string | null> {
+    if (!roleIntent) return null
+    if (!isDrapeRole(roleIntent)) return 'Choose a valid Drapeon mode.'
+
+    const { data: sessionData, error: sessionError } = await withAuthBootstrapTimeout(
+      supabase.auth.getSession(),
+      'Drapeon mode session lookup',
+    )
+    const currentSession = sessionData.session
+    if (sessionError || !currentSession?.user?.id) {
+      return 'Sign in completed, but Drapeon could not choose your mode. Sign in again if the app does not move.'
+    }
+
+    if (currentSession.user.user_metadata?.role === roleIntent) {
+      return null
+    }
+
+    const { error } = await supabase.auth.updateUser({ data: { role: roleIntent } })
+    if (error) {
+      return mapAuthErrorMessage(
+        error.message,
+        'Sign in completed, but Drapeon could not choose your mode. Try again in a moment.',
+      )
+    }
+
+    try {
+      await syncUserRow({
+        userId: currentSession.user.id,
+        role: roleIntent,
+        displayName: displayNameFromMetadata(currentSession.user.user_metadata),
+      })
+    } catch (error) {
+      console.warn('Unable to sync role intent into users row.', error)
+    }
+
+    const { data, error: refreshError } = await supabase.auth.refreshSession()
+    if (refreshError) {
+      return mapAuthErrorMessage(
+        refreshError.message,
+        'Drapeon mode changed, but your session did not refresh cleanly. Sign out and back in if the app does not move.',
+      )
+    }
+
+    setSession(data.session)
+    return null
+  }
+
   async function signUp(
     email: string,
     password: string,
     displayName: string,
-    role: 'CUSTOMER' | 'TAILOR'
+    role: DrapeRole
   ) {
     const normalizedEmail = normalizeEmail(email)
     if (!isValidEmail(normalizedEmail)) {
@@ -393,7 +459,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         requiresEmailConfirmation: false,
       }
     }
-    if (role !== 'CUSTOMER' && role !== 'TAILOR') {
+    if (!isDrapeRole(role)) {
       return {
         error: 'Choose whether you are signing up as a customer or tailor.',
         requiresEmailConfirmation: false,
@@ -428,13 +494,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  async function signIn(email: string, password: string) {
+  async function signIn(email: string, password: string, roleIntent?: DrapeRole | null) {
     const normalizedEmail = normalizeEmail(email)
     if (!isValidEmail(normalizedEmail)) {
       return { error: 'Enter a valid email address.' }
     }
     try {
       const { error } = await signInWithPasswordResilient(normalizedEmail, password)
+      if (!error) {
+        const roleError = await applyRoleIntent(roleIntent)
+        if (roleError) return { error: roleError }
+      }
       return {
         error: error ? mapAuthErrorMessage(error.message, 'We could not sign you in right now. Please try again in a moment.') : null,
       }
@@ -448,7 +518,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  async function signInWithGoogle(): Promise<{ error: string | null }> {
+  async function signInWithGoogle(roleIntent?: DrapeRole | null): Promise<{ error: string | null }> {
     try {
       const redirectUrl = ExpoLinking.createURL('/callback')
       const { data, error } = await supabase.auth.signInWithOAuth({
@@ -480,13 +550,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { error: mapAuthErrorMessage(sessionError.message, 'Google sign-in completed, but Drapeon could not open your session. Please try again.') }
       }
 
+      const roleError = await applyRoleIntent(roleIntent)
+      if (roleError) return { error: roleError }
+
       return { error: null }
     } catch (e: unknown) {
       return { error: mapAuthErrorMessage((e as Error).message, 'Google sign-in failed. Please try again in a moment.') }
     }
   }
 
-  async function signInWithApple(): Promise<{ error: string | null }> {
+  async function signInWithApple(roleIntent?: DrapeRole | null): Promise<{ error: string | null }> {
     if (Platform.OS !== 'ios') return { error: 'Apple sign-in is only available on iOS' }
     try {
       // Dynamic import so Android doesn't crash on missing native module
@@ -507,7 +580,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         token: credential.identityToken,
         nonce: rawNonce,
       })
-      return { error: error ? mapAuthErrorMessage(error.message, 'Apple sign-in completed, but Drapeon could not open your session. Please try again.') : null }
+      if (error) {
+        return { error: mapAuthErrorMessage(error.message, 'Apple sign-in completed, but Drapeon could not open your session. Please try again.') }
+      }
+      const roleError = await applyRoleIntent(roleIntent)
+      return { error: roleError }
     } catch (e: unknown) {
       const err = e as { code?: string; message?: string }
       if (err.code === 'ERR_REQUEST_CANCELED') return { error: null } // user cancelled
@@ -515,22 +592,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  async function switchRole(role: 'CUSTOMER' | 'TAILOR'): Promise<{ error: string | null }> {
+  async function switchRole(role: DrapeRole): Promise<{ error: string | null }> {
     if (!session?.user?.id) {
       return { error: 'Sign in again before switching Drapeon modes.' }
     }
-    if (role !== 'CUSTOMER' && role !== 'TAILOR') {
+    if (!isDrapeRole(role)) {
       return { error: 'Choose a valid Drapeon mode.' }
     }
 
-    const displayName =
-      typeof session.user.user_metadata?.display_name === 'string'
-        ? session.user.user_metadata.display_name
-        : typeof session.user.user_metadata?.full_name === 'string'
-          ? session.user.user_metadata.full_name
-          : typeof session.user.user_metadata?.name === 'string'
-            ? session.user.user_metadata.name
-            : null
+    const displayName = displayNameFromMetadata(session.user.user_metadata)
 
     const { error } = await supabase.auth.updateUser({ data: { role } })
     if (error) {
@@ -587,9 +657,10 @@ export function useAuth() {
 }
 
 // Convenience: get current user role from JWT metadata
-export function useUserRole(): 'CUSTOMER' | 'TAILOR' | null {
+export function useUserRole(): DrapeRole | null {
   const { user } = useAuth()
-  return (user?.user_metadata?.role as 'CUSTOMER' | 'TAILOR') ?? null
+  const role = user?.user_metadata?.role
+  return isDrapeRole(role) ? role : null
 }
 
 export { signInWithPasswordResilient }

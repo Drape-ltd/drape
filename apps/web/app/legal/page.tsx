@@ -6,7 +6,7 @@ import { buildMetadata } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'Legal',
-  description: 'Find the formal legal contact route for Drapeon.',
+  description: 'Find formal legal contact information for Drapeon, operated by O4 Group LLC.',
   path: '/legal',
 })
 
@@ -14,8 +14,8 @@ export default function LegalPage(): JSX.Element {
   return (
     <MarketingShell
       eyebrow="Legal"
-      title="Formal legal contact should be easy to find."
-      description="The website should make formal communication routes visible without overwhelming the rest of the product story."
+      title="Legal information for Drapeon."
+      description="Drapeon is operated by O4 Group LLC. Formal legal communication routes to the legal inbox on the drapeon.co domain."
       cta={
         <a
           href={`mailto:${CONTACTS.legal}?subject=Drapeon%20legal%20inquiry`}
@@ -27,22 +27,22 @@ export default function LegalPage(): JSX.Element {
     >
       <section className="py-8">
         <SectionTitle
-          eyebrow="Why it exists"
-          title="A serious product should make serious contact paths visible."
-          description="The legal page does not need to be noisy. It just needs to route the right issues correctly."
+          eyebrow="Company"
+          title="Drapeon is operated by O4 Group LLC."
+          description="This page routes formal legal communication. Product support, privacy, and security issues have dedicated inboxes."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           <MarketingCard
             title="Formal communication"
-            body="Contractual, regulatory, or formal legal communication should have a clear route."
+            body="Contractual, regulatory, or formal legal communication goes to legal@drapeon.co."
           />
           <MarketingCard
             title="Separation"
-            body="Legal issues should not be mixed into customer support, privacy, or general inquiries."
+            body="Support, privacy, and security requests have separate routes so the right team can respond."
           />
           <MarketingCard
             title="Clarity"
-            body="The right inbox should be obvious before someone has to ask where to send a formal request."
+            body="O4 Group LLC is the business entity behind Drapeon."
           />
         </div>
       </section>

@@ -10,7 +10,7 @@ import {
   KeyboardAvoidingView,
   Linking,
 } from 'react-native'
-import { useNavigation, useRouter } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
@@ -20,10 +20,30 @@ import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
 import { Button, Input, Divider } from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius } from '@/constants/theme'
 
+type RoleIntent = 'CUSTOMER' | 'TAILOR'
+
+function normalizeRoleIntent(value: unknown): RoleIntent | null {
+  const candidate = Array.isArray(value) ? value[0] : value
+  return candidate === 'CUSTOMER' || candidate === 'TAILOR' ? candidate : null
+}
+
 export default function SignInScreen() {
   const router = useRouter()
   const navigation = useNavigation()
+  const params = useLocalSearchParams<{ intent?: string }>()
   const { signIn, signInWithGoogle, signInWithApple } = useAuth()
+  const roleIntent = normalizeRoleIntent(params.intent)
+  const intentLabel = roleIntent === 'TAILOR' ? 'tailor' : roleIntent === 'CUSTOMER' ? 'customer' : null
+  const intentTitle = roleIntent === 'TAILOR'
+    ? 'Sign in to your tailor workspace.'
+    : roleIntent === 'CUSTOMER'
+      ? 'Sign in to order with Drapeon.'
+      : 'Sign in to Drapeon.'
+  const intentBody = roleIntent === 'TAILOR'
+    ? 'Open briefs, consultations, production updates, payouts, and your storefront.'
+    : roleIntent === 'CUSTOMER'
+      ? 'Continue browsing tailors, tracking orders, measurements, messages, and protected payments.'
+      : 'Continue tracking orders, messages, measurements, and protected payments.'
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -61,7 +81,7 @@ export default function SignInScreen() {
     setPasswordError('')
 
     setLoading(true)
-    const { error } = await signIn(email.trim().toLowerCase(), password)
+    const { error } = await signIn(email.trim().toLowerCase(), password, roleIntent)
     setLoading(false)
     if (error) {
       if (error === 'Incorrect password. Try again.') {
@@ -91,7 +111,7 @@ export default function SignInScreen() {
   async function handleGoogle() {
     if (loading || oauthLoading) return
     setOauthLoading('google')
-    const { error } = await signInWithGoogle()
+    const { error } = await signInWithGoogle(roleIntent)
     setOauthLoading(null)
     if (error) Alert.alert('Google sign-in failed', error)
     else capture('sign_in', { method: 'google' })
@@ -100,7 +120,7 @@ export default function SignInScreen() {
   async function handleApple() {
     if (loading || oauthLoading) return
     setOauthLoading('apple')
-    const { error } = await signInWithApple()
+    const { error } = await signInWithApple(roleIntent)
     setOauthLoading(null)
     if (error) Alert.alert('Apple sign-in failed', error)
     else capture('sign_in', { method: 'apple' })
@@ -138,15 +158,19 @@ export default function SignInScreen() {
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <AuthEntryHeader
             eyebrow="Welcome back"
-            title="Sign in to Drapeon."
-            body="Continue tracking orders, messages, measurements, and protected payments."
+            title={intentTitle}
+            body={intentBody}
             showWordmark={false}
           />
 
           <View style={styles.formCard}>
             <View style={styles.formIntro}>
               <Text style={styles.formEyebrow}>Your account</Text>
-              <Text style={styles.formTitle}>Use your email or a connected account.</Text>
+              <Text style={styles.formTitle}>
+                {intentLabel
+                  ? `Use your email or a connected account. We’ll open the ${intentLabel} side after sign in.`
+                  : 'Use your email or a connected account.'}
+              </Text>
             </View>
 
             <Input
@@ -192,7 +216,9 @@ export default function SignInScreen() {
             <View style={styles.nextCard}>
               <Text style={styles.nextEyebrow}>Protected access</Text>
               <Text style={styles.nextTitle}>
-                We’ll return you to the right side of your account after sign in.
+                {intentLabel
+                  ? `If this account has not used the ${intentLabel} side yet, we’ll take you to setup first.`
+                  : 'We’ll return you to the right side of your account after sign in.'}
               </Text>
             </View>
 
@@ -246,7 +272,13 @@ export default function SignInScreen() {
 
             <Text style={styles.prompt}>
               Don't have an account?{' '}
-              <Text style={styles.link} onPress={() => router.replace('/(auth)/sign-up')}>
+              <Text
+                style={styles.link}
+                onPress={() => router.replace({
+                  pathname: '/(auth)/sign-up',
+                  params: roleIntent ? { intent: roleIntent } : undefined,
+                })}
+              >
                 Create one
               </Text>
             </Text>

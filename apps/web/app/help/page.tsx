@@ -14,7 +14,7 @@ const FAQ: Array<{ question: string; answer: string }> = [
   {
     question: 'How do customers raise a concern?',
     answer:
-      'Concerns should be raised from the order itself, where the history and updates are still visible.',
+      'Concerns start from the order itself, where the history and updates are still visible.',
   },
   {
     question: 'What if the connection is weak or a live feature fails?',
@@ -101,13 +101,13 @@ export default function HelpPage(): JSX.Element {
         <SectionTitle
           eyebrow="When Signal Is Weak"
           title="Use the durable path first."
-          description="Drapeon should still feel understandable when live features are delayed or connectivity is uneven."
+          description="Drapeon keeps the order record useful when live features are delayed or connectivity is uneven."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           {[
             [
               'Open the order first',
-              'Quotes, handoff status, and concern history should still be clearest from the order itself.',
+              'Quotes, handoff status, and concern history stay clearest from the order itself.',
             ],
             [
               'Keep messages in Drapeon',

@@ -8,6 +8,13 @@ import { Colors, Fonts, FontSize, FontWeight, Spacing } from '@/constants/theme'
 export default function WelcomeScreen() {
   const router = useRouter()
 
+  function startAs(intent: 'CUSTOMER' | 'TAILOR') {
+    router.push({
+      pathname: '/(auth)/sign-up',
+      params: { intent },
+    })
+  }
+
   async function openLegal(url: string) {
     const supported = await Linking.canOpenURL(url)
     if (!supported) {
@@ -32,25 +39,35 @@ export default function WelcomeScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.hero}>
         <View style={styles.brandLockup}>
-          <Text style={styles.wordmark}>drape</Text>
+          <View style={styles.logoMark}>
+            <Text style={styles.logoLetter}>D</Text>
+          </View>
+          <Text style={styles.wordmark}>Drapeon</Text>
         </View>
-        <Text style={styles.tagline}>Your tailor, found and protected.</Text>
+        <Text style={styles.eyebrow}>AI-powered fashion discovery and fit</Text>
+        <Text style={styles.tagline}>Fashion that fits before the first stitch.</Text>
         <Text style={styles.sub}>
-          Order custom pieces, ready-made finds, and track every stitch with payment protection.
+          Find trusted tailors, shop ready-made pieces, and use Drape Vision to keep fit,
+          orders, and payments in one protected place.
         </Text>
         <View style={styles.trustRail}>
-          <TrustPoint label="Vetted tailors" />
-          <TrustPoint label="Protected payments" />
-          <TrustPoint label="Tracked orders" />
+          <TrustPoint label="Discover trusted fashion" />
+          <TrustPoint label="Review fit before ordering" />
+          <TrustPoint label="Track money and handoff" />
         </View>
       </View>
 
       <View style={styles.actions}>
-        <Button label="Create an account" onPress={() => router.push('/(auth)/sign-up')} />
-        <Divider label="or" />
+        <Button label="Continue as customer" onPress={() => startAs('CUSTOMER')} />
+        <Button
+          label="Continue as tailor"
+          variant="secondary"
+          onPress={() => startAs('TAILOR')}
+        />
+        <Divider label="already have an account?" />
         <Button
           label="Sign in"
-          variant="secondary"
+          variant="ghost"
           onPress={() => router.push('/(auth)/sign-in')}
         />
         <Text style={styles.legal}>
@@ -100,26 +117,62 @@ const styles = StyleSheet.create({
   hero: {
     flex: 1,
     justifyContent: 'center',
-    gap: Spacing.lg,
+    gap: Spacing.md,
   },
   brandLockup: {
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  logoMark: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreen,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.white,
+  },
+  logoLetter: {
+    fontFamily: Fonts.display,
+    fontSize: 21,
+    fontWeight: FontWeight.bold,
+    color: Colors.white,
+    lineHeight: 25,
   },
   wordmark: {
     fontFamily: Fonts.display,
-    fontSize: 58,
+    fontSize: 42,
     fontWeight: FontWeight.bold,
     color: Colors.needleGreen,
     letterSpacing: 0,
-    lineHeight: 66,
+    lineHeight: 50,
+  },
+  eyebrow: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    backgroundColor: Colors.white,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.lightGrey,
+    color: Colors.needleGreen,
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    letterSpacing: 0,
+    lineHeight: 18,
+    marginTop: Spacing.lg,
+    overflow: 'hidden',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    textTransform: 'uppercase',
   },
   tagline: {
     fontFamily: Fonts.display,
-    fontSize: 34,
+    fontSize: 36,
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
-    lineHeight: 40,
-    marginTop: Spacing.lg,
+    lineHeight: 41,
   },
   sub: {
     fontFamily: Fonts.body,

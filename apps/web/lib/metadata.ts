@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://drapeon.co'
+const defaultTitle = 'Drapeon | AI-powered fashion discovery and fit'
 
 export function buildMetadata({
   title,
@@ -20,7 +21,7 @@ export function buildMetadata({
       canonical: path,
     },
     openGraph: {
-      title: title === 'Drapeon' ? 'Drapeon | Custom clothing, handled beautifully' : `${title} | Drapeon`,
+      title: title === 'Drapeon' ? defaultTitle : `${title} | Drapeon`,
       description,
       url,
       siteName: 'Drapeon',
@@ -36,7 +37,7 @@ export function buildMetadata({
     },
     twitter: {
       card: 'summary_large_image',
-      title: title === 'Drapeon' ? 'Drapeon | Custom clothing, handled beautifully' : `${title} | Drapeon`,
+      title: title === 'Drapeon' ? defaultTitle : `${title} | Drapeon`,
       description,
       images: ['/opengraph-image'],
     },

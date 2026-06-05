@@ -5,43 +5,41 @@ import type { JSX } from 'react'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
-const lastUpdated = 'May 9, 2026'
+const lastUpdated = 'June 5, 2026'
 const accountDeletionRoute = '/account-deletion' as Route
 
-const customerResponsibilities = [
+const userRules = [
   'Provide accurate account, contact, delivery, measurement, and order information.',
-  'Only upload photos, references, and media that you have the right to use.',
-  'Review quotes, garment details, delivery details, and cancellation terms before paying.',
-  'Respond to reasonable tailor and support questions needed to complete the order.',
-  'Confirm delivery honestly and raise disputes or aftercare issues promptly.',
+  'Only upload photos, references, reviews, and media you have the right to use.',
+  'Keep communication and order decisions inside Drapeon when they relate to a Drapeon order.',
+  'Do not harass, scam, impersonate, bypass payment, manipulate reviews, or misrepresent work.',
 ]
 
-const tailorResponsibilities = [
-  'Keep profile, portfolio, pricing, availability, location, and delivery settings accurate.',
-  'Only accept work you can reasonably complete at the agreed quality and timeline.',
-  'Provide clear quotes, stage updates, production photos, and handoff information.',
-  'Do not start paid work until the order is accepted and payment status allows work to begin.',
-  'Maintain required verification, payout, tax, identity, and compliance information.',
+const orderRules = [
+  {
+    title: 'Custom orders',
+    body: 'Customers submit a brief. Tailors review the brief, ask questions, and provide a quote. Work begins only when the order and payment state allow it.',
+  },
+  {
+    title: 'Ready-made orders',
+    body: 'Ready-made purchases depend on listed photos, size, stock, pickup, delivery, shipping, and return details.',
+  },
+  {
+    title: 'Drape Vision',
+    body: 'Drape Vision provides AI-assisted measurement guidance. Users remain responsible for reviewing measurements and choosing manual entry when needed.',
+  },
 ]
 
-const prohibitedActivities = [
-  'Bypassing Drapeon payments or moving active Drapeon orders off-platform.',
-  'Uploading illegal, misleading, stolen, harmful, or rights-infringing content.',
-  'Harassment, discrimination, threats, scams, impersonation, or abusive communication.',
-  'Manipulating reviews, ratings, availability, portfolio media, or verification records.',
-  'Using Drapeon to launder money, evade sanctions, commit fraud, or violate law.',
-]
-
-const cancellationPolicy = [
-  ['Before tailor accepts', 'Full refund.'],
-  ['After acceptance, before cutting begins', 'Full refund unless a separate non-refundable consultation fee was clearly accepted.'],
-  ['After cutting begins', '50% refund unless Drapeon support decides otherwise based on the evidence.'],
-  ['After completion', 'No automatic refund. Contact support to report an issue or request aftercare review.'],
+const refundRules = [
+  ['Before tailor acceptance', 'Eligible for a full refund.'],
+  ['After acceptance, before cutting begins', 'Eligible for a full refund unless a clearly accepted non-refundable fee or material cost applies.'],
+  ['After cutting begins', 'Refunds may be partial and depend on progress, evidence, and support review.'],
+  ['After completion or delivery', 'No automatic refund. Users can request aftercare or open a dispute when something is wrong.'],
 ]
 
 export const metadata: Metadata = buildMetadata({
   title: 'Terms of Service',
-  description: 'Read the terms that govern customer, tailor, payment, order, dispute, and account use on Drapeon.',
+  description: 'Terms for using Drapeon, an AI-powered fashion discovery and fit platform operated by O4 Group LLC.',
   path: '/terms',
 })
 
@@ -49,8 +47,8 @@ export default function TermsPage(): JSX.Element {
   return (
     <MarketingShell
       eyebrow="Terms of Service"
-      title="Clear terms for custom clothing that crosses borders."
-      description="These Terms explain what Drapeon provides, what customers and tailors are responsible for, how payments and payouts work, and how disputes, cancellations, and account actions are handled."
+      title="Terms for Drapeon users, tailors, orders, and AI fit tools."
+      description="Drapeon is operated by O4 Group LLC. These Terms explain the rules for accounts, orders, payments, Drape Vision, disputes, and support."
       cta={
         <a
           href={`mailto:${CONTACTS.legal}?subject=Drapeon%20legal%20question`}
@@ -64,7 +62,7 @@ export default function TermsPage(): JSX.Element {
         <div className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
           <p className="font-semibold text-ink">Last updated: {lastUpdated}</p>
           <p className="mt-3">
-            By using Drapeon, you agree to these Terms. If you use Drapeon for a business, tailor shop, studio, brand, or organization, you confirm that you have authority to accept these Terms for that organization.
+            By using Drapeon, you agree to these Terms. If you use Drapeon on behalf of a business, tailor shop, studio, or organization, you confirm that you have authority to accept these Terms for that organization.
           </p>
         </div>
       </section>
@@ -72,169 +70,35 @@ export default function TermsPage(): JSX.Element {
       <section className="border-t border-ink/6 py-16">
         <SectionTitle
           eyebrow="What Drapeon is"
-          title="Drapeon is a marketplace and order operating system."
-          description="Drapeon helps customers find tailors, place custom or ready-made orders, pay, communicate, track production, confirm delivery, and handle support."
+          title="A fashion marketplace with ordering, fit, payment, and support tools."
+          description="Drapeon helps customers discover fashion, use fit guidance, place custom or ready-made orders, communicate with tailors, pay, track production, and resolve issues."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           <MarketingCard
             title="Marketplace"
-            body="Drapeon connects customers and tailors. Tailors are independent providers, not Drapeon employees, unless a separate written agreement says otherwise."
+            body="Tailors and sellers are independent providers unless a separate written agreement says otherwise."
           />
           <MarketingCard
-            title="Order system"
-            body="Drapeon keeps briefs, quotes, messages, production updates, delivery, reviews, disputes, and support context in one place."
+            title="Order record"
+            body="Briefs, quotes, measurements, messages, photos, production updates, delivery, disputes, and reviews stay connected to the order."
           />
           <MarketingCard
             title="Payment coordination"
-            body="Drapeon coordinates payment collection, refunds, payout eligibility, and provider references through payment processors such as Stripe and Paystack."
-          />
-        </div>
-        <div className="mt-8 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
-          Drapeon is not a bank, tailor, insurer, freight carrier, customs broker, or legal adviser. We may provide trust, safety, payment, support, and dispute tools, but each customer and tailor remains responsible for their own decisions, content, commitments, and legal obligations.
-        </div>
-      </section>
-
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="Accounts"
-          title="Accounts must be accurate and secure."
-          description="Users are responsible for keeping account details current and protecting login credentials."
-        />
-        <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
-          You must provide accurate information, keep your email and phone number up to date, and notify Drapeon if you suspect unauthorized access. We may require identity, payout, phone, email, or business verification before enabling certain features. We may limit, suspend, or close accounts that create risk for users, payments, payouts, safety, verification, or marketplace trust.
-        </div>
-      </section>
-
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="Responsibilities"
-          title="Customers and tailors each carry part of the trust chain."
-          description="Custom clothing only works when the brief, quote, measurements, production, communication, and handoff are handled with care."
-        />
-        <div className="mt-10 grid gap-5 lg:grid-cols-2">
-          <div className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
-            <h3 className="text-2xl text-ink">Customer responsibilities</h3>
-            <ul className="mt-5 grid gap-3 text-sm leading-7 text-ink/72">
-              {customerResponsibilities.map((item) => (
-                <li key={item} className="rounded-2xl bg-bone/70 px-4 py-3">
-                  {item}
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
-            <h3 className="text-2xl text-ink">Tailor responsibilities</h3>
-            <ul className="mt-5 grid gap-3 text-sm leading-7 text-ink/72">
-              {tailorResponsibilities.map((item) => (
-                <li key={item} className="rounded-2xl bg-bone/70 px-4 py-3">
-                  {item}
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      </section>
-
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="Orders and quotes"
-          title="A paid order is built around the accepted quote."
-          description="The accepted quote, delivery details, cancellation policy, stage updates, and order thread are the source of truth for an order."
-        />
-        <div className="mt-10 grid gap-5 lg:grid-cols-3">
-          <MarketingCard
-            title="Custom orders"
-            body="Customers submit a brief. Tailors review details and provide a quote. Work should only proceed once the order and payment state allow it."
-          />
-          <MarketingCard
-            title="Ready-made orders"
-            body="Ready-made items depend on listed size, stock, delivery, and return details. Inventory can be limited and may sell out."
-          />
-          <MarketingCard
-            title="Changes"
-            body="Material changes after quote acceptance may require a revised quote, revised timeline, or support review before work continues."
+            body="Drapeon coordinates payment, refund, payout, and provider status through payment processors such as Stripe and Paystack."
           />
         </div>
       </section>
 
       <section className="border-t border-ink/6 py-16">
         <SectionTitle
-          eyebrow="Payments and payouts"
-          title="Payments protect the order until release conditions are met."
-          description="Drapeon uses payment providers to collect customer funds, track payment status, handle refunds, and release eligible payouts."
-        />
-        <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
-          When a customer pays, payment providers may hold or settle funds according to their rules. Drapeon coordinates an escrow-style hold for the order: the tailor should not be paid out until the order is delivered, the release window and dispute checks are satisfied, and the tailor has a verified payout account. Payout timing can depend on provider processing, bank availability, compliance review, refunds, chargebacks, disputes, or manual ops review.
-        </div>
-        <div className="mt-5 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
-          If payment fails, the order may be placed on hold, moved to payment failed, cancelled, or blocked from production until payment is resolved. Tailors should not begin work on unpaid or blocked orders.
-        </div>
-      </section>
-
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="Cancellation and refunds"
-          title="The refund path depends on production progress."
-          description="Custom clothing changes value as work begins. The cancellation policy must be visible before checkout and support can review edge cases."
-        />
-        <div className="mt-10 grid gap-4">
-          {cancellationPolicy.map(([stage, outcome]) => (
-            <div key={stage} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
-              <h3 className="text-2xl text-ink">{stage}</h3>
-              <p className="mt-3 text-sm leading-7 text-ink/68">{outcome}</p>
-            </div>
-          ))}
-        </div>
-        <p className="mt-6 text-sm leading-7 text-ink/68">
-          Refund timing depends on payment providers and financial institutions. Drapeon may adjust outcomes for fraud, safety, chargebacks, evidence, legal requirements, or support-approved exceptions.
-        </p>
-      </section>
-
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="Disputes and aftercare"
-          title="Problems should stay attached to the order record."
-          description="If a garment is late, damaged, wrong, incomplete, missing, or materially different from the accepted quote, users should raise the issue through Drapeon support."
-        />
-        <div className="mt-10 grid gap-5 lg:grid-cols-3">
-          <MarketingCard
-            title="Disputes"
-            body="Disputes may pause payout release while Drapeon reviews order evidence, messages, photos, delivery records, and user history."
-          />
-          <MarketingCard
-            title="Aftercare"
-            body="Some post-delivery issues may be handled through aftercare review rather than an automatic refund."
-          />
-          <MarketingCard
-            title="Evidence"
-            body="Drapeon may retain order evidence and timeline records as needed for trust, safety, support, legal, payment, and payout reasons."
-          />
-        </div>
-      </section>
-
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="Content and communication"
-          title="Photos, reviews, messages, and portfolios must be honest."
-          description="Drapeon depends on visual trust. Uploaded content must not mislead customers, violate rights, or create safety risk."
-        />
-        <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
-          You keep ownership of content you upload, but you grant Drapeon permission to host, display, process, resize, moderate, and use it as needed to operate the service. Drapeon may remove or restrict content that appears fraudulent, unsafe, illegal, infringing, discriminatory, misleading, or inconsistent with marketplace trust.
-        </div>
-      </section>
-
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="Prohibited conduct"
-          title="Anything that breaks marketplace trust is not allowed."
-          description="Drapeon may investigate, restrict, suspend, or terminate accounts that create risk."
+          eyebrow="Account rules"
+          title="Use Drapeon honestly and keep order decisions on record."
+          description="Marketplace trust depends on accurate profiles, real portfolio media, reliable communication, and clear payment records."
         />
         <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
           <ul className="grid gap-3 text-sm leading-7 text-ink/72 md:grid-cols-2">
-            {prohibitedActivities.map((item) => (
-              <li key={item} className="rounded-2xl bg-bone/70 px-4 py-3">
-                {item}
-              </li>
+            {userRules.map((rule) => (
+              <li key={rule} className="rounded-2xl bg-bone/70 px-4 py-3">{rule}</li>
             ))}
           </ul>
         </div>
@@ -242,67 +106,97 @@ export default function TermsPage(): JSX.Element {
 
       <section className="border-t border-ink/6 py-16">
         <SectionTitle
-          eyebrow="Account actions"
-          title="Suspension, closure, and deletion are separate workflows."
-          description="Drapeon may restrict accounts for safety, fraud, payout, payment, verification, support, or legal reasons. Users can also request account deletion."
+          eyebrow="Orders and Drape Vision"
+          title="The accepted order is the source of truth."
+          description="Measurements, Drape Vision results, reference photos, quotes, timelines, delivery details, and support decisions stay attached to the order."
         />
-        <div className="mt-10 grid gap-5 lg:grid-cols-2">
-          <MarketingCard
-            title="Platform restrictions"
-            body="We may pause new orders, hide profiles, block payouts, disable messaging, remove content, or require review when risk is detected."
-          />
-          <MarketingCard
-            title="Account deletion"
-            body="Deletion requests are handled through the app or drapeon.co/account-deletion. Some records may be retained where legally or operationally necessary."
-          />
+        <div className="mt-10 grid gap-5 lg:grid-cols-3">
+          {orderRules.map((item) => (
+            <MarketingCard key={item.title} title={item.title} body={item.body} />
+          ))}
         </div>
-        <div className="mt-8">
-          <Link
-            href={accountDeletionRoute}
-            className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-6 py-4 text-sm font-semibold text-ink shadow-sm"
-          >
-            Open account deletion page
-          </Link>
+        <div className="mt-8 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
+          Drape Vision and other fit tools are designed to improve measurement quality, but custom clothing still involves human judgment, fabric behavior, body changes, lighting, camera quality, and tailoring execution. Drapeon does not guarantee a perfect garment outcome.
         </div>
       </section>
 
       <section className="border-t border-ink/6 py-16">
         <SectionTitle
-          eyebrow="Legal terms"
-          title="Liability, changes, governing law, and contact."
-          description="These legal terms are written for launch readiness, but Drapeon may update them as the product, jurisdictions, and providers evolve."
+          eyebrow="Payments, refunds, and payouts"
+          title="Money movement follows order state and provider rules."
+          description="Drapeon is not a bank. Payment providers process customer payments, refunds, and payout rails."
         />
-        <div className="mt-10 grid gap-4">
-          <div className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
-            <h3 className="text-2xl text-ink">No guarantee of perfect fit or outcome</h3>
-            <p className="mt-3 text-sm leading-7 text-ink/68">
-              Drapeon works to improve trust and clarity, but custom clothing involves human judgment, fabric behavior, measurements, body changes, shipping, and tailoring execution. Except where required by law, Drapeon does not guarantee every garment outcome.
-            </p>
-          </div>
-          <div className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
-            <h3 className="text-2xl text-ink">Limitation of liability</h3>
-            <p className="mt-3 text-sm leading-7 text-ink/68">
-              To the maximum extent allowed by law, Drapeon is not liable for indirect, incidental, special, consequential, exemplary, or punitive damages, or for losses outside the amount paid for the affected order, except where the law does not allow that limit.
-            </p>
-          </div>
-          <div className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
-            <h3 className="text-2xl text-ink">Changes to these Terms</h3>
-            <p className="mt-3 text-sm leading-7 text-ink/68">
-              We may update these Terms as Drapeon changes. If a change is material, we will take reasonable steps to notify users. Continued use after the effective date means you accept the updated Terms.
-            </p>
-          </div>
-          <div className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
-            <h3 className="text-2xl text-ink">Governing law</h3>
-            <p className="mt-3 text-sm leading-7 text-ink/68">
-              These Terms are governed by the laws of Wyoming, United States, without regard to conflict-of-law rules, except where consumer protection law requires a different rule.
-            </p>
-          </div>
-          <div className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
-            <h3 className="text-2xl text-ink">Contact</h3>
-            <p className="mt-3 text-sm leading-7 text-ink/68">
-              Legal questions: <a className="font-semibold text-needle" href={`mailto:${CONTACTS.legal}`}>{CONTACTS.legal}</a>. General support: <a className="font-semibold text-needle" href={`mailto:${CONTACTS.support}`}>{CONTACTS.support}</a>.
-            </p>
-          </div>
+        <div className="mt-10 grid gap-5 lg:grid-cols-2">
+          <MarketingCard
+            title="Customer payments"
+            body="Customers must review order details, pricing, fees, currency, delivery, shipping, and cancellation terms before paying."
+          />
+          <MarketingCard
+            title="Tailor payouts"
+            body="Payouts require a verified payout account, eligible order state, no blocking dispute, and provider readiness."
+          />
+        </div>
+        <div className="mt-8 grid gap-4">
+          {refundRules.map(([stage, outcome]) => (
+            <div key={stage} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
+              <h3 className="text-2xl text-ink">{stage}</h3>
+              <p className="mt-3 text-sm leading-7 text-ink/68">{outcome}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="border-t border-ink/6 py-16">
+        <SectionTitle
+          eyebrow="Disputes and safety"
+          title="Problems belong in Drapeon support."
+          description="Support may review messages, photos, measurements, payment records, delivery records, user history, and other order evidence."
+        />
+        <div className="mt-10 grid gap-5 lg:grid-cols-3">
+          <MarketingCard
+            title="Disputes"
+            body="A dispute may pause payout release while Drapeon reviews evidence and decides the next safe action."
+          />
+          <MarketingCard
+            title="Content"
+            body="Drapeon may remove or restrict illegal, unsafe, misleading, stolen, abusive, discriminatory, or rights-infringing content."
+          />
+          <MarketingCard
+            title="Account action"
+            body="Drapeon may limit, suspend, or close accounts that create safety, fraud, payment, verification, legal, or marketplace risk."
+          />
+        </div>
+      </section>
+
+      <section className="border-t border-ink/6 py-16">
+        <SectionTitle
+          eyebrow="Legal"
+          title="O4 Group LLC operates Drapeon."
+          description="These Terms may change as the product, jurisdictions, providers, and policies evolve."
+        />
+        <div className="mt-10 grid gap-5 lg:grid-cols-2">
+          <MarketingCard
+            title="Governing law"
+            body="These Terms are governed by the laws of Wyoming, United States, except where consumer protection law requires a different rule."
+          />
+          <MarketingCard
+            title="Limitation of liability"
+            body="To the maximum extent allowed by law, O4 Group LLC is not liable for indirect, incidental, special, consequential, exemplary, or punitive damages."
+          />
+        </div>
+        <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+          <a
+            href={`mailto:${CONTACTS.legal}`}
+            className="inline-flex items-center justify-center rounded-full bg-needle px-6 py-4 text-sm font-semibold text-white shadow-sm"
+          >
+            {CONTACTS.legal}
+          </a>
+          <Link
+            href={accountDeletionRoute}
+            className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-6 py-4 text-sm font-semibold text-ink shadow-sm"
+          >
+            Account deletion
+          </Link>
         </div>
       </section>
     </MarketingShell>

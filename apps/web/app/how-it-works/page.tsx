@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import type { JSX } from 'react'
+import { AppSurfacePreview } from '../../components/product-visuals'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
@@ -16,6 +17,7 @@ export default function HowItWorksPage(): JSX.Element {
       eyebrow="How it works"
       title="One trust-first order loop from brief to review."
       description="Discover, brief, produce, complete."
+      visual={<AppSurfacePreview variant="timeline" />}
       cta={
         <div className="flex flex-col gap-3 sm:flex-row">
           <Link

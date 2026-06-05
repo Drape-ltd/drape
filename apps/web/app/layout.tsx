@@ -7,17 +7,17 @@ const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://drapeon.co'
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
-    default: 'Drapeon | Custom clothing, handled beautifully',
+    default: 'Drapeon | AI-powered fashion discovery and fit',
     template: '%s | Drapeon',
   },
   description:
-    'Find a tailor you trust, place one clear order, and follow it all the way through.',
+    'AI-powered fashion discovery and fit, including Drape Vision camera-assisted measurements.',
   applicationName: 'Drapeon',
   manifest: '/manifest.webmanifest',
   openGraph: {
-    title: 'Drapeon | Custom clothing, handled beautifully',
+    title: 'Drapeon | AI-powered fashion discovery and fit',
     description:
-      'Find a tailor you trust, place one clear order, and follow it all the way through.',
+      'Discover fashion, work with trusted tailors, and use Drape Vision for camera-assisted measurements.',
     url: siteUrl,
     siteName: 'Drapeon',
     type: 'website',
@@ -32,9 +32,9 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Drapeon | Custom clothing, handled beautifully',
+    title: 'Drapeon | AI-powered fashion discovery and fit',
     description:
-      'Find a tailor you trust, place one clear order, and follow it all the way through.',
+      'Discover fashion, work with trusted tailors, and use Drape Vision for camera-assisted measurements.',
     images: ['/opengraph-image'],
   },
   icons: {
@@ -48,7 +48,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }):
   const organizationJsonLd = {
     '@context': 'https://schema.org',
     '@type': 'Organization',
-    name: 'Drapeon',
+    name: 'O4 Group LLC',
+    legalName: 'O4 Group LLC',
+    brand: {
+      '@type': 'Brand',
+      name: 'Drapeon',
+    },
     url: siteUrl,
     email: 'hello@drapeon.co',
   }
@@ -58,7 +63,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }):
     '@type': 'WebSite',
     name: 'Drapeon',
     url: siteUrl,
-    description: 'Find a tailor you trust, place one clear order, and follow it all the way through.',
+    description: 'AI-powered fashion discovery and fit.',
   }
 
   return (

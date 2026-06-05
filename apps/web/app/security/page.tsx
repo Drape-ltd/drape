@@ -14,8 +14,8 @@ export default function SecurityPage(): JSX.Element {
   return (
     <MarketingShell
       eyebrow="Security"
-      title="Security issues should have a direct, trusted route."
-      description="Drapeon handles accounts, measurements, orders, and verification-related data. The website should make security reporting feel straightforward and serious."
+      title="Security issues have a direct, trusted route."
+      description="Drapeon handles accounts, measurements, orders, and verification-related data. Security reports have a dedicated route."
       cta={
         <a
           href={`mailto:${CONTACTS.security}?subject=Drapeon%20security%20report`}
@@ -29,20 +29,20 @@ export default function SecurityPage(): JSX.Element {
         <SectionTitle
           eyebrow="What matters"
           title="A good security path is fast, clear, and direct."
-          description="The web should make it obvious where a report goes, why it matters, and how it differs from a normal support request."
+          description="A security disclosure never belongs in a general support queue."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           <MarketingCard
             title="Direct reporting"
-            body="Security concerns should route directly to the security team instead of disappearing into general support."
+            body="Security concerns route directly to the security team instead of disappearing into general support."
           />
           <MarketingCard
             title="Clear separation"
-            body="Product help, privacy requests, and security disclosures should each have their own destination."
+            body="Product help, privacy requests, and security disclosures each have their own destination."
           />
           <MarketingCard
             title="Trust posture"
-            body="A trust-first product should make responsible reporting feel easy and credible."
+            body="A trust-first product makes responsible reporting feel easy and credible."
           />
         </div>
       </section>
@@ -51,7 +51,7 @@ export default function SecurityPage(): JSX.Element {
         <SectionTitle
           eyebrow="Contact routes"
           title="Use the right inbox for the right issue."
-          description="The website can keep this simple while still making the path clear."
+          description="Security and privacy reports have separate routes so each issue reaches the right owner."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-2">
           <a

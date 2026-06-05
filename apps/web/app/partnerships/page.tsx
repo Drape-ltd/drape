@@ -14,8 +14,8 @@ export default function PartnershipsPage(): JSX.Element {
   return (
     <MarketingShell
       eyebrow="Partnerships"
-      title="Partnerships should strengthen discovery, trust, and handoff."
-      description="Drapeon is building a trust-first custom-clothing platform, so the right partnerships should make the ecosystem stronger for both customers and tailors."
+      title="Partnerships strengthen discovery, trust, and handoff."
+      description="Drapeon is building a trust-first custom-clothing platform, so the right partners make the ecosystem stronger for both customers and tailors."
       cta={
         <a
           href={`mailto:${CONTACTS.partnerships}?subject=Drapeon%20partnership%20inquiry`}
@@ -34,7 +34,7 @@ export default function PartnershipsPage(): JSX.Element {
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           <MarketingCard title="Tailor ecosystem" body="Partnerships that help strong makers grow on Drapeon without weakening trust or clarity." />
           <MarketingCard title="Operational tools" body="Verification, logistics, and workflow partnerships that make the order loop cleaner." />
-          <MarketingCard title="Brand alignment" body="Partnerships should feel additive to the product vision, not like random distribution grabs." />
+          <MarketingCard title="Brand alignment" body="The best partnerships feel additive to the product vision, not like random distribution grabs." />
         </div>
       </section>
     </MarketingShell>

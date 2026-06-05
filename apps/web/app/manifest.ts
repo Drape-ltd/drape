@@ -4,7 +4,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: 'Drapeon',
     short_name: 'Drapeon',
-    description: 'Find a tailor you trust, place one clear order, and follow it all the way through.',
+    description: 'AI-powered fashion discovery and fit.',
     start_url: '/',
     display: 'standalone',
     background_color: '#F5F0E8',

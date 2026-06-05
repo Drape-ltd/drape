@@ -16,7 +16,7 @@ export function AuthEntryHeader({
 }: AuthEntryHeaderProps) {
   return (
     <View style={styles.wrap}>
-      {showWordmark ? <Text style={styles.wordmark}>drape</Text> : null}
+      {showWordmark ? <Text style={styles.wordmark}>Drapeon</Text> : null}
       {eyebrow ? (
         <Text style={[styles.eyebrow, !showWordmark && styles.eyebrowWithoutWordmark]}>
           {eyebrow}

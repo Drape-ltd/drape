@@ -14,7 +14,7 @@ export default function VerifyPage(): JSX.Element {
   return (
     <MarketingShell
       eyebrow="Verification"
-      title="Verification should feel clear before it feels official."
+      title="Verification makes trust easier to read."
       description="Drapeon works better when verification is easy to understand: what it is for, why it matters, and how it supports trust for both customers and tailors."
       cta={
         <a
@@ -42,7 +42,7 @@ export default function VerifyPage(): JSX.Element {
           />
           <MarketingCard
             title="Clear routing"
-            body="Verification questions should have their own direct route instead of disappearing into general support."
+            body="Verification questions have their own direct route instead of disappearing into general support."
           />
         </div>
       </section>

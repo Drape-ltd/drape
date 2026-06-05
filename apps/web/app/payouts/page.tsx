@@ -14,8 +14,8 @@ export default function PayoutsPage(): JSX.Element {
   return (
     <MarketingShell
       eyebrow="Payouts"
-      title="Payout questions should reach the right team directly."
-      description="Tailor confidence depends on more than discovery and quoting. The website should also make the payout support path obvious when it is needed."
+      title="Payout questions reach the right team directly."
+      description="Tailor confidence depends on more than discovery and quoting. Drapeon gives payout questions a direct support path."
       cta={
         <a
           href={`mailto:${CONTACTS.payouts}?subject=Drapeon%20payout%20question`}
@@ -29,12 +29,12 @@ export default function PayoutsPage(): JSX.Element {
         <SectionTitle
           eyebrow="Why it matters"
           title="Operational trust matters after the order too."
-          description="Drapeon is strongest when the business side feels as orderly as the customer side. Payout questions should not feel hidden or hard to route."
+          description="The business side feels as orderly as the customer side. Payout questions have a visible route."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           <MarketingCard
             title="Clear routing"
-            body="Payout questions should go to a dedicated team instead of getting mixed into generic support."
+            body="Payout questions go to a dedicated team instead of getting mixed into generic support."
           />
           <MarketingCard
             title="Tailor confidence"
@@ -42,7 +42,7 @@ export default function PayoutsPage(): JSX.Element {
           />
           <MarketingCard
             title="Order clarity"
-            body="Payout support should stay consistent with the same trust-first order model used elsewhere in Drapeon."
+            body="Payout support stays consistent with the same trust-first order model used elsewhere in Drapeon."
           />
         </div>
       </section>

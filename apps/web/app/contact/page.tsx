@@ -1,12 +1,13 @@
 import type { Metadata } from 'next'
 import { CONTACTS } from '@drape/shared'
 import type { JSX } from 'react'
+import { AppSurfacePreview } from '../../components/product-visuals'
 import { MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'Contact',
-  description: 'Reach the right Drapeon team directly across support, privacy, security, legal, press, and partnerships.',
+  description: 'Reach the Drapeon team at O4 Group LLC for support, privacy, security, legal, press, and partnerships.',
   path: '/contact',
 })
 
@@ -14,11 +15,12 @@ export default function ContactPage(): JSX.Element {
   return (
     <MarketingShell
       eyebrow="Contact"
-      title="Reach the right Drapeon team directly."
-      description="Find the right inbox fast."
+      title="Reach the right Drapeon team."
+      description="Drapeon is operated by O4 Group LLC. Use the right drapeon.co inbox for support, privacy, security, legal, press, and partnerships."
+      visual={<AppSurfacePreview variant="contact" />}
       cta={
         <a
-          href={`mailto:${CONTACTS.hello}?subject=Drapeon%20website%20contact`}
+          href={`mailto:${CONTACTS.hello}?subject=Drapeon%20contact`}
           className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
         >
           Email Drapeon
@@ -28,8 +30,8 @@ export default function ContactPage(): JSX.Element {
       <section className="py-8">
         <SectionTitle
           eyebrow="Directory"
-          title="One product, clear inboxes."
-          description="No guesswork."
+          title="Professional contact routes on the drapeon.co domain."
+          description="Choose the route that matches the issue so the right team can respond quickly."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-2">
           {[

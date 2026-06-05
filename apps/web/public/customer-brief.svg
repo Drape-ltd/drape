@@ -1,28 +1,53 @@
 <svg width="1200" height="560" viewBox="0 0 1200 560" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect width="1200" height="560" rx="40" fill="#F5EEE2"/>
-  <circle cx="1015" cy="121" r="78" fill="#E7EFEA"/>
-  <rect x="74" y="72" width="1052" height="416" rx="30" fill="#FFFDFC" stroke="#E7DED0" stroke-width="2"/>
-  <rect x="112" y="112" width="650" height="336" rx="28" fill="#FBF7F0"/>
-  <rect x="790" y="112" width="290" height="336" rx="28" fill="#F7F0E6"/>
-  <rect x="142" y="146" width="148" height="18" rx="9" fill="#2D6A4F" fill-opacity="0.18"/>
-  <rect x="142" y="179" width="472" height="12" rx="6" fill="#1A1A1A" fill-opacity="0.12"/>
-  <rect x="142" y="214" width="290" height="68" rx="20" fill="#FFFDFC" stroke="#E7DED0"/>
-  <rect x="450" y="214" width="282" height="68" rx="20" fill="#FFFDFC" stroke="#E7DED0"/>
-  <rect x="142" y="302" width="590" height="92" rx="22" fill="#FFFDFC" stroke="#E7DED0"/>
-  <rect x="166" y="236" width="92" height="12" rx="6" fill="#1A1A1A" fill-opacity="0.16"/>
-  <rect x="166" y="257" width="64" height="10" rx="5" fill="#1A1A1A" fill-opacity="0.10"/>
-  <rect x="474" y="236" width="78" height="12" rx="6" fill="#1A1A1A" fill-opacity="0.16"/>
-  <rect x="474" y="257" width="90" height="10" rx="5" fill="#1A1A1A" fill-opacity="0.10"/>
-  <rect x="166" y="326" width="144" height="12" rx="6" fill="#1A1A1A" fill-opacity="0.16"/>
-  <rect x="166" y="350" width="522" height="10" rx="5" fill="#1A1A1A" fill-opacity="0.10"/>
-  <rect x="166" y="372" width="486" height="10" rx="5" fill="#1A1A1A" fill-opacity="0.10"/>
-  <rect x="818" y="144" width="116" height="18" rx="9" fill="#2D6A4F" fill-opacity="0.18"/>
-  <rect x="818" y="186" width="232" height="120" rx="22" fill="#FFFDFC" stroke="#E7DED0"/>
-  <rect x="840" y="208" width="86" height="86" rx="18" fill="#DDEADF"/>
-  <rect x="946" y="208" width="82" height="12" rx="6" fill="#1A1A1A" fill-opacity="0.16"/>
-  <rect x="946" y="232" width="66" height="10" rx="5" fill="#1A1A1A" fill-opacity="0.10"/>
-  <rect x="818" y="328" width="232" height="88" rx="22" fill="#2D6A4F"/>
-  <rect x="850" y="362" width="98" height="14" rx="7" fill="white" fill-opacity="0.92"/>
-  <rect x="961" y="362" width="57" height="14" rx="7" fill="white" fill-opacity="0.58"/>
-  <text x="142" y="102" fill="#2D6A4F" font-family="Arial, sans-serif" font-size="18" font-weight="700" letter-spacing="0.18em">CUSTOMER BRIEF</text>
+  <rect width="1200" height="560" rx="36" fill="#F5F0E8"/>
+  <rect x="42" y="42" width="1116" height="476" rx="34" fill="#FFFDFC" stroke="#E4DDD2" stroke-width="2"/>
+
+  <text x="82" y="94" fill="#2D6A4F" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700" letter-spacing="0.18em">SHARED ORDER RECORD</text>
+  <text x="82" y="126" fill="#1A1A1A" fill-opacity="0.72" font-family="Inter, Arial, sans-serif" font-size="18">One brief gives the customer confidence and gives the tailor enough context to work.</text>
+
+  <rect x="82" y="166" width="490" height="254" rx="26" fill="#FBF7F0" stroke="#E6DED1"/>
+  <rect x="628" y="166" width="490" height="254" rx="26" fill="#FBF7F0" stroke="#E6DED1"/>
+
+  <rect x="112" y="196" width="154" height="30" rx="15" fill="#E4EFE9"/>
+  <text x="132" y="216" fill="#2D6A4F" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="0.12em">CUSTOMER</text>
+  <text x="112" y="260" fill="#1A1A1A" font-family="Fraunces, Georgia, serif" font-size="34" font-weight="700">Clear brief</text>
+
+  <rect x="112" y="288" width="190" height="78" rx="18" fill="#FFFDFC" stroke="#E6DED1"/>
+  <text x="132" y="318" fill="#1A1A1A" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="700">Fit context</text>
+  <text x="132" y="344" fill="#1A1A1A" fill-opacity="0.62" font-family="Inter, Arial, sans-serif" font-size="13">Drape Vision or manual</text>
+
+  <rect x="326" y="288" width="206" height="78" rx="18" fill="#FFFDFC" stroke="#E6DED1"/>
+  <text x="346" y="318" fill="#1A1A1A" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="700">Order terms</text>
+  <text x="346" y="344" fill="#1A1A1A" fill-opacity="0.62" font-family="Inter, Arial, sans-serif" font-size="13">Quote, deadline, delivery</text>
+
+  <rect x="112" y="382" width="420" height="20" rx="10" fill="#2D6A4F" fill-opacity="0.16"/>
+  <rect x="112" y="382" width="214" height="20" rx="10" fill="#2D6A4F"/>
+
+  <rect x="658" y="196" width="126" height="30" rx="15" fill="#E4EFE9"/>
+  <text x="678" y="216" fill="#2D6A4F" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="0.12em">TAILOR</text>
+  <text x="658" y="260" fill="#1A1A1A" font-family="Fraunces, Georgia, serif" font-size="34" font-weight="700">Actionable work</text>
+
+  <rect x="658" y="288" width="196" height="78" rx="18" fill="#FFFDFC" stroke="#E6DED1"/>
+  <text x="678" y="318" fill="#1A1A1A" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="700">Production stages</text>
+  <text x="678" y="344" fill="#1A1A1A" fill-opacity="0.62" font-family="Inter, Arial, sans-serif" font-size="13">Design, source, cut, sew</text>
+
+  <rect x="878" y="288" width="200" height="78" rx="18" fill="#FFFDFC" stroke="#E6DED1"/>
+  <text x="898" y="318" fill="#1A1A1A" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="700">Money state</text>
+  <text x="898" y="344" fill="#1A1A1A" fill-opacity="0.62" font-family="Inter, Arial, sans-serif" font-size="13">Paid, pending, released</text>
+
+  <rect x="658" y="382" width="420" height="20" rx="10" fill="#D85A30" fill-opacity="0.16"/>
+  <rect x="658" y="382" width="312" height="20" rx="10" fill="#D85A30"/>
+
+  <rect x="82" y="444" width="1036" height="42" rx="21" fill="#1A1A1A"/>
+  <circle cx="126" cy="465" r="7" fill="#2D6A4F"/>
+  <circle cx="315" cy="465" r="7" fill="#2D6A4F"/>
+  <circle cx="504" cy="465" r="7" fill="#2D6A4F"/>
+  <circle cx="693" cy="465" r="7" fill="#F5F0E8"/>
+  <circle cx="882" cy="465" r="7" fill="#F5F0E8"/>
+  <path d="M133 465H308M322 465H497M511 465H686M700 465H875" stroke="#FFFDFC" stroke-opacity="0.24" stroke-width="3" stroke-linecap="round"/>
+  <text x="148" y="470" fill="#FFFDFC" fill-opacity="0.86" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="600">Brief</text>
+  <text x="337" y="470" fill="#FFFDFC" fill-opacity="0.86" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="600">Quote</text>
+  <text x="526" y="470" fill="#FFFDFC" fill-opacity="0.86" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="600">Payment</text>
+  <text x="715" y="470" fill="#FFFDFC" fill-opacity="0.86" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="600">Production</text>
+  <text x="904" y="470" fill="#FFFDFC" fill-opacity="0.86" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="600">Handoff</text>
 </svg>

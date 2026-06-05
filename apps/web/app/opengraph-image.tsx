@@ -39,18 +39,18 @@ export default function OpenGraphImage() {
             textTransform: 'uppercase',
           }}
         >
-          The order that earns the word of mouth
+          AI-powered fashion discovery and fit
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '28px', maxWidth: '900px' }}>
           <div style={{ fontSize: 112, lineHeight: 0.9, fontWeight: 700, letterSpacing: '-0.06em' }}>
-            drape
+            Drapeon
           </div>
           <div style={{ fontSize: 76, lineHeight: 1, fontWeight: 700, letterSpacing: '-0.05em' }}>
-            Custom clothing, handled beautifully.
+            Fashion that fits before the first stitch.
           </div>
           <div style={{ fontSize: 32, lineHeight: 1.4, color: 'rgba(26,26,26,0.72)' }}>
-            Find a tailor you trust, place one clear order, and follow it through.
+            Discover fashion, work with trusted tailors, and capture fit measurements with Drape Vision.
           </div>
         </div>
 
@@ -60,7 +60,7 @@ export default function OpenGraphImage() {
             gap: '18px',
           }}
         >
-          {['Discover', 'Order', 'Trust'].map((item) => (
+          {['Discover', 'Measure', 'Order'].map((item) => (
             <div
               key={item}
               style={{

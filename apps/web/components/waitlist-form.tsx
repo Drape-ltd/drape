@@ -63,7 +63,7 @@ export function WaitlistForm({ role, title, description }: WaitlistFormProps): J
   }
 
   return (
-    <div className="rounded-[2rem] border border-white/80 bg-white/88 p-6 shadow-[0_24px_70px_rgba(22,28,24,0.08)] backdrop-blur sm:p-7">
+    <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)] backdrop-blur sm:p-7">
       <div className="max-w-2xl">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">{role === 'CUSTOMER' ? 'Customer queue' : 'Tailor queue'}</p>
         <h3 className="mt-3 text-3xl text-ink">{title}</h3>

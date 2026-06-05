@@ -16,7 +16,7 @@ export default function TrustPage(): JSX.Element {
     <MarketingShell
       eyebrow="Trust"
       title="Custom clothing works better when trust is designed into the flow."
-      description="Verification, fit, and handoff should feel accountable on both sides."
+      description="Verification, fit, and handoff feel accountable on both sides."
       cta={
         <div className="flex flex-col gap-3 sm:flex-row">
           <Link
@@ -37,8 +37,8 @@ export default function TrustPage(): JSX.Element {
       <section className="py-8">
         <SectionTitle
           eyebrow="Why it matters"
-          title="Trust should feel built in."
-          description="The important things should stay visible."
+          title="Trust is built into the order."
+          description="The important things stay visible."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-4">
           {DRAPE_PUBLIC_TRUST_SECTIONS.map((section) => (
@@ -72,9 +72,9 @@ export default function TrustPage(): JSX.Element {
 
       <section className="border-t border-ink/6 py-16">
         <div className="grid gap-6 lg:grid-cols-[0.8fr_1.2fr]">
-          <div className="rounded-[2rem] bg-ink p-8 text-white shadow-[0_25px_80px_rgba(22,28,24,0.14)]">
+          <div className="rounded-[1.6rem] bg-ink p-7 text-white shadow-[0_18px_60px_rgba(22,28,24,0.12)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/60">Trust principle</p>
-            <h3 className="mt-4 text-3xl sm:text-4xl">People should feel the difference before they sign in.</h3>
+            <h3 className="mt-4 text-3xl sm:text-4xl">People can feel the difference before they sign in.</h3>
             <p className="mt-4 text-sm leading-7 text-white/74">Clarity beats noise.</p>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -98,7 +98,7 @@ export default function TrustPage(): JSX.Element {
       <section className="border-t border-ink/6 py-16">
         <SectionTitle
           eyebrow="Contact routes"
-          title="The right issue should reach the right team."
+          title="The right issue reaches the right team."
           description="Clear inboxes."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">

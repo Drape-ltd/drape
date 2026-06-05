@@ -40,9 +40,9 @@ const FAQ: Array<{ question: string; answer: string }> = [
       'Drapeon keeps the important communication and stage history close to the order so concerns can be raised with the right context attached.',
   },
   {
-    question: 'Is Drapeon live everywhere on web yet?',
+    question: 'Can I download Drapeon today?',
     answer:
-      'Not yet. The website is currently focused on early access, applications, and company information while the product continues to roll out.',
+      'Join the queue and we will share access as Drapeon opens to more customers and tailors.',
   },
 ]
 
@@ -74,7 +74,7 @@ export default function FaqPage(): JSX.Element {
       />
       <MarketingShell
         eyebrow="FAQ"
-        title="Questions should resolve into clarity, not more guesswork."
+        title="Questions resolve into clarity, not more guesswork."
         description="A quick guide to the most common questions about Drapeon."
       >
         <section className="py-8">

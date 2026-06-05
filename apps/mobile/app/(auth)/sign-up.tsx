@@ -9,7 +9,7 @@ import {
   KeyboardAvoidingView,
   ScrollView,
 } from 'react-native'
-import { useNavigation, useRouter } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '@/lib/auth'
@@ -26,6 +26,11 @@ import {
 } from '@drape/shared/auth-security'
 
 type Role = 'CUSTOMER' | 'TAILOR'
+
+function normalizeRoleIntent(value: unknown): Role | null {
+  const candidate = Array.isArray(value) ? value[0] : value
+  return candidate === 'CUSTOMER' || candidate === 'TAILOR' ? candidate : null
+}
 
 function passwordStrength(value: string) {
   const hasLower = /[a-z]/u.test(value)
@@ -56,13 +61,15 @@ function passwordChecklist(value: string) {
 export default function SignUpScreen() {
   const router = useRouter()
   const navigation = useNavigation()
+  const params = useLocalSearchParams<{ intent?: string }>()
   const { signUp, signInWithGoogle, signInWithApple } = useAuth()
+  const initialRole = normalizeRoleIntent(params.intent) ?? 'CUSTOMER'
 
   const [displayName, setDisplayName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
-  const [role, setRole] = useState<Role>('CUSTOMER')
+  const [role, setRole] = useState<Role>(initialRole)
   const [loading, setLoading] = useState(false)
   const [oauthLoading, setOauthLoading] = useState<'google' | 'apple' | null>(null)
   const [nameError, setNameError] = useState('')
@@ -145,7 +152,7 @@ export default function SignUpScreen() {
   async function handleGoogle() {
     if (loading || oauthLoading) return
     setOauthLoading('google')
-    const { error } = await signInWithGoogle()
+    const { error } = await signInWithGoogle(role)
     setOauthLoading(null)
     if (error) Alert.alert('Google sign-in failed', error)
     else capture('sign_up', { method: 'google' })
@@ -155,7 +162,7 @@ export default function SignUpScreen() {
   async function handleApple() {
     if (loading || oauthLoading) return
     setOauthLoading('apple')
-    const { error } = await signInWithApple()
+    const { error } = await signInWithApple(role)
     setOauthLoading(null)
     if (error) Alert.alert('Apple sign-in failed', error)
     else capture('sign_up', { method: 'apple' })
@@ -176,8 +183,8 @@ export default function SignUpScreen() {
         >
           <AuthEntryHeader
             eyebrow="Create account"
-            title="Start with the right side of Drapeon."
-            body="Choose whether you are ordering or tailoring first. You can switch views later from your account."
+            title={role === 'TAILOR' ? 'Start your tailor workspace.' : 'Start ordering with Drapeon.'}
+            body="Choose where you want to begin. One account can use both sides later from account settings."
             showWordmark={false}
           />
 
@@ -394,7 +401,7 @@ export default function SignUpScreen() {
             <View style={styles.nextCard}>
               <Text style={styles.nextEyebrow}>Next</Text>
               <Text style={styles.nextTitle}>
-                After email confirmation, Drapeon opens the setup flow for your selected side.
+                After email confirmation, Drapeon opens the setup flow for the selected side.
               </Text>
             </View>
 
@@ -432,7 +439,13 @@ export default function SignUpScreen() {
 
             <Text style={styles.signInPrompt}>
               Already have an account?{' '}
-              <Text style={styles.link} onPress={() => router.replace('/(auth)/sign-in')}>
+              <Text
+                style={styles.link}
+                onPress={() => router.replace({
+                  pathname: '/(auth)/sign-in',
+                  params: { intent: role },
+                })}
+              >
                 Sign in
               </Text>
             </Text>

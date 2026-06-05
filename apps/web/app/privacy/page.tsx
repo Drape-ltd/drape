@@ -2,72 +2,62 @@ import type { Metadata, Route } from 'next'
 import { CONTACTS } from '@drape/shared'
 import Link from 'next/link'
 import type { JSX } from 'react'
+import { AppSurfacePreview } from '../../components/product-visuals'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
-const lastUpdated = 'May 9, 2026'
+const lastUpdated = 'June 5, 2026'
 const accountDeletionRoute = '/account-deletion' as Route
 
-const dataCategories = [
+const collectedData = [
   {
-    title: 'Account and contact information',
-    body: 'Name, email address, phone number, account role, login identifiers, notification preferences, profile photo, and support contact history.',
+    title: 'Account data',
+    body: 'Name, email, phone number, login details, profile photo, role, preferences, and support messages.',
   },
   {
-    title: 'Tailor profile and marketplace information',
-    body: 'Display name, bio, location, specialties, languages, portfolio media, ready-made item listings, availability, verification status, payout setup status, and public review information.',
+    title: 'Fit and measurement data',
+    body: 'Manual measurements, fit preferences, Drape Vision scan results, measurement history, and order-specific fit context.',
   },
   {
-    title: 'Orders, messages, and media',
-    body: 'Order briefs, quotes, stage updates, delivery details, customer and tailor messages, style references, production photos, reviews, disputes, aftercare requests, and support notes.',
+    title: 'Shopping and order data',
+    body: 'Tailor profiles viewed, saved items, custom briefs, ready-made orders, messages, quotes, photos, delivery details, reviews, disputes, refunds, and support records.',
   },
   {
-    title: 'Measurements and fit context',
-    body: 'Measurements that users enter, saved fit preferences, Drape Vision scan results when used, confidence metadata, and measurement history needed to support future orders and fit disputes.',
+    title: 'Payment and payout data',
+    body: 'Amounts, currencies, provider references, payment status, refund status, payout status, and compliance signals. Card and bank details are handled by payment providers.',
   },
   {
-    title: 'Payment and payout records',
-    body: 'Amounts, currency, provider references, payment status, payout status, refund status, payout account metadata, and fraud or compliance review signals. Card and bank processing is handled by payment providers.',
+    title: 'Device and diagnostics',
+    body: 'Device type, app version, crash reports, security logs, push tokens, analytics events, and performance data.',
   },
   {
-    title: 'Device, diagnostics, and analytics',
-    body: 'App version, device type, crash reports, performance data, IP-derived security signals, push tokens, and product analytics events that help Drapeon operate and improve the service.',
+    title: 'Camera and media',
+    body: 'Photos, reference images, production media, proof photos, and camera-derived measurement data when users choose to use Drape Vision or upload media.',
   },
 ]
 
-const useCases = [
-  'Create and secure customer and tailor accounts.',
-  'Show tailor profiles, photos, portfolios, ready-made items, reviews, and availability.',
-  'Process custom and ready-made orders, payments, refunds, delivery, payouts, and disputes.',
-  'Store measurements and fit context so customers do not have to repeat themselves for every order.',
-  'Send order updates, messages, payment confirmations, payout alerts, support notices, and security notices.',
-  'Detect fraud, abuse, payment risk, bypass attempts, account takeover risk, and policy violations.',
-  'Debug crashes, broken uploads, failed images, payment errors, and performance issues.',
-  'Improve Drapeon through aggregate analytics and product research.',
+const uses = [
+  'Create and secure accounts.',
+  'Provide fashion discovery, tailor profiles, ready-made shopping, and custom ordering.',
+  'Power Drape Vision measurement review and fit guidance.',
+  'Process orders, payments, refunds, payouts, delivery, disputes, and support requests.',
+  'Send order, account, security, email, SMS, and push notifications.',
+  'Detect fraud, abuse, off-platform bypass attempts, unsafe content, and payment risk.',
+  'Improve reliability, performance, product quality, and customer support.',
 ]
 
 const providers = [
-  ['Supabase', 'Database, authentication, storage, Edge Functions, and operational logs.'],
-  ['Stripe', 'Card payments, payment status, refunds, Connect payouts, and payment compliance.'],
-  ['Paystack', 'Supported local payment and payout flows, including bank transfer references.'],
-  ['Sentry', 'Crash reporting, error diagnostics, and performance monitoring.'],
-  ['PostHog', 'Product analytics, funnels, and feature usage measurement.'],
-  ['Email, SMS, and push providers', 'Account notices, order updates, support messages, and notification delivery.'],
-  ['Ops and support tooling', 'Manual review for disputes, safety, payout, verification, support, and privacy requests.'],
-]
-
-const rights = [
-  'Access a copy of personal data Drapeon can reasonably provide.',
-  'Correct inaccurate account, contact, or profile information.',
-  'Request deletion or anonymization of personal data that Drapeon no longer needs to keep.',
-  'Object to or limit certain processing where applicable law gives that right.',
-  'Withdraw optional marketing or promotional communication preferences.',
-  'Ask privacy questions at privacy@drapeon.co.',
+  'Supabase for authentication, database, storage, and Edge Functions.',
+  'Stripe and Paystack for payment, refund, and payout processing.',
+  'Google MediaPipe technology for computer-vision measurement support.',
+  'Email, SMS, and push providers for important notifications.',
+  'Sentry and analytics tools for crash reporting, diagnostics, and product improvement.',
+  'Ops and support tools for safety, privacy, verification, disputes, refunds, and payout review.',
 ]
 
 export const metadata: Metadata = buildMetadata({
   title: 'Privacy Policy',
-  description: 'Read how Drapeon collects, uses, shares, protects, and deletes personal data.',
+  description: 'How Drapeon, operated by O4 Group LLC, handles measurements, Drape Vision data, shopping data, payments, and support records.',
   path: '/privacy',
 })
 
@@ -75,8 +65,9 @@ export default function PrivacyPage(): JSX.Element {
   return (
     <MarketingShell
       eyebrow="Privacy Policy"
-      title="Privacy for real orders, real money, and real fit data."
-      description="Drapeon handles personal profiles, messages, measurements, photos, payments, payouts, and support cases. This policy explains what we collect, why we use it, who helps us process it, and how deletion works."
+      title="Privacy for measurements, orders, and Drape Vision."
+      description="Drapeon is operated by O4 Group LLC. This policy explains how we collect, use, share, retain, and protect personal data across Drapeon services."
+      visual={<AppSurfacePreview variant="privacy" />}
       cta={
         <Link
           href={accountDeletionRoute}
@@ -90,19 +81,19 @@ export default function PrivacyPage(): JSX.Element {
         <div className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
           <p className="font-semibold text-ink">Last updated: {lastUpdated}</p>
           <p className="mt-3">
-            This Privacy Policy applies to Drapeon&apos;s mobile apps, web pages, support channels, marketplace, order flows, payment flows, and operational tools. If you use Drapeon as a customer, tailor, applicant, visitor, or support contact, this policy explains how your information is handled.
+            This Privacy Policy applies to Drapeon mobile apps, drapeon.co, support channels, marketplace features, Drape Vision, and related services operated by O4 Group LLC.
           </p>
         </div>
       </section>
 
       <section className="border-t border-ink/6 py-16">
         <SectionTitle
-          eyebrow="Data we collect"
-          title="We collect what the marketplace needs to work."
-          description="Drapeon relies on visual trust, communication, measurement context, payment status, and operational records. We do not collect these casually."
+          eyebrow="What we collect"
+          title="We collect the data needed to make fashion fit and orders work."
+          description="Measurements and order context are sensitive, so we describe them plainly."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
-          {dataCategories.map((item) => (
+          {collectedData.map((item) => (
             <MarketingCard key={item.title} title={item.title} body={item.body} />
           ))}
         </div>
@@ -110,16 +101,25 @@ export default function PrivacyPage(): JSX.Element {
 
       <section className="border-t border-ink/6 py-16">
         <SectionTitle
+          eyebrow="Drape Vision"
+          title="Camera-assisted measurement stays user controlled."
+          description="Drape Vision uses computer vision built on Google MediaPipe to help estimate clothing measurements from a phone camera."
+        />
+        <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
+          Drape Vision does not save raw video by default. Users can retake scans, review measurement results, choose manual entry instead, and decide when measurements or proof photos should be saved or attached to an order. Measurement results may be stored in the user&apos;s measurement profile and used for fit guidance, order briefs, tailor-assisted scans, size guidance, and support review when needed.
+        </div>
+      </section>
+
+      <section className="border-t border-ink/6 py-16">
+        <SectionTitle
           eyebrow="How we use data"
-          title="Every important use maps to the trust chain."
-          description="The app has to open cleanly, let people find tailors, place orders, pay, track production, resolve problems, and release payouts correctly."
+          title="We use data to run the product, protect orders, and improve fit."
+          description="We do not sell personal data."
         />
         <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
           <ul className="grid gap-3 text-sm leading-7 text-ink/72 md:grid-cols-2">
-            {useCases.map((item) => (
-              <li key={item} className="rounded-2xl bg-bone/70 px-4 py-3">
-                {item}
-              </li>
+            {uses.map((item) => (
+              <li key={item} className="rounded-2xl bg-bone/70 px-4 py-3">{item}</li>
             ))}
           </ul>
         </div>
@@ -128,102 +128,62 @@ export default function PrivacyPage(): JSX.Element {
       <section className="border-t border-ink/6 py-16">
         <SectionTitle
           eyebrow="Sharing"
-          title="We share data with service providers that help Drapeon run."
-          description="Drapeon does not sell personal data. We share data with providers when needed for payments, storage, security, analytics, messaging, compliance, and support."
+          title="We share data only with providers that help Drapeon run."
+          description="Service providers process data for hosting, payments, communication, measurement support, safety, analytics, and support."
         />
-        <div className="mt-10 grid gap-4">
-          {providers.map(([name, body]) => (
-            <div key={name} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
-              <h3 className="text-2xl text-ink">{name}</h3>
-              <p className="mt-3 text-sm leading-7 text-ink/68">{body}</p>
-            </div>
-          ))}
+        <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
+          <ul className="grid gap-3 text-sm leading-7 text-ink/72">
+            {providers.map((item) => (
+              <li key={item} className="rounded-2xl bg-bone/70 px-4 py-3">{item}</li>
+            ))}
+          </ul>
         </div>
         <p className="mt-6 text-sm leading-7 text-ink/68">
-          We may also disclose information when required by law, to protect users, to investigate fraud or abuse, to handle disputes or legal claims, or during a business transfer such as a merger, financing, acquisition, or sale of assets.
+          We may also disclose information if required by law, to protect users, to investigate fraud or abuse, to resolve disputes, or as part of a business transaction.
         </p>
       </section>
 
       <section className="border-t border-ink/6 py-16">
         <SectionTitle
-          eyebrow="Retention"
-          title="Deletion is real, but it is staged when money or safety is involved."
-          description="Drapeon deletes or anonymizes data when it is no longer needed. Some records must be retained for active orders, payments, payouts, disputes, fraud prevention, legal obligations, tax/accounting needs, safety, support, or claims."
+          eyebrow="Retention and rights"
+          title="You can access, correct, or delete your data."
+          description="Deletion may be delayed where active orders, payments, refunds, disputes, fraud prevention, tax/accounting records, legal obligations, or safety reviews require retention."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           <MarketingCard
-            title="Active accounts"
-            body="We keep account, profile, measurement, message, order, and preference data while your account is active and as needed to provide Drapeon."
+            title="Access and correction"
+            body="You may ask for a copy of personal data we can reasonably provide or ask us to correct inaccurate account, profile, measurement, or contact information."
           />
           <MarketingCard
-            title="Closed accounts"
-            body="When deletion completes, public-facing personal attribution is removed where possible and data that is no longer needed is deleted or anonymized."
+            title="Deletion"
+            body="You can request account deletion in the app or at drapeon.co/account-deletion. We delete or anonymize data that is no longer needed."
           />
           <MarketingCard
-            title="Required records"
-            body="Payment, payout, refund, dispute, audit, security, and legal records may be kept for the time needed to meet legal and operational obligations."
+            title="Communication choices"
+            body="You can update notification preferences and opt out of optional marketing where available. Critical account and order notices may still be sent."
           />
-        </div>
-        <div className="mt-8 rounded-[1.75rem] border border-needle/10 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
-          Account deletion can be requested in the app or on the web at{' '}
-          <Link href={accountDeletionRoute} className="font-semibold text-needle">
-            drapeon.co/account-deletion
-          </Link>
-          . If a deletion request collides with an active order, payout, refund, dispute, chargeback, or legal hold, Drapeon may restrict new activity first and finish deletion or anonymization after the obligation is resolved.
         </div>
       </section>
 
       <section className="border-t border-ink/6 py-16">
         <SectionTitle
-          eyebrow="Rights"
-          title="You can ask us to access, correct, or delete your data."
-          description="Depending on where you live, laws such as GDPR, UK GDPR, Nigerian NDPR, and other privacy laws may give you rights over your personal data."
+          eyebrow="Contact"
+          title="Privacy questions go to a dedicated inbox."
+          description="Use this route for privacy requests, data questions, or account-data concerns."
         />
-        <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
-          <ul className="grid gap-3 text-sm leading-7 text-ink/72 md:grid-cols-2">
-            {rights.map((item) => (
-              <li key={item} className="rounded-2xl bg-bone/70 px-4 py-3">
-                {item}
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div className="mt-8 grid gap-5 lg:grid-cols-3">
-          <a
-            href={`mailto:${CONTACTS.privacy}?subject=Drapeon%20privacy%20question`}
-            className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
-          >
+        <div className="mt-10 grid gap-5 lg:grid-cols-3">
+          <a href={`mailto:${CONTACTS.privacy}`} className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Privacy</p>
             <h3 className="mt-3 break-words text-2xl text-ink">{CONTACTS.privacy}</h3>
-            <p className="mt-3 text-sm leading-7 text-ink/68">Privacy questions, rights requests, and deletion follow-up.</p>
           </a>
-          <a
-            href={`mailto:${CONTACTS.support}?subject=Drapeon%20support%20request`}
-            className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
-          >
+          <a href={`mailto:${CONTACTS.support}`} className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Support</p>
             <h3 className="mt-3 break-words text-2xl text-ink">{CONTACTS.support}</h3>
-            <p className="mt-3 text-sm leading-7 text-ink/68">Order, account access, delivery, and general support questions.</p>
           </a>
-          <a
-            href={`mailto:${CONTACTS.security}?subject=Drapeon%20security%20report`}
-            className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]"
-          >
+          <a href={`mailto:${CONTACTS.security}`} className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Security</p>
             <h3 className="mt-3 break-words text-2xl text-ink">{CONTACTS.security}</h3>
-            <p className="mt-3 text-sm leading-7 text-ink/68">Security concerns, account takeover reports, and vulnerability reports.</p>
           </a>
-        </div>
-      </section>
-
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="International users"
-          title="Drapeon is built for cross-border tailoring."
-          description="Users may be in the United States, Nigeria, Ghana, Kenya, the United Kingdom, the European Union, Canada, and other countries. Privacy rights and retention rules can vary by location."
-        />
-        <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
-          Drapeon aims to honor applicable privacy rights, including access, correction, deletion, objection, and complaint rights where the law gives them. If local law requires Drapeon to keep certain records, we will keep only what is reasonably necessary and restrict access to the people and systems that need it.
         </div>
       </section>
     </MarketingShell>
