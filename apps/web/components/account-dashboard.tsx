@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import type { Route } from 'next'
 import { useRouter } from 'next/navigation'
 import type { Session } from '@supabase/supabase-js'
 import { createClient } from '../lib/supabase'
@@ -140,7 +141,7 @@ type AccountNextAction = {
   title: string
   body: string
   cta: string
-  href: string
+  href: Route | 'drape://'
 }
 
 const emptyActivity: AccountActivity = {
@@ -296,8 +297,8 @@ function buildNextAction({
         eyebrow: 'Shop',
         title: 'Add your first ready-made piece.',
         body: 'Ready-made items help customers understand your taste and buy without a custom brief.',
-        cta: 'Add shop item',
-        href: 'drape://',
+        cta: 'Review shop',
+        href: '/account/shop',
       }
     }
     if (tailorOrders.length === 0) {
@@ -313,8 +314,8 @@ function buildNextAction({
       eyebrow: 'Today',
       title: 'Review active work in the app.',
       body: 'Production photos, proof uploads, consultation calls, and stage actions stay in the app for launch.',
-      cta: 'Open work queue',
-      href: 'drape://',
+      cta: 'View work queue',
+      href: '/account/work',
     }
   }
 
@@ -332,8 +333,8 @@ function buildNextAction({
       eyebrow: 'Fit',
       title: 'Add measurements before ordering.',
       body: 'Use Drape Vision on iOS or manual measurements so tailors have the right fit context.',
-      cta: 'Add measurements',
-      href: 'drape://',
+      cta: 'Review measurements',
+      href: '/account/measurements',
     }
   }
   if (customerOrders.length === 0) {
@@ -342,7 +343,7 @@ function buildNextAction({
       title: 'Find a tailor and start your first brief.',
       body: 'Explore tailors, save favorites, and place custom or ready-made orders in the mobile app.',
       cta: 'Open Explore',
-      href: 'drape://',
+      href: '/account/explore',
     }
   }
   if (unreadMessages > 0) {
@@ -350,16 +351,16 @@ function buildNextAction({
       eyebrow: 'Messages',
       title: 'You have order messages waiting.',
       body: 'Reply in the app so the order record stays protected on Drapeon.',
-      cta: 'Open messages',
-      href: 'drape://',
+      cta: 'Review messages',
+      href: '/account/messages',
     }
   }
   return {
     eyebrow: 'Today',
     title: 'Review your orders in the app.',
     body: 'Checkout, calls, proof photos, handoff confirmation, and support actions stay in the app for launch.',
-    cta: 'Open orders',
-    href: 'drape://',
+    cta: 'Review orders',
+    href: '/account/orders',
   }
 }
 
@@ -642,6 +643,15 @@ export function AccountDashboard(): React.JSX.Element {
     measurementCount,
     unreadMessages,
   })
+  const accountLinks: Array<[string, Route]> = [
+    ['Explore', '/account/explore'],
+    ['Orders', '/account/orders'],
+    ['Messages', '/account/messages'],
+    ['Measurements', '/account/measurements'],
+  ]
+  if (role === 'TAILOR' || activity.tailorProfile) {
+    accountLinks.push(['Shop', '/account/shop'], ['Work queue', '/account/work'])
+  }
 
   return (
     <div className="grid gap-5">
@@ -677,6 +687,17 @@ export function AccountDashboard(): React.JSX.Element {
             {activity.warning}
           </div>
         ) : null}
+        <div className="mt-6 flex gap-2 overflow-x-auto pb-1">
+          {accountLinks.map(([label, href]) => (
+            <Link
+              key={href}
+              href={href}
+              className="whitespace-nowrap rounded-full border border-ink/8 bg-white px-4 py-2.5 text-sm font-semibold text-ink/72"
+            >
+              {label}
+            </Link>
+          ))}
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -710,12 +731,21 @@ export function AccountDashboard(): React.JSX.Element {
             <h2 className="mt-2 text-3xl text-ink">{nextAction.title}</h2>
             <p className="mt-3 max-w-2xl text-sm leading-7 text-ink/66">{nextAction.body}</p>
           </div>
-          <a
-            href={nextAction.href}
-            className="inline-flex min-h-12 items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(45,106,79,0.18)]"
-          >
-            {nextAction.cta}
-          </a>
+          {nextAction.href.startsWith('/') ? (
+            <Link
+              href={nextAction.href}
+              className="inline-flex min-h-12 items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(45,106,79,0.18)]"
+            >
+              {nextAction.cta}
+            </Link>
+          ) : (
+            <a
+              href={nextAction.href}
+              className="inline-flex min-h-12 items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(45,106,79,0.18)]"
+            >
+              {nextAction.cta}
+            </a>
+          )}
         </div>
       </div>
 
