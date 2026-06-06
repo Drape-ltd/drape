@@ -2,7 +2,7 @@
 
 import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { validateDisplayName } from '@drape/shared/contact-filter'
+import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-filter'
 import {
   MAX_PASSWORD_LENGTH,
   PASSWORD_POLICY_HINT,
@@ -97,6 +97,13 @@ function parseMajorAmountToMinor(value: string) {
   return Math.round(amount * 100)
 }
 
+function fieldHasContactLeak(value: string, label: string): string | null {
+  if (!value.trim()) return null
+  const result = filterContactInfo(value)
+  if (!result.blocked) return null
+  return `${label} can't include phone numbers, emails, links, social handles, or off-platform contact instructions.`
+}
+
 export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -174,6 +181,14 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     const priceRangeMax = parseMajorAmountToMinor(priceMax)
     if (tailorLocation.trim().length < 2) {
       setError('Add your city or base location.')
+      return null
+    }
+    const contactLeakError =
+      fieldHasContactLeak(tailorLocation, 'Location') ||
+      fieldHasContactLeak(tailorLanguages, 'Languages') ||
+      fieldHasContactLeak(tailorSpecialties, 'Specialties')
+    if (contactLeakError) {
+      setError(contactLeakError)
       return null
     }
     if (languages.length === 0) {

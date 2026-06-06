@@ -6,6 +6,7 @@ import type { Route } from 'next'
 import { useRouter } from 'next/navigation'
 import type { Session } from '@supabase/supabase-js'
 import { createClient } from '../lib/supabase'
+import { safeEntityName, safeUserText } from '../lib/safe-display'
 import {
   bootstrapWebOnboarding,
   webOnboardingFromUser,
@@ -218,7 +219,7 @@ function formatRelative(value: string | null | undefined) {
 }
 
 function orderTitle(order: DashboardOrder) {
-  return order.item_title || order.garment_type || 'Order'
+  return safeUserText(order.item_title || order.garment_type, 'Order')
 }
 
 function orderAmount(order: DashboardOrder) {
@@ -227,17 +228,19 @@ function orderAmount(order: DashboardOrder) {
 
 function orderCounterparty(order: DashboardOrder, userId: string) {
   if (order.customer_id === userId) {
-    return firstJoinedRow(order.tailor_profiles)?.display_name || 'Tailor'
+    return safeEntityName(firstJoinedRow(order.tailor_profiles)?.display_name, 'Tailor')
   }
-  return firstJoinedRow(order.customer_profiles)?.display_name || 'Customer'
+  return safeEntityName(firstJoinedRow(order.customer_profiles)?.display_name, 'Customer')
 }
 
 function profileName(activity: AccountActivity, fallback: string) {
   return (
-    activity.customerProfile?.display_name ||
-    activity.tailorProfile?.business_name ||
-    activity.tailorProfile?.display_name ||
-    fallback
+    safeEntityName(
+      activity.customerProfile?.display_name ||
+        activity.tailorProfile?.business_name ||
+        activity.tailorProfile?.display_name,
+      fallback,
+    )
   )
 }
 
@@ -779,7 +782,7 @@ export function AccountDashboard(): React.JSX.Element {
                             {orderCounterparty(order, userId)} · {cleanLabel(order.stage, 'In progress')}
                           </p>
                           {latestUpdate?.note ? (
-                            <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink/58">{latestUpdate.note}</p>
+                            <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink/58">{safeUserText(latestUpdate.note)}</p>
                           ) : null}
                         </div>
                         <div className="text-left sm:text-right">
@@ -798,7 +801,7 @@ export function AccountDashboard(): React.JSX.Element {
             <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Profile readiness</p>
               <h2 className="mt-2 text-3xl text-ink">
-                {activity.tailorProfile?.business_name || activity.tailorProfile?.display_name || 'Tailor profile'}
+                {safeEntityName(activity.tailorProfile?.business_name || activity.tailorProfile?.display_name, 'Tailor profile')}
               </h2>
               <div className="mt-5 grid gap-2 text-sm leading-6 text-ink/66">
                 <p>Profile: <span className="font-semibold text-ink">{activity.tailorProfile?.profile_completed ? 'Complete' : 'Setup in progress'}</span></p>
@@ -820,7 +823,7 @@ export function AccountDashboard(): React.JSX.Element {
                     <div key={item.id} className="rounded-[1.15rem] border border-ink/6 bg-white p-4 shadow-sm">
                       <div className="flex items-start justify-between gap-4">
                         <div>
-                          <h3 className="font-semibold text-ink">{item.title || 'Ready-made item'}</h3>
+                          <h3 className="font-semibold text-ink">{safeUserText(item.title, 'Ready-made item')}</h3>
                           <p className="mt-1 text-sm text-ink/60">{cleanLabel(item.stock_status, 'Stock')} · {item.is_live ? 'Live' : 'Draft'}</p>
                         </div>
                         <p className="text-sm font-semibold text-ink">{formatMoney(item.price_amount, item.currency)}</p>
@@ -862,7 +865,7 @@ export function AccountDashboard(): React.JSX.Element {
                             {orderCounterparty(order, userId)} · {cleanLabel(order.stage, 'In progress')}
                           </p>
                           <p className="mt-2 text-sm leading-6 text-ink/58">
-                            {latestUpdate?.note || 'The next timeline update from the app will appear here.'}
+                            {safeUserText(latestUpdate?.note, 'The next timeline update from the app will appear here.')}
                           </p>
                         </div>
                         <div className="text-left sm:text-right">
@@ -892,7 +895,7 @@ export function AccountDashboard(): React.JSX.Element {
                       <div key={profile.id} className="rounded-[1.15rem] border border-ink/6 bg-white p-4 shadow-sm">
                         <div className="flex items-start justify-between gap-4">
                           <div>
-                            <h3 className="font-semibold text-ink">{profile.label || 'Measurement profile'}</h3>
+                            <h3 className="font-semibold text-ink">{safeUserText(profile.label, 'Measurement profile')}</h3>
                             <p className="mt-1 text-sm text-ink/60">
                               {cleanLabel(profile.relationship, 'Wearer')} · {cleanLabel(profile.source, 'Manual')}
                             </p>
@@ -926,7 +929,7 @@ export function AccountDashboard(): React.JSX.Element {
                     <div key={collection.id} className="rounded-[1.15rem] border border-ink/6 bg-white p-4 shadow-sm">
                       <div className="flex items-center justify-between gap-4">
                         <div>
-                          <h3 className="font-semibold text-ink">{collection.name || 'Wishlist'}</h3>
+                          <h3 className="font-semibold text-ink">{safeUserText(collection.name, 'Wishlist')}</h3>
                           <p className="mt-1 text-sm text-ink/60">{formatRelative(collection.updated_at)}</p>
                         </div>
                         <p className="text-sm font-semibold text-ink">{collection.item_count ?? 0} items</p>
@@ -972,7 +975,7 @@ export function AccountDashboard(): React.JSX.Element {
                   <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink/62">
                     {message.blocked
                       ? 'A message was blocked to keep the order protected on Drapeon.'
-                      : message.content || (message.media_url ? 'Media message attached.' : 'Message activity recorded.')}
+                      : safeUserText(message.content, message.media_url ? 'Media message attached.' : 'Message activity recorded.')}
                   </p>
                   <p className="mt-3 text-xs text-ink/48">{formatRelative(message.created_at)}</p>
                 </div>

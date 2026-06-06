@@ -89,6 +89,14 @@ describe('sanitiseText', () => {
     expect(sanitised).toContain('[removed]')
   })
 
+  it('replaces social handles, emails, and redirect instructions', () => {
+    const { sanitised, hadViolation } = sanitiseText('DM me @ada_tailor or email ada@example.com')
+    expect(hadViolation).toBe(true)
+    expect(sanitised).toContain('[removed]')
+    expect(sanitised).not.toContain('@ada_tailor')
+    expect(sanitised).not.toContain('ada@example.com')
+  })
+
   it('leaves clean text unchanged', () => {
     const text = 'Beautiful hand-stitched lace fabric preferred.'
     const { sanitised, hadViolation } = sanitiseText(text)

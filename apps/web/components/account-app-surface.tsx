@@ -6,6 +6,7 @@ import Image from 'next/image'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { createClient } from '../lib/supabase'
+import { safeEntityName, safeUserText } from '../lib/safe-display'
 
 type AccountSurface =
   | 'explore'
@@ -304,7 +305,7 @@ function formatRelative(value: string | null | undefined) {
 }
 
 function orderTitle(order: AccountOrder) {
-  return order.item_title || order.garment_type || 'Drapeon order'
+  return safeUserText(order.item_title || order.garment_type, 'Drapeon order')
 }
 
 function orderAmount(order: AccountOrder) {
@@ -318,10 +319,10 @@ function isTerminalOrder(order: AccountOrder) {
 function partyName(order: AccountOrder, userId: string | null) {
   if (order.customer_id === userId) {
     const tailor = firstJoinedRow(order.tailor_profiles)
-    return tailor?.business_name || tailor?.display_name || 'Tailor'
+    return safeEntityName(tailor?.business_name || tailor?.display_name, 'Tailor')
   }
   const customer = firstJoinedRow(order.customer_profiles)
-  return customer?.display_name || 'Customer'
+  return safeEntityName(customer?.display_name, 'Customer')
 }
 
 function itemPhoto(item: SellerItem) {
@@ -722,14 +723,16 @@ function RenderExplore({ data }: { data: AccountSurfaceData }) {
                 <div className="mt-4">
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <h3 className="text-2xl text-ink">{tailor.business_name || tailor.display_name || 'Tailor'}</h3>
-                      <p className="mt-1 text-sm text-ink/58">{tailor.location || 'Location pending'}</p>
+                      <h3 className="text-2xl text-ink">{safeEntityName(tailor.business_name || tailor.display_name, 'Tailor')}</h3>
+                      <p className="mt-1 text-sm text-ink/58">{safeUserText(tailor.location, 'Location pending')}</p>
                     </div>
                     <p className="rounded-full bg-bone px-3 py-1 text-sm font-semibold text-ink">
                       {Number(tailor.avg_rating ?? 0).toFixed(1)}
                     </p>
                   </div>
-                  <p className="mt-3 line-clamp-2 text-sm leading-6 text-ink/62">{tailor.bio || stringList(tailor.specialty_tags).join(', ') || 'Verified craft profile on Drapeon.'}</p>
+                  <p className="mt-3 line-clamp-2 text-sm leading-6 text-ink/62">
+                    {safeUserText(tailor.bio || stringList(tailor.specialty_tags).join(', '), 'Verified craft profile on Drapeon.')}
+                  </p>
                   <div className="mt-4 grid grid-cols-2 gap-2 text-xs font-semibold text-ink/62">
                     <span className="rounded-full bg-bone px-3 py-2 text-center">{cleanLabel(tailor.availability, 'Availability')}</span>
                     <span className="rounded-full bg-bone px-3 py-2 text-center">
@@ -761,8 +764,8 @@ function RenderExplore({ data }: { data: AccountSurfaceData }) {
               <article key={item.id} className="rounded-[1.5rem] border border-ink/8 bg-white/84 p-4 shadow-sm">
                 <PhotoTile src={itemPhoto(item)} label="Ready-made item" />
                 <div className="mt-4">
-                  <h3 className="text-2xl text-ink">{item.title || 'Ready-made item'}</h3>
-                  <p className="mt-1 text-sm text-ink/58">{tailor?.business_name || tailor?.display_name || 'Drapeon tailor'}</p>
+                  <h3 className="text-2xl text-ink">{safeUserText(item.title, 'Ready-made item')}</h3>
+                  <p className="mt-1 text-sm text-ink/58">{safeEntityName(tailor?.business_name || tailor?.display_name, 'Drapeon tailor')}</p>
                   <div className="mt-4 flex items-center justify-between gap-4">
                     <p className="font-semibold text-ink">{formatMoney(item.price_amount, item.currency)}</p>
                     <p className="text-sm font-semibold text-rust">{cleanLabel(item.stock_status, 'In stock')}</p>
@@ -795,7 +798,7 @@ function OrderCard({ order, data }: { order: AccountOrder; data: AccountSurfaceD
           </p>
           {message ? (
             <p className="mt-3 line-clamp-1 text-sm text-ink/54">
-              {message.blocked ? 'Protected message blocked.' : message.content || 'Media message attached.'}
+              {message.blocked ? 'Protected message blocked.' : safeUserText(message.content, message.media_url ? 'Media message attached.' : 'Message activity recorded.')}
             </p>
           ) : null}
         </div>
@@ -864,7 +867,9 @@ function RenderOrderDetail({ data, orderId }: { data: AccountSurfaceData; orderI
         <div className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">{cleanLabel(order.order_kind, 'Order')}</p>
           <h2 className="mt-3 text-4xl text-ink">{orderTitle(order)}</h2>
-          <p className="mt-3 text-sm leading-7 text-ink/66">{order.description || order.special_note || 'The app brief carries full order details and proof media.'}</p>
+          <p className="mt-3 text-sm leading-7 text-ink/66">
+            {safeUserText(order.description || order.special_note, 'The app brief carries full order details and proof media.')}
+          </p>
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
             <SummaryLine label="Status" value={cleanLabel(order.stage, 'In progress')} />
             <SummaryLine label="Amount" value={orderAmount(order)} />
@@ -896,9 +901,9 @@ function RenderOrderDetail({ data, orderId }: { data: AccountSurfaceData; orderI
           <h2 className="text-3xl text-ink">Brief</h2>
           <div className="mt-5 grid gap-3">
             <SummaryLine label="Party" value={partyName(order, data.userId)} />
-            <SummaryLine label="Garment" value={order.garment_type || order.item_title} />
+            <SummaryLine label="Garment" value={safeUserText(order.garment_type || order.item_title, 'Garment')} />
             <SummaryLine label="Fabric" value={cleanLabel(order.fabric_source, 'Fabric source')} />
-            <SummaryLine label="Tracking" value={order.fabric_tracking || 'No tracking added'} />
+            <SummaryLine label="Tracking" value={order.fabric_tracking ? 'Tracking added in app' : 'No tracking added'} />
           </div>
         </div>
         <div className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
@@ -915,7 +920,7 @@ function RenderOrderDetail({ data, orderId }: { data: AccountSurfaceData; orderI
                     <span className="mt-1 h-3 w-3 rounded-full bg-needle" />
                     <div>
                       <h3 className="font-semibold text-ink">{cleanLabel(update.stage, 'Stage update')}</h3>
-                      <p className="mt-1 text-sm leading-6 text-ink/62">{update.note || 'Stage updated.'}</p>
+                      <p className="mt-1 text-sm leading-6 text-ink/62">{safeUserText(update.note, 'Stage updated.')}</p>
                       <p className="mt-2 text-xs text-ink/46">{formatRelative(update.created_at)}</p>
                     </div>
                   </div>
@@ -956,7 +961,7 @@ function RenderOrderDetail({ data, orderId }: { data: AccountSurfaceData; orderI
                     {message.sender_id === data.userId ? 'You' : 'Other party'} · {formatRelative(message.created_at)}
                   </p>
                   <p className="mt-2 text-sm leading-6 text-ink/62">
-                    {message.blocked ? 'A message was blocked to keep the order protected.' : message.content || 'Media message attached.'}
+                    {message.blocked ? 'A message was blocked to keep the order protected.' : safeUserText(message.content, message.media_url ? 'Media message attached.' : 'Message activity recorded.')}
                   </p>
                 </div>
               ))
@@ -1004,7 +1009,7 @@ function RenderMessages({ data }: { data: AccountSurfaceData }) {
                     {message.sender_id === data.userId ? 'You sent' : 'Received'} · {cleanLabel(message.type, 'Message')}
                   </p>
                   <p className="mt-2 line-clamp-3 text-sm leading-6 text-ink/66">
-                    {message.blocked ? 'Contact-sharing or unsafe content was blocked.' : message.content || 'Media message attached.'}
+                    {message.blocked ? 'Contact-sharing or unsafe content was blocked.' : safeUserText(message.content, message.media_url ? 'Media message attached.' : 'Message activity recorded.')}
                   </p>
                   <p className="mt-3 text-xs text-ink/46">{formatRelative(message.created_at)}</p>
                 </div>
@@ -1040,7 +1045,7 @@ function RenderMeasurements({ data }: { data: AccountSurfaceData }) {
                   <div key={profile.id} className="rounded-[1.1rem] border border-ink/6 bg-white p-4">
                     <div className="flex items-start justify-between gap-4">
                       <div>
-                        <h3 className="font-semibold text-ink">{profile.label || 'Measurement profile'}</h3>
+                        <h3 className="font-semibold text-ink">{safeUserText(profile.label, 'Measurement profile')}</h3>
                         <p className="mt-1 text-sm text-ink/60">
                           {cleanLabel(profile.relationship, 'Wearer')} · {cleanLabel(profile.source, 'Manual')}
                         </p>
@@ -1117,10 +1122,10 @@ function RenderShop({ data }: { data: AccountSurfaceData }) {
               <article key={item.id} className="rounded-[1.5rem] border border-ink/8 bg-white/84 p-4 shadow-sm">
                 <PhotoTile src={itemPhoto(item)} label="Ready-made item" />
                 <div className="mt-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/76">{cleanLabel(item.category, 'Ready-made')}</p>
-                  <h3 className="mt-2 text-2xl text-ink">{item.title || 'Ready-made item'}</h3>
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/76">{safeUserText(item.category, 'Ready-made')}</p>
+                  <h3 className="mt-2 text-2xl text-ink">{safeUserText(item.title, 'Ready-made item')}</h3>
                   <p className="mt-1 text-sm text-ink/58">
-                    {isTailor ? (item.is_live ? 'Live listing' : 'Draft listing') : tailor?.business_name || tailor?.display_name || 'Drapeon tailor'}
+                    {isTailor ? (item.is_live ? 'Live listing' : 'Draft listing') : safeEntityName(tailor?.business_name || tailor?.display_name, 'Drapeon tailor')}
                   </p>
                   <div className="mt-4 grid grid-cols-2 gap-2">
                     <SummaryLine label="Price" value={formatMoney(item.price_amount, item.currency)} />
