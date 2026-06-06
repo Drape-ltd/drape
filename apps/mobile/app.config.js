@@ -7,8 +7,6 @@ const GOOGLE_SERVICES_CANDIDATES = [
   process.env.GOOGLE_SERVICES_JSON,
   process.env.GOOGLE_SERVICES_FILE,
   process.env.GOOGLE_SERVICES_JSON_PATH,
-  "./google-services.json",
-  "./android/app/google-services.json",
 ].filter(Boolean);
 
 function findGoogleServicesFile() {
