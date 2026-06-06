@@ -20,7 +20,7 @@ const accessPaths: Array<{
 }> = [
   {
     eyebrow: 'Customers',
-    title: 'Order and track from the Drapeon app.',
+    title: 'View customer activity on web and continue in the app.',
     body:
       'Customer accounts manage saved tailors, measurements, protected payments, order timelines, messages, delivery proof, reviews, and support.',
     action: (
@@ -31,7 +31,7 @@ const accessPaths: Array<{
   },
   {
     eyebrow: 'Tailors',
-    title: 'Run your workspace from the tailor side.',
+    title: 'Review tailor work from web and act in the app.',
     body:
       'Tailor accounts manage setup, applications, portfolios, ready-made items, custom briefs, consultations, production updates, payouts, and proof media.',
     action: (
@@ -81,7 +81,7 @@ export default function AccountPage(): JSX.Element {
         <SectionTitle
           eyebrow="Access paths"
           title="The same identity can use customer and tailor mode."
-          description="Customer and tailor access live in the Drapeon app. Ops uses a separate protected web gate."
+          description="Customer and tailor history is visible on web. Camera, checkout, push, production media, and sensitive changes continue in the app until each web flow is ported deliberately."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           {accessPaths.map((path) => (
@@ -106,7 +106,7 @@ export default function AccountPage(): JSX.Element {
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Password reset</p>
             <h3 className="mt-4 text-2xl text-ink">Open a reset link in the app.</h3>
             <p className="mt-3 text-sm leading-7 text-ink/68">
-              Password recovery starts from the Drapeon app. Reset links return to the app so the change stays inside the signed account flow.
+              Password recovery can start on web or in the app. Reset links return to the signed account flow so sensitive changes stay protected.
             </p>
           </Link>
           <Link href="/account-deletion" className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]">

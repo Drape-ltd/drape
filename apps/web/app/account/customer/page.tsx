@@ -17,7 +17,7 @@ export default function CustomerAccountPage(): JSX.Element {
     <MarketingShell
       eyebrow="Customer access"
       title="Open the customer side of Drapeon."
-      description="Customers use Drapeon to discover tailors, manage measurements, place orders, track timelines, message, confirm handoff, and get support."
+      description="Customers can sign in on web to review orders, measurements, wishlist, messages, payment history, and support context from the same account used in the app."
       visual={<AppSurfacePreview variant="explore" />}
       cta={
         <div className="flex flex-col gap-3 sm:flex-row">
@@ -25,7 +25,7 @@ export default function CustomerAccountPage(): JSX.Element {
             href="/sign-in?role=customer"
             className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
           >
-            Sign in as customer
+            Open customer dashboard
           </a>
           <Link
             href="/sign-up?role=customer"
@@ -40,7 +40,7 @@ export default function CustomerAccountPage(): JSX.Element {
         <SectionTitle
           eyebrow="What customer access controls"
           title="Orders, fit, payment, messages, and delivery stay together."
-          description="Customer account access is app-first so the order record, push notifications, payments, camera, and proof flows work from the same trusted device."
+          description="Web shows the same customer records. The mobile app remains the place for camera capture, push notifications, checkout, proof media, and handoff confirmation."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           {[

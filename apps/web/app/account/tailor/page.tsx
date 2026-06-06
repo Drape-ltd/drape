@@ -17,7 +17,7 @@ export default function TailorAccountPage(): JSX.Element {
     <MarketingShell
       eyebrow="Tailor access"
       title="Open the tailor workspace."
-      description="Tailors use Drapeon to manage setup, verification, shop inventory, custom briefs, consultations, production updates, proof media, earnings, and payouts."
+      description="Tailors can sign in on web to review work, shop state, customer context, payout readiness, messages, and account state from the same Drapeon profile used in the app."
       visual={<AppSurfacePreview variant="tailor" />}
       cta={
         <div className="flex flex-col gap-3 sm:flex-row">
@@ -25,7 +25,7 @@ export default function TailorAccountPage(): JSX.Element {
             href="/sign-in?role=tailor"
             className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
           >
-            Sign in as tailor
+            Open tailor dashboard
           </a>
           <Link
             href="/sign-up?role=tailor"
@@ -40,7 +40,7 @@ export default function TailorAccountPage(): JSX.Element {
         <SectionTitle
           eyebrow="What tailor access controls"
           title="Your craft, orders, clients, proof, and payout state live in one workspace."
-          description="Tailor access is app-first so camera proof, production updates, messages, calls, and payout readiness stay connected to the order record."
+          description="Web shows the same tailor records. The mobile app remains the place for proof capture, production media, calls, checkout-adjacent flows, and sensitive account changes."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           {[

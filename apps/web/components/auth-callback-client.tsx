@@ -9,6 +9,18 @@ function sanitizeNext(value: string | null) {
   return value?.startsWith('/') === true ? value : '/account/dashboard'
 }
 
+async function syncRoleMirror(role: 'CUSTOMER' | 'TAILOR') {
+  const supabase = createClient()
+  const { data } = await supabase.auth.getUser()
+  const userId = data.user?.id
+  if (!userId) return
+
+  await supabase
+    .from('users')
+    .update({ role, updated_at: new Date().toISOString() })
+    .eq('id', userId)
+}
+
 export function AuthCallbackClient(): React.JSX.Element {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -34,6 +46,7 @@ export function AuthCallbackClient(): React.JSX.Element {
       if (roleIntent === 'CUSTOMER' || roleIntent === 'TAILOR') {
         window.localStorage.removeItem('drapeon.web.auth.roleIntent')
         await supabase.auth.updateUser({ data: { role: roleIntent } }).catch(() => null)
+        await syncRoleMirror(roleIntent)
       }
 
       router.replace(next as Route)
