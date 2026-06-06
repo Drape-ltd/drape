@@ -4,6 +4,10 @@ import { useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { Route } from 'next'
 import { createClient } from '../lib/supabase'
+import {
+  bootstrapWebOnboarding,
+  type WebOnboardingPayload,
+} from '../lib/account-bootstrap'
 
 function sanitizeNext(value: string | null) {
   return value?.startsWith('/') === true ? value : '/account/dashboard'
@@ -19,6 +23,17 @@ async function syncRoleMirror(role: 'CUSTOMER' | 'TAILOR') {
     .from('users')
     .update({ role, updated_at: new Date().toISOString() })
     .eq('id', userId)
+}
+
+function readStoredOnboarding() {
+  const raw = window.localStorage.getItem('drapeon.web.auth.onboarding')
+  if (!raw) return null
+  try {
+    const payload = JSON.parse(raw) as WebOnboardingPayload
+    return payload?.source === 'web' ? payload : null
+  } catch {
+    return null
+  }
 }
 
 export function AuthCallbackClient(): React.JSX.Element {
@@ -43,10 +58,29 @@ export function AuthCallbackClient(): React.JSX.Element {
       }
 
       const roleIntent = window.localStorage.getItem('drapeon.web.auth.roleIntent')
+      const onboarding = readStoredOnboarding()
       if (roleIntent === 'CUSTOMER' || roleIntent === 'TAILOR') {
         window.localStorage.removeItem('drapeon.web.auth.roleIntent')
-        await supabase.auth.updateUser({ data: { role: roleIntent } }).catch(() => null)
+        window.localStorage.removeItem('drapeon.web.auth.onboarding')
+        await supabase.auth.updateUser({
+          data: {
+            role: onboarding?.role ?? roleIntent,
+            display_name: onboarding?.displayName,
+            phone: onboarding?.phone,
+            web_onboarding: onboarding ?? undefined,
+          },
+        }).catch(() => null)
         await syncRoleMirror(roleIntent)
+      }
+
+      if (onboarding) {
+        const { data } = await supabase.auth.getUser()
+        if (data.user?.id) {
+          await bootstrapWebOnboarding(supabase, {
+            userId: data.user.id,
+            onboarding,
+          }).catch(() => null)
+        }
       }
 
       router.replace(next as Route)

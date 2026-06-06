@@ -5,6 +5,10 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import type { Session } from '@supabase/supabase-js'
 import { createClient } from '../lib/supabase'
+import {
+  bootstrapWebOnboarding,
+  webOnboardingFromUser,
+} from '../lib/account-bootstrap'
 
 type DrapeRole = 'CUSTOMER' | 'TAILOR'
 type JoinedProfile = { display_name?: string | null }
@@ -527,7 +531,19 @@ export function AccountDashboard(): React.JSX.Element {
     }
 
     let active = true
-    fetchAccountActivity(session.user.id)
+    const supabase = createClient()
+    const onboarding = webOnboardingFromUser(session.user)
+
+    Promise.resolve()
+      .then(async () => {
+        if (onboarding) {
+          await bootstrapWebOnboarding(supabase, {
+            userId: session.user.id,
+            onboarding,
+          })
+        }
+      })
+      .then(() => fetchAccountActivity(session.user.id))
       .then((nextActivity) => {
         if (!active) return
         setActivity(nextActivity)
@@ -544,7 +560,7 @@ export function AccountDashboard(): React.JSX.Element {
     return () => {
       active = false
     }
-  }, [session?.user.id])
+  }, [session?.user])
 
   async function setRole(role: DrapeRole) {
     setError(null)
