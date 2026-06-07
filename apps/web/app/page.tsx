@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import type { JSX } from 'react'
 import { AppSurfacePreview, ProductSurfaceGrid } from '../components/product-visuals'
+import { PublicSiteHeader } from '../components/public-site-header'
 import { SiteFooter } from '../components/site-footer'
-import { SiteHeader } from '../components/site-header'
 import { buildMetadata } from '../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
@@ -54,7 +54,7 @@ export default function Home(): JSX.Element {
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)]">
       <section className="mx-auto max-w-6xl px-5 py-5 sm:px-8 lg:px-12">
-        <SiteHeader />
+        <PublicSiteHeader />
 
         <div className="grid items-start gap-10 pb-12 pt-6 lg:grid-cols-[1.05fr_0.95fr] lg:gap-14 lg:pb-14 lg:pt-8">
           <div>

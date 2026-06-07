@@ -1,7 +1,7 @@
 import type { JSX, ReactNode } from 'react'
 import { AppSurfacePreview } from './product-visuals'
+import { PublicSiteHeader } from './public-site-header'
 import { SiteFooter } from './site-footer'
-import { SiteHeader } from './site-header'
 
 type MarketingShellProps = {
   eyebrow: string
@@ -23,7 +23,7 @@ export function MarketingShell({
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)]">
       <div className="mx-auto max-w-6xl px-5 py-6 sm:px-8 lg:px-12">
-        <SiteHeader />
+        <PublicSiteHeader />
 
         <section className="grid gap-8 py-8 lg:grid-cols-[1.08fr_0.92fr] lg:items-center lg:py-12">
           <div>
