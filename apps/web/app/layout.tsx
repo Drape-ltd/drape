@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import * as React from 'react'
+import { getSupabasePublishableKey, getSupabaseUrl } from '../lib/supabase-config'
 import './globals.css'
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://drapeon.co'
@@ -45,6 +46,12 @@ export const metadata: Metadata = {
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }): React.JSX.Element {
+  const publicSupabaseEnv = {
+    supabaseUrl: getSupabaseUrl(),
+    supabasePublishableKey: getSupabasePublishableKey(),
+  }
+  const hasPublicSupabaseEnv = Boolean(publicSupabaseEnv.supabaseUrl && publicSupabaseEnv.supabasePublishableKey)
+
   const organizationJsonLd = {
     '@context': 'https://schema.org',
     '@type': 'Organization',
@@ -77,6 +84,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }):
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteJsonLd) }}
         />
+        {hasPublicSupabaseEnv ? (
+          <script
+            id="drapeon-public-env"
+            dangerouslySetInnerHTML={{
+              __html: `window.__DRAPEON_PUBLIC_ENV__=${JSON.stringify(publicSupabaseEnv).replace(/</g, '\\u003c')};`,
+            }}
+          />
+        ) : null}
         {children}
       </body>
     </html>

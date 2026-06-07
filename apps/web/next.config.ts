@@ -1,5 +1,15 @@
 import type { NextConfig } from 'next'
 
+function getPublicSupabaseKey() {
+  return (
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
+    process.env.SUPABASE_PUBLISHABLE_KEY ??
+    process.env.SUPABASE_ANON_KEY ??
+    null
+  )
+}
+
 function getSupabaseStorageHostname() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL
 
@@ -49,6 +59,10 @@ function contentSecurityPolicy() {
 
 const nextConfig: NextConfig = {
   typedRoutes: true,
+  env: {
+    DRAPEON_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? '',
+    DRAPEON_PUBLIC_SUPABASE_PUBLISHABLE_KEY: getPublicSupabaseKey() ?? '',
+  },
   async headers() {
     return [
       {
