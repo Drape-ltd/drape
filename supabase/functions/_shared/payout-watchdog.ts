@@ -24,10 +24,11 @@ type WatchdogOrderRow = {
   tailor_id: string | null
   customer_id: string | null
   currency: string | null
-  source_currency: string | null
-  source_amount: number | null
+  source_currency?: string | null
+  source_amount?: number | null
   subtotal_amount: number | null
   total_amount: number | null
+  quoted_amount?: number | null
   escrow_released: boolean | null
   handoff_completed_at: string | null
   customer_handoff_confirmed_at: string | null
@@ -57,6 +58,7 @@ function payoutAmount(order: WatchdogOrderRow) {
   if (typeof order.source_amount === 'number' && order.source_amount > 0) return order.source_amount
   if (typeof order.subtotal_amount === 'number' && order.subtotal_amount > 0) return order.subtotal_amount
   if (typeof order.total_amount === 'number' && order.total_amount > 0) return order.total_amount
+  if (typeof order.quoted_amount === 'number' && order.quoted_amount > 0) return order.quoted_amount
   return null
 }
 
@@ -68,6 +70,27 @@ function payoutCurrency(order: WatchdogOrderRow) {
 function payoutProvider(order: WatchdogOrderRow) {
   const currency = payoutCurrency(order)
   return currency ? resolvePaymentProviderForCurrency(currency) : null
+}
+
+function describeSupabaseError(error: unknown) {
+  if (error instanceof Error) return error.message
+  if (!error || typeof error !== 'object') return String(error)
+
+  const payload = error as Record<string, unknown>
+  const pieces = [
+    typeof payload.message === 'string' ? payload.message : null,
+    typeof payload.details === 'string' ? payload.details : null,
+    typeof payload.hint === 'string' ? payload.hint : null,
+    typeof payload.code === 'string' ? `code ${payload.code}` : null,
+  ].filter(Boolean)
+
+  if (pieces.length > 0) return pieces.join(' | ')
+
+  try {
+    return JSON.stringify(payload)
+  } catch {
+    return 'Unknown Supabase error'
+  }
 }
 
 export async function findOverduePayoutsWithoutRows(
@@ -82,17 +105,39 @@ export async function findOverduePayoutsWithoutRows(
   const graceMinutes = options.graceMinutes ?? PAYOUT_WATCHDOG_GRACE_MINUTES
   const limit = Math.max(1, Math.min(100, Math.trunc(options.limit ?? PAYOUT_WATCHDOG_LIMIT)))
 
-  const { data: orders, error: orderError } = await supabase
-    .from('orders')
-    .select('id, reference, stage, order_kind, tailor_id, customer_id, currency, source_currency, source_amount, subtotal_amount, total_amount, escrow_released, handoff_completed_at, customer_handoff_confirmed_at')
-    .eq('escrow_released', false)
-    .in('stage', [...PAYOUT_FINAL_STAGES])
-    .not('customer_handoff_confirmed_at', 'is', null)
-    .lte('customer_handoff_confirmed_at', payoutWatchdogCutoff(now, graceMinutes))
-    .order('customer_handoff_confirmed_at', { ascending: true })
-    .limit(limit)
+  const cutoff = payoutWatchdogCutoff(now, graceMinutes)
+  const selectTiers = [
+    'id, reference, stage, order_kind, tailor_id, customer_id, currency, source_currency, source_amount, subtotal_amount, total_amount, escrow_released, handoff_completed_at, customer_handoff_confirmed_at',
+    'id, reference, stage, order_kind, tailor_id, customer_id, currency, subtotal_amount, total_amount, escrow_released, handoff_completed_at, customer_handoff_confirmed_at',
+    'id, reference, stage, order_kind, tailor_id, customer_id, currency, quoted_amount, escrow_released, handoff_completed_at, customer_handoff_confirmed_at',
+    'id, reference, stage, tailor_id, customer_id, currency, quoted_amount, escrow_released, handoff_completed_at, customer_handoff_confirmed_at',
+  ]
+  let orders: unknown[] | null = null
+  let orderError: unknown = null
 
-  if (orderError) throw orderError
+  for (const selectColumns of selectTiers) {
+    const result = await supabase
+      .from('orders')
+      .select(selectColumns)
+      .eq('escrow_released', false)
+      .in('stage', [...PAYOUT_FINAL_STAGES])
+      .not('customer_handoff_confirmed_at', 'is', null)
+      .lte('customer_handoff_confirmed_at', cutoff)
+      .order('customer_handoff_confirmed_at', { ascending: true })
+      .limit(limit)
+
+    if (!result.error) {
+      orders = result.data ?? []
+      orderError = null
+      break
+    }
+
+    orderError = result.error
+    const description = describeSupabaseError(result.error)
+    if (!description.includes('does not exist') && !description.includes('PGRST204')) break
+  }
+
+  if (orderError) throw new Error(`Payout watchdog order query failed: ${describeSupabaseError(orderError)}`)
 
   const candidateOrders = ((orders ?? []) as WatchdogOrderRow[])
     .filter((order) => typeof order.customer_handoff_confirmed_at === 'string')
@@ -105,7 +150,7 @@ export async function findOverduePayoutsWithoutRows(
     .select('order_id')
     .in('order_id', orderIds)
 
-  if (payoutError) throw payoutError
+  if (payoutError) throw new Error(`Payout watchdog payout query failed: ${describeSupabaseError(payoutError)}`)
 
   const ordersWithPayoutRows = new Set(
     ((payouts ?? []) as Array<{ order_id: string | null }>)
