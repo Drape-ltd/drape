@@ -1,9 +1,22 @@
 import type { NextConfig } from 'next'
 
+function getPublicSupabaseUrl() {
+  return (
+    process.env.DRAPEON_PUBLIC_SUPABASE_URL ??
+    process.env.NEXT_PUBLIC_SUPABASE_URL ??
+    process.env.EXPO_PUBLIC_SUPABASE_URL ??
+    process.env.SUPABASE_URL ??
+    null
+  )
+}
+
 function getPublicSupabaseKey() {
   return (
+    process.env.DRAPEON_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
+    process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
+    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ??
     process.env.SUPABASE_PUBLISHABLE_KEY ??
     process.env.SUPABASE_ANON_KEY ??
     null
@@ -11,7 +24,7 @@ function getPublicSupabaseKey() {
 }
 
 function getSupabaseStorageHostname() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL
+  const supabaseUrl = getPublicSupabaseUrl()
 
   if (!supabaseUrl) return null
 
@@ -24,6 +37,39 @@ function getSupabaseStorageHostname() {
 
 const supabaseStorageHostname = getSupabaseStorageHostname()
 const supabaseStorageOrigin = supabaseStorageHostname ? `https://${supabaseStorageHostname}` : ''
+const publicSupabaseUrl = getPublicSupabaseUrl()
+const publicSupabaseKey = getPublicSupabaseKey()
+
+function isCloudflareBuild() {
+  return Boolean(
+    process.env.CF_PAGES ||
+      process.env.CF_PAGES_BRANCH ||
+      process.env.CF_PAGES_COMMIT_SHA ||
+      process.env.CLOUDFLARE_ACCOUNT_ID ||
+      process.env.CF_ACCOUNT_ID
+  )
+}
+
+function assertPublicSupabaseEnvForCloudflare() {
+  if (!isCloudflareBuild()) return
+
+  const missing: string[] = []
+  if (!publicSupabaseUrl) {
+    missing.push('NEXT_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_URL')
+  }
+  if (!publicSupabaseKey) {
+    missing.push('NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY or EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY')
+  }
+
+  if (!missing.length) return
+
+  throw new Error(
+    `[web env] Missing public Supabase env for browser auth: ${missing.join(', ')}. ` +
+      'Set these in Cloudflare Pages/Workers production variables and redeploy.'
+  )
+}
+
+assertPublicSupabaseEnvForCloudflare()
 
 function contentSecurityPolicy() {
   const imgSrc = ["'self'", 'data:', 'blob:', supabaseStorageOrigin, 'https://*.stripe.com'].filter(Boolean).join(' ')
@@ -60,8 +106,8 @@ function contentSecurityPolicy() {
 const nextConfig: NextConfig = {
   typedRoutes: true,
   env: {
-    DRAPEON_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? '',
-    DRAPEON_PUBLIC_SUPABASE_PUBLISHABLE_KEY: getPublicSupabaseKey() ?? '',
+    DRAPEON_PUBLIC_SUPABASE_URL: publicSupabaseUrl ?? '',
+    DRAPEON_PUBLIC_SUPABASE_PUBLISHABLE_KEY: publicSupabaseKey ?? '',
   },
   async headers() {
     return [
