@@ -23,17 +23,30 @@ export function SiteHeader(): JSX.Element {
   const pathname = usePathname()
   const router = useRouter()
   const [signedIn, setSignedIn] = useState(false)
-  const [checkingSession, setCheckingSession] = useState(true)
+  const [checkingSession, setCheckingSession] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
   const isActive = (href: string): boolean => pathname === href || pathname?.startsWith(`${href}/`) === true
 
   useEffect(() => {
-    const supabase = createClient()
+    let supabase: ReturnType<typeof createClient>
+
+    try {
+      supabase = createClient()
+    } catch (error) {
+      console.warn('[site-header] Auth session check unavailable.', error)
+      return
+    }
+
     let active = true
 
     supabase.auth.getSession().then(({ data }) => {
       if (!active) return
       setSignedIn(Boolean(data.session?.user.id))
+      setCheckingSession(false)
+    }).catch((error: unknown) => {
+      console.warn('[site-header] Auth session check failed.', error)
+      if (!active) return
+      setSignedIn(false)
       setCheckingSession(false)
     })
 
@@ -52,8 +65,12 @@ export function SiteHeader(): JSX.Element {
   async function signOut() {
     if (signingOut) return
     setSigningOut(true)
-    const supabase = createClient()
-    await supabase.auth.signOut()
+    try {
+      const supabase = createClient()
+      await supabase.auth.signOut()
+    } catch (error) {
+      console.warn('[site-header] Sign out failed.', error)
+    }
     setSignedIn(false)
     setSigningOut(false)
     router.replace('/sign-in')
