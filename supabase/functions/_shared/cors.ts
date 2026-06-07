@@ -18,7 +18,22 @@ const ALLOWED_ORIGINS = new Set([
   'https://admin.drapeon.co',
 ])
 
+const DEV_ALLOWED_ORIGINS = new Set([
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:3001',
+  'http://localhost:3000',
+  'http://localhost:3001',
+])
+
 const ALLOW_HEADERS = 'authorization, x-client-info, apikey, content-type'
+
+function isDevProject() {
+  try {
+    return new URL(Deno.env.get('SUPABASE_URL') ?? '').hostname.startsWith('pqptfuqogvrajozfsqzi')
+  } catch {
+    return false
+  }
+}
 
 /**
  * Returns CORS response headers appropriate for the incoming request's Origin.
@@ -39,7 +54,10 @@ export function getCorsHeaders(req: Request): Record<string, string> {
   }
 
   // Browser: return the actual origin back only if it is allowlisted
-  const allowedOrigin = ALLOWED_ORIGINS.has(origin) ? origin : 'https://drapeon.co'
+  const allowedOrigin =
+    ALLOWED_ORIGINS.has(origin) || (isDevProject() && DEV_ALLOWED_ORIGINS.has(origin))
+      ? origin
+      : 'https://drapeon.co'
   return {
     'Access-Control-Allow-Origin': allowedOrigin,
     'Access-Control-Allow-Headers': ALLOW_HEADERS,

@@ -371,8 +371,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         </h1>
         <p className="mt-4 text-sm leading-7 text-ink/66">
           {isSignUp
-            ? 'One Drapeon account can use both customer and tailor mode. This choice opens the right side first.'
-            : 'Use the same account you use in the app to view your Drapeon history on web.'}
+            ? 'Choose a starting side. You can add the other later.'
+            : 'Use the same account from the app.'}
         </p>
       </div>
 
@@ -395,7 +395,13 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         </div>
       ) : null}
 
-      <div className="mt-6 grid gap-4">
+      <form
+        className="mt-6 grid gap-4"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void submit()
+        }}
+      >
         {isSignUp ? (
           <label className="grid gap-2 text-sm font-semibold text-ink">
             Display name
@@ -658,10 +664,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         ) : null}
 
         <button
-          type="button"
-          onClick={() => {
-            void submit()
-          }}
+          type="submit"
           disabled={loading || !!oauthLoading}
           className="min-h-[52px] rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(45,106,79,0.18)] transition hover:bg-needle-600 disabled:cursor-not-allowed disabled:bg-ink/18 disabled:text-ink/42"
         >
@@ -690,7 +693,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
             {oauthLoading === 'apple' ? 'Opening...' : 'Continue with Apple'}
           </button>
         </div>
-      </div>
+      </form>
 
       <div className="mt-6 flex flex-col gap-3 border-t border-ink/6 pt-5 text-sm text-ink/62 sm:flex-row sm:items-center sm:justify-between">
         {isSignUp ? (

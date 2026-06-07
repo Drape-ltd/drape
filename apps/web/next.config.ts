@@ -16,7 +16,7 @@ const supabaseStorageHostname = getSupabaseStorageHostname()
 const supabaseStorageOrigin = supabaseStorageHostname ? `https://${supabaseStorageHostname}` : ''
 
 function contentSecurityPolicy() {
-  const imgSrc = ["'self'", 'data:', 'blob:', supabaseStorageOrigin].filter(Boolean).join(' ')
+  const imgSrc = ["'self'", 'data:', 'blob:', supabaseStorageOrigin, 'https://*.stripe.com'].filter(Boolean).join(' ')
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? ''
   const shouldUpgradeInsecureRequests = siteUrl.startsWith('https://') && !siteUrl.includes('localhost')
   const connectSrc = [
@@ -26,6 +26,9 @@ function contentSecurityPolicy() {
     'https://*.posthog.com',
     'https://us.i.posthog.com',
     'https://api.resend.com',
+    'https://api.stripe.com',
+    'https://r.stripe.com',
+    'https://m.stripe.network',
   ].join(' ')
 
   return [
@@ -34,9 +37,10 @@ function contentSecurityPolicy() {
     "frame-ancestors 'none'",
     "object-src 'none'",
     `img-src ${imgSrc}`,
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com",
     "style-src 'self' 'unsafe-inline'",
     `connect-src ${connectSrc}`,
+    "frame-src 'self' https://js.stripe.com https://hooks.stripe.com",
     "font-src 'self' data:",
     "form-action 'self'",
     shouldUpgradeInsecureRequests ? 'upgrade-insecure-requests' : '',

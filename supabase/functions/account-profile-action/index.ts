@@ -8,6 +8,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { validateDisplayName } from '../../../packages/shared/src/contact-filter.ts'
 import { normalizePhoneForStorage, validatePhoneForProfile } from '../../../packages/shared/src/phone.ts'
+import { normalizeAccountCurrency } from '../../../packages/shared/src/currency-config.ts'
 import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
@@ -32,6 +33,16 @@ const BodySchema = z.discriminatedUnion('action', [
     action: z.literal('update-avatar'),
     role: z.enum(['CUSTOMER', 'TAILOR']),
     avatarUrl: z.string().url(),
+  }),
+  z.object({
+    action: z.literal('update-display-name'),
+    role: z.enum(['CUSTOMER', 'TAILOR']),
+    displayName: z.string().trim().min(1).max(80),
+  }),
+  z.object({
+    action: z.literal('update-currency'),
+    role: z.enum(['CUSTOMER', 'TAILOR']),
+    currency: z.string().trim().min(3).max(3),
   }),
 ])
 
@@ -92,6 +103,141 @@ Deno.serve(async (req) => {
         payload: { function: FN, ip: clientIp, action: body.action },
       })
       return rateLimitExceededResponse(cors)
+    }
+
+    if (body.action === 'update-display-name' || body.action === 'update-currency') {
+      const { data: userRow, error: userLookupError } = await supabase
+        .from('users')
+        .select('id, email, role')
+        .eq('id', caller.id)
+        .maybeSingle()
+
+      if (userLookupError) {
+        log('error', FN, 'users.lookup_failed', { actor_id: caller.id, error: userLookupError.message })
+        return jsonResponse({
+          error: 'We could not load your account record right now.',
+          message: 'We could not load your account record right now.',
+        }, 500, cors)
+      }
+
+      if (userRow?.role && userRow.role !== body.role) {
+        return jsonResponse({
+          error: 'This profile does not match your account type. Sign out and sign back in, then retry.',
+          message: 'This profile does not match your account type. Sign out and sign back in, then retry.',
+        }, 400, cors)
+      }
+
+      const now = new Date().toISOString()
+
+      if (body.action === 'update-display-name') {
+        const displayName = body.displayName.trim()
+        const displayNameIssue = validateDisplayName(displayName)
+        if (displayNameIssue) {
+          return jsonResponse({ error: displayNameIssue, message: displayNameIssue }, 400, cors)
+        }
+
+        const { data: authUserData } = await supabase.auth.admin.getUserById(caller.id)
+        const email = caller.email ?? authUserData?.user?.email ?? userRow?.email ?? ''
+        if (!email.trim()) {
+          return jsonResponse({
+            error: 'We could not verify the email on this account. Sign out and sign back in, then retry.',
+            message: 'We could not verify the email on this account. Sign out and sign back in, then retry.',
+          }, 400, cors)
+        }
+
+        const { error: usersError } = await supabase
+          .from('users')
+          .upsert({ id: caller.id, email, role: body.role, display_name: displayName, updated_at: now }, { onConflict: 'id' })
+
+        if (usersError) {
+          log('error', FN, 'users.display_name_upsert_failed', { actor_id: caller.id, error: usersError.message })
+          return jsonResponse({
+            error: 'We could not save your display name right now.',
+            message: 'We could not save your display name right now.',
+          }, 500, cors)
+        }
+
+        if (body.role === 'CUSTOMER') {
+          const { error: profileError } = await supabase
+            .from('customer_profiles')
+            .upsert({ user_id: caller.id, display_name: displayName, updated_at: now }, { onConflict: 'user_id' })
+          if (profileError) {
+            log('error', FN, 'customer_profile.display_name_upsert_failed', { actor_id: caller.id, error: profileError.message })
+            return jsonResponse({
+              error: 'We could not save your customer profile right now.',
+              message: 'We could not save your customer profile right now.',
+            }, 500, cors)
+          }
+        } else {
+          const { error: profileError } = await supabase
+            .from('tailor_profiles')
+            .update({ display_name: displayName, updated_at: now })
+            .eq('user_id', caller.id)
+          if (profileError) {
+            log('error', FN, 'tailor_profile.display_name_update_failed', { actor_id: caller.id, error: profileError.message })
+            return jsonResponse({
+              error: 'We could not save your tailor profile right now.',
+              message: 'We could not save your tailor profile right now.',
+            }, 500, cors)
+          }
+        }
+
+        await audit(supabase, {
+          event: 'account.display_name_updated',
+          actor_id: caller.id,
+          actor_role: body.role,
+          severity: 'info',
+          payload: { function: FN },
+        })
+
+        return jsonResponse({ ok: true }, 200, cors)
+      }
+
+      const currency = normalizeAccountCurrency(body.currency)
+      if (!currency) {
+        return jsonResponse({
+          error: 'Choose a supported currency.',
+          message: 'Choose a supported currency.',
+        }, 400, cors)
+      }
+
+      const { error: currencyError } = await supabase
+        .from('users')
+        .update({ default_currency: currency, updated_at: now })
+        .eq('id', caller.id)
+
+      if (currencyError) {
+        log('error', FN, 'users.currency_update_failed', { actor_id: caller.id, error: currencyError.message })
+        return jsonResponse({
+          error: 'We could not save your currency right now.',
+          message: 'We could not save your currency right now.',
+        }, 500, cors)
+      }
+
+      if (body.role === 'TAILOR') {
+        const { error: tailorCurrencyError } = await supabase
+          .from('tailor_profiles')
+          .update({ currency, updated_at: now })
+          .eq('user_id', caller.id)
+
+        if (tailorCurrencyError) {
+          log('error', FN, 'tailor_profile.currency_update_failed', { actor_id: caller.id, error: tailorCurrencyError.message })
+          return jsonResponse({
+            error: 'We saved your account currency but could not update the tailor storefront yet.',
+            message: 'We saved your account currency but could not update the tailor storefront yet.',
+          }, 500, cors)
+        }
+      }
+
+      await audit(supabase, {
+        event: 'account.currency_updated',
+        actor_id: caller.id,
+        actor_role: body.role,
+        severity: 'info',
+        payload: { function: FN, currency },
+      })
+
+      return jsonResponse({ ok: true, currency }, 200, cors)
     }
 
     if (body.action === 'update-avatar') {

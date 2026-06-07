@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Image from 'next/image'
 import Link from 'next/link'
 import type { JSX } from 'react'
 import { AppSurfacePreview } from '../../components/product-visuals'
@@ -81,9 +82,11 @@ export default function TailorsPage(): JSX.Element {
           description="Drapeon gives tailors the same connected workspace across setup, shop, clients, orders, production updates, and money."
         />
         <div className="mt-10 overflow-hidden rounded-[1.6rem] border border-ink/6 bg-white/82 p-3 shadow-sm">
-          <img
+          <Image
             src="/tailor-pipeline.svg"
             alt="Drapeon tailor pipeline interface preview"
+            width={1200}
+            height={560}
             className="h-auto w-full rounded-[1.25rem]"
           />
         </div>

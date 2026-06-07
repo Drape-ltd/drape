@@ -32,6 +32,7 @@ type DashboardOrder = {
   quoted_completion_date: string | null
   customer_id: string | null
   tailor_id: string | null
+  tailor_profile_id: string | null
   tailor_profiles?: JoinedProfile | JoinedProfile[] | null
   customer_profiles?: JoinedProfile | JoinedProfile[] | null
 }
@@ -72,7 +73,6 @@ type CustomerProfileSummary = {
   avatar_url: string | null
   measurements: Record<string, unknown> | null
   unit_preference: string | null
-  fit_style: string | null
   updated_at: string | null
 }
 type TailorProfileSummary = {
@@ -308,15 +308,15 @@ function buildNextAction({
       return {
         eyebrow: 'Discovery',
         title: 'Share your profile to get your first order.',
-        body: 'Once orders arrive, this web dashboard becomes your read-only command center for work, messages, and money.',
+        body: 'Once orders arrive, this web dashboard becomes your command center for work, messages, shop, and money.',
         cta: 'Open profile',
         href: 'drape://',
       }
     }
     return {
       eyebrow: 'Today',
-      title: 'Review active work in the app.',
-      body: 'Production photos, proof uploads, consultation calls, and stage actions stay in the app for launch.',
+      title: 'Review active work.',
+      body: 'Quotes, messages, stage updates, and ready-made shop work can move on web. Use the app for Vision and native camera proof.',
       cta: 'View work queue',
       href: '/account/work',
     }
@@ -344,7 +344,7 @@ function buildNextAction({
     return {
       eyebrow: 'Order',
       title: 'Find a tailor and start your first brief.',
-      body: 'Explore tailors, save favorites, and place custom or ready-made orders in the mobile app.',
+      body: 'Explore tailors, save favorites, and start ready-made checkout on web. Use the app for Vision-assisted custom briefs.',
       cta: 'Open Explore',
       href: '/account/explore',
     }
@@ -353,15 +353,15 @@ function buildNextAction({
     return {
       eyebrow: 'Messages',
       title: 'You have order messages waiting.',
-      body: 'Reply in the app so the order record stays protected on Drapeon.',
+      body: 'Reply on web or mobile so the order record stays protected on Drapeon.',
       cta: 'Review messages',
       href: '/account/messages',
     }
   }
   return {
     eyebrow: 'Today',
-    title: 'Review your orders in the app.',
-    body: 'Checkout, calls, proof photos, handoff confirmation, and support actions stay in the app for launch.',
+    title: 'Review your orders.',
+    body: 'Checkout, messages, calls, and support are available on web where the order stage allows it. Native proof capture stays in the app.',
     cta: 'Review orders',
     href: '/account/orders',
   }
@@ -372,14 +372,13 @@ async function fetchAccountActivity(userId: string): Promise<AccountActivity> {
   const [
     customerProfileRes,
     tailorProfileRes,
-    ordersRes,
     measurementProfilesRes,
     measurementScansRes,
     wishlistCollectionsRes,
   ] = await Promise.all([
     supabase
       .from('customer_profiles')
-      .select('user_id, display_name, avatar_url, measurements, unit_preference, fit_style, updated_at')
+      .select('user_id, display_name, avatar_url, measurements, unit_preference, updated_at')
       .eq('user_id', userId)
       .maybeSingle(),
     supabase
@@ -387,18 +386,6 @@ async function fetchAccountActivity(userId: string): Promise<AccountActivity> {
       .select('id, user_id, display_name, business_name, availability, is_live, is_verified, profile_completed, total_orders, avg_rating, currency, payout_account_verified, payout_reverification_required')
       .eq('user_id', userId)
       .maybeSingle(),
-    supabase
-      .from('orders')
-      .select(`
-        id, reference, order_kind, garment_type, item_title, item_size, stage, delivery_method,
-        quoted_amount, total_amount, currency, quoted_currency, created_at, updated_at, quoted_completion_date,
-        customer_id, tailor_id,
-        tailor_profiles!tailor_profile_id(display_name),
-        customer_profiles!customer_id(display_name)
-      `)
-      .or(`customer_id.eq.${userId},tailor_id.eq.${userId}`)
-      .order('created_at', { ascending: false })
-      .limit(12),
     supabase
       .from('customer_measurement_profiles')
       .select('id, label, relationship, source, unit_preference, is_default, last_measured_at, updated_at')
@@ -419,6 +406,24 @@ async function fetchAccountActivity(userId: string): Promise<AccountActivity> {
       .order('updated_at', { ascending: false })
       .limit(6),
   ])
+
+  const tailorProfile = tailorProfileRes.error ? null : ((tailorProfileRes.data ?? null) as TailorProfileSummary | null)
+  const orderFilter = tailorProfile?.id
+    ? `customer_id.eq.${userId},tailor_id.eq.${userId},tailor_profile_id.eq.${tailorProfile.id}`
+    : `customer_id.eq.${userId},tailor_id.eq.${userId}`
+
+  const ordersRes = await supabase
+    .from('orders')
+    .select(`
+      id, reference, order_kind, garment_type, item_title, item_size, stage, delivery_method,
+      quoted_amount, total_amount, currency, quoted_currency, created_at, updated_at, quoted_completion_date,
+      customer_id, tailor_id, tailor_profile_id,
+      tailor_profiles!tailor_profile_id(display_name),
+      customer_profiles!customer_id(display_name)
+    `)
+    .or(orderFilter)
+    .order('created_at', { ascending: false })
+    .limit(12)
 
   let warning: string | null = null
   if (
@@ -468,7 +473,6 @@ async function fetchAccountActivity(userId: string): Promise<AccountActivity> {
   }
 
   let sellerItems: SellerItemSummary[] = []
-  const tailorProfile = tailorProfileRes.error ? null : ((tailorProfileRes.data ?? null) as TailorProfileSummary | null)
   if (tailorProfile?.id) {
     const { data, error } = await supabase
       .from('seller_items')
@@ -632,7 +636,9 @@ export function AccountDashboard(): React.JSX.Element {
   const completedOrders = activity.orders.length - activeOrders.length
   const displayName = profileName(activity, email)
   const customerOrders = activity.orders.filter((order) => order.customer_id === userId)
-  const tailorOrders = activity.orders.filter((order) => order.tailor_id === userId)
+  const tailorOrders = activity.orders.filter(
+    (order) => order.tailor_id === userId || order.tailor_profile_id === activity.tailorProfile?.id,
+  )
   const latestMessage = activity.messages[0] ?? null
   const unreadMessages = activity.messages.filter((message) => message.sender_id !== userId && !message.read_at).length
   const liveSellerItems = activity.sellerItems.filter((item) => item.is_live).length
@@ -647,10 +653,14 @@ export function AccountDashboard(): React.JSX.Element {
     unreadMessages,
   })
   const accountLinks: Array<[string, Route]> = [
+    ['Dashboard', '/account/dashboard'],
     ['Explore', '/account/explore'],
+    ['Saved', '/account/saved'],
     ['Orders', '/account/orders'],
     ['Messages', '/account/messages'],
     ['Measurements', '/account/measurements'],
+    ['Settings', '/account/settings'],
+    ['Support', '/account/support'],
   ]
   if (role === 'TAILOR' || activity.tailorProfile) {
     accountLinks.push(['Shop', '/account/shop'], ['Work queue', '/account/work'])

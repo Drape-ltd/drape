@@ -10,8 +10,12 @@ import { authorizeCronRequest } from "../_shared/cron.ts";
 import { getCorsHeaders } from "../_shared/cors.ts";
 import { getServiceRoleKey, getSupabaseUrl } from "../_shared/env.ts";
 import { audit, log } from "../_shared/logger.ts";
-import { sendPushToUser } from "../_shared/notify.ts";
 import { createOrRefreshOpsIssue } from "../_shared/ops-issues.ts";
+import {
+  enqueueOrderEventEmailJob,
+  enqueuePushJob,
+  enqueueSmsJob,
+} from "../_shared/side-effect-jobs.ts";
 import {
   getClientIp,
   RATE_LIMITS,
@@ -27,10 +31,6 @@ const PICKUP_REMINDER_DAYS = 7;
 const PICKUP_OPS_DAYS = 14;
 const PICKUP_STORAGE_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-declare const EdgeRuntime: {
-  waitUntil(promise: Promise<unknown>): void;
-};
 
 type TailorProfileRelation = {
   user_id: string | null;
@@ -90,6 +90,67 @@ function tailorUserId(order: OrderRow) {
     ? order.tailor_profiles[0]
     : order.tailor_profiles;
   return relation?.user_id ?? null;
+}
+
+function orderRef(order: OrderRow) {
+  return order.reference?.trim() || order.id.slice(0, 8).toUpperCase();
+}
+
+function queueOrderNotice(
+  supabase: SupabaseClient,
+  input: {
+    order: OrderRow;
+    userId: string | null | undefined;
+    audience: "CUSTOMER" | "TAILOR";
+    title: string;
+    body: string;
+    smsBody: string;
+    event: string;
+    idempotencyKey: string;
+    preferenceKey?: "orderUpdates" | "newOrders";
+    priority?: number;
+  },
+) {
+  const { order, userId, audience, title, body, smsBody, event, idempotencyKey } = input;
+  if (!userId) return Promise.resolve([]);
+
+  return Promise.allSettled([
+    enqueuePushJob(supabase, {
+      userId,
+      source: FN,
+      orderId: order.id,
+      idempotencyKey: `${idempotencyKey}:push`,
+      priority: input.priority ?? 20,
+      notification: {
+        title,
+        body,
+        preferenceKey: input.preferenceKey,
+        data: { orderId: order.id },
+      },
+    }),
+    enqueueSmsJob(supabase, {
+      userId,
+      audience,
+      source: FN,
+      orderId: order.id,
+      event,
+      idempotencyKey: `${idempotencyKey}:sms`,
+      priority: input.priority ?? 20,
+      body: smsBody,
+    }),
+    enqueueOrderEventEmailJob(supabase, {
+      order: order as unknown as Record<string, unknown> & { id: string },
+      recipientUserId: userId,
+      audience,
+      subject: title,
+      headline: title,
+      body,
+      ctaLabel: "Open order",
+      source: FN,
+      idempotencyKey: `${idempotencyKey}:email`,
+      priority: input.priority ?? 20,
+    }),
+  ]);
 }
 
 function staleDays(order: OrderRow, nowMs: number) {
@@ -366,59 +427,77 @@ async function sendReminderNotifications(
   supabase: SupabaseClient,
   order: OrderRow,
 ) {
-  if (order.customer_id) {
-    EdgeRuntime.waitUntil(
-      sendPushToUser(supabase, order.customer_id, {
-        title: "We are checking on your order",
-        body: "Your order hasn't been updated recently. We're following up.",
-        preferenceKey: "orderUpdates",
-        data: { orderId: order.id },
-      }),
-    );
-  }
+  const sends: Promise<unknown>[] = [];
+  const ref = orderRef(order);
+
+  sends.push(queueOrderNotice(supabase, {
+    order,
+    userId: order.customer_id,
+    audience: "CUSTOMER",
+    title: "We are checking on your order",
+    body: "Your order has not been updated recently. Drape is following up so the next step is clear.",
+    smsBody: `Drape: order ${ref} has not been updated recently. We are following up so the next step is clear.`,
+    event: "production_stall_reminder",
+    idempotencyKey: `production-stall-reminder:${order.id}:customer`,
+    preferenceKey: "orderUpdates",
+    priority: 20,
+  }));
 
   const tailorId = tailorUserId(order);
-  if (tailorId) {
-    EdgeRuntime.waitUntil(
-      sendPushToUser(supabase, tailorId, {
-        title: "Production update needed",
-        body:
-          isReadyMade(order)
-            ? "Please update this order so the customer knows whether it is being prepared, packed, or handed off."
-            : "Please post an update for this order so the customer knows what is happening.",
-        preferenceKey: "newOrders",
-        data: { orderId: order.id },
-      }),
-    );
-  }
+  const tailorBody = isReadyMade(order)
+    ? "Please update this order so the customer knows whether it is being prepared, packed, or handed off."
+    : "Please post a production update so the customer knows what is happening.";
+  sends.push(queueOrderNotice(supabase, {
+    order,
+    userId: tailorId,
+    audience: "TAILOR",
+    title: "Production update needed",
+    body: tailorBody,
+    smsBody: `Drape: order ${ref} needs an update. Open the order and post the next step so the customer is not left waiting.`,
+    event: "production_stall_reminder",
+    idempotencyKey: `production-stall-reminder:${order.id}:tailor`,
+    preferenceKey: "newOrders",
+    priority: 20,
+  }));
+
+  await Promise.allSettled(sends);
 }
 
 async function sendDisputeNotifications(
   supabase: SupabaseClient,
   order: OrderRow,
 ) {
-  if (order.customer_id) {
-    EdgeRuntime.waitUntil(
-      sendPushToUser(supabase, order.customer_id, {
-        title: "Drape is stepping in",
-        body:
-          "Your order has been paused for support review because production updates stopped.",
-        data: { orderId: order.id },
-      }),
-    );
-  }
+  const sends: Promise<unknown>[] = [];
+  const ref = orderRef(order);
+
+  sends.push(queueOrderNotice(supabase, {
+    order,
+    userId: order.customer_id,
+    audience: "CUSTOMER",
+    title: "Drape is stepping in",
+    body: "Your order has been paused for support review because production updates stopped.",
+    smsBody: `Drape: order ${ref} has been paused for support review because updates stopped. Open Drape for the latest status.`,
+    event: "production_stall_dispute",
+    idempotencyKey: `production-stall-dispute:${order.id}:customer`,
+    preferenceKey: "orderUpdates",
+    priority: 10,
+  }));
 
   const tailorId = tailorUserId(order);
-  if (tailorId) {
-    EdgeRuntime.waitUntil(
-      sendPushToUser(supabase, tailorId, {
-        title: "Order review opened",
-        body:
-          "This order has not been updated in 10 days. Add an update in Drape or respond to support.",
-        data: { orderId: order.id },
-      }),
-    );
-  }
+  sends.push(queueOrderNotice(supabase, {
+    order,
+    userId: tailorId,
+    audience: "TAILOR",
+    title: "Order review opened",
+    body: "This order has not been updated in 10 days. Add an update in Drape or respond to support.",
+    smsBody: `Drape: order ${ref} is now in support review after no update. Open Drape and respond before work continues.`,
+    event: "production_stall_dispute",
+    idempotencyKey: `production-stall-dispute:${order.id}:tailor`,
+    preferenceKey: "newOrders",
+    priority: 10,
+  }));
+
+  await Promise.allSettled(sends);
 }
 
 async function sendDeadlineNotifications(
@@ -426,34 +505,43 @@ async function sendDeadlineNotifications(
   order: OrderRow,
   daysRemaining: number,
 ) {
-  if (order.customer_id) {
-    EdgeRuntime.waitUntil(
-      sendPushToUser(supabase, order.customer_id, {
-        title: "Order deadline check",
-        body:
-          daysRemaining <= 1
-            ? "Your order deadline is close. We are checking that the next step is clear."
-            : "Your order deadline is coming up. We are checking that progress stays on track.",
-        preferenceKey: "orderUpdates",
-        data: { orderId: order.id },
-      }),
-    );
-  }
+  const sends: Promise<unknown>[] = [];
+  const ref = orderRef(order);
+  const customerBody = daysRemaining <= 1
+    ? "Your order deadline is close. We are checking that the next step is clear."
+    : "Your order deadline is coming up. We are checking that progress stays on track.";
+  const tailorBody = daysRemaining <= 1
+    ? "This order deadline is very close. Post the next update or message the customer now."
+    : "This order deadline is coming up. Add a progress update so the customer is not left guessing.";
+
+  sends.push(queueOrderNotice(supabase, {
+    order,
+    userId: order.customer_id,
+    audience: "CUSTOMER",
+    title: "Order deadline check",
+    body: customerBody,
+    smsBody: `Drape: order ${ref} deadline is ${daysRemaining <= 1 ? "very close" : "coming up"}. We are checking progress now.`,
+    event: "deadline_warning",
+    idempotencyKey: `deadline-warning:${order.id}:customer`,
+    preferenceKey: "orderUpdates",
+    priority: 15,
+  }));
 
   const tailorId = tailorUserId(order);
-  if (tailorId) {
-    EdgeRuntime.waitUntil(
-      sendPushToUser(supabase, tailorId, {
-        title: "Deadline check needed",
-        body:
-          daysRemaining <= 1
-            ? "This order deadline is very close. Post the next update or message the customer now."
-            : "This order deadline is coming up. Add a progress update so the customer is not left guessing.",
-        preferenceKey: "newOrders",
-        data: { orderId: order.id },
-      }),
-    );
-  }
+  sends.push(queueOrderNotice(supabase, {
+    order,
+    userId: tailorId,
+    audience: "TAILOR",
+    title: "Deadline check needed",
+    body: tailorBody,
+    smsBody: `Drape: order ${ref} deadline is ${daysRemaining <= 1 ? "very close" : "coming up"}. Post an update or message the customer in Drape.`,
+    event: "deadline_warning",
+    idempotencyKey: `deadline-warning:${order.id}:tailor`,
+    preferenceKey: "newOrders",
+    priority: 15,
+  }));
+
+  await Promise.allSettled(sends);
 }
 
 async function sendPickupNotifications(
@@ -461,32 +549,43 @@ async function sendPickupNotifications(
   order: OrderRow,
   daysWaiting: number,
 ) {
-  if (order.customer_id) {
-    EdgeRuntime.waitUntil(
-      sendPushToUser(supabase, order.customer_id, {
-        title: "Pickup reminder",
-        body: daysWaiting >= PICKUP_OPS_DAYS
-          ? "Your order has been waiting for collection. Drape is checking in so pickup stays clear."
-          : "Your order is ready for collection. Please collect it soon or message the tailor inside Drape.",
-        preferenceKey: "orderUpdates",
-        data: { orderId: order.id },
-      }),
-    );
-  }
+  const sends: Promise<unknown>[] = [];
+  const ref = orderRef(order);
+  const customerBody = daysWaiting >= PICKUP_OPS_DAYS
+    ? "Your order has been waiting for collection. Drape is checking in so pickup stays clear."
+    : "Your order is ready for collection. Please collect it soon or message the tailor inside Drape.";
+  const tailorBody = daysWaiting >= PICKUP_OPS_DAYS
+    ? "Drape is checking on this uncollected pickup. Keep the garment and any pickup plan in the order thread."
+    : "This pickup is still open. Message the customer in Drape if collection needs a new time.";
+
+  sends.push(queueOrderNotice(supabase, {
+    order,
+    userId: order.customer_id,
+    audience: "CUSTOMER",
+    title: "Pickup reminder",
+    body: customerBody,
+    smsBody: `Drape: order ${ref} is ready for pickup and still open. Collect it soon or message the tailor in Drape.`,
+    event: "pickup_uncollected",
+    idempotencyKey: `pickup-uncollected:${order.id}:${daysWaiting}:customer`,
+    preferenceKey: "orderUpdates",
+    priority: 25,
+  }));
 
   const tailorId = tailorUserId(order);
-  if (tailorId) {
-    EdgeRuntime.waitUntil(
-      sendPushToUser(supabase, tailorId, {
-        title: "Pickup still open",
-        body: daysWaiting >= PICKUP_OPS_DAYS
-          ? "Drape is checking on this uncollected pickup. Keep the garment and any pickup plan in the order thread."
-          : "This pickup is still open. Message the customer in Drape if collection needs a new time.",
-        preferenceKey: "newOrders",
-        data: { orderId: order.id },
-      }),
-    );
-  }
+  sends.push(queueOrderNotice(supabase, {
+    order,
+    userId: tailorId,
+    audience: "TAILOR",
+    title: "Pickup still open",
+    body: tailorBody,
+    smsBody: `Drape: pickup for order ${ref} is still open. Keep collection plans inside Drape.`,
+    event: "pickup_uncollected",
+    idempotencyKey: `pickup-uncollected:${order.id}:${daysWaiting}:tailor`,
+    preferenceKey: "newOrders",
+    priority: 25,
+  }));
+
+  await Promise.allSettled(sends);
 }
 
 Deno.serve(async (req) => {
