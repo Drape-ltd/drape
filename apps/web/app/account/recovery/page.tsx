@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { CONTACTS } from '@drape/shared'
 import Link from 'next/link'
 import type { JSX } from 'react'
+import { AccountRecoveryRequestForm } from '../../../components/account-recovery-request-form'
 import { AppSurfacePreview } from '../../../components/product-visuals'
 import { MarketingShell, SectionTitle } from '../../../components/marketing-shell'
 import { buildMetadata } from '../../../lib/metadata'
@@ -17,15 +18,15 @@ export default function AccountRecoveryPage(): JSX.Element {
     <MarketingShell
       eyebrow="Account recovery"
       title="Recover access without weakening account security."
-      description="Password reset starts from the Drapeon app. Sensitive account changes require a fresh password confirmation before anything changes."
+      description="Request a password reset from web, then complete the protected recovery flow from the secure reset link."
       visual={<AppSurfacePreview variant="privacy" />}
       cta={
         <div className="flex flex-col gap-3 sm:flex-row">
           <a
-            href="drape://"
+            href="#password-reset"
             className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
           >
-            Open Drapeon app
+            Reset password
           </a>
           <a
             href={`mailto:${CONTACTS.support}?subject=Account%20recovery%20help`}
@@ -36,16 +37,20 @@ export default function AccountRecoveryPage(): JSX.Element {
         </div>
       }
     >
+      <section id="password-reset" className="py-8">
+        <AccountRecoveryRequestForm />
+      </section>
+
       <section className="py-8">
         <SectionTitle
           eyebrow="How recovery works"
-          title="The app handles the reset. The website handles safe fallback."
-          description="Drapeon keeps account recovery clear for customers and tailors without exposing sensitive controls on a public web page."
+          title="Recovery starts on web and finishes securely."
+          description="Drapeon keeps account recovery clear for customers and tailors without exposing sensitive account controls on a public page."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           {[
-            ['Request reset in app', 'Use Forgot password on the Drapeon sign-in screen for the email attached to your account.'],
-            ['Open the email link', 'The reset link redirects back into the Drapeon app so the new password is saved in the signed flow.'],
+            ['Request a reset link', 'Use the email attached to your Drapeon account. We show the same safe response even if the address is not registered.'],
+            ['Open the email link', 'The reset link opens the protected recovery bridge so the new password is saved in a signed recovery flow.'],
             ['Confirm sensitive changes', 'Password, phone, payout, email, and deletion actions require recent password confirmation server-side.'],
           ].map(([title, body]) => (
             <div key={title} className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm">
