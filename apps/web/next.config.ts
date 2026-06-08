@@ -53,19 +53,11 @@ function isCloudflareBuild() {
 function assertPublicSupabaseEnvForCloudflare() {
   if (!isCloudflareBuild()) return
 
-  const missing: string[] = []
-  if (!publicSupabaseUrl) {
-    missing.push('NEXT_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_URL')
-  }
-  if (!publicSupabaseKey) {
-    missing.push('NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY or EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY')
-  }
+  if (publicSupabaseUrl && publicSupabaseKey) return
 
-  if (!missing.length) return
-
-  throw new Error(
-    `[web env] Missing public Supabase env for browser auth: ${missing.join(', ')}. ` +
-      'Set these in Cloudflare Pages/Workers production variables and redeploy.'
+  console.warn(
+    '[web env] Public Supabase env was not visible during the Cloudflare build. ' +
+      'Browser auth will use /api/public-env.js at runtime; confirm Cloudflare runtime variables are set.'
   )
 }
 

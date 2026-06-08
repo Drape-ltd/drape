@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Script from 'next/script'
 import * as React from 'react'
 import { getSupabasePublishableKey, getSupabaseUrl } from '../lib/supabase-config'
 import './globals.css'
@@ -84,6 +85,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }):
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteJsonLd) }}
         />
+        <Script src="/api/public-env.js" strategy="beforeInteractive" />
         {hasPublicSupabaseEnv ? (
           <script
             id="drapeon-public-env"
