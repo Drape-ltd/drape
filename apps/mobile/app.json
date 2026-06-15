@@ -18,7 +18,7 @@
     ],
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.drape.app",
+      "bundleIdentifier": "co.drapeon.app",
       "privacyManifests": {
         "NSPrivacyAccessedAPITypes": [
           {
