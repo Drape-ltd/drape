@@ -60,6 +60,10 @@ apps/mobile/android/app/google-services.json
 web-build/
 android/
 ios/
+!packages/drape-vision/nitrogen/generated/android/
+!packages/drape-vision/nitrogen/generated/android/**
+!packages/drape-vision/nitrogen/generated/ios/
+!packages/drape-vision/nitrogen/generated/ios/**
 
 # Testing
 coverage
