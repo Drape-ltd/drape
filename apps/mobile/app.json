@@ -112,6 +112,7 @@
         "@stripe/stripe-react-native",
         {}
       ],
+      "./plugins/with-vision-camera-ios-build-settings",
       "@react-native-community/datetimepicker",
       "@sentry/react-native",
       "expo-font"
