@@ -21,19 +21,19 @@ export function MarketingShell({
   children,
 }: MarketingShellProps): JSX.Element {
   return (
-    <main className="min-h-screen bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)]">
-      <div className="mx-auto max-w-6xl px-5 py-6 sm:px-8 lg:px-12">
+    <main className="min-h-screen overflow-x-hidden bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)]">
+      <div className="viewport-safe-shell mx-auto py-6 sm:px-8 lg:px-12">
         <PublicSiteHeader />
 
-        <section className="grid gap-8 py-8 lg:grid-cols-[1.08fr_0.92fr] lg:items-center lg:py-12">
-          <div>
-            <div className="inline-flex items-center rounded-full border border-needle/10 bg-white/70 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-needle shadow-sm">
+        <section className="grid min-w-0 gap-8 py-8 lg:grid-cols-[1.08fr_0.92fr] lg:items-center lg:py-12">
+          <div className="min-w-0">
+            <div className="inline-flex max-w-full items-center rounded-full border border-needle/10 bg-white/70 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-needle shadow-sm sm:tracking-[0.18em]">
               {eyebrow}
             </div>
-            <h1 className="mt-5 max-w-4xl text-5xl leading-[0.92] text-ink sm:text-6xl lg:text-7xl">{title}</h1>
-            <p className="mt-6 max-w-2xl text-lg leading-8 text-ink/68 sm:text-xl">{description}</p>
+            <h1 className="mt-5 max-w-[22rem] break-words text-[2.35rem] leading-[1.02] text-ink sm:max-w-4xl sm:text-6xl lg:text-7xl">{title}</h1>
+            <p className="mt-6 max-w-[22rem] text-lg leading-8 text-ink/68 sm:max-w-2xl sm:text-xl">{description}</p>
           </div>
-          <div>
+          <div className="min-w-0">
             {visual ?? <AppSurfacePreview variant="explore" />}
             {cta ? <div className="mt-4">{cta}</div> : null}
           </div>

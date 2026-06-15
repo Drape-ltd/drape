@@ -77,6 +77,7 @@ function contentSecurityPolicy() {
     'https://api.stripe.com',
     'https://r.stripe.com',
     'https://m.stripe.network',
+    'https://cloudflareinsights.com',
   ].join(' ')
 
   return [
@@ -85,7 +86,7 @@ function contentSecurityPolicy() {
     "frame-ancestors 'none'",
     "object-src 'none'",
     `img-src ${imgSrc}`,
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com https://static.cloudflareinsights.com",
     "style-src 'self' 'unsafe-inline'",
     `connect-src ${connectSrc}`,
     "frame-src 'self' https://js.stripe.com https://hooks.stripe.com",

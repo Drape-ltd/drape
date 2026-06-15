@@ -213,30 +213,18 @@ export default function SignInScreen() {
               disabled={!email || !password || !!emailError}
             />
 
-            <View style={styles.nextCard}>
-              <Text style={styles.nextEyebrow}>Protected access</Text>
-              <Text style={styles.nextTitle}>
-                {intentLabel
-                  ? `If this account has not used the ${intentLabel} side yet, we’ll take you to setup first.`
-                  : 'We’ll return you to the right side of your account after sign in.'}
+            <Text style={styles.prompt}>
+              Don't have an account?{' '}
+              <Text
+                style={styles.link}
+                onPress={() => router.replace({
+                  pathname: '/(auth)/sign-up',
+                  params: roleIntent ? { intent: roleIntent } : undefined,
+                })}
+              >
+                Create one
               </Text>
-            </View>
-
-            <TouchableOpacity
-              style={styles.forgotWrap}
-              onPress={() => router.push('/(auth)/forgot-password')}
-            >
-              <Text style={styles.forgot}>Forgot your password?</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.supportWrap}
-              onPress={() => {
-                void contactAccountSupport()
-              }}
-            >
-              <Text style={styles.supportLink}>Can’t access your account?</Text>
-            </TouchableOpacity>
+            </Text>
 
             <Divider label="or continue with" />
 
@@ -270,18 +258,32 @@ export default function SignInScreen() {
               )}
             </View>
 
-            <Text style={styles.prompt}>
-              Don't have an account?{' '}
-              <Text
-                style={styles.link}
-                onPress={() => router.replace({
-                  pathname: '/(auth)/sign-up',
-                  params: roleIntent ? { intent: roleIntent } : undefined,
-                })}
+            <View style={styles.accountLinksRow}>
+              <TouchableOpacity
+                style={styles.accountLinkHit}
+                onPress={() => router.push('/(auth)/forgot-password')}
               >
-                Create one
+                <Text style={styles.forgot}>Forgot password?</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.accountLinkHit}
+                onPress={() => {
+                  void contactAccountSupport()
+                }}
+              >
+                <Text style={styles.supportLink}>Can’t access account?</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.nextCard}>
+              <Text style={styles.nextEyebrow}>Protected access</Text>
+              <Text style={styles.nextTitle}>
+                {intentLabel
+                  ? `If this account has not used the ${intentLabel} side yet, we’ll take you to setup first.`
+                  : 'We’ll return you to the right side of your account after sign in.'}
               </Text>
-            </Text>
+            </View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -340,10 +342,14 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
     lineHeight: 21,
   },
-  forgotWrap: { alignSelf: 'flex-end' },
   forgot: { fontFamily: Fonts.bodyMedium, fontSize: FontSize.sm, color: Colors.needleGreen, fontWeight: FontWeight.medium },
-  supportWrap: { alignSelf: 'flex-end', marginTop: -Spacing.sm },
   supportLink: { fontFamily: Fonts.bodyMedium, fontSize: FontSize.sm, color: Colors.inkLight, fontWeight: FontWeight.medium },
+  accountLinksRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  accountLinkHit: { flexShrink: 1 },
   oauthRow: { flexDirection: 'row', gap: Spacing.md },
   oauthBtn: {
     flex: 1,

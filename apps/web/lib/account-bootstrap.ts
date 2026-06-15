@@ -117,65 +117,21 @@ export async function bootstrapWebOnboarding(
     onboarding: WebOnboardingPayload
   }
 ) {
-  const { userId, onboarding } = input
-  const now = new Date().toISOString()
+  const { data, error } = await supabase.functions.invoke('account-profile-action', {
+    body: {
+      action: 'bootstrap-web-onboarding',
+      onboarding: input.onboarding,
+    },
+  })
 
-  await supabase
-    .from('users')
-    .update({
-      display_name: onboarding.displayName,
-      role: onboarding.role,
-      phone: onboarding.phone,
-      default_currency: onboarding.defaultCurrency,
-      currency_source: onboarding.currencySource,
-      region_code: onboarding.regionCode,
-      currency_confirmed_at: now,
-      updated_at: now,
-    })
-    .eq('id', userId)
+  const payload = (data ?? {}) as { error?: unknown; message?: unknown }
+  const message = typeof payload.message === 'string'
+    ? payload.message
+    : typeof payload.error === 'string'
+      ? payload.error
+      : 'We could not finish your account setup right now. Please try again.'
 
-  if (onboarding.role === 'CUSTOMER' && onboarding.customer) {
-    await supabase.from('customer_profiles').upsert(
-      {
-        user_id: userId,
-        display_name: onboarding.displayName,
-        phone: onboarding.phone,
-        unit_preference: onboarding.customer.unitPreference,
-        garment_context: onboarding.customer.garmentContext,
-        measurements: {
-          unit: onboarding.customer.unitPreference,
-          garmentContext: onboarding.customer.garmentContext,
-          fitFlags: [],
-        },
-        updated_at: now,
-      },
-      { onConflict: 'user_id' }
-    )
-  }
-
-  if (onboarding.role === 'TAILOR' && onboarding.tailor) {
-    await supabase.from('tailor_profiles').upsert(
-      {
-        user_id: userId,
-        display_name: onboarding.displayName,
-        bio: null,
-        location: onboarding.tailor.location,
-        languages: onboarding.tailor.languages,
-        specialty_tags: onboarding.tailor.specialties,
-        price_range_min: onboarding.tailor.priceRangeMin,
-        price_range_max: onboarding.tailor.priceRangeMax,
-        currency: onboarding.defaultCurrency,
-        seller_type: 'TAILOR',
-        supports_custom_orders: onboarding.tailor.supportsCustomOrders,
-        supports_ready_made: onboarding.tailor.supportsReadyMade,
-        pickup_available: onboarding.tailor.fulfillment.includes('PICKUP'),
-        delivery_available: onboarding.tailor.fulfillment.includes('DELIVERY'),
-        shipping_available: onboarding.tailor.fulfillment.includes('SHIPPING'),
-        delivery_fee: 0,
-        shipping_fee: 0,
-        updated_at: now,
-      },
-      { onConflict: 'user_id' }
-    )
+  if (error || payload.error) {
+    throw new Error(message)
   }
 }

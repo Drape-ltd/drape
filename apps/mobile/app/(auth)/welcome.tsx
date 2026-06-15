@@ -1,9 +1,10 @@
+import type { ComponentProps } from 'react'
 import { View, Text, StyleSheet, Alert, Linking } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import { Button, Divider } from '@/components/ui'
-import { Colors, Fonts, FontSize, FontWeight, Spacing } from '@/constants/theme'
+import { Button } from '@/components/ui'
+import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 
 export default function WelcomeScreen() {
   const router = useRouter()
@@ -38,23 +39,13 @@ export default function WelcomeScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.hero}>
-        <View style={styles.brandLockup}>
-          <View style={styles.logoMark}>
-            <Text style={styles.logoLetter}>D</Text>
-          </View>
-          <Text style={styles.wordmark}>Drapeon</Text>
-        </View>
+        <Text style={styles.wordmark}>Drapeon</Text>
         <Text style={styles.eyebrow}>AI-powered fashion discovery and fit</Text>
         <Text style={styles.tagline}>Fashion that fits before the first stitch.</Text>
         <Text style={styles.sub}>
-          Find trusted tailors, shop ready-made pieces, and use Drape Vision to keep fit,
-          orders, and payments in one protected place.
+          Discover tailors, shop pieces, and track orders with fit and payment protection.
         </Text>
-        <View style={styles.trustRail}>
-          <TrustPoint label="Discover trusted fashion" />
-          <TrustPoint label="Review fit before ordering" />
-          <TrustPoint label="Track money and handoff" />
-        </View>
+        <ProductPreview />
       </View>
 
       <View style={styles.actions}>
@@ -64,10 +55,10 @@ export default function WelcomeScreen() {
           variant="secondary"
           onPress={() => startAs('TAILOR')}
         />
-        <Divider label="already have an account?" />
         <Button
           label="Sign in"
           variant="ghost"
+          size="md"
           onPress={() => router.push('/(auth)/sign-in')}
         />
         <Text style={styles.legal}>
@@ -96,13 +87,45 @@ export default function WelcomeScreen() {
   )
 }
 
-function TrustPoint({ label }: { label: string }) {
+type FeatherIconName = ComponentProps<typeof Feather>['name']
+
+function ProductPreview() {
   return (
-    <View style={styles.trustPoint}>
-      <View style={styles.trustIcon}>
-        <Feather name="check" size={12} color={Colors.needleGreen} />
+    <View style={styles.previewShell}>
+      <View style={styles.previewCard}>
+        <View style={styles.previewTopRow}>
+          <Text style={styles.previewKicker}>Drapeon flow</Text>
+          <View style={styles.protectedPill}>
+            <Feather name="shield" size={13} color={Colors.needleGreen} />
+            <Text style={styles.protectedText}>Protected</Text>
+          </View>
+        </View>
+        <View style={styles.previewSteps}>
+          <PreviewStep icon="search" label="Find" />
+          <View style={styles.previewLine} />
+          <PreviewStep icon="scissors" label="Fit" />
+          <View style={styles.previewLine} />
+          <PreviewStep icon="credit-card" label="Pay" />
+          <View style={styles.previewLine} />
+          <PreviewStep icon="check-circle" label="Track" />
+        </View>
       </View>
-      <Text style={styles.trustText}>{label}</Text>
+      <View style={styles.previewTabs}>
+        <Text style={styles.previewTab}>Fit</Text>
+        <Text style={styles.previewTab}>Order</Text>
+        <Text style={styles.previewTab}>Trust</Text>
+      </View>
+    </View>
+  )
+}
+
+function PreviewStep({ icon, label }: { icon: FeatherIconName; label: string }) {
+  return (
+    <View style={styles.previewStep}>
+      <View style={styles.previewStepIcon}>
+        <Feather name={icon} size={16} color={Colors.textInverse} />
+      </View>
+      <Text style={styles.previewStepLabel}>{label}</Text>
     </View>
   )
 }
@@ -116,38 +139,17 @@ const styles = StyleSheet.create({
   },
   hero: {
     flex: 1,
-    justifyContent: 'center',
-    gap: Spacing.md,
-  },
-  brandLockup: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: Spacing.sm,
-  },
-  logoMark: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.needleGreen,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.white,
-  },
-  logoLetter: {
-    fontFamily: Fonts.display,
-    fontSize: 21,
-    fontWeight: FontWeight.bold,
-    color: Colors.white,
-    lineHeight: 25,
+    justifyContent: 'flex-end',
+    gap: Spacing.lg,
+    paddingBottom: Spacing.xxl,
   },
   wordmark: {
     fontFamily: Fonts.display,
-    fontSize: 42,
+    fontSize: 48,
     fontWeight: FontWeight.bold,
     color: Colors.needleGreen,
     letterSpacing: 0,
-    lineHeight: 50,
+    lineHeight: 56,
   },
   eyebrow: {
     alignSelf: 'flex-start',
@@ -161,7 +163,6 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
     letterSpacing: 0,
     lineHeight: 18,
-    marginTop: Spacing.lg,
     overflow: 'hidden',
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.xs,
@@ -169,10 +170,10 @@ const styles = StyleSheet.create({
   },
   tagline: {
     fontFamily: Fonts.display,
-    fontSize: 36,
+    fontSize: 38,
     fontWeight: FontWeight.semibold,
     color: Colors.ink,
-    lineHeight: 41,
+    lineHeight: 43,
   },
   sub: {
     fontFamily: Fonts.body,
@@ -180,32 +181,97 @@ const styles = StyleSheet.create({
     color: Colors.inkLight,
     lineHeight: 24,
   },
-  trustRail: {
-    gap: Spacing.sm,
+  previewShell: {
+    gap: Spacing.md,
     marginTop: Spacing.sm,
   },
-  trustPoint: {
+  previewCard: {
+    backgroundColor: Colors.needleGreen,
+    borderRadius: Radius.xl,
+    padding: Spacing.lg,
+    ...Shadow.md,
+  },
+  previewTopRow: {
+    alignItems: 'center',
     flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: Spacing.lg,
+  },
+  previewKicker: {
+    color: Colors.textInverse,
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+  },
+  protectedPill: {
+    alignItems: 'center',
+    backgroundColor: Colors.textInverse,
+    borderRadius: Radius.full,
+    flexDirection: 'row',
+    gap: Spacing.xs,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+  },
+  protectedText: {
+    color: Colors.needleGreen,
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+  },
+  previewSteps: {
+    alignItems: 'center',
+    flexDirection: 'row',
+  },
+  previewStep: {
     alignItems: 'center',
     gap: Spacing.sm,
+    width: 58,
   },
-  trustIcon: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+  previewStepIcon: {
     alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderColor: 'rgba(255,255,255,0.22)',
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    height: 36,
     justifyContent: 'center',
-    backgroundColor: Colors.needleGreenLight,
+    width: 36,
   },
-  trustText: {
-    fontFamily: Fonts.bodyMedium,
-    fontSize: FontSize.sm,
+  previewStepLabel: {
+    color: Colors.textInverse,
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+  },
+  previewLine: {
+    backgroundColor: 'rgba(255,255,255,0.32)',
+    flex: 1,
+    height: 1,
+    marginBottom: 24,
+  },
+  previewTabs: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  previewTab: {
+    backgroundColor: Colors.white,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.full,
+    borderWidth: StyleSheet.hairlineWidth,
     color: Colors.ink,
-    fontWeight: FontWeight.medium,
+    flex: 1,
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    overflow: 'hidden',
+    paddingVertical: Spacing.sm,
+    textAlign: 'center',
   },
   actions: {
-    gap: Spacing.md,
-    paddingBottom: Spacing.lg,
+    gap: Spacing.sm,
+    paddingBottom: Spacing.md,
   },
   legal: {
     fontFamily: Fonts.body,

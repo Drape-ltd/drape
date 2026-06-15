@@ -52,44 +52,44 @@ const trustSurfaces = [
 
 export default function Home(): JSX.Element {
   return (
-    <main className="min-h-screen bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)]">
-      <section className="mx-auto max-w-6xl px-5 py-5 sm:px-8 lg:px-12">
+    <main className="min-h-screen overflow-x-hidden bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)]">
+      <section className="viewport-safe-shell mx-auto py-5 sm:px-8 lg:px-12">
         <PublicSiteHeader />
 
-        <div className="grid items-start gap-10 pb-12 pt-6 lg:grid-cols-[1.05fr_0.95fr] lg:gap-14 lg:pb-14 lg:pt-8">
-          <div>
-            <div className="inline-flex rounded-full border border-needle/12 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-needle shadow-sm">
+        <div className="grid min-w-0 items-start gap-10 pb-12 pt-6 lg:grid-cols-[1.05fr_0.95fr] lg:gap-14 lg:pb-14 lg:pt-8">
+          <div className="min-w-0">
+            <div className="inline-flex max-w-full rounded-full border border-needle/12 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-needle shadow-sm sm:tracking-[0.18em]">
               AI-powered fashion discovery and fit
             </div>
-            <h1 className="mt-6 max-w-4xl text-5xl leading-[0.94] text-ink sm:text-6xl lg:text-7xl">
+            <h1 className="mt-6 max-w-[22rem] break-words text-[2.35rem] leading-[1.02] text-ink sm:max-w-4xl sm:text-6xl lg:text-7xl">
               Find fashion that fits before the first stitch.
             </h1>
-            <p className="mt-6 max-w-2xl text-lg leading-8 text-ink/68 sm:text-xl">
+            <p className="mt-6 max-w-[22rem] text-lg leading-8 text-ink/68 sm:max-w-2xl sm:text-xl">
               Drapeon helps customers discover trusted tailors and ready-made fashion, place clear orders, and use Drape Vision to capture fit measurements with computer vision.
             </p>
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+            <div className="mt-8 flex max-w-[22rem] flex-col gap-3 sm:max-w-none sm:flex-row">
               <Link
                 href="/join"
-                className="inline-flex items-center justify-center rounded-full bg-needle px-6 py-4 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(45,106,79,0.18)] transition hover:bg-needle-600"
+                className="inline-flex w-full items-center justify-center rounded-full bg-needle px-6 py-4 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(45,106,79,0.18)] transition hover:bg-needle-600 sm:w-auto"
               >
                 Join the queue
               </Link>
               <Link
                 href="/vision"
-                className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-6 py-4 text-sm font-semibold text-ink transition hover:bg-bone"
+                className="inline-flex w-full items-center justify-center rounded-full border border-ink/10 bg-white px-6 py-4 text-sm font-semibold text-ink transition hover:bg-bone sm:w-auto"
               >
                 Explore Drape Vision
               </Link>
               <Link
                 href="/account"
-                className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white/70 px-6 py-4 text-sm font-semibold text-ink/72 transition hover:bg-white hover:text-ink"
+                className="inline-flex w-full items-center justify-center rounded-full border border-ink/10 bg-white/70 px-6 py-4 text-sm font-semibold text-ink/72 transition hover:bg-white hover:text-ink sm:w-auto"
               >
                 Account access
               </Link>
             </div>
           </div>
 
-          <div>
+          <div className="min-w-0">
             <AppSurfacePreview variant="vision" />
             <div className="mt-4 grid gap-3">
               {visionSteps.map(([title, body]) => (

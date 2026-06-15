@@ -5,10 +5,11 @@ import { chromium } from 'playwright'
 
 const baseUrl = process.env.WEB_QA_BASE_URL ?? 'http://127.0.0.1:3000'
 const outDir = process.env.WEB_QA_OUT_DIR ?? '/private/tmp/drape-web-qa'
+const chromeExecutablePath = process.env.WEB_QA_CHROME_EXECUTABLE || undefined
 
 async function main() {
   await mkdir(outDir, { recursive: true })
-  const browser = await chromium.launch({ headless: true })
+  const browser = await chromium.launch({ headless: true, executablePath: chromeExecutablePath })
   const context = await browser.newContext({ viewport: { width: 1440, height: 1200 } })
   const page = await context.newPage()
   const events = []

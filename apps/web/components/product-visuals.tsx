@@ -62,20 +62,20 @@ export function AppSurfacePreview({ variant = 'explore' }: { variant?: PreviewVa
   const content = previewContent[variant]
 
   return (
-    <div className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-4 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
-      <div className="rounded-[1.2rem] bg-ink p-5 text-white">
+    <div className="w-full max-w-[22rem] min-w-0 rounded-[1.6rem] border border-ink/8 bg-white/84 p-4 shadow-[0_18px_60px_rgba(22,28,24,0.06)] sm:max-w-none">
+      <div className="min-w-0 rounded-[1.2rem] bg-ink p-5 text-white">
         <div className="flex items-center justify-between gap-3">
           <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/58">{content.eyebrow}</p>
           <span className="rounded-full bg-white/12 px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-white/64">
             Drapeon
           </span>
         </div>
-        <h3 className="mt-3 text-3xl text-white">{content.title}</h3>
+        <h3 className="mt-3 break-words text-2xl text-white sm:text-3xl">{content.title}</h3>
         <div className="mt-5 grid gap-2">
           {content.rows.map((row) => (
-            <div key={row} className="flex items-center gap-3 rounded-[0.95rem] border border-white/10 bg-white/8 px-3 py-2 text-sm text-white/74">
+            <div key={row} className="flex min-w-0 items-center gap-3 rounded-[0.95rem] border border-white/10 bg-white/8 px-3 py-2 text-sm text-white/74">
               <span className="size-2 shrink-0 rounded-full bg-white/72" />
-              <span>{row}</span>
+              <span className="min-w-0 break-words">{row}</span>
             </div>
           ))}
         </div>

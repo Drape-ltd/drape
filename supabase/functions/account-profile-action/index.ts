@@ -6,7 +6,7 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { validateDisplayName } from '../../../packages/shared/src/contact-filter.ts'
+import { filterContactInfo, validateDisplayName } from '../../../packages/shared/src/contact-filter.ts'
 import { normalizePhoneForStorage, validatePhoneForProfile } from '../../../packages/shared/src/phone.ts'
 import { normalizeAccountCurrency } from '../../../packages/shared/src/currency-config.ts'
 import { getAuthUser } from '../_shared/auth.ts'
@@ -22,6 +22,43 @@ import { parseBody, z } from '../_shared/validate.ts'
 const FN = 'account-profile-action'
 
 const BodySchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('bootstrap-web-onboarding'),
+    onboarding: z.discriminatedUnion('role', [
+      z.object({
+        source: z.literal('web'),
+        role: z.literal('CUSTOMER'),
+        displayName: z.string().trim().min(2).max(80),
+        phone: z.string().trim().min(1).max(32),
+        defaultCurrency: z.string().trim().min(3).max(3),
+        currencySource: z.string().trim().min(1).max(40),
+        regionCode: z.string().trim().min(2).max(8).default('ZZ'),
+        customer: z.object({
+          unitPreference: z.enum(['in', 'cm']),
+          garmentContext: z.enum(['MENSWEAR', 'WOMENSWEAR', 'BOTH', 'PREFER_NOT_TO_SAY']),
+        }),
+      }),
+      z.object({
+        source: z.literal('web'),
+        role: z.literal('TAILOR'),
+        displayName: z.string().trim().min(2).max(80),
+        phone: z.string().trim().min(1).max(32),
+        defaultCurrency: z.string().trim().min(3).max(3),
+        currencySource: z.string().trim().min(1).max(40),
+        regionCode: z.string().trim().min(2).max(8).default('ZZ'),
+        tailor: z.object({
+          location: z.string().trim().min(2).max(120),
+          languages: z.array(z.string().trim().min(1).max(40)).min(1).max(12),
+          specialties: z.array(z.string().trim().min(1).max(60)).min(1).max(20),
+          priceRangeMin: z.number().int().nonnegative().optional().nullable(),
+          priceRangeMax: z.number().int().nonnegative().optional().nullable(),
+          supportsCustomOrders: z.boolean().default(true),
+          supportsReadyMade: z.boolean().default(false),
+          fulfillment: z.array(z.enum(['PICKUP', 'DELIVERY', 'SHIPPING'])).min(1).max(3),
+        }),
+      }),
+    ]),
+  }),
   z.object({
     action: z.literal('update-personal-info'),
     role: z.enum(['CUSTOMER', 'TAILOR']),
@@ -65,6 +102,18 @@ function readAuthMetadata(value: unknown): Record<string, unknown> {
     : {}
 }
 
+function contactLeakMessage(field: string, value: string | string[] | null | undefined) {
+  const entries = Array.isArray(value) ? value : [value]
+  for (const entry of entries) {
+    if (!entry) continue
+    const result = filterContactInfo(entry)
+    if (result.blocked) {
+      return `${field} can't include phone numbers, emails, links, social handles, or off-platform contact instructions.`
+    }
+  }
+  return null
+}
+
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
@@ -95,14 +144,180 @@ Deno.serve(async (req) => {
       body.action === 'update-avatar' ? 20 : 5,
     )
     if (!allowed) {
+      const actorRole = body.action === 'bootstrap-web-onboarding' ? body.onboarding.role : body.role
       await audit(supabase, {
         event: 'rate_limit.exceeded',
         actor_id: caller.id,
-        actor_role: body.role,
+        actor_role: actorRole,
         severity: 'warn',
         payload: { function: FN, ip: clientIp, action: body.action },
       })
       return rateLimitExceededResponse(cors)
+    }
+
+    if (body.action === 'bootstrap-web-onboarding') {
+      const onboarding = body.onboarding
+      const displayName = onboarding.displayName.trim()
+      const displayNameIssue = validateDisplayName(displayName)
+      if (displayNameIssue) {
+        return jsonResponse({ error: displayNameIssue, message: displayNameIssue }, 400, cors)
+      }
+
+      const normalizedPhone = normalizePhoneForStorage(onboarding.phone)
+      const phoneIssue = validatePhoneForProfile(normalizedPhone)
+      if (phoneIssue) {
+        return jsonResponse({ error: phoneIssue, message: phoneIssue }, 400, cors)
+      }
+
+      const currency = normalizeAccountCurrency(onboarding.defaultCurrency)
+      if (!currency) {
+        return jsonResponse({ error: 'Choose a supported currency.', message: 'Choose a supported currency.' }, 400, cors)
+      }
+
+      if (onboarding.role === 'TAILOR') {
+        const tailorLeak =
+          contactLeakMessage('Location', onboarding.tailor.location) ||
+          contactLeakMessage('Languages', onboarding.tailor.languages) ||
+          contactLeakMessage('Specialties', onboarding.tailor.specialties)
+        if (tailorLeak) {
+          return jsonResponse({ error: tailorLeak, message: tailorLeak }, 400, cors)
+        }
+        if (
+          onboarding.tailor.priceRangeMin != null &&
+          onboarding.tailor.priceRangeMax != null &&
+          onboarding.tailor.priceRangeMax < onboarding.tailor.priceRangeMin
+        ) {
+          return jsonResponse({
+            error: 'Maximum price must be greater than or equal to minimum price.',
+            message: 'Maximum price must be greater than or equal to minimum price.',
+          }, 400, cors)
+        }
+      }
+
+      const { data: authUserData } = await supabase.auth.admin.getUserById(caller.id)
+      const email = caller.email ?? authUserData?.user?.email ?? ''
+      if (!email.trim()) {
+        return jsonResponse({
+          error: 'We could not verify the email on this account. Sign out and sign back in, then retry.',
+          message: 'We could not verify the email on this account. Sign out and sign back in, then retry.',
+        }, 400, cors)
+      }
+
+      const now = new Date().toISOString()
+      const { error: userUpsertError } = await supabase
+        .from('users')
+        .upsert(
+          {
+            id: caller.id,
+            email,
+            display_name: displayName,
+            role: onboarding.role,
+            phone: normalizedPhone,
+            default_currency: currency,
+            currency_source: onboarding.currencySource,
+            region_code: onboarding.regionCode || 'ZZ',
+            currency_confirmed_at: now,
+            updated_at: now,
+          },
+          { onConflict: 'id' },
+        )
+
+      if (userUpsertError) {
+        log('error', FN, 'web_onboarding.users_upsert_failed', { actor_id: caller.id, error: userUpsertError.message })
+        return jsonResponse({
+          error: 'We could not finish your account setup right now.',
+          message: 'We could not finish your account setup right now.',
+        }, 500, cors)
+      }
+
+      const metadata = readAuthMetadata(authUserData?.user?.user_metadata)
+      await supabase.auth.admin.updateUserById(caller.id, {
+        user_metadata: {
+          ...metadata,
+          display_name: displayName,
+          phone: normalizedPhone,
+          role: onboarding.role,
+          web_onboarding: onboarding,
+        },
+      }).catch((error) => {
+        log('warn', FN, 'web_onboarding.auth_metadata_update_failed', {
+          actor_id: caller.id,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+
+      if (onboarding.role === 'CUSTOMER') {
+        const { error: profileError } = await supabase
+          .from('customer_profiles')
+          .upsert(
+            {
+              user_id: caller.id,
+              display_name: displayName,
+              phone: normalizedPhone,
+              unit_preference: onboarding.customer.unitPreference,
+              garment_context: onboarding.customer.garmentContext,
+              measurements: {
+                unit: onboarding.customer.unitPreference,
+                garmentContext: onboarding.customer.garmentContext,
+                fitFlags: [],
+              },
+              updated_at: now,
+            },
+            { onConflict: 'user_id' },
+          )
+
+        if (profileError) {
+          log('error', FN, 'web_onboarding.customer_profile_upsert_failed', { actor_id: caller.id, error: profileError.message })
+          return jsonResponse({
+            error: 'We could not finish your customer setup right now.',
+            message: 'We could not finish your customer setup right now.',
+          }, 500, cors)
+        }
+      } else {
+        const { error: profileError } = await supabase
+          .from('tailor_profiles')
+          .upsert(
+            {
+              user_id: caller.id,
+              display_name: displayName,
+              bio: null,
+              location: onboarding.tailor.location,
+              languages: onboarding.tailor.languages,
+              specialty_tags: onboarding.tailor.specialties,
+              price_range_min: onboarding.tailor.priceRangeMin,
+              price_range_max: onboarding.tailor.priceRangeMax,
+              currency,
+              seller_type: 'TAILOR',
+              supports_custom_orders: onboarding.tailor.supportsCustomOrders,
+              supports_ready_made: onboarding.tailor.supportsReadyMade,
+              pickup_available: onboarding.tailor.fulfillment.includes('PICKUP'),
+              delivery_available: onboarding.tailor.fulfillment.includes('DELIVERY'),
+              shipping_available: onboarding.tailor.fulfillment.includes('SHIPPING'),
+              delivery_fee: 0,
+              shipping_fee: 0,
+              updated_at: now,
+            },
+            { onConflict: 'user_id' },
+          )
+
+        if (profileError) {
+          log('error', FN, 'web_onboarding.tailor_profile_upsert_failed', { actor_id: caller.id, error: profileError.message })
+          return jsonResponse({
+            error: 'We could not finish your tailor setup right now.',
+            message: 'We could not finish your tailor setup right now.',
+          }, 500, cors)
+        }
+      }
+
+      await audit(supabase, {
+        event: 'account.web_onboarding_bootstrapped',
+        actor_id: caller.id,
+        actor_role: onboarding.role,
+        severity: 'info',
+        payload: { function: FN, role: onboarding.role, source: 'web' },
+      })
+
+      return jsonResponse({ ok: true, role: onboarding.role }, 200, cors)
     }
 
     if (body.action === 'update-display-name' || body.action === 'update-currency') {
