@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import Script from 'next/script'
 import * as React from 'react'
+import { AuthLandingRedirect } from '../components/auth-landing-redirect'
 import { getSupabasePublishableKey, getSupabaseUrl } from '../lib/supabase-config'
 import './globals.css'
 
@@ -94,6 +95,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }):
             }}
           />
         ) : null}
+        <AuthLandingRedirect />
         {children}
       </body>
     </html>

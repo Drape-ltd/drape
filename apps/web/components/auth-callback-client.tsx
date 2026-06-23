@@ -121,6 +121,10 @@ export function AuthCallbackClient(): React.JSX.Element {
         return
       }
 
+      if (active) {
+        setMessage('Email confirmed. Opening your Drapeon dashboard...')
+      }
+
       const roleIntent = window.localStorage.getItem('drapeon.web.auth.roleIntent')
       const { data } = await supabase.auth.getUser()
       const onboarding = readStoredOnboarding() ?? webOnboardingFromUser(data.user)
