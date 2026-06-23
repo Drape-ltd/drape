@@ -77,6 +77,12 @@ function mapAuthError(message: string | undefined) {
   return 'We could not complete this step right now. Please try again.'
 }
 
+function buildAuthCallbackUrl(nextPath = '/account/dashboard') {
+  const url = new URL('/auth/callback', window.location.origin)
+  url.searchParams.set('next', nextPath)
+  return url.toString()
+}
+
 function browserLocale() {
   if (typeof navigator === 'undefined') return null
   return navigator.language || navigator.languages?.[0] || null
@@ -266,7 +272,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
 
     setLoading(true)
     const normalizedEmail = email.trim().toLowerCase()
-    const redirectTo = `${window.location.origin}/account/dashboard`
+    const redirectTo = buildAuthCallbackUrl('/account/dashboard')
 
     if (isSignUp) {
       const onboarding = buildOnboardingPayload()
@@ -274,6 +280,9 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         setLoading(false)
         return
       }
+
+      window.localStorage.setItem('drapeon.web.auth.roleIntent', role)
+      window.localStorage.setItem('drapeon.web.auth.onboarding', JSON.stringify(onboarding))
 
       const { data, error } = await supabase.auth.signUp({
         email: normalizedEmail,
@@ -291,6 +300,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
 
       setLoading(false)
       if (error) {
+        window.localStorage.removeItem('drapeon.web.auth.roleIntent')
+        window.localStorage.removeItem('drapeon.web.auth.onboarding')
         setError(mapAuthError(error.message))
         return
       }
@@ -302,6 +313,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         userId: data.session.user.id,
         onboarding,
       })
+      window.localStorage.removeItem('drapeon.web.auth.roleIntent')
+      window.localStorage.removeItem('drapeon.web.auth.onboarding')
       router.replace('/account/dashboard')
       return
     }
@@ -316,6 +329,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       return
     }
 
+    window.localStorage.removeItem('drapeon.web.auth.roleIntent')
+    window.localStorage.removeItem('drapeon.web.auth.onboarding')
     setLoading(false)
     router.replace('/account/dashboard')
   }
@@ -347,11 +362,10 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       window.localStorage.removeItem('drapeon.web.auth.roleIntent')
       window.localStorage.removeItem('drapeon.web.auth.onboarding')
     }
-    const next = encodeURIComponent('/account/dashboard')
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
-        redirectTo: `${window.location.origin}/auth/callback?next=${next}`,
+        redirectTo: buildAuthCallbackUrl('/account/dashboard'),
       },
     })
     setOauthLoading(null)

@@ -6,11 +6,77 @@ import type { Route } from 'next'
 import { createClient } from '../lib/supabase'
 import {
   bootstrapWebOnboarding,
+  webOnboardingFromUser,
   type WebOnboardingPayload,
 } from '../lib/account-bootstrap'
 
+type EmailOtpType = 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email_change' | 'email'
+
+const emailOtpTypes = new Set<EmailOtpType>([
+  'signup',
+  'invite',
+  'magiclink',
+  'recovery',
+  'email_change',
+  'email',
+])
+
 function sanitizeNext(value: string | null) {
-  return value?.startsWith('/') === true ? value : '/account/dashboard'
+  return value?.startsWith('/') === true && !value.startsWith('//') ? value : '/account/dashboard'
+}
+
+function normalizeEmailOtpType(value: string | null): EmailOtpType | null {
+  return value && emailOtpTypes.has(value as EmailOtpType) ? (value as EmailOtpType) : null
+}
+
+function mapCallbackError(message: string | undefined) {
+  const normalized = (message ?? '').toLowerCase()
+  if (normalized.includes('expired') || normalized.includes('invalid')) {
+    return 'This account link has expired or was already used. Request a fresh link and try again.'
+  }
+  if (normalized.includes('network') || normalized.includes('fetch')) {
+    return 'Connection looks weak. Try again when the signal improves.'
+  }
+  return 'We could not finish this account link. Return to sign in and try again.'
+}
+
+async function applySessionFromUrl(
+  supabase: ReturnType<typeof createClient>,
+  searchParams: { get(name: string): string | null }
+) {
+  const providerError = searchParams.get('error_description') ?? searchParams.get('error')
+  if (providerError) {
+    throw new Error(providerError)
+  }
+
+  const code = searchParams.get('code')
+  if (code) {
+    const { error } = await supabase.auth.exchangeCodeForSession(code)
+    if (error) throw error
+    return
+  }
+
+  const tokenHash = searchParams.get('token_hash')
+  const otpType = normalizeEmailOtpType(searchParams.get('type'))
+  if (tokenHash && otpType) {
+    const { error } = await supabase.auth.verifyOtp({
+      token_hash: tokenHash,
+      type: otpType,
+    })
+    if (error) throw error
+    return
+  }
+
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+  const accessToken = hashParams.get('access_token')
+  const refreshToken = hashParams.get('refresh_token')
+  if (accessToken && refreshToken) {
+    const { error } = await supabase.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    })
+    if (error) throw error
+  }
 }
 
 async function syncRoleMirror(role: 'CUSTOMER' | 'TAILOR') {
@@ -46,35 +112,39 @@ export function AuthCallbackClient(): React.JSX.Element {
 
     async function complete() {
       const supabase = createClient()
-      const code = searchParams.get('code')
       const next = sanitizeNext(searchParams.get('next'))
 
-      if (code) {
-        const { error } = await supabase.auth.exchangeCodeForSession(code)
-        if (error) {
-          if (active) setMessage('We could not finish sign in. Return to sign in and try again.')
-          return
-        }
+      try {
+        await applySessionFromUrl(supabase, searchParams)
+      } catch (error) {
+        if (active) setMessage(mapCallbackError(error instanceof Error ? error.message : undefined))
+        return
       }
 
       const roleIntent = window.localStorage.getItem('drapeon.web.auth.roleIntent')
-      const onboarding = readStoredOnboarding()
-      if (roleIntent === 'CUSTOMER' || roleIntent === 'TAILOR') {
+      const { data } = await supabase.auth.getUser()
+      const onboarding = readStoredOnboarding() ?? webOnboardingFromUser(data.user)
+      const metadataRole = data.user?.user_metadata?.role
+      const role =
+        onboarding?.role ??
+        (roleIntent === 'CUSTOMER' || roleIntent === 'TAILOR' ? roleIntent : null) ??
+        (metadataRole === 'CUSTOMER' || metadataRole === 'TAILOR' ? metadataRole : null)
+
+      if (role) {
         window.localStorage.removeItem('drapeon.web.auth.roleIntent')
         window.localStorage.removeItem('drapeon.web.auth.onboarding')
         await supabase.auth.updateUser({
           data: {
-            role: onboarding?.role ?? roleIntent,
+            role,
             display_name: onboarding?.displayName,
             phone: onboarding?.phone,
             web_onboarding: onboarding ?? undefined,
           },
         }).catch(() => null)
-        await syncRoleMirror(roleIntent)
+        await syncRoleMirror(role)
       }
 
       if (onboarding) {
-        const { data } = await supabase.auth.getUser()
         if (data.user?.id) {
           await bootstrapWebOnboarding(supabase, {
             userId: data.user.id,
