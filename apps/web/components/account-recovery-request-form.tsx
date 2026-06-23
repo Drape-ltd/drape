@@ -56,6 +56,7 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
   return (
     <form
       className="mt-8 grid gap-4 rounded-[1.5rem] border border-ink/8 bg-white/86 p-5 shadow-[0_18px_55px_rgba(22,28,24,0.06)] sm:p-6"
+      noValidate
       onSubmit={(event) => {
         event.preventDefault()
         void submit()
