@@ -137,7 +137,6 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const [oauthLoading, setOauthLoading] = useState<'google' | 'apple' | null>(null)
   const isSignUp = mode === 'sign-up'
 
   function getSupabase() {
@@ -257,7 +256,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   }
 
   async function submit() {
-    if (loading || oauthLoading) return
+    if (loading) return
     setError(null)
     setMessage(null)
 
@@ -333,45 +332,6 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     window.localStorage.removeItem('drapeon.web.auth.onboarding')
     setLoading(false)
     router.replace('/account/dashboard')
-  }
-
-  async function oauth(provider: 'google' | 'apple') {
-    if (loading || oauthLoading) return
-    setError(null)
-    setMessage(null)
-    let onboarding: WebOnboardingPayload | null = null
-    if (isSignUp) {
-      const validationError = validate({ credentials: false })
-      if (validationError) {
-        setError(validationError)
-        return
-      }
-      onboarding = buildOnboardingPayload()
-      if (!onboarding) return
-    }
-    const supabase = getSupabase()
-    if (!supabase) return
-
-    setOauthLoading(provider)
-    if (isSignUp) {
-      window.localStorage.setItem('drapeon.web.auth.roleIntent', role)
-      if (onboarding) {
-        window.localStorage.setItem('drapeon.web.auth.onboarding', JSON.stringify(onboarding))
-      }
-    } else {
-      window.localStorage.removeItem('drapeon.web.auth.roleIntent')
-      window.localStorage.removeItem('drapeon.web.auth.onboarding')
-    }
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider,
-      options: {
-        redirectTo: buildAuthCallbackUrl('/account/dashboard'),
-      },
-    })
-    setOauthLoading(null)
-    if (error) {
-      setError(mapAuthError(error.message))
-    }
   }
 
   return (
@@ -679,34 +639,11 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
 
         <button
           type="submit"
-          disabled={loading || !!oauthLoading}
+          disabled={loading}
           className="min-h-[52px] rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(45,106,79,0.18)] transition hover:bg-needle-600 disabled:cursor-not-allowed disabled:bg-ink/18 disabled:text-ink/42"
         >
           {loading ? 'Working...' : isSignUp ? 'Create account' : 'Sign in'}
         </button>
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <button
-            type="button"
-            onClick={() => {
-              void oauth('google')
-            }}
-            disabled={loading || !!oauthLoading}
-            className="min-h-12 rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink transition hover:bg-bone disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {oauthLoading === 'google' ? 'Opening...' : 'Continue with Google'}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              void oauth('apple')
-            }}
-            disabled={loading || !!oauthLoading}
-            className="min-h-12 rounded-full border border-ink bg-ink px-4 py-3 text-sm font-semibold text-white transition hover:bg-ink/88 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {oauthLoading === 'apple' ? 'Opening...' : 'Continue with Apple'}
-          </button>
-        </div>
       </form>
 
       <div className="mt-6 flex flex-col gap-3 border-t border-ink/6 pt-5 text-sm text-ink/62 sm:flex-row sm:items-center sm:justify-between">
