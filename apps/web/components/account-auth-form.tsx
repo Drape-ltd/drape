@@ -77,6 +77,10 @@ function mapAuthError(message: string | undefined) {
   return 'We could not complete this step right now. Please try again.'
 }
 
+function isEmailNotConfirmedError(message: string | undefined) {
+  return (message ?? '').toLowerCase().includes('email not confirmed')
+}
+
 function buildAuthCallbackUrl(nextPath = '/account/dashboard') {
   const url = new URL('/auth/callback', window.location.origin)
   url.searchParams.set('next', nextPath)
@@ -137,6 +141,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [resendLoading, setResendLoading] = useState(false)
+  const [pendingConfirmationEmail, setPendingConfirmationEmail] = useState<string | null>(null)
   const isSignUp = mode === 'sign-up'
 
   function getSupabase() {
@@ -259,6 +265,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     if (loading) return
     setError(null)
     setMessage(null)
+    setPendingConfirmationEmail(null)
 
     const validationError = validate()
     if (validationError) {
@@ -305,7 +312,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         return
       }
       if (!data.session) {
-        setMessage('Check your email to confirm your Drapeon account, then sign in.')
+        setPendingConfirmationEmail(normalizedEmail)
+        setMessage('Check your email to confirm your Drapeon account. The link opens your dashboard after confirmation.')
         return
       }
       await bootstrapWebOnboarding(supabase, {
@@ -324,14 +332,44 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     })
     if (error) {
       setLoading(false)
+      if (isEmailNotConfirmedError(error.message)) {
+        setPendingConfirmationEmail(normalizedEmail)
+      }
       setError(mapAuthError(error.message))
       return
     }
 
+    setPendingConfirmationEmail(null)
     window.localStorage.removeItem('drapeon.web.auth.roleIntent')
     window.localStorage.removeItem('drapeon.web.auth.onboarding')
     setLoading(false)
     router.replace('/account/dashboard')
+  }
+
+  async function resendConfirmation() {
+    if (loading || resendLoading || !pendingConfirmationEmail) return
+
+    const supabase = getSupabase()
+    if (!supabase) return
+
+    setError(null)
+    setMessage(null)
+    setResendLoading(true)
+    const { error: resendError } = await supabase.auth.resend({
+      type: 'signup',
+      email: pendingConfirmationEmail,
+      options: {
+        emailRedirectTo: buildAuthCallbackUrl('/account/dashboard'),
+      },
+    })
+    setResendLoading(false)
+
+    if (resendError) {
+      setError(mapAuthError(resendError.message))
+      return
+    }
+
+    setMessage('Confirmation email sent again. Open the latest Drapeon email and use that link.')
   }
 
   return (
@@ -408,7 +446,10 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
           Email
           <input
             value={email}
-            onChange={(event) => setEmail(event.target.value)}
+            onChange={(event) => {
+              setEmail(event.target.value)
+              setPendingConfirmationEmail(null)
+            }}
             placeholder="you@example.com"
             type="email"
             autoComplete="email"
@@ -634,6 +675,23 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         {message ? (
           <div className="rounded-[1rem] border border-needle/16 bg-needle/8 px-4 py-3 text-sm leading-6 text-ink">
             {message}
+          </div>
+        ) : null}
+        {pendingConfirmationEmail ? (
+          <div className="grid gap-3 rounded-[1rem] border border-ink/8 bg-white/72 px-4 py-3 text-sm leading-6 text-ink">
+            <p className="text-ink/66">
+              Need a fresh link for <span className="font-semibold text-ink">{pendingConfirmationEmail}</span>?
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                void resendConfirmation()
+              }}
+              disabled={loading || resendLoading}
+              className="min-h-11 rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-needle transition hover:bg-bone disabled:cursor-not-allowed disabled:text-ink/36"
+            >
+              {resendLoading ? 'Sending...' : 'Resend confirmation email'}
+            </button>
           </div>
         ) : null}
 
