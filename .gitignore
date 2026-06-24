@@ -60,6 +60,16 @@ apps/mobile/android/app/google-services.json
 web-build/
 android/
 ios/
+!packages/drape-vision/android/
+packages/drape-vision/android/.cxx/
+packages/drape-vision/android/build/
+!packages/drape-vision/android/CMakeLists.txt
+!packages/drape-vision/android/build.gradle
+!packages/drape-vision/android/gradle.properties
+!packages/drape-vision/android/src/
+!packages/drape-vision/android/src/**
+!packages/drape-vision/ios/
+!packages/drape-vision/ios/**
 !packages/drape-vision/nitrogen/generated/android/
 !packages/drape-vision/nitrogen/generated/android/**
 !packages/drape-vision/nitrogen/generated/ios/
