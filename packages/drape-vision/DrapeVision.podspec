@@ -24,6 +24,12 @@ Pod::Spec.new do |s|
   load "nitrogen/generated/ios/DrapeVision+autolinking.rb"
   add_nitrogen_files(s)
 
+  # Nitro mutates source_files for generated bridges; keep handwritten Swift
+  # implementations in the pod so EAS remote iOS builds can resolve them.
+  s.source_files = (Array(s.attributes_hash["source_files"]) + [
+    "ios/**/*.{swift,m,mm}",
+  ]).uniq
+
   s.dependency "VisionCamera"
   s.dependency "MediaPipeTasksVision"
   s.dependency "React-jsi"
