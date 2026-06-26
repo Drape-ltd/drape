@@ -2,12 +2,6 @@ diff --git a/ios/StripeSwiftInterop.h b/ios/StripeSwiftInterop.h
 index 4f10e5e..6f08c8d 100644
 --- a/ios/StripeSwiftInterop.h
 +++ b/ios/StripeSwiftInterop.h
-@@ -11,7 +11,7 @@
-@protocol STPPaymentCardTextFieldDelegate;
-@protocol STPCardFormViewDelegate;
-
+@@ -13 +13 @@
 -typedef NS_ENUM(NSUInteger, STPPaymentStatus);
 +typedef NS_ENUM(NSInteger, STPPaymentStatus);
-
- // stripe_react_native-Swift.h also depends on these headers.
- #import <React/RCTBridgeModule.h>

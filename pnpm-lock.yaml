@@ -8,7 +8,7 @@ pnpmfileChecksum: sha256-sAwhUpo5J7LwNzJpMC2ZWvcTPA9ysOzGyq6yRylzxjw=
 
 patchedDependencies:
   '@stripe/stripe-react-native@0.50.3':
-    hash: 3f19f59246195c26ab03404b6afbeff05de098e8b690d74b53409c539dff7be7
+    hash: ebf066fa327aee7df6b071af75e87469b0bd23e4090f6570d8577f07ab2a1692
     path: patches/@stripe__stripe-react-native@0.50.3.patch
 
 importers:
@@ -63,7 +63,7 @@ importers:
         version: 7.2.0(expo@54.0.33)(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
       '@stripe/stripe-react-native':
         specifier: 0.50.3
-        version: 0.50.3(patch_hash=3f19f59246195c26ab03404b6afbeff05de098e8b690d74b53409c539dff7be7)(expo@54.0.33)(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
+        version: 0.50.3(patch_hash=ebf066fa327aee7df6b071af75e87469b0bd23e4090f6570d8577f07ab2a1692)(expo@54.0.33)(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
       '@supabase/supabase-js':
         specifier: ^2.47.0
         version: 2.99.1
@@ -8507,7 +8507,7 @@ snapshots:
 
   '@standard-schema/spec@1.1.0': {}
 
-  '@stripe/stripe-react-native@0.50.3(patch_hash=3f19f59246195c26ab03404b6afbeff05de098e8b690d74b53409c539dff7be7)(expo@54.0.33)(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)':
+  '@stripe/stripe-react-native@0.50.3(patch_hash=ebf066fa327aee7df6b071af75e87469b0bd23e4090f6570d8577f07ab2a1692)(expo@54.0.33)(react-native@0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)':
     dependencies:
       react: 19.1.0
       react-native: 0.81.5(@babel/core@7.29.0)(@react-native/metro-config@0.84.1(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0)
