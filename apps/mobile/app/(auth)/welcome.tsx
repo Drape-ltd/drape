@@ -1,10 +1,21 @@
-import type { ComponentProps } from 'react'
-import { View, Text, StyleSheet, Alert, Linking } from 'react-native'
+import { View, Text, StyleSheet, Alert, Linking, ScrollView, TouchableOpacity } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
-import { Button } from '@/components/ui'
-import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
+import { colors } from '@drape/shared/design-system'
+import { Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
+
+const palette = {
+  background: colors.background,
+  surface: colors.surface,
+  ink: colors.textPrimary,
+  muted: colors.textSecondary,
+  line: colors.border,
+  green: colors.primary,
+  greenDark: colors.primaryDark,
+  greenSoft: colors.primaryLight,
+  inverse: colors.textInverse,
+}
 
 export default function WelcomeScreen() {
   const router = useRouter()
@@ -38,252 +49,272 @@ export default function WelcomeScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.hero}>
-        <Text style={styles.wordmark}>Drapeon</Text>
-        <Text style={styles.eyebrow}>AI-powered fashion discovery and fit</Text>
-        <Text style={styles.tagline}>Fashion that fits before the first stitch.</Text>
-        <Text style={styles.sub}>
-          Discover tailors, shop pieces, and track orders with fit and payment protection.
-        </Text>
-        <ProductPreview />
-      </View>
+      <ScrollView
+        bounces={false}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.brandBlock}>
+          <Text style={styles.wordmark}>Drapeon</Text>
+          <Text style={styles.eyebrow}>AI-powered fashion discovery and fit</Text>
+        </View>
 
-      <View style={styles.actions}>
-        <Button label="Continue as customer" onPress={() => startAs('CUSTOMER')} />
-        <Button
-          label="Continue as tailor"
-          variant="secondary"
-          onPress={() => startAs('TAILOR')}
-        />
-        <Button
-          label="Sign in"
-          variant="ghost"
-          size="md"
-          onPress={() => router.push('/(auth)/sign-in')}
-        />
-        <Text style={styles.legal}>
-          By continuing you agree to our{' '}
-          <Text
-            style={styles.link}
-            onPress={() => {
-              void openLegal('https://drapeon.co/terms')
-            }}
-          >
-            Terms
-          </Text>{' '}
-          and{' '}
-          <Text
-            style={styles.link}
-            onPress={() => {
-              void openLegal('https://drapeon.co/privacy')
-            }}
-          >
-            Privacy Policy
+        <View style={styles.hero}>
+          <Text style={styles.tagline}>Find fashion that fits.</Text>
+          <Text style={styles.sub}>
+            Shop ready-made pieces, start custom orders, and follow every update in one protected workspace.
           </Text>
-          .
-        </Text>
-      </View>
+
+          <View style={styles.promiseRow}>
+            <PromiseItem icon="search" label="Discover" />
+            <PromiseItem icon="scissors" label="Fit" />
+            <PromiseItem icon="shield" label="Protect" />
+          </View>
+        </View>
+
+        <View style={styles.actions}>
+          <RoleButton
+            title="Continue as customer"
+            subtitle="Shop, order, and track your fit."
+            variant="primary"
+            onPress={() => startAs('CUSTOMER')}
+          />
+          <RoleButton
+            title="Continue as tailor"
+            subtitle="Manage briefs, quotes, and production."
+            variant="secondary"
+            onPress={() => startAs('TAILOR')}
+          />
+
+          <TouchableOpacity
+            activeOpacity={0.75}
+            accessibilityRole="button"
+            accessibilityLabel="Sign in"
+            onPress={() => router.push('/(auth)/sign-in')}
+            style={styles.signInButton}
+          >
+            <Text style={styles.signInLabel}>Sign in</Text>
+          </TouchableOpacity>
+
+          <Text style={styles.legal}>
+            By continuing you agree to our{' '}
+            <Text
+              style={styles.link}
+              onPress={() => {
+                void openLegal('https://drapeon.co/terms')
+              }}
+            >
+              Terms
+            </Text>{' '}
+            and{' '}
+            <Text
+              style={styles.link}
+              onPress={() => {
+                void openLegal('https://drapeon.co/privacy')
+              }}
+            >
+              Privacy Policy
+            </Text>
+            .
+          </Text>
+        </View>
+      </ScrollView>
     </SafeAreaView>
   )
 }
 
-type FeatherIconName = ComponentProps<typeof Feather>['name']
-
-function ProductPreview() {
+function PromiseItem({ icon, label }: { icon: keyof typeof Feather.glyphMap; label: string }) {
   return (
-    <View style={styles.previewShell}>
-      <View style={styles.previewCard}>
-        <View style={styles.previewTopRow}>
-          <Text style={styles.previewKicker}>Drapeon flow</Text>
-          <View style={styles.protectedPill}>
-            <Feather name="shield" size={13} color={Colors.needleGreen} />
-            <Text style={styles.protectedText}>Protected</Text>
-          </View>
-        </View>
-        <View style={styles.previewSteps}>
-          <PreviewStep icon="search" label="Find" />
-          <View style={styles.previewLine} />
-          <PreviewStep icon="scissors" label="Fit" />
-          <View style={styles.previewLine} />
-          <PreviewStep icon="credit-card" label="Pay" />
-          <View style={styles.previewLine} />
-          <PreviewStep icon="check-circle" label="Track" />
-        </View>
+    <View style={styles.promiseItem}>
+      <View style={styles.promiseIcon}>
+        <Feather name={icon} size={15} color={palette.green} />
       </View>
-      <View style={styles.previewTabs}>
-        <Text style={styles.previewTab}>Fit</Text>
-        <Text style={styles.previewTab}>Order</Text>
-        <Text style={styles.previewTab}>Trust</Text>
-      </View>
+      <Text style={styles.promiseLabel}>{label}</Text>
     </View>
   )
 }
 
-function PreviewStep({ icon, label }: { icon: FeatherIconName; label: string }) {
+function RoleButton({
+  title,
+  subtitle,
+  variant,
+  onPress,
+}: {
+  title: string
+  subtitle: string
+  variant: 'primary' | 'secondary'
+  onPress: () => void
+}) {
+  const primary = variant === 'primary'
+
   return (
-    <View style={styles.previewStep}>
-      <View style={styles.previewStepIcon}>
-        <Feather name={icon} size={16} color={Colors.textInverse} />
+    <TouchableOpacity
+      activeOpacity={0.78}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      onPress={onPress}
+      style={[styles.roleButton, primary ? styles.roleButtonPrimary : styles.roleButtonSecondary]}
+    >
+      <View style={styles.roleCopy}>
+        <Text style={[styles.roleTitle, primary && styles.roleTitlePrimary]}>{title}</Text>
+        <Text style={[styles.roleSubtitle, primary && styles.roleSubtitlePrimary]}>{subtitle}</Text>
       </View>
-      <Text style={styles.previewStepLabel}>{label}</Text>
-    </View>
+      <Feather name="arrow-right" size={18} color={primary ? palette.inverse : palette.green} />
+    </TouchableOpacity>
   )
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.bone,
-    padding: Spacing.xl,
-    justifyContent: 'space-between',
+    backgroundColor: palette.background,
   },
-  hero: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    gap: Spacing.lg,
+  content: {
+    flexGrow: 1,
+    justifyContent: 'space-between',
+    gap: Spacing.xxl,
+    padding: Spacing.xl,
     paddingBottom: Spacing.xxl,
   },
+  brandBlock: {
+    gap: Spacing.md,
+    paddingTop: Spacing.sm,
+  },
   wordmark: {
+    color: palette.green,
     fontFamily: Fonts.display,
-    fontSize: 48,
+    fontSize: 44,
     fontWeight: FontWeight.bold,
-    color: Colors.needleGreen,
     letterSpacing: 0,
-    lineHeight: 56,
+    lineHeight: 50,
   },
   eyebrow: {
     alignSelf: 'flex-start',
-    borderRadius: 999,
-    backgroundColor: Colors.white,
+    backgroundColor: palette.surface,
+    borderColor: palette.line,
+    borderRadius: Radius.full,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.lightGrey,
-    color: Colors.needleGreen,
+    color: palette.green,
     fontFamily: Fonts.bodySemiBold,
-    fontSize: FontSize.xs,
+    fontSize: 11,
     fontWeight: FontWeight.semibold,
     letterSpacing: 0,
     lineHeight: 18,
     overflow: 'hidden',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 5,
     textTransform: 'uppercase',
+  },
+  hero: {
+    gap: Spacing.xl,
   },
   tagline: {
+    color: palette.ink,
     fontFamily: Fonts.display,
-    fontSize: 38,
-    fontWeight: FontWeight.semibold,
-    color: Colors.ink,
-    lineHeight: 43,
-  },
-  sub: {
-    fontFamily: Fonts.body,
-    fontSize: FontSize.md,
-    color: Colors.inkLight,
-    lineHeight: 24,
-  },
-  previewShell: {
-    gap: Spacing.md,
-    marginTop: Spacing.sm,
-  },
-  previewCard: {
-    backgroundColor: Colors.needleGreen,
-    borderRadius: Radius.xl,
-    padding: Spacing.lg,
-    ...Shadow.md,
-  },
-  previewTopRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: Spacing.lg,
-  },
-  previewKicker: {
-    color: Colors.textInverse,
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: FontSize.xs,
+    fontSize: 42,
     fontWeight: FontWeight.semibold,
     letterSpacing: 0,
-    textTransform: 'uppercase',
+    lineHeight: 48,
   },
-  protectedPill: {
-    alignItems: 'center',
-    backgroundColor: Colors.textInverse,
-    borderRadius: Radius.full,
+  sub: {
+    color: palette.muted,
+    fontFamily: Fonts.body,
+    fontSize: 17,
+    lineHeight: 26,
+  },
+  promiseRow: {
     flexDirection: 'row',
-    gap: Spacing.xs,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 6,
-  },
-  protectedText: {
-    color: Colors.needleGreen,
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-  },
-  previewSteps: {
-    alignItems: 'center',
-    flexDirection: 'row',
-  },
-  previewStep: {
-    alignItems: 'center',
     gap: Spacing.sm,
-    width: 58,
   },
-  previewStepIcon: {
+  promiseItem: {
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.16)',
-    borderColor: 'rgba(255,255,255,0.22)',
-    borderRadius: 18,
-    borderWidth: StyleSheet.hairlineWidth,
-    height: 36,
+    backgroundColor: palette.surface,
+    borderColor: palette.line,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    flex: 1,
+    gap: Spacing.sm,
     justifyContent: 'center',
-    width: 36,
+    minHeight: 82,
   },
-  previewStepLabel: {
-    color: Colors.textInverse,
+  promiseIcon: {
+    alignItems: 'center',
+    backgroundColor: palette.greenSoft,
+    borderRadius: Radius.full,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  promiseLabel: {
+    color: palette.ink,
     fontFamily: Fonts.bodySemiBold,
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
-  },
-  previewLine: {
-    backgroundColor: 'rgba(255,255,255,0.32)',
-    flex: 1,
-    height: 1,
-    marginBottom: 24,
-  },
-  previewTabs: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-  },
-  previewTab: {
-    backgroundColor: Colors.white,
-    borderColor: Colors.lightGrey,
-    borderRadius: Radius.full,
-    borderWidth: StyleSheet.hairlineWidth,
-    color: Colors.ink,
-    flex: 1,
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    overflow: 'hidden',
-    paddingVertical: Spacing.sm,
-    textAlign: 'center',
   },
   actions: {
-    gap: Spacing.sm,
-    paddingBottom: Spacing.md,
+    gap: Spacing.md,
   },
-  legal: {
+  roleButton: {
+    alignItems: 'center',
+    borderRadius: Radius.xl,
+    flexDirection: 'row',
+    gap: Spacing.md,
+    justifyContent: 'space-between',
+    minHeight: 72,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+  },
+  roleButtonPrimary: {
+    backgroundColor: palette.green,
+  },
+  roleButtonSecondary: {
+    backgroundColor: palette.surface,
+    borderColor: palette.line,
+    borderWidth: 1,
+  },
+  roleCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  roleTitle: {
+    color: palette.ink,
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: 16,
+    fontWeight: FontWeight.semibold,
+  },
+  roleTitlePrimary: {
+    color: palette.inverse,
+  },
+  roleSubtitle: {
+    color: palette.muted,
     fontFamily: Fonts.body,
     fontSize: FontSize.xs,
-    color: Colors.midGrey,
-    textAlign: 'center',
     lineHeight: 18,
-    marginTop: Spacing.sm,
+  },
+  roleSubtitlePrimary: {
+    color: colors.primaryLight,
+  },
+  signInButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+  },
+  signInLabel: {
+    color: palette.greenDark,
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+  },
+  legal: {
+    color: palette.muted,
+    fontFamily: Fonts.body,
+    fontSize: FontSize.xs,
+    lineHeight: 18,
+    textAlign: 'center',
   },
   link: {
+    color: palette.greenDark,
     fontFamily: Fonts.bodyMedium,
-    color: Colors.needleGreen,
     fontWeight: FontWeight.medium,
   },
 })

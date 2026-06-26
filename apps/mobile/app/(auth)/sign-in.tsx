@@ -19,8 +19,17 @@ import { AuthBackButton } from '@/components/auth/AuthBackButton'
 import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
 import { Button, Input, Divider } from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius } from '@/constants/theme'
+import { colors } from '@drape/shared/design-system'
 
 type RoleIntent = 'CUSTOMER' | 'TAILOR'
+
+const oauthPalette = {
+  appleBg: colors.surfaceDark,
+  appleFg: colors.textInverse,
+  googleBg: colors.surface,
+  googleFg: colors.textPrimary,
+  googleBorder: colors.border,
+}
 
 function normalizeRoleIntent(value: unknown): RoleIntent | null {
   const candidate = Array.isArray(value) ? value[0] : value
@@ -250,7 +259,7 @@ export default function SignInScreen() {
                   accessibilityRole="button"
                   accessibilityLabel="Sign in with Apple"
                 >
-                  <Ionicons name="logo-apple" size={18} color={Colors.textInverse} />
+                  <Ionicons name="logo-apple" size={18} color={oauthPalette.appleFg} />
                   <Text style={[styles.oauthLabel, styles.oauthLabelApple]}>
                     {oauthLoading === 'apple' ? 'Opening…' : 'Apple'}
                   </Text>
@@ -360,12 +369,12 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     borderRadius: Radius.lg,
     borderWidth: 1.5,
-    borderColor: Colors.lightGrey,
-    backgroundColor: Colors.white,
+    borderColor: oauthPalette.googleBorder,
+    backgroundColor: oauthPalette.googleBg,
   },
-  oauthBtnApple: { backgroundColor: Colors.ink, borderColor: Colors.ink },
-  oauthIcon: { fontFamily: Fonts.bodyBold, fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink },
-  oauthIconApple: { color: Colors.textInverse },
-  oauthLabel: { fontFamily: Fonts.bodyMedium, fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink },
-  oauthLabelApple: { color: Colors.textInverse },
+  oauthBtnApple: { backgroundColor: oauthPalette.appleBg, borderColor: oauthPalette.appleBg },
+  oauthIcon: { fontFamily: Fonts.bodyBold, fontSize: FontSize.md, fontWeight: FontWeight.bold, color: oauthPalette.googleFg },
+  oauthIconApple: { color: oauthPalette.appleFg },
+  oauthLabel: { fontFamily: Fonts.bodyMedium, fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: oauthPalette.googleFg },
+  oauthLabelApple: { color: oauthPalette.appleFg },
 })

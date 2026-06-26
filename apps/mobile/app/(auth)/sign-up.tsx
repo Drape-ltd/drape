@@ -18,6 +18,7 @@ import { AuthBackButton } from '@/components/auth/AuthBackButton'
 import { AuthEntryHeader } from '@/components/auth/AuthEntryHeader'
 import { Button, Input, Divider } from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius } from '@/constants/theme'
+import { colors } from '@drape/shared/design-system'
 import { validateDisplayName } from '@drape/shared/contact-filter'
 import {
   MAX_PASSWORD_LENGTH,
@@ -26,6 +27,14 @@ import {
 } from '@drape/shared/auth-security'
 
 type Role = 'CUSTOMER' | 'TAILOR'
+
+const oauthPalette = {
+  appleBg: colors.surfaceDark,
+  appleFg: colors.textInverse,
+  googleBg: colors.surface,
+  googleFg: colors.textPrimary,
+  googleBorder: colors.border,
+}
 
 function normalizeRoleIntent(value: unknown): Role | null {
   const candidate = Array.isArray(value) ? value[0] : value
@@ -183,87 +192,80 @@ export default function SignUpScreen() {
         >
           <AuthEntryHeader
             eyebrow="Create account"
-            title={role === 'TAILOR' ? 'Start your tailor workspace.' : 'Start ordering with Drapeon.'}
-            body="Choose where you want to begin. One account can use both sides later from account settings."
+            title="Create your Drapeon account."
+            body="Choose your starting side. You can add the other side later from account settings."
             showWordmark={false}
           />
 
           <View style={styles.formCard}>
-            <View style={styles.formIntro}>
-              <Text style={styles.formEyebrow}>Choose your starting role</Text>
-              <Text style={styles.formTitle}>This sets up the right dashboard first.</Text>
-            </View>
-
-            {/* Role picker */}
             <View style={styles.roleRow}>
               <TouchableOpacity
                 testID="role-customer"
-                style={[styles.roleCard, role === 'CUSTOMER' && styles.roleCardActive]}
+                style={[styles.roleSegment, role === 'CUSTOMER' && styles.roleSegmentActive]}
                 onPress={() => setRole('CUSTOMER')}
                 accessibilityRole="button"
                 accessibilityLabel="Start as a customer"
                 accessibilityState={{ selected: role === 'CUSTOMER' }}
               >
-                <View
-                  style={[styles.roleIconWrap, role === 'CUSTOMER' && styles.roleIconWrapActive]}
-                >
-                  <Ionicons
-                    name="person-outline"
-                    size={22}
-                    color={role === 'CUSTOMER' ? Colors.needleGreen : Colors.ink}
-                  />
-                </View>
-                <View style={styles.roleTextWrap}>
-                  <Text style={[styles.roleLabel, role === 'CUSTOMER' && styles.roleLabelActive]}>
-                    Customer
-                  </Text>
-                  <Text style={styles.roleHint}>
-                    Find a tailor, place an order, and track it through to completion.
-                  </Text>
-                </View>
-                <View style={[styles.roleCheck, role === 'CUSTOMER' && styles.roleCheckActive]}>
-                  <Text
-                    style={[
-                      styles.roleCheckText,
-                      role === 'CUSTOMER' && styles.roleCheckTextActive,
-                    ]}
-                  >
-                    ✓
-                  </Text>
-                </View>
+                <Ionicons
+                  name="person-outline"
+                  size={18}
+                  color={role === 'CUSTOMER' ? Colors.needleGreen : Colors.midGrey}
+                />
+                <Text style={[styles.roleLabel, role === 'CUSTOMER' && styles.roleLabelActive]}>
+                  Customer
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 testID="role-tailor"
-                style={[styles.roleCard, role === 'TAILOR' && styles.roleCardActive]}
+                style={[styles.roleSegment, role === 'TAILOR' && styles.roleSegmentActive]}
                 onPress={() => setRole('TAILOR')}
                 accessibilityRole="button"
                 accessibilityLabel="Start as a tailor"
                 accessibilityState={{ selected: role === 'TAILOR' }}
               >
-                <View style={[styles.roleIconWrap, role === 'TAILOR' && styles.roleIconWrapActive]}>
-                  <Ionicons
-                    name="cut-outline"
-                    size={22}
-                    color={role === 'TAILOR' ? Colors.needleGreen : Colors.ink}
-                  />
-                </View>
-                <View style={styles.roleTextWrap}>
-                  <Text style={[styles.roleLabel, role === 'TAILOR' && styles.roleLabelActive]}>
-                    Tailor
-                  </Text>
-                  <Text style={styles.roleHint}>
-                    Receive briefs, run consultations, send quotes, and manage production.
-                  </Text>
-                </View>
-                <View style={[styles.roleCheck, role === 'TAILOR' && styles.roleCheckActive]}>
-                  <Text
-                    style={[styles.roleCheckText, role === 'TAILOR' && styles.roleCheckTextActive]}
-                  >
-                    ✓
-                  </Text>
-                </View>
+                <Ionicons
+                  name="cut-outline"
+                  size={18}
+                  color={role === 'TAILOR' ? Colors.needleGreen : Colors.midGrey}
+                />
+                <Text style={[styles.roleLabel, role === 'TAILOR' && styles.roleLabelActive]}>
+                  Tailor
+                </Text>
               </TouchableOpacity>
             </View>
+
+            <View style={styles.oauthRow}>
+              <TouchableOpacity
+                style={styles.oauthBtn}
+                onPress={handleGoogle}
+                disabled={!!oauthLoading || loading}
+                accessibilityRole="button"
+                accessibilityLabel="Sign up with Google"
+              >
+                <Text style={styles.oauthIcon}>G</Text>
+                <Text style={styles.oauthLabel}>
+                  {oauthLoading === 'google' ? 'Opening…' : 'Google'}
+                </Text>
+              </TouchableOpacity>
+
+              {Platform.OS === 'ios' && (
+                <TouchableOpacity
+                  style={[styles.oauthBtn, styles.oauthBtnApple]}
+                  onPress={handleApple}
+                  disabled={!!oauthLoading || loading}
+                  accessibilityRole="button"
+                  accessibilityLabel="Sign up with Apple"
+                >
+                  <Ionicons name="logo-apple" size={18} color={oauthPalette.appleFg} />
+                  <Text style={[styles.oauthLabel, styles.oauthLabelApple]}>
+                    {oauthLoading === 'apple' ? 'Opening…' : 'Apple'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <Divider label="or use email" />
 
             <Input
               label="Display name"
@@ -398,44 +400,9 @@ export default function SignUpScreen() {
               }
             />
 
-            <View style={styles.nextCard}>
-              <Text style={styles.nextEyebrow}>Next</Text>
-              <Text style={styles.nextTitle}>
-                After email confirmation, Drapeon opens the setup flow for the selected side.
-              </Text>
-            </View>
-
-            <Divider label="or sign up with" />
-
-            <View style={styles.oauthRow}>
-              <TouchableOpacity
-                style={styles.oauthBtn}
-                onPress={handleGoogle}
-                disabled={!!oauthLoading || loading}
-                accessibilityRole="button"
-                accessibilityLabel="Sign up with Google"
-              >
-                <Text style={styles.oauthIcon}>G</Text>
-                <Text style={styles.oauthLabel}>
-                  {oauthLoading === 'google' ? 'Opening…' : 'Google'}
-                </Text>
-              </TouchableOpacity>
-
-              {Platform.OS === 'ios' && (
-                <TouchableOpacity
-                  style={[styles.oauthBtn, styles.oauthBtnApple]}
-                  onPress={handleApple}
-                  disabled={!!oauthLoading || loading}
-                  accessibilityRole="button"
-                  accessibilityLabel="Sign up with Apple"
-                >
-                  <Ionicons name="logo-apple" size={18} color={Colors.textInverse} />
-                  <Text style={[styles.oauthLabel, styles.oauthLabelApple]}>
-                    {oauthLoading === 'apple' ? 'Opening…' : 'Apple'}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
+            <Text style={styles.confirmationNote}>
+              We’ll send a confirmation link before opening your setup flow.
+            </Text>
 
             <Text style={styles.signInPrompt}>
               Already have an account?{' '}
@@ -468,20 +435,6 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
   },
   formIntro: { gap: 4 },
-  formEyebrow: {
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: FontSize.xs,
-    color: Colors.midGrey,
-    fontWeight: FontWeight.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0,
-  },
-  formTitle: {
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: FontSize.md,
-    color: Colors.ink,
-    fontWeight: FontWeight.semibold,
-  },
   passwordMeter: {
     gap: Spacing.sm,
     marginTop: -Spacing.sm,
@@ -552,7 +505,30 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.medium,
   },
-  roleRow: { gap: Spacing.md },
+  roleRow: {
+    backgroundColor: Colors.bone,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: Spacing.xs,
+    padding: 4,
+  },
+  roleSegment: {
+    alignItems: 'center',
+    borderRadius: Radius.md,
+    flex: 1,
+    flexDirection: 'row',
+    gap: Spacing.xs,
+    justifyContent: 'center',
+    minHeight: 46,
+    paddingHorizontal: Spacing.md,
+  },
+  roleSegmentActive: {
+    backgroundColor: Colors.white,
+    borderColor: Colors.lightGrey,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
   roleCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -612,6 +588,13 @@ const styles = StyleSheet.create({
   },
   signInPrompt: { fontFamily: Fonts.body, fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center' },
   link: { fontFamily: Fonts.bodyMedium, color: Colors.needleGreen, fontWeight: FontWeight.medium },
+  confirmationNote: {
+    color: Colors.midGrey,
+    fontFamily: Fonts.body,
+    fontSize: FontSize.xs,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
   nextCard: {
     backgroundColor: Colors.bone,
     borderRadius: Radius.lg,
@@ -650,12 +633,12 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
     borderRadius: Radius.lg,
     borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    backgroundColor: Colors.white,
+    borderColor: oauthPalette.googleBorder,
+    backgroundColor: oauthPalette.googleBg,
   },
-  oauthBtnApple: { backgroundColor: Colors.ink, borderColor: Colors.ink },
-  oauthIcon: { fontFamily: Fonts.bodyBold, fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.ink },
-  oauthIconApple: { color: Colors.textInverse },
-  oauthLabel: { fontFamily: Fonts.bodyMedium, fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.ink },
-  oauthLabelApple: { color: Colors.textInverse },
+  oauthBtnApple: { backgroundColor: oauthPalette.appleBg, borderColor: oauthPalette.appleBg },
+  oauthIcon: { fontFamily: Fonts.bodyBold, fontSize: FontSize.md, fontWeight: FontWeight.bold, color: oauthPalette.googleFg },
+  oauthIconApple: { color: oauthPalette.appleFg },
+  oauthLabel: { fontFamily: Fonts.bodyMedium, fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: oauthPalette.googleFg },
+  oauthLabelApple: { color: oauthPalette.appleFg },
 })
