@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet, Alert, Linking, ScrollView, TouchableOpacity } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { Feather } from '@expo/vector-icons'
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons'
 import { colors } from '@drape/shared/design-system'
 import { Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 
@@ -56,19 +56,20 @@ export default function WelcomeScreen() {
       >
         <View style={styles.brandBlock}>
           <Text style={styles.wordmark}>Drapeon</Text>
-          <Text style={styles.eyebrow}>AI-powered fashion discovery and fit</Text>
         </View>
 
         <View style={styles.hero}>
-          <Text style={styles.tagline}>Find fashion that fits.</Text>
+          <Text style={styles.tagline} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.86}>
+            Your tailor.{'\n'}Anywhere in the world.
+          </Text>
           <Text style={styles.sub}>
-            Shop ready-made pieces, start custom orders, and follow every update in one protected workspace.
+            Find a tailor, place your order, and watch it come to life. Every stitch tracked. Every payment protected.
           </Text>
 
           <View style={styles.promiseRow}>
-            <PromiseItem icon="search" label="Discover" />
-            <PromiseItem icon="scissors" label="Fit" />
-            <PromiseItem icon="shield" label="Protect" />
+            <PromiseItem icon="account" label="Find your tailor" />
+            <PromiseItem icon="tape-measure" label="Your measurements" />
+            <PromiseItem icon="shield-check" label="Protected payment" />
           </View>
         </View>
 
@@ -123,13 +124,15 @@ export default function WelcomeScreen() {
   )
 }
 
-function PromiseItem({ icon, label }: { icon: keyof typeof Feather.glyphMap; label: string }) {
+function PromiseItem({ icon, label }: { icon: keyof typeof MaterialCommunityIcons.glyphMap; label: string }) {
   return (
     <View style={styles.promiseItem}>
       <View style={styles.promiseIcon}>
-        <Feather name={icon} size={15} color={palette.green} />
+        <MaterialCommunityIcons name={icon} size={18} color={palette.green} />
       </View>
-      <Text style={styles.promiseLabel}>{label}</Text>
+      <Text style={styles.promiseLabel} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82}>
+        {label}
+      </Text>
     </View>
   )
 }
@@ -177,7 +180,6 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.xxl,
   },
   brandBlock: {
-    gap: Spacing.md,
     paddingTop: Spacing.sm,
   },
   wordmark: {
@@ -188,25 +190,8 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     lineHeight: 50,
   },
-  eyebrow: {
-    alignSelf: 'flex-start',
-    backgroundColor: palette.surface,
-    borderColor: palette.line,
-    borderRadius: Radius.full,
-    borderWidth: StyleSheet.hairlineWidth,
-    color: palette.green,
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: 11,
-    fontWeight: FontWeight.semibold,
-    letterSpacing: 0,
-    lineHeight: 18,
-    overflow: 'hidden',
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 5,
-    textTransform: 'uppercase',
-  },
   hero: {
-    gap: Spacing.xl,
+    gap: Spacing.md,
   },
   tagline: {
     color: palette.ink,
@@ -225,6 +210,7 @@ const styles = StyleSheet.create({
   promiseRow: {
     flexDirection: 'row',
     gap: Spacing.sm,
+    marginTop: Spacing.sm,
   },
   promiseItem: {
     alignItems: 'center',
@@ -233,9 +219,10 @@ const styles = StyleSheet.create({
     borderRadius: Radius.lg,
     borderWidth: 1,
     flex: 1,
-    gap: Spacing.sm,
+    gap: 7,
     justifyContent: 'center',
-    minHeight: 82,
+    minHeight: 88,
+    paddingHorizontal: 4,
   },
   promiseIcon: {
     alignItems: 'center',
@@ -248,11 +235,15 @@ const styles = StyleSheet.create({
   promiseLabel: {
     color: palette.ink,
     fontFamily: Fonts.bodySemiBold,
-    fontSize: FontSize.xs,
+    fontSize: 12,
     fontWeight: FontWeight.semibold,
+    lineHeight: 15,
+    textAlign: 'center',
+    width: '100%',
   },
   actions: {
     gap: Spacing.md,
+    paddingTop: Spacing.md,
   },
   roleButton: {
     alignItems: 'center',
@@ -268,7 +259,7 @@ const styles = StyleSheet.create({
     backgroundColor: palette.green,
   },
   roleButtonSecondary: {
-    backgroundColor: palette.surface,
+    backgroundColor: palette.greenSoft,
     borderColor: palette.line,
     borderWidth: 1,
   },
