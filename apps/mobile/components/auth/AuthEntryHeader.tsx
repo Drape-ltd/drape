@@ -6,6 +6,7 @@ type AuthEntryHeaderProps = {
   title: string
   body: string
   showWordmark?: boolean
+  compact?: boolean
 }
 
 export function AuthEntryHeader({
@@ -13,17 +14,18 @@ export function AuthEntryHeader({
   title,
   body,
   showWordmark = false,
+  compact = false,
 }: AuthEntryHeaderProps) {
   return (
-    <View style={styles.wrap}>
+    <View style={[styles.wrap, compact && styles.wrapCompact]}>
       {showWordmark ? <Text style={styles.wordmark}>Drapeon</Text> : null}
       {eyebrow ? (
         <Text style={[styles.eyebrow, !showWordmark && styles.eyebrowWithoutWordmark]}>
           {eyebrow}
         </Text>
       ) : null}
-      <Text style={styles.title}>{title}</Text>
-      <Text style={styles.body}>{body}</Text>
+      <Text style={[styles.title, compact && styles.titleCompact]}>{title}</Text>
+      <Text style={[styles.body, compact && styles.bodyCompact]}>{body}</Text>
     </View>
   )
 }
@@ -32,6 +34,10 @@ const styles = StyleSheet.create({
   wrap: {
     gap: Spacing.sm,
     paddingTop: Spacing.sm,
+  },
+  wrapCompact: {
+    gap: 6,
+    paddingTop: 0,
   },
   wordmark: {
     fontFamily: Fonts.display,
@@ -60,10 +66,18 @@ const styles = StyleSheet.create({
     lineHeight: 40,
     letterSpacing: 0,
   },
+  titleCompact: {
+    fontSize: 28,
+    lineHeight: 33,
+  },
   body: {
     fontFamily: Fonts.body,
     fontSize: FontSize.md,
     color: Colors.inkLight,
     lineHeight: 24,
+  },
+  bodyCompact: {
+    fontSize: FontSize.sm,
+    lineHeight: 21,
   },
 })

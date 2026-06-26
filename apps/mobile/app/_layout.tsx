@@ -617,8 +617,8 @@ export default function RootLayout() {
             <Stack.Screen name="(customer)" options={{ headerShown: false }} />
             <Stack.Screen name="(tailor)" options={{ headerShown: false }} />
             <Stack.Screen name="passport" options={{ headerShown: false }} />
-            <Stack.Screen name="group-invite" options={{ headerShown: false }} />
-            <Stack.Screen name="referral" options={{ headerShown: false }} />
+            <Stack.Screen name="group-invite/[code]" options={{ headerShown: false }} />
+            <Stack.Screen name="referral/[code]" options={{ headerShown: false }} />
             <Stack.Screen name="vision" options={{ headerShown: false }} />
             <Stack.Screen name="paystack-redirect" options={{ headerShown: false }} />
           </Stack>

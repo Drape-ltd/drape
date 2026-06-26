@@ -39,6 +39,9 @@
     "typescript": "^5.7.2"
   },
   "pnpm": {
+    "patchedDependencies": {
+      "@stripe/stripe-react-native@0.50.3": "patches/@stripe__stripe-react-native@0.50.3.patch"
+    },
     "onlyBuiltDependencies": [
       "@prisma/client",
       "@prisma/engines",

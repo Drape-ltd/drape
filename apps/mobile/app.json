@@ -18,6 +18,7 @@
     ],
     "ios": {
       "supportsTablet": false,
+      "appleTeamId": "W84Q46T4XF",
       "bundleIdentifier": "co.drapeon.app",
       "privacyManifests": {
         "NSPrivacyAccessedAPITypes": [

@@ -195,6 +195,7 @@ export default function SignUpScreen() {
             title="Create your Drapeon account."
             body="Choose your starting side. You can add the other side later from account settings."
             showWordmark={false}
+            compact
           />
 
           <View style={styles.formCard}>
@@ -426,15 +427,14 @@ export default function SignUpScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.bone },
   keyboardAvoider: { flex: 1 },
-  back: { paddingHorizontal: Spacing.xl, paddingTop: Spacing.md },
-  content: { padding: Spacing.xl, gap: Spacing.xl, paddingBottom: Spacing.xxl },
+  back: { paddingHorizontal: Spacing.xl, paddingTop: Spacing.sm },
+  content: { padding: Spacing.xl, gap: Spacing.lg, paddingBottom: Spacing.xxl },
   formCard: {
     backgroundColor: Colors.white,
     borderRadius: Radius.xl,
-    padding: Spacing.lg,
+    padding: Spacing.md,
     gap: Spacing.md,
   },
-  formIntro: { gap: 4 },
   passwordMeter: {
     gap: Spacing.sm,
     marginTop: -Spacing.sm,
@@ -529,32 +529,6 @@ const styles = StyleSheet.create({
     borderColor: Colors.lightGrey,
     borderWidth: StyleSheet.hairlineWidth,
   },
-  roleCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: Spacing.md,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    backgroundColor: Colors.bone,
-    gap: Spacing.md,
-  },
-  roleCardActive: {
-    borderColor: Colors.needleGreen,
-    backgroundColor: Colors.needleGreenLight,
-  },
-  roleIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  roleIconWrapActive: {
-    backgroundColor: Colors.needleGreenLight,
-  },
-  roleTextWrap: { flex: 1, gap: 2 },
   roleLabel: {
     fontFamily: Fonts.bodySemiBold,
     fontSize: FontSize.sm,
@@ -562,30 +536,6 @@ const styles = StyleSheet.create({
     color: Colors.ink,
   },
   roleLabelActive: { color: Colors.needleGreen },
-  roleHint: { fontFamily: Fonts.body, fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 16 },
-  roleCheck: {
-    width: 24,
-    height: 24,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: Colors.lightGrey,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.white,
-  },
-  roleCheckActive: {
-    borderColor: Colors.needleGreen,
-    backgroundColor: Colors.needleGreen,
-  },
-  roleCheckText: {
-    fontFamily: Fonts.bodyBold,
-    fontSize: FontSize.xs,
-    color: Colors.midGrey,
-    fontWeight: FontWeight.bold,
-  },
-  roleCheckTextActive: {
-    color: Colors.textInverse,
-  },
   signInPrompt: { fontFamily: Fonts.body, fontSize: FontSize.sm, color: Colors.inkLight, textAlign: 'center' },
   link: { fontFamily: Fonts.bodyMedium, color: Colors.needleGreen, fontWeight: FontWeight.medium },
   confirmationNote: {
@@ -594,33 +544,6 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     lineHeight: 18,
     textAlign: 'center',
-  },
-  nextCard: {
-    backgroundColor: Colors.bone,
-    borderRadius: Radius.lg,
-    padding: Spacing.md,
-    gap: 4,
-  },
-  nextEyebrow: {
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: FontSize.xs,
-    color: Colors.midGrey,
-    fontWeight: FontWeight.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: 0,
-  },
-  nextTitle: {
-    fontFamily: Fonts.bodySemiBold,
-    fontSize: FontSize.sm,
-    color: Colors.ink,
-    fontWeight: FontWeight.semibold,
-    lineHeight: 19,
-  },
-  nextCopy: {
-    fontFamily: Fonts.body,
-    fontSize: FontSize.sm,
-    color: Colors.inkLight,
-    lineHeight: 20,
   },
   oauthRow: { flexDirection: 'row', gap: Spacing.md },
   oauthBtn: {
