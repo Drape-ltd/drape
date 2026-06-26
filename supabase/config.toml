@@ -27,8 +27,20 @@ enabled = true
 
 [auth]
 enabled = true
-site_url = "http://localhost:3000"
-additional_redirect_urls = ["https://localhost:3000", "drape://"]
+site_url = "https://drapeon.co"
+additional_redirect_urls = [
+  "https://drapeon.co/auth/callback",
+  "https://drapeon.co/auth/recover",
+  "https://www.drapeon.co/auth/callback",
+  "https://www.drapeon.co/auth/recover",
+  "drape://",
+  "drape://callback",
+  "drape:///callback",
+  "http://localhost:3000/auth/callback",
+  "http://localhost:3000/auth/recover",
+  "https://localhost:3000/auth/callback",
+  "https://localhost:3000/auth/recover",
+]
 jwt_expiry = 3600
 enable_signup = true
 

@@ -81,8 +81,25 @@ function isEmailNotConfirmedError(message: string | undefined) {
   return (message ?? '').toLowerCase().includes('email not confirmed')
 }
 
+function getPublicSiteOrigin() {
+  const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/+$/, '')
+  if (configured && !configured.includes('localhost') && !configured.includes('127.0.0.1')) {
+    return configured
+  }
+
+  if (
+    typeof window !== 'undefined' &&
+    !window.location.hostname.includes('localhost') &&
+    window.location.hostname !== '127.0.0.1'
+  ) {
+    return window.location.origin
+  }
+
+  return 'https://drapeon.co'
+}
+
 function buildAuthCallbackUrl(nextPath = '/account/dashboard') {
-  const url = new URL('/auth/callback', window.location.origin)
+  const url = new URL('/auth/callback', getPublicSiteOrigin())
   url.searchParams.set('next', nextPath)
   return url.toString()
 }

@@ -48,6 +48,13 @@ function isDrapeRole(value: unknown): value is DrapeRole {
   return value === 'CUSTOMER' || value === 'TAILOR'
 }
 
+function getHostedAuthCallbackUrl(nextPath = '/account/dashboard') {
+  const siteUrl = (process.env.EXPO_PUBLIC_SITE_URL ?? 'https://drapeon.co').replace(/\/+$/, '')
+  const url = new URL('/auth/callback', siteUrl)
+  url.searchParams.set('next', nextPath)
+  return url.toString()
+}
+
 function displayNameFromMetadata(metadata: User['user_metadata']) {
   if (typeof metadata?.display_name === 'string' && metadata.display_name.trim().length > 0) {
     return metadata.display_name.trim()
@@ -112,6 +119,27 @@ function parseAuthTokensFromUrl(url: string) {
   } catch {
     return null
   }
+}
+
+async function applyAuthSessionFromUrl(url: string) {
+  const parsedUrl = new URL(url)
+  const code = parsedUrl.searchParams.get('code')
+  if (code) {
+    const { error } = await supabase.auth.exchangeCodeForSession(code)
+    if (error) throw error
+    return
+  }
+
+  const tokens = parseAuthTokensFromUrl(url)
+  if (!tokens) {
+    throw new Error('No auth session was returned.')
+  }
+
+  const { error } = await supabase.auth.setSession({
+    access_token: tokens.accessToken,
+    refresh_token: tokens.refreshToken,
+  })
+  if (error) throw error
 }
 
 function createOAuthNonce(byteLength = 32) {
@@ -352,20 +380,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async function handleAuthDeepLink(url: string | null) {
       if (!active || !url || url === lastHandledUrl) return
 
-      const tokens = parseAuthTokensFromUrl(url)
-      if (!tokens) return
+      const hasAuthPayload =
+        url.includes('code=') ||
+        url.includes('access_token=') ||
+        url.includes('refresh_token=')
+      if (!hasAuthPayload) return
 
       lastHandledUrl = url
 
-      const { error } = await supabase.auth.setSession({
-        access_token: tokens.accessToken,
-        refresh_token: tokens.refreshToken,
-      })
-
-      if (error) {
+      try {
+        await applyAuthSessionFromUrl(url)
+      } catch (error) {
         console.warn('Unable to exchange auth deep link session', {
-          type: tokens.type ?? 'unknown',
-          message: error.message,
+          message: error instanceof Error ? error.message : String(error),
         })
       }
     }
@@ -485,6 +512,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       email: normalizedEmail,
       password,
       options: {
+        emailRedirectTo: getHostedAuthCallbackUrl('/account/dashboard'),
         data: { display_name: displayName, role },
       },
     })
@@ -532,22 +560,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const result = await WebBrowser.openAuthSessionAsync(data.url, redirectUrl)
       if (result.type !== 'success') return { error: null } // user cancelled
 
-      // Supabase returns tokens in the URL fragment (#access_token=...&refresh_token=...)
-      const fragment = result.url.split('#')[1] ?? result.url.split('?')[1] ?? ''
-      const params = new URLSearchParams(fragment)
-      const accessToken = params.get('access_token')
-      const refreshToken = params.get('refresh_token')
-
-      if (!accessToken || !refreshToken) {
-        return { error: 'Google sign-in completed, but the session could not be created. Please try again.' }
-      }
-
-      const { error: sessionError } = await supabase.auth.setSession({
-        access_token: accessToken,
-        refresh_token: refreshToken,
-      })
-      if (sessionError) {
-        return { error: mapAuthErrorMessage(sessionError.message, 'Google sign-in completed, but Drapeon could not open your session. Please try again.') }
+      try {
+        await applyAuthSessionFromUrl(result.url)
+      } catch (sessionError) {
+        return {
+          error: mapAuthErrorMessage(
+            sessionError instanceof Error ? sessionError.message : String(sessionError),
+            'Google sign-in completed, but Drapeon could not open your session. Please try again.'
+          ),
+        }
       }
 
       const roleError = await applyRoleIntent(roleIntent)

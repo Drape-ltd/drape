@@ -14,6 +14,23 @@ function mapRecoveryError(message: string | undefined) {
   return 'We could not send a reset link right now. Please try again.'
 }
 
+function getHostedRecoveryUrl() {
+  const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/+$/, '')
+  if (configured && !configured.includes('localhost') && !configured.includes('127.0.0.1')) {
+    return `${configured}/auth/recover`
+  }
+
+  if (
+    typeof window !== 'undefined' &&
+    !window.location.hostname.includes('localhost') &&
+    window.location.hostname !== '127.0.0.1'
+  ) {
+    return `${window.location.origin}/auth/recover`
+  }
+
+  return 'https://drapeon.co/auth/recover'
+}
+
 export function AccountRecoveryRequestForm(): React.JSX.Element {
   const [email, setEmail] = useState('')
   const [loading, setLoading] = useState(false)
@@ -41,7 +58,7 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
 
     setLoading(true)
     const { error: resetError } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
-      redirectTo: `${window.location.origin}/auth/recover`,
+      redirectTo: getHostedRecoveryUrl(),
     })
     setLoading(false)
 
