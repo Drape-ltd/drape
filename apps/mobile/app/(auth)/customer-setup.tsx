@@ -18,7 +18,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
 import { pickAvatarImageUri, type AvatarImageSource } from '@/lib/avatar-picker'
-import { isLikelyConnectivityIssue } from '@/lib/function-errors'
+import { isDuplicatePhoneError, isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { syncUserRow } from '@/lib/syncUserRow'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
 import { Sentry } from '@/lib/sentry'
@@ -83,6 +83,10 @@ function normalizeGarmentContext(value: unknown): GarmentContext | null {
 }
 
 function customerSetupSaveMessage(error: unknown) {
+  if (isDuplicatePhoneError(error)) {
+    return 'That phone number is already connected to another Drapeon account. Use a different number or contact support.'
+  }
+
   return isLikelyConnectivityIssue(error)
     ? 'Connection looks weak. We could not save your setup yet. Retry when the signal improves.'
     : 'We could not save your setup right now. Please try again in a moment.'
@@ -317,7 +321,9 @@ export default function CustomerSetupScreen() {
         })
       } catch (syncError: unknown) {
         setSaving(false)
-        const message = isLikelyConnectivityIssue(syncError)
+        const message = isDuplicatePhoneError(syncError)
+          ? 'That phone number is already connected to another Drapeon account. Use a different number or contact support.'
+          : isLikelyConnectivityIssue(syncError)
           ? 'We saved your setup, but could not finish locking your account currency because the connection looks weak. Please retry once the signal improves.'
           : 'We saved your setup, but could not finish locking your account currency right now. Please try again in a moment.'
         setSaveError(message)

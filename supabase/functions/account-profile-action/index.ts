@@ -20,6 +20,7 @@ import { checkRateLimit, getClientIp, rateLimitExceededResponse } from '../_shar
 import { parseBody, z } from '../_shared/validate.ts'
 
 const FN = 'account-profile-action'
+const DUPLICATE_PHONE_MESSAGE = 'That phone number is already connected to another Drapeon account. Use a different number or contact support.'
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
@@ -100,6 +101,22 @@ function readAuthMetadata(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? { ...(value as Record<string, unknown>) }
     : {}
+}
+
+function isDuplicatePhoneError(error: { code?: string | null; message?: string | null; details?: string | null } | null | undefined) {
+  const text = `${error?.message ?? ''} ${error?.details ?? ''}`.toLowerCase()
+  return error?.code === '23505' && (
+    text.includes('phone_already_in_use') ||
+    text.includes('phone') ||
+    text.includes('users_phone')
+  )
+}
+
+function duplicatePhoneResponse(cors: HeadersInit) {
+  return jsonResponse({
+    error: DUPLICATE_PHONE_MESSAGE,
+    message: DUPLICATE_PHONE_MESSAGE,
+  }, 409, cors)
 }
 
 function contactLeakMessage(field: string, value: string | string[] | null | undefined) {
@@ -224,6 +241,9 @@ Deno.serve(async (req) => {
 
       if (userUpsertError) {
         log('error', FN, 'web_onboarding.users_upsert_failed', { actor_id: caller.id, error: userUpsertError.message })
+        if (isDuplicatePhoneError(userUpsertError)) {
+          return duplicatePhoneResponse(cors)
+        }
         return jsonResponse({
           error: 'We could not finish your account setup right now.',
           message: 'We could not finish your account setup right now.',
@@ -268,6 +288,9 @@ Deno.serve(async (req) => {
 
         if (profileError) {
           log('error', FN, 'web_onboarding.customer_profile_upsert_failed', { actor_id: caller.id, error: profileError.message })
+          if (isDuplicatePhoneError(profileError)) {
+            return duplicatePhoneResponse(cors)
+          }
           return jsonResponse({
             error: 'We could not finish your customer setup right now.',
             message: 'We could not finish your customer setup right now.',
@@ -688,6 +711,9 @@ Deno.serve(async (req) => {
 
     if (userUpdateError) {
       log('error', FN, 'users.upsert_failed', { actor_id: caller.id, error: userUpdateError.message })
+      if (isDuplicatePhoneError(userUpdateError)) {
+        return duplicatePhoneResponse(cors)
+      }
       return jsonResponse({
         error: 'We could not save your personal information right now.',
         message: 'We could not save your personal information right now.',
@@ -726,6 +752,9 @@ Deno.serve(async (req) => {
 
       if (profileError) {
         log('error', FN, 'customer_profile.upsert_failed', { actor_id: caller.id, error: profileError.message })
+        if (isDuplicatePhoneError(profileError)) {
+          return duplicatePhoneResponse(cors)
+        }
         return jsonResponse({
           error: 'We could not save your customer profile right now.',
           message: 'We could not save your customer profile right now.',

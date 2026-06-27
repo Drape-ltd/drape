@@ -7,11 +7,11 @@ import {
 
 describe('normalizePhoneForStorage', () => {
   it('strips formatting from local numbers', () => {
-    expect(normalizePhoneForStorage('080 1234 5678')).toBe('08012345678')
+    expect(normalizePhoneForStorage('080 1234 5678')).toBe('+2348012345678')
   })
 
   it('normalizes Nigerian local numbers missing the leading zero', () => {
-    expect(normalizePhoneForStorage('8012345678')).toBe('08012345678')
+    expect(normalizePhoneForStorage('8012345678')).toBe('+2348012345678')
   })
 
   it('keeps explicit E.164 numbers canonical', () => {

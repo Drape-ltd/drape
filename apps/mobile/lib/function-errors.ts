@@ -122,3 +122,17 @@ export function isLikelyConnectivityIssue(error: unknown): boolean {
   const message = readErrorMessage(error)?.toLowerCase() ?? ''
   return CONNECTIVITY_PATTERNS.some((pattern) => message.includes(pattern))
 }
+
+export function isDuplicatePhoneError(error: unknown): boolean {
+  const message = readErrorMessage(error)?.toLowerCase() ?? ''
+  const code = error && typeof error === 'object'
+    ? String((error as { code?: unknown }).code ?? '').toLowerCase()
+    : ''
+
+  return (
+    code === '23505' && message.includes('phone') ||
+    message.includes('phone_already_in_use') ||
+    message.includes('already uses this phone number') ||
+    message.includes('phone number is already connected')
+  )
+}

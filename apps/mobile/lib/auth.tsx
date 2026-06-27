@@ -83,6 +83,13 @@ function mapAuthErrorMessage(message: string | null | undefined, fallback = 'We 
   if (normalized.includes('user already registered') || normalized.includes('already registered') || normalized.includes('already exists')) {
     return 'This email is already associated with a Drapeon account. Sign in or reset your password.'
   }
+  if (
+    normalized.includes('phone_already_in_use') ||
+    normalized.includes('already uses this phone number') ||
+    normalized.includes('phone number is already connected')
+  ) {
+    return 'That phone number is already connected to another Drapeon account. Use a different number or contact support.'
+  }
   if (normalized.includes('email not confirmed') || normalized.includes('confirm your email')) {
     return 'Check your email and confirm your Drapeon account before signing in.'
   }

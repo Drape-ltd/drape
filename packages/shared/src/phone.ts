@@ -34,13 +34,13 @@ export function normalizePhoneForStorage(value: string): string {
   }
 
   if (looksLikeNigerianLocalMobile(digits)) {
-    return digits
+    return `+234${digits.slice(1)}`
   }
 
   // Drape is currently Nigeria-first, so treat 10-digit 7/8/9 mobile values
   // as local numbers missing the leading zero.
   if (digits.length === NIGERIAN_MOBILE_WITHOUT_ZERO_LENGTH && looksLikeNigerianMobileWithoutLeadingZero(digits)) {
-    return `0${digits}`
+    return `+234${digits}`
   }
 
   if (looksLikeNigerianE164Digits(digits)) {
@@ -68,14 +68,6 @@ export function validatePhoneForProfile(value: string): string | null {
     return null
   }
 
-  if (looksLikeNigerianLocalMobile(digits)) {
-    return null
-  }
-
-  if (looksLikeNigerianE164Digits(digits)) {
-    return null
-  }
-
   return 'Add a full phone number with country code, for example +2348012345678. Nigerian mobile numbers starting with 0 also work.'
 }
 
@@ -88,14 +80,6 @@ export function validateDispatchPhoneForProfile(value: string): string | null {
   }
 
   if (normalized.startsWith('+')) {
-    return null
-  }
-
-  if (looksLikeNigerianLocalMobile(digits)) {
-    return null
-  }
-
-  if (looksLikeNigerianE164Digits(digits)) {
     return null
   }
 

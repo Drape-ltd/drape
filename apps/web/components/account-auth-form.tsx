@@ -65,6 +65,16 @@ function mapAuthError(message: string | undefined) {
   if (normalized.includes('already registered') || normalized.includes('already exists')) {
     return 'This email already has a Drapeon account. Sign in instead.'
   }
+  if (
+    normalized.includes('phone_already_in_use') ||
+    normalized.includes('already uses this phone number') ||
+    normalized.includes('phone number is already connected')
+  ) {
+    return 'That phone number is already connected to another Drapeon account. Use a different number or contact support.'
+  }
+  if (normalized.includes('database error saving new user')) {
+    return 'We could not create this account with those details. If you are reusing a phone number, use a different number or contact support.'
+  }
   if (normalized.includes('email not confirmed')) {
     return 'Check your email and confirm your Drapeon account before signing in.'
   }

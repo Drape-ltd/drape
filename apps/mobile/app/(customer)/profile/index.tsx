@@ -22,6 +22,7 @@ import { useCustomerProfileOverview, useRefreshOnFocus } from '@/lib/queries'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
 import { shareCustomerReferral, shareDiscoverTailors } from '@/lib/invite'
 import { Sentry } from '@/lib/sentry'
+import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
 import { AvatarImage } from '@/components/ui/AvatarImage'
@@ -419,6 +420,31 @@ export default function CustomerProfileScreen() {
             <Text style={styles.workspaceStatus}>{guidedFitStatus}</Text>
           </TouchableOpacity>
 
+          <TouchableOpacity
+            style={styles.visionCard}
+            onPress={() => {
+              router.push({
+                pathname: DRAPE_VISION_ROUTE,
+                params: {
+                  mode: 'customer_scan',
+                  returnTo: '/(customer)/profile',
+                },
+              } as never)
+            }}
+            activeOpacity={0.8}
+          >
+            <View style={styles.visionIcon}>
+              <Feather name="aperture" size={22} color={Colors.needleGreen} />
+            </View>
+            <View style={styles.visionCopy}>
+              <Text style={styles.visionTitle}>Drapeon Vision</Text>
+              <Text style={styles.visionText}>
+                Capture measurements or jump into manual fit details before ordering.
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={18} color={Colors.inkLight} />
+          </TouchableOpacity>
+
           {/* ── Become a tailor ── */}
           <TouchableOpacity
             style={[styles.becomeCard, switchingRole && styles.becomeCardDisabled]}
@@ -752,6 +778,31 @@ const styles = StyleSheet.create({
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
   },
+  visionCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  visionIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreenLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  visionCopy: { flex: 1, gap: 2 },
+  visionTitle: {
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  visionText: { fontSize: FontSize.xs, color: Colors.midGrey, lineHeight: 16 },
   quickLinksRow: { flexDirection: 'row', gap: Spacing.sm },
   quickLinkCard: {
     flex: 1,

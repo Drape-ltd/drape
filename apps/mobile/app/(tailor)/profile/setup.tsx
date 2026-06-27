@@ -25,7 +25,7 @@ import { Feather } from '@expo/vector-icons'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { detectDeviceCurrencyPreference, fetchCurrencyPreferenceContext } from '@/lib/currency'
-import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
+import { isDuplicatePhoneError, isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { syncUserRow } from '@/lib/syncUserRow'
 import { stripExif } from '@/lib/stripExif'
 import { createValidatedUploadPayload, uploadPublicStorageImage } from '@/lib/storage-upload'
@@ -1211,7 +1211,9 @@ export default function TailorSetupScreen() {
     } catch (syncError) {
       Alert.alert(
         'Profile saved',
-        isLikelyConnectivityIssue(syncError)
+        isDuplicatePhoneError(syncError)
+          ? 'That phone number is already connected to another Drapeon account. Use a different number or contact support.'
+          : isLikelyConnectivityIssue(syncError)
           ? 'Your tailor profile was saved, but we could not finish locking your account currency because the connection looks weak. Please reopen setup and retry.'
           : 'Your tailor profile was saved, but we could not finish locking your account currency right now. Please reopen setup and try again.'
       )
