@@ -379,7 +379,7 @@ for (const tailor of TAILORS) {
     role: 'TAILOR',
     phone: tailor.phone,
     default_currency: 'USD',
-    currency_source: 'LAUNCH_DEMO',
+    currency_source: 'USER_SELECTED',
     region_code: tailor.location.includes('Nigeria') ? 'NG' : 'US',
     updated_at: now,
   })
