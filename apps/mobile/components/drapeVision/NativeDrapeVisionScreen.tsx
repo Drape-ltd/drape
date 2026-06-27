@@ -3196,11 +3196,10 @@ export default function DrapeVisionScreen() {
   const cameraOutputs = useMemo(
     () => engineStatus === 'ready' &&
       frameOutputReady &&
-      !cameraRestarting &&
-      (Platform.OS === 'android' || captureArmed)
+      !cameraRestarting
       ? [frameOutput]
       : [],
-    [cameraRestarting, captureArmed, engineStatus, frameOutput, frameOutputReady],
+    [cameraRestarting, engineStatus, frameOutput, frameOutputReady],
   )
   const cameraActive = phase === 'scan' &&
     engineStatus === 'ready' &&
