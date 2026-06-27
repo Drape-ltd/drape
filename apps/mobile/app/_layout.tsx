@@ -17,6 +17,7 @@ import {
 
 // Keep the native splash screen visible until RouteGuard has resolved auth + role + profile.
 // This prevents any JS route from flashing through on app start / reload.
+SplashScreen.setOptions({ duration: 450, fade: true })
 SplashScreen.preventAutoHideAsync().catch(() => {})
 import { QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider, useAuth, useUserRole } from '@/lib/auth'

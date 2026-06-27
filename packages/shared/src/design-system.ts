@@ -2,6 +2,7 @@ export const colors = {
   primary: '#2D6A4F',
   primaryDark: '#245540',
   primaryLight: '#E8F5EF',
+  secondaryActionBg: '#E1F5EE',
 
   accent: '#D85A30',
   accentLight: '#FAEEDA',
@@ -50,6 +51,7 @@ export const darkColors = {
   primary: '#2D6A4F',
   primaryDark: '#C5E4D3',
   primaryLight: '#122B20',
+  secondaryActionBg: '#122B20',
   accent: '#F07A52',
   accentLight: '#3D241C',
   statusPending: '#F6B84A',

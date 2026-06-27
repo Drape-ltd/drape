@@ -1,11 +1,25 @@
-import { View, Text, StyleSheet, Alert, Linking, ScrollView, TouchableOpacity } from 'react-native'
+import { useMemo } from 'react'
+import { View, Text, StyleSheet, Alert, Linking, ScrollView, TouchableOpacity, useColorScheme } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons'
-import { colors } from '@drape/shared/design-system'
+import { colors, darkColors } from '@drape/shared/design-system'
 import { Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 
-const palette = {
+type WelcomePalette = {
+  background: string
+  surface: string
+  ink: string
+  muted: string
+  line: string
+  green: string
+  greenDark: string
+  greenSoft: string
+  secondaryButton: string
+  inverse: string
+}
+
+const lightPalette: WelcomePalette = {
   background: colors.background,
   surface: colors.surface,
   ink: colors.textPrimary,
@@ -14,11 +28,28 @@ const palette = {
   green: colors.primary,
   greenDark: colors.primaryDark,
   greenSoft: colors.primaryLight,
+  secondaryButton: colors.secondaryActionBg,
+  inverse: colors.textInverse,
+}
+
+const darkPalette: WelcomePalette = {
+  background: darkColors.background,
+  surface: darkColors.surface,
+  ink: darkColors.textPrimary,
+  muted: darkColors.textSecondary,
+  line: darkColors.border,
+  green: darkColors.statusSuccess,
+  greenDark: darkColors.primaryDark,
+  greenSoft: darkColors.statusSuccessBg,
+  secondaryButton: darkColors.secondaryActionBg,
   inverse: colors.textInverse,
 }
 
 export default function WelcomeScreen() {
   const router = useRouter()
+  const isDark = useColorScheme() === 'dark'
+  const palette = isDark ? darkPalette : lightPalette
+  const styles = useMemo(() => makeStyles(palette), [palette])
 
   function startAs(intent: 'CUSTOMER' | 'TAILOR') {
     router.push({
@@ -67,23 +98,25 @@ export default function WelcomeScreen() {
           </Text>
 
           <View style={styles.promiseRow}>
-            <PromiseItem icon="account" label="Find your tailor" />
-            <PromiseItem icon="tape-measure" label="Your measurements" />
-            <PromiseItem icon="shield-check" label="Protected payment" />
+            <PromiseItem icon="account" label="Find your tailor" styles={styles} palette={palette} />
+            <PromiseItem icon="tape-measure" label="Your measurements" styles={styles} palette={palette} />
+            <PromiseItem icon="shield-check" label="Protected payment" styles={styles} palette={palette} />
           </View>
         </View>
 
         <View style={styles.actions}>
           <RoleButton
             title="Continue as customer"
-            subtitle="Shop, order, and track your fit."
             variant="primary"
+            styles={styles}
+            palette={palette}
             onPress={() => startAs('CUSTOMER')}
           />
           <RoleButton
             title="Continue as tailor"
-            subtitle="Manage briefs, quotes, and production."
             variant="secondary"
+            styles={styles}
+            palette={palette}
             onPress={() => startAs('TAILOR')}
           />
 
@@ -124,7 +157,17 @@ export default function WelcomeScreen() {
   )
 }
 
-function PromiseItem({ icon, label }: { icon: keyof typeof MaterialCommunityIcons.glyphMap; label: string }) {
+function PromiseItem({
+  icon,
+  label,
+  styles,
+  palette,
+}: {
+  icon: keyof typeof MaterialCommunityIcons.glyphMap
+  label: string
+  styles: ReturnType<typeof makeStyles>
+  palette: WelcomePalette
+}) {
   return (
     <View style={styles.promiseItem}>
       <View style={styles.promiseIcon}>
@@ -139,13 +182,15 @@ function PromiseItem({ icon, label }: { icon: keyof typeof MaterialCommunityIcon
 
 function RoleButton({
   title,
-  subtitle,
   variant,
+  styles,
+  palette,
   onPress,
 }: {
   title: string
-  subtitle: string
   variant: 'primary' | 'secondary'
+  styles: ReturnType<typeof makeStyles>
+  palette: WelcomePalette
   onPress: () => void
 }) {
   const primary = variant === 'primary'
@@ -160,27 +205,27 @@ function RoleButton({
     >
       <View style={styles.roleCopy}>
         <Text style={[styles.roleTitle, primary && styles.roleTitlePrimary]}>{title}</Text>
-        <Text style={[styles.roleSubtitle, primary && styles.roleSubtitlePrimary]}>{subtitle}</Text>
       </View>
       <Feather name="arrow-right" size={18} color={primary ? palette.inverse : palette.green} />
     </TouchableOpacity>
   )
 }
 
-const styles = StyleSheet.create({
+function makeStyles(palette: WelcomePalette) {
+  return StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: palette.background,
   },
   content: {
     flexGrow: 1,
-    justifyContent: 'space-between',
-    gap: Spacing.xxl,
+    justifyContent: 'center',
+    gap: 28,
     padding: Spacing.xl,
     paddingBottom: Spacing.xxl,
   },
   brandBlock: {
-    paddingTop: Spacing.sm,
+    paddingTop: 2,
   },
   wordmark: {
     color: palette.green,
@@ -191,7 +236,7 @@ const styles = StyleSheet.create({
     lineHeight: 50,
   },
   hero: {
-    gap: Spacing.md,
+    gap: 16,
   },
   tagline: {
     color: palette.ink,
@@ -210,7 +255,7 @@ const styles = StyleSheet.create({
   promiseRow: {
     flexDirection: 'row',
     gap: Spacing.sm,
-    marginTop: Spacing.sm,
+    marginTop: 8,
   },
   promiseItem: {
     alignItems: 'center',
@@ -243,7 +288,7 @@ const styles = StyleSheet.create({
   },
   actions: {
     gap: Spacing.md,
-    paddingTop: Spacing.md,
+    paddingTop: 4,
   },
   roleButton: {
     alignItems: 'center',
@@ -251,21 +296,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: Spacing.md,
     justifyContent: 'space-between',
-    minHeight: 72,
+    minHeight: 62,
     paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
+    paddingVertical: Spacing.sm,
   },
   roleButtonPrimary: {
     backgroundColor: palette.green,
   },
   roleButtonSecondary: {
-    backgroundColor: palette.greenSoft,
+    backgroundColor: palette.secondaryButton,
     borderColor: palette.line,
     borderWidth: 1,
   },
   roleCopy: {
     flex: 1,
-    gap: 3,
   },
   roleTitle: {
     color: palette.ink,
@@ -276,19 +320,10 @@ const styles = StyleSheet.create({
   roleTitlePrimary: {
     color: palette.inverse,
   },
-  roleSubtitle: {
-    color: palette.muted,
-    fontFamily: Fonts.body,
-    fontSize: FontSize.xs,
-    lineHeight: 18,
-  },
-  roleSubtitlePrimary: {
-    color: colors.primaryLight,
-  },
   signInButton: {
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 48,
+    minHeight: 42,
   },
   signInLabel: {
     color: palette.greenDark,
@@ -309,3 +344,4 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.medium,
   },
 })
+}

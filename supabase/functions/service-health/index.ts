@@ -88,6 +88,41 @@ function anyEnvCheck(names: string[], label: string, required = true): Check {
   }
 }
 
+function secretModeCheck(names: string[], label: string, modes: Record<string, 'test' | 'live'>): Check {
+  const value = names
+    .map((name) => Deno.env.get(name)?.trim() ?? '')
+    .find((candidate) => candidate.length > 0)
+
+  if (!value) {
+    return {
+      ok: false,
+      status: 'fail',
+      message: `Missing required environment variable: ${label}`,
+    }
+  }
+
+  for (const [prefix, mode] of Object.entries(modes)) {
+    if (value.startsWith(prefix)) {
+      const status = mode === 'test' ? 'warn' : 'ok'
+      return {
+        ok: true,
+        status,
+        message: mode === 'test'
+          ? `${label} is configured in test mode. Tester checkout is safe, but public launch payments are not live.`
+          : `${label} is configured in live mode. Real payment attempts can charge real cards.`,
+        details: { mode },
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    status: 'warn',
+    message: `${label} is configured, but the key prefix did not match a known test/live pattern.`,
+    details: { mode: 'unknown' },
+  }
+}
+
 function smsSecretCheck(): Check {
   const provider = (Deno.env.get('SMS_PROVIDER') ?? '').trim().toLowerCase()
   const termiiConfigured = !!(Deno.env.get('TERMII_API_KEY') && (Deno.env.get('TERMII_SENDER_ID') ?? Deno.env.get('TERMII_FROM')))
@@ -390,8 +425,18 @@ async function androidPushRegistrationCheck(supabase: any): Promise<Check> {
 function providerSecretChecks() {
   return {
     stripeSecret: anyEnvCheck(['STRIPE_SECRET_KEY', 'STRIPE_SECRET_KEY_SANDBOX'], 'STRIPE_SECRET_KEY'),
+    stripeMode: secretModeCheck(
+      ['STRIPE_SECRET_KEY', 'STRIPE_SECRET_KEY_SANDBOX'],
+      'STRIPE_SECRET_KEY',
+      { sk_test_: 'test', sk_live_: 'live' },
+    ),
     stripeWebhookSecret: anyEnvCheck(['STRIPE_WEBHOOK_SECRET', 'STRIPE_WEBHOOK_SECRETS'], 'STRIPE_WEBHOOK_SECRET'),
     paystackSecret: anyEnvCheck(['PAYSTACK_SECRET_KEY', 'PAYSTACK_SECRET_KEY_TEST'], 'PAYSTACK_SECRET_KEY'),
+    paystackMode: secretModeCheck(
+      ['PAYSTACK_SECRET_KEY', 'PAYSTACK_SECRET_KEY_TEST'],
+      'PAYSTACK_SECRET_KEY',
+      { sk_test_: 'test', sk_live_: 'live' },
+    ),
     smsProvider: smsSecretCheck(),
     authSmsHookSecret: anyEnvCheck(['AUTH_SMS_HOOK_SECRET', 'SUPABASE_AUTH_HOOK_SECRET'], 'AUTH_SMS_HOOK_SECRET', false),
     reauthProofSecret: envCheck('REAUTH_PROOF_SECRET'),
