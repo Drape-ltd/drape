@@ -408,7 +408,7 @@ for (const tailor of TAILORS) {
     is_verified: true,
     is_live: true,
     profile_completed: true,
-    id_verification_status: 'APPROVED',
+    id_verification_status: 'VERIFIED',
     id_verified_at: now,
     avg_rating: tailor.key === 'iya-dara' ? 4.9 : 4.8,
     total_reviews: tailor.key === 'iya-dara' ? 23 : 19,
