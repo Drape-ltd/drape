@@ -109,7 +109,7 @@ const SCAN_FRAME_RESOLUTION = Platform.OS === 'android'
 const SCAN_FRAME_PIXEL_FORMAT = 'rgb'
 const SCAN_FRAME_TIMESTAMP_MS_MULTIPLIER = Platform.OS === 'ios' ? 1000 : 1 / 1_000_000
 const SCAN_LITE_FRAME_INTERVAL_MS = Platform.OS === 'android' ? 1400 : DRAPE_VISION_LITE_FRAME_INTERVAL_MS
-const SCAN_CAPTURE_INTERVAL_MS = Platform.OS === 'android' ? 1200 : 1800
+const SCAN_CAPTURE_INTERVAL_MS = Platform.OS === 'android' ? 1200 : 1500
 const SCAN_POSE_LOCK_CONFIDENCE = 0.05
 const SCAN_FULL_BODY_LOCK_CONFIDENCE = 0.05
 const SCAN_POSE_MODEL_CONFIDENCE = Platform.OS === 'android' ? 0.15 : 0.5
@@ -118,10 +118,10 @@ const SCAN_COUNTDOWN_SECONDS = 7
 const SCAN_FRAME_EDGE_MARGIN = Platform.OS === 'android' ? 0.01 : 0.025
 const SCAN_MIN_BODY_FRAME_HEIGHT = Platform.OS === 'android' ? 0.035 : 0.42
 const SCAN_MAX_BODY_FRAME_HEIGHT = Platform.OS === 'android' ? 0.97 : 0.94
-const SCAN_CAPTURE_STABLE_MS = Platform.OS === 'android' ? 300 : 650
-const SCAN_CAPTURE_MAX_YAW_DELTA_DEGREES = Platform.OS === 'android' ? 14 : 10
-const SCAN_CAPTURE_MAX_BODY_HEIGHT_DELTA = Platform.OS === 'android' ? 0.09 : 0.06
-const SCAN_CAPTURE_MIN_YAW_PROGRESS_DEGREES = Platform.OS === 'android' ? 8 : 28
+const SCAN_CAPTURE_STABLE_MS = Platform.OS === 'android' ? 300 : 450
+const SCAN_CAPTURE_MAX_YAW_DELTA_DEGREES = Platform.OS === 'android' ? 14 : 18
+const SCAN_CAPTURE_MAX_BODY_HEIGHT_DELTA = Platform.OS === 'android' ? 0.09 : 0.1
+const SCAN_CAPTURE_MIN_YAW_PROGRESS_DEGREES = Platform.OS === 'android' ? 8 : 18
 const SCAN_ANDROID_SEQUENTIAL_CAPTURE = Platform.OS === 'android'
 const SCAN_ANDROID_ANGLE_PROGRESS_RELAX_MS = 2600
 const SCAN_ANDROID_CAPTURE_ANGLES_DEGREES = [0, 60, 120] as const
@@ -134,10 +134,14 @@ const SCAN_RADAR_ANGLES_DEGREES = SCAN_ANDROID_SEQUENTIAL_CAPTURE
 const SCAN_ANDROID_MIN_BODY_LANDMARKS = 4
 const SCAN_ANDROID_MIN_CAPTURE_BODY_LANDMARKS = 4
 const SCAN_MIN_CAPTURED_ANGLE_COUNT = Platform.OS === 'android' ? 3 : 5
+const SCAN_REQUIRED_CAPTURE_COUNT = Platform.OS === 'android'
+  ? SCAN_TARGET_CAPTURE_COUNT
+  : SCAN_MIN_CAPTURED_ANGLE_COUNT
 const SCAN_MIN_UNIQUE_HALF_TURN_ANGLES = Platform.OS === 'android' ? 3 : 4
 const SCAN_MAX_HALF_TURN_ANGLE_GAP_DEGREES = 70
 const SCAN_FRAME_START_TIMEOUT_MS = Platform.OS === 'android' ? 20000 : 9000
-const SCAN_CAPTURE_STALL_TIMEOUT_MS = Platform.OS === 'android' ? 45000 : 28000
+const SCAN_CAPTURE_STALL_TIMEOUT_MS = 45000
+const SCAN_RECOVERY_PROMPT_LIMIT = Platform.OS === 'android' ? 1 : 3
 const SCAN_REUSE_LITE_DETECTION_FOR_CAPTURE = Platform.OS === 'android'
 const SCAN_ANDROID_TORSO_TO_BODY_HEIGHT_RATIO = 0.46
 const SCAN_ANDROID_SHOULDER_TO_HIP_BODY_HEIGHT_RATIO = 0.28
@@ -684,8 +688,8 @@ function buildScanDistanceCue(input: {
   captureNotice: string | null
   capturedAngleCount: number
   instruction: string
+  requiredAngles: number
   scanCountdown: number | null
-  totalAngles: number
 }): ScanDistanceCue {
   if (input.scanCountdown != null) {
     return {
@@ -756,7 +760,7 @@ function buildScanDistanceCue(input: {
     }
   }
 
-  if (input.capturedAngleCount >= input.totalAngles - 1) {
+  if (input.capturedAngleCount >= input.requiredAngles - 1) {
     return {
       title: 'ALMOST DONE',
       subtitle: 'Keep turning slowly.',
@@ -766,9 +770,77 @@ function buildScanDistanceCue(input: {
 
   return {
     title: 'TURN SLOWLY',
-    subtitle: `${input.capturedAngleCount}/${input.totalAngles} angles locked.`,
+    subtitle: `${formatScanCaptureProgress(input.capturedAngleCount)} locked.`,
     tone: 'action',
   }
+}
+
+function formatScanCaptureProgress(capturedAngleCount: number) {
+  if (Platform.OS === 'ios') {
+    return `${capturedAngleCount} of ${SCAN_REQUIRED_CAPTURE_COUNT}+ clean angles`
+  }
+
+  return `${capturedAngleCount} of ${SCAN_TARGET_CAPTURE_COUNT} angles`
+}
+
+function hasRightSideScanAngle(captures: Array<{ angleDegrees: number }>) {
+  return captures.some((capture) => {
+    const angle = ((capture.angleDegrees % 360) + 360) % 360
+    return angle >= 24 && angle <= 150
+  })
+}
+
+function hasLeftSideScanAngle(captures: Array<{ angleDegrees: number }>) {
+  return captures.some((capture) => {
+    const angle = ((capture.angleDegrees % 360) + 360) % 360
+    return angle >= 210 && angle <= 336
+  })
+}
+
+function buildNextScanInstruction(captures: Array<{ angleDegrees: number }>, capturedAngleCount: number) {
+  if (Platform.OS !== 'ios') {
+    return capturedAngleCount >= SCAN_TARGET_CAPTURE_COUNT - 1 ? 'Almost done' : 'Keep turning'
+  }
+
+  if (capturedAngleCount === 0) return 'Face the phone and hold full body'
+  if (!hasRightSideScanAngle(captures)) return 'Turn slowly to show one shoulder'
+  if (!hasLeftSideScanAngle(captures)) return 'Return through front, then show the other shoulder'
+  if (capturedAngleCount < SCAN_REQUIRED_CAPTURE_COUNT) return 'Pause at each clean angle'
+  return 'Almost done'
+}
+
+function formatScanRecoveryMessage(capturedAngleCount: number) {
+  if (Platform.OS === 'ios') {
+    return capturedAngleCount > 0
+      ? 'Still scanning. Keep head-to-ankles visible, pause at each side angle, then continue through front to the other shoulder.'
+      : 'Still scanning. Step back until your full body is visible, then face the phone and hold still for the first capture.'
+  }
+
+  return capturedAngleCount > 0
+    ? 'Still scanning. Hold still for the next angle or retake if the phone moved.'
+    : 'Still scanning. Step farther back until your head, hips, and ankles are visible.'
+}
+
+function formatScanStallMessage(capturedAngleCount: number) {
+  if (capturedAngleCount > 0) {
+    return `Drapeon Vision locked ${formatScanCaptureProgress(capturedAngleCount)} but needs a cleaner pass before calculating measurements. Retake with the phone set down, bright light, and head-to-ankles visible.`
+  }
+
+  return 'Drapeon Vision could not lock a full-body pass yet. Set the phone down, step back until head and ankles stay visible, then retake in brighter light.'
+}
+
+function fallbackTitleForVisionMessage(message: string) {
+  const normalized = message.toLowerCase()
+  if (
+    normalized.includes('not receiving camera frames') ||
+    normalized.includes('cannot start') ||
+    normalized.includes('not available') ||
+    normalized.includes('no front camera')
+  ) {
+    return 'Scan not available'
+  }
+
+  return 'Cleaner scan needed'
 }
 
 function hasDrapeVisionScanCoverage(captures: Array<{ angleDegrees: number }>) {
@@ -1151,6 +1223,7 @@ export default function DrapeVisionScreen() {
   const visionLabSessionIdRef = useRef<string | null>(null)
   const scanArmedAtRef = useRef<number | null>(null)
   const lastScanCaptureAtRef = useRef<number | null>(null)
+  const scanRecoveryPromptCountRef = useRef(0)
   const processedFrameCountRef = useRef(0)
   const lastFrameSeenAtRef = useRef<number | null>(null)
 
@@ -1204,10 +1277,11 @@ export default function DrapeVisionScreen() {
         const armedAt = Date.now()
         scanArmedAtRef.current = armedAt
         lastScanCaptureAtRef.current = armedAt
+        scanRecoveryPromptCountRef.current = 0
         captureArmedValue.value = 1
         setCaptureArmed(true)
         setScanCountdown(null)
-        setInstruction('Face the phone, then turn slowly right')
+        setInstruction(Platform.OS === 'ios' ? 'Face the phone and hold full body' : 'Face the phone, then turn slowly right')
         setCaptureNotice('Capturing now')
         if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
         captureNoticeTimerRef.current = setTimeout(() => setCaptureNotice(null), 900)
@@ -2251,6 +2325,7 @@ export default function DrapeVisionScreen() {
     setScanCountdown(null)
     scanArmedAtRef.current = null
     lastScanCaptureAtRef.current = null
+    scanRecoveryPromptCountRef.current = 0
     processedFrameCountRef.current = 0
     lastFrameSeenAtRef.current = null
 	    setSavedMeasurementScanId(null)
@@ -2433,6 +2508,7 @@ export default function DrapeVisionScreen() {
         frameHeightPx,
       },
     ].sort((a, b) => a.angleIndex - b.angleIndex)
+    scanRecoveryPromptCountRef.current = 0
     appendVisionLabCapture({
       angleIndex: index,
       targetAngleDegrees,
@@ -2451,8 +2527,8 @@ export default function DrapeVisionScreen() {
     setLatestInferenceMs(detection.inferenceMs ?? 0)
     setCapturedSegments((previous) => previous.map((captured, segmentIndex) => captured || segmentIndex === index))
     setCurrentSegment((index + 1) % SCAN_TARGET_CAPTURE_COUNT)
-    setInstruction(capturedSetRef.current.size >= SCAN_TARGET_CAPTURE_COUNT - 1 ? 'Almost done' : 'Keep turning')
-    setCaptureNotice(`Captured ${capturedSetRef.current.size} of ${SCAN_TARGET_CAPTURE_COUNT}`)
+    setInstruction(buildNextScanInstruction(capturesRef.current, capturedSetRef.current.size))
+    setCaptureNotice(`Captured ${formatScanCaptureProgress(capturedSetRef.current.size)}`)
     if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
     captureNoticeTimerRef.current = setTimeout(() => setCaptureNotice(null), 700)
     trigger('impactHeavy', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
@@ -2490,22 +2566,28 @@ export default function DrapeVisionScreen() {
       if (!stalledBeforeFrames && !stalledDuringCapture) return
 
       const reason = stalledBeforeFrames ? 'NO_CAMERA_FRAMES' : 'CAPTURE_STALLED'
-      if (Platform.OS === 'android' && stalledDuringCapture && framesRecentlySeen) {
-        const coachingMessage = capturedAngles > 0
-          ? 'Still scanning. Hold still for the next angle or retake if the phone moved.'
-          : 'Still scanning. Step farther back until your head, hips, and ankles are visible.'
-
+      if (stalledDuringCapture && framesRecentlySeen && scanRecoveryPromptCountRef.current < SCAN_RECOVERY_PROMPT_LIMIT) {
+        const coachingMessage = formatScanRecoveryMessage(capturedAngles)
+        scanRecoveryPromptCountRef.current += 1
         addVisionBreadcrumb('scan_recovery_prompt', {
           mode,
-          step: 'android_scan_watchdog',
+          step: 'scan_watchdog',
           reason,
           capturedAngles,
           processedFrames: frameCount,
           lastFrameSeenAt,
+          promptCount: scanRecoveryPromptCountRef.current,
+          platform: Platform.OS,
         }, 'info')
-        setInstruction(capturedAngles > 0 ? 'Hold still for the next angle' : 'Fit full body in frame')
+        setInstruction(
+          capturedAngles > 0
+            ? buildNextScanInstruction(capturesRef.current, capturedAngles)
+            : Platform.OS === 'ios'
+              ? 'Face the phone and hold full body'
+              : 'Fit full body in frame',
+        )
         setFrameDropWarning(coachingMessage)
-        setCaptureNotice(capturedAngles > 0 ? 'Keep turning slowly' : 'Step farther back')
+        setCaptureNotice(capturedAngles > 0 ? 'Pause, then keep turning slowly' : 'Step farther back')
         if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
         captureNoticeTimerRef.current = setTimeout(() => setCaptureNotice(null), 1400)
         lastScanCaptureAtRef.current = now
@@ -2514,9 +2596,7 @@ export default function DrapeVisionScreen() {
 
       const message = stalledBeforeFrames
         ? 'Drapeon Vision is not receiving camera frames on this device. Use manual measurements for this order, then try Vision again after restarting the app.'
-        : capturedAngles > 0
-          ? `Drapeon Vision captured ${capturedAngles} angle${capturedAngles === 1 ? '' : 's'} but could not finish the scan. Retake it or use manual measurements so this order keeps moving.`
-          : 'Drapeon Vision could not lock onto a full-body scan. Use manual measurements for this order or retake the scan with more light and space.'
+        : formatScanStallMessage(capturedAngles)
 
       addVisionBreadcrumb('scan_failure', {
         mode,
@@ -2532,6 +2612,7 @@ export default function DrapeVisionScreen() {
       setScanCountdown(null)
       scanArmedAtRef.current = null
       lastScanCaptureAtRef.current = null
+      scanRecoveryPromptCountRef.current = 0
       setEngineError(message)
       setFrameDropWarning(message)
       setCaptureNotice(null)
@@ -3916,7 +3997,7 @@ export default function DrapeVisionScreen() {
           ? 'Face the phone in fitted clothing and hold still for the first capture.'
           : Platform.OS === 'android'
             ? 'Keep turning slowly to your right. Android records three stable angles for launch.'
-            : 'Keep turning slowly to your right. One full rotation should take about 15 seconds.'
+            : 'Turn slowly to one shoulder, pass through front, then show the other shoulder. Pause at each locked angle.'
     const scanProgressMeta = latestInferenceMs
       ? `${Math.round(latestInferenceMs)} ms`
       : cameraRestarting
@@ -3933,8 +4014,8 @@ export default function DrapeVisionScreen() {
       captureNotice,
       capturedAngleCount,
       instruction,
+      requiredAngles: SCAN_REQUIRED_CAPTURE_COUNT,
       scanCountdown,
-      totalAngles: SCAN_TARGET_CAPTURE_COUNT,
     })
     const distanceCueStyle = distanceCue.tone === 'countdown'
       ? styles.scanDistanceCueCountdown
@@ -4015,7 +4096,7 @@ export default function DrapeVisionScreen() {
           <View style={styles.scanBottomPanel}>
             <View style={styles.scanProgressHeader}>
               <Text style={styles.scanProgressTitle}>
-                {capturedAngleCount} of {SCAN_TARGET_CAPTURE_COUNT} angles captured
+                {formatScanCaptureProgress(capturedAngleCount)} captured
               </Text>
               <Text style={styles.scanProgressMeta}>{scanProgressMeta}</Text>
             </View>
@@ -4537,7 +4618,7 @@ export default function DrapeVisionScreen() {
             <View style={styles.heroIcon}>
               <Feather name="alert-circle" size={28} color={Colors.kanteRust} />
             </View>
-            <Text style={styles.titleSmall}>Scan not available</Text>
+            <Text style={styles.titleSmall}>{fallbackTitleForVisionMessage(message)}</Text>
             <Text style={styles.body}>{message}</Text>
           </View>
 
