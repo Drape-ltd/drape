@@ -107,6 +107,7 @@ const SCAN_FRAME_RESOLUTION = Platform.OS === 'android'
   ? { width: 360, height: 480 }
   : CommonResolutions.VGA_4_3
 const SCAN_FRAME_PIXEL_FORMAT = 'rgb'
+const SCAN_FRAME_TIMESTAMP_MS_MULTIPLIER = Platform.OS === 'ios' ? 1000 : 1 / 1_000_000
 const SCAN_LITE_FRAME_INTERVAL_MS = Platform.OS === 'android' ? 1400 : DRAPE_VISION_LITE_FRAME_INTERVAL_MS
 const SCAN_CAPTURE_INTERVAL_MS = Platform.OS === 'android' ? 1200 : 1800
 const SCAN_POSE_LOCK_CONFIDENCE = 0.05
@@ -2613,7 +2614,7 @@ export default function DrapeVisionScreen() {
     targetResolution: SCAN_FRAME_RESOLUTION,
     pixelFormat: SCAN_FRAME_PIXEL_FORMAT,
     dropFramesWhileBusy: true,
-    allowDeferredStart: false,
+    allowDeferredStart: Platform.OS === 'ios',
     enablePhysicalBufferRotation: true,
     enablePreviewSizedOutputBuffers: Platform.OS === 'android',
     onFrameDropped: handleFrameDropped,
@@ -2625,7 +2626,7 @@ export default function DrapeVisionScreen() {
         return
       }
 
-      const timestampMs = frame.timestamp / 1_000_000
+      const timestampMs = frame.timestamp * SCAN_FRAME_TIMESTAMP_MS_MULTIPLIER
       if (timestampMs - lastLiteFrameMs.value < SCAN_LITE_FRAME_INTERVAL_MS) {
         frame.dispose()
         return
