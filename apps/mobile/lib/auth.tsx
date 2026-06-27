@@ -611,6 +611,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (error) {
         return { error: mapAuthErrorMessage(error.message, 'Apple sign-in completed, but Drapeon could not open your session. Please try again.') }
       }
+
+      const fullNameParts = [
+        credential.fullName?.givenName,
+        credential.fullName?.middleName,
+        credential.fullName?.familyName,
+      ]
+        .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
+        .map((part) => part.trim())
+      const fullName = fullNameParts.join(' ')
+      if (fullName) {
+        await supabase.auth.updateUser({
+          data: {
+            display_name: fullName,
+            full_name: fullName,
+            given_name: credential.fullName?.givenName ?? undefined,
+            family_name: credential.fullName?.familyName ?? undefined,
+          },
+        }).catch(() => null)
+      }
+
       const roleError = await applyRoleIntent(roleIntent)
       return { error: roleError }
     } catch (e: unknown) {
