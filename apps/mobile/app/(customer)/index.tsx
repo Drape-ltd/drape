@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState, useRef, useEffect } from 'react'
 import {
+  Animated,
   View,
   Text,
   ScrollView,
@@ -14,6 +15,7 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
+  PanResponder,
   type StyleProp,
   type ViewStyle,
 } from 'react-native'
@@ -31,6 +33,7 @@ import {
   type RecentlyViewedTailor,
 } from '@/lib/recently-viewed-tailors'
 import { RemoteImage, TierBadgeChip, StarRating } from '@/components/ui'
+import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { TierBadge } from '@/components/ui'
 import type { OrderStage } from '@drape/shared/order-machine'
@@ -39,10 +42,14 @@ import type { StorageImageBucket } from '@/lib/image-url'
 const RECENT_SEARCHES_KEY = 'drape_recent_searches'
 const LAST_SEARCH_KEY = 'drape_last_search'
 const CUSTOMER_ONBOARDING_KEY = 'drape_customer_onboarding_seen'
+const VISION_FAB_POSITION_KEY = 'drape_customer_vision_fab_position'
 const MAX_RECENT_SEARCHES = 5
 const PAGE_SIZE = 20
 const EXPLORE_FOCUS_REFRESH_MS = 60_000
 const EXPLORE_CARD_IMAGE_RATIO = 1.04
+const VISION_FAB_SIZE = 56
+const VISION_FAB_MARGIN = Spacing.md
+const VISION_FAB_DRAG_THRESHOLD = 6
 const HOME_BG = Colors.bone
 const PRIMARY_GREEN = Colors.needleGreen
 const CHARCOAL = Colors.ink
@@ -73,6 +80,7 @@ const FILTER_SPECIALTIES = [
 
 type AvailFilter = 'ALL' | 'OPEN' | 'LIMITED'
 type MinRatingFilter = null | 4 | 4.5 | 5
+type VisionFabPosition = { x: number; y: number }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -249,6 +257,17 @@ function storageKey(base: string, userId: string | undefined) {
   return `${base}:${userId ?? 'guest'}`
 }
 
+function parseStoredVisionFabPosition(raw: string | null): VisionFabPosition | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as Partial<VisionFabPosition>
+    if (!Number.isFinite(parsed.x) || !Number.isFinite(parsed.y)) return null
+    return { x: Number(parsed.x), y: Number(parsed.y) }
+  } catch {
+    return null
+  }
+}
+
 async function saveRecentSearch(userId: string | undefined, q: string) {
   try {
     const raw = await AsyncStorage.getItem(storageKey(RECENT_SEARCHES_KEY, userId))
@@ -378,6 +397,7 @@ export default function CustomerHomeScreen() {
   const router = useRouter()
   const { user } = useAuth()
   const insets = useSafeAreaInsets()
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions()
   const userId = user?.id
 
   // Browse data
@@ -413,6 +433,11 @@ export default function CustomerHomeScreen() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<TextInput>(null)
   const lastBrowseFetchAtRef = useRef(0)
+  const visionFabPosition = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current
+  const visionFabCurrentRef = useRef<VisionFabPosition>({ x: 0, y: 0 })
+  const visionFabDragStartRef = useRef<VisionFabPosition>({ x: 0, y: 0 })
+  const visionFabDraggedRef = useRef(false)
+  const [visionFabReady, setVisionFabReady] = useState(false)
 
   const isSearchActive = query.trim().length > 0
   const showSuggestions = searchFocused && !isSearchActive
@@ -423,6 +448,81 @@ export default function CustomerHomeScreen() {
     (locationFilter.trim() ? 1 : 0) +
     (minRatingFilter ? 1 : 0) +
     (priceMaxFilter.trim() ? 1 : 0)
+
+  const visionFabStorageKey = useMemo(() => storageKey(VISION_FAB_POSITION_KEY, userId), [userId])
+
+  const getVisionFabBounds = useCallback(() => {
+    const bottomClearance = Math.max(insets.bottom + 92, 112)
+    const minX = VISION_FAB_MARGIN
+    const maxX = Math.max(minX, windowWidth - VISION_FAB_SIZE - VISION_FAB_MARGIN)
+    const minY = VISION_FAB_MARGIN
+    const maxY = Math.max(
+      minY,
+      windowHeight - VISION_FAB_SIZE - bottomClearance
+    )
+
+    return { minX, maxX, minY, maxY }
+  }, [insets.bottom, windowHeight, windowWidth])
+
+  const clampVisionFabPosition = useCallback(
+    (position: VisionFabPosition): VisionFabPosition => {
+      const bounds = getVisionFabBounds()
+      return {
+        x: Math.min(Math.max(position.x, bounds.minX), bounds.maxX),
+        y: Math.min(Math.max(position.y, bounds.minY), bounds.maxY),
+      }
+    },
+    [getVisionFabBounds]
+  )
+
+  const getDefaultVisionFabPosition = useCallback((): VisionFabPosition => {
+    const bounds = getVisionFabBounds()
+    return { x: bounds.maxX, y: bounds.maxY }
+  }, [getVisionFabBounds])
+
+  const applyVisionFabPosition = useCallback(
+    (position: VisionFabPosition) => {
+      const nextPosition = clampVisionFabPosition(position)
+      visionFabCurrentRef.current = nextPosition
+      visionFabPosition.setValue(nextPosition)
+    },
+    [clampVisionFabPosition, visionFabPosition]
+  )
+
+  const persistVisionFabPosition = useCallback(
+    (position: VisionFabPosition) => {
+      AsyncStorage.setItem(visionFabStorageKey, JSON.stringify(position)).catch(() => {
+        // Local UI preference only; never block Explore if it cannot be saved.
+      })
+    },
+    [visionFabStorageKey]
+  )
+
+  useEffect(() => {
+    let cancelled = false
+
+    AsyncStorage.getItem(visionFabStorageKey)
+      .then((raw) => parseStoredVisionFabPosition(raw) ?? getDefaultVisionFabPosition())
+      .then((position) => {
+        if (cancelled) return
+        applyVisionFabPosition(position)
+        setVisionFabReady(true)
+      })
+      .catch(() => {
+        if (cancelled) return
+        applyVisionFabPosition(getDefaultVisionFabPosition())
+        setVisionFabReady(true)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [applyVisionFabPosition, getDefaultVisionFabPosition, visionFabStorageKey])
+
+  useEffect(() => {
+    if (!visionFabReady) return
+    applyVisionFabPosition(visionFabCurrentRef.current)
+  }, [applyVisionFabPosition, visionFabReady])
 
   // Filtered results by local UI filters (client-side, no extra round trip).
   const filteredResults = searchResults.filter((tailor) => {
@@ -749,6 +849,74 @@ export default function CustomerHomeScreen() {
     setMinRatingFilter(null)
     setPriceMaxFilter('')
   }
+
+  const openDrapeVision = useCallback(() => {
+    router.push({
+      pathname: DRAPE_VISION_ROUTE,
+      params: {
+        mode: 'customer_scan',
+        returnTo: '/(customer)',
+      },
+    } as never)
+  }, [router])
+
+  const visionFabPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => !showOnboarding,
+        onMoveShouldSetPanResponder: (_, gestureState) =>
+          Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3,
+        onPanResponderGrant: () => {
+          visionFabDragStartRef.current = visionFabCurrentRef.current
+          visionFabDraggedRef.current = false
+        },
+        onPanResponderMove: (_, gestureState) => {
+          const hasDragged =
+            Math.abs(gestureState.dx) > VISION_FAB_DRAG_THRESHOLD ||
+            Math.abs(gestureState.dy) > VISION_FAB_DRAG_THRESHOLD
+          visionFabDraggedRef.current = visionFabDraggedRef.current || hasDragged
+
+          if (!visionFabDraggedRef.current) return
+
+          applyVisionFabPosition({
+            x: visionFabDragStartRef.current.x + gestureState.dx,
+            y: visionFabDragStartRef.current.y + gestureState.dy,
+          })
+        },
+        onPanResponderRelease: (_, gestureState) => {
+          const wasDragged =
+            visionFabDraggedRef.current ||
+            Math.abs(gestureState.dx) > VISION_FAB_DRAG_THRESHOLD ||
+            Math.abs(gestureState.dy) > VISION_FAB_DRAG_THRESHOLD
+
+          if (!wasDragged) {
+            applyVisionFabPosition(visionFabDragStartRef.current)
+            openDrapeVision()
+            return
+          }
+
+          const nextPosition = clampVisionFabPosition({
+            x: visionFabDragStartRef.current.x + gestureState.dx,
+            y: visionFabDragStartRef.current.y + gestureState.dy,
+          })
+          applyVisionFabPosition(nextPosition)
+          persistVisionFabPosition(nextPosition)
+        },
+        onPanResponderTerminate: () => {
+          const nextPosition = clampVisionFabPosition(visionFabCurrentRef.current)
+          applyVisionFabPosition(nextPosition)
+          persistVisionFabPosition(nextPosition)
+        },
+        onPanResponderTerminationRequest: () => true,
+      }),
+    [
+      applyVisionFabPosition,
+      clampVisionFabPosition,
+      openDrapeVision,
+      persistVisionFabPosition,
+      showOnboarding,
+    ]
+  )
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -1164,6 +1332,23 @@ export default function CustomerHomeScreen() {
 
         </ScrollView>
       )}
+      {!showOnboarding && visionFabReady ? (
+        <Animated.View
+          {...visionFabPanResponder.panHandlers}
+          accessible
+          accessibilityRole="button"
+          accessibilityLabel="Open Drapeon Vision"
+          accessibilityHint="Double tap to open. Drag to move this shortcut."
+          style={[
+            styles.visionFloatingOrb,
+            { transform: visionFabPosition.getTranslateTransform() },
+          ]}
+        >
+          <View style={styles.visionFloatingOrbInner}>
+            <Feather name="aperture" size={24} color={Colors.textInverse} />
+          </View>
+        </Animated.View>
+      ) : null}
     </SafeAreaView>
   )
 }
@@ -1687,6 +1872,28 @@ const styles = StyleSheet.create({
   filterBadgeText: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.textInverse },
   cancelBtn: { paddingVertical: 8, minHeight: 44, justifyContent: 'center' },
   cancelText: { fontSize: 14, color: PRIMARY_GREEN, fontWeight: FontWeight.medium },
+  visionFloatingOrb: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: VISION_FAB_SIZE,
+    height: VISION_FAB_SIZE,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 40,
+    ...Shadow.lg,
+  },
+  visionFloatingOrbInner: {
+    width: VISION_FAB_SIZE,
+    height: VISION_FAB_SIZE,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreen,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.78)',
+  },
 
   // Scroll areas
   scroll: { flex: 1 },

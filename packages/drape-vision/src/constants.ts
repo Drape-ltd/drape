@@ -22,6 +22,8 @@ export const DRAPE_VISION_DEFAULT_HEIGHT_CM = 170
 
 export const DRAPE_VISION_LANDMARK = {
   nose: 0,
+  leftEar: 7,
+  rightEar: 8,
   leftShoulder: 11,
   rightShoulder: 12,
   leftElbow: 13,

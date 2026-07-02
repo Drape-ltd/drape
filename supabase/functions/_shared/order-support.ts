@@ -13,6 +13,7 @@ export type MeasurementScanCaptureMethod =
   | 'GUIDED_HELPER_BASELINE'
   | 'TAILOR_REVIEWED_BASELINE'
   | 'DRAPE_VISION_ROTATION'
+  | 'DRAPE_VISION_SPECIALIST_SCAN'
   | 'TAILOR_ASSISTED_DRAPE_VISION_ROTATION'
   | 'GARMENT_QC_VISION_FLAT_LAY'
 
@@ -459,6 +460,7 @@ export const MEASUREMENT_SCAN_CAPTURE_METHOD_LABELS: Record<MeasurementScanCaptu
   GUIDED_HELPER_BASELINE: 'Guided fit intake with helper',
   TAILOR_REVIEWED_BASELINE: 'Tailor-reviewed fit intake',
   DRAPE_VISION_ROTATION: 'Drape Vision scan',
+  DRAPE_VISION_SPECIALIST_SCAN: 'Drape Vision specialist scan',
   TAILOR_ASSISTED_DRAPE_VISION_ROTATION: 'Tailor-assisted Drape Vision scan',
   GARMENT_QC_VISION_FLAT_LAY: 'Drape Vision garment QC',
 }

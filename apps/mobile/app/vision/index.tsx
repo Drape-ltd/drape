@@ -139,6 +139,23 @@ export default function DrapeVisionRoute() {
   const androidPaused = isAndroidLiveScanPausedForLaunch(androidVisionEnabled)
 
   useEffect(() => {
+    const payload = {
+      mode,
+      nativeScreenLoaded: !!NativeVisionScreen,
+      androidPaused,
+      appOwnership: expoAppOwnership() ?? 'unknown',
+      platform: Platform.OS,
+    }
+    if (__DEV__) console.log('[DrapeVision:route] mounted', payload)
+    Sentry.addBreadcrumb({
+      category: 'drape_vision',
+      level: 'info',
+      message: 'vision_route_mounted',
+      data: payload,
+    })
+  }, [NativeVisionScreen, androidPaused, mode])
+
+  useEffect(() => {
     if (NativeVisionScreen) return
     Sentry.addBreadcrumb({
       category: 'drape_vision',

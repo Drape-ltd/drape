@@ -15,6 +15,9 @@
 #include <fbjni/fbjni.h>
 #include <NitroModules/HybridObjectRegistry.hpp>
 
+#include "JHybridDrapeFaceLandmarkerSpec.hpp"
+#include "JHybridDrapeHandLandmarkerSpec.hpp"
+#include "JHybridDrapeImageSegmenterSpec.hpp"
 #include "JHybridDrapePoseLandmarkerSpec.hpp"
 #include <NitroModules/DefaultConstructableObject.hpp>
 
@@ -34,12 +37,39 @@ struct JHybridDrapePoseLandmarkerSpecImpl: public jni::JavaClass<JHybridDrapePos
     return javaPart->getJHybridDrapePoseLandmarkerSpec();
   }
 };
+struct JHybridDrapeHandLandmarkerSpecImpl: public jni::JavaClass<JHybridDrapeHandLandmarkerSpecImpl, JHybridDrapeHandLandmarkerSpec::JavaPart> {
+  static constexpr auto kJavaDescriptor = "Lcom/margelo/nitro/drape/vision/HybridDrapeHandLandmarker;";
+  static std::shared_ptr<JHybridDrapeHandLandmarkerSpec> create() {
+    static const auto constructorFn = javaClassStatic()->getConstructor<JHybridDrapeHandLandmarkerSpecImpl::javaobject()>();
+    jni::local_ref<JHybridDrapeHandLandmarkerSpec::JavaPart> javaPart = javaClassStatic()->newObject(constructorFn);
+    return javaPart->getJHybridDrapeHandLandmarkerSpec();
+  }
+};
+struct JHybridDrapeFaceLandmarkerSpecImpl: public jni::JavaClass<JHybridDrapeFaceLandmarkerSpecImpl, JHybridDrapeFaceLandmarkerSpec::JavaPart> {
+  static constexpr auto kJavaDescriptor = "Lcom/margelo/nitro/drape/vision/HybridDrapeFaceLandmarker;";
+  static std::shared_ptr<JHybridDrapeFaceLandmarkerSpec> create() {
+    static const auto constructorFn = javaClassStatic()->getConstructor<JHybridDrapeFaceLandmarkerSpecImpl::javaobject()>();
+    jni::local_ref<JHybridDrapeFaceLandmarkerSpec::JavaPart> javaPart = javaClassStatic()->newObject(constructorFn);
+    return javaPart->getJHybridDrapeFaceLandmarkerSpec();
+  }
+};
+struct JHybridDrapeImageSegmenterSpecImpl: public jni::JavaClass<JHybridDrapeImageSegmenterSpecImpl, JHybridDrapeImageSegmenterSpec::JavaPart> {
+  static constexpr auto kJavaDescriptor = "Lcom/margelo/nitro/drape/vision/HybridDrapeImageSegmenter;";
+  static std::shared_ptr<JHybridDrapeImageSegmenterSpec> create() {
+    static const auto constructorFn = javaClassStatic()->getConstructor<JHybridDrapeImageSegmenterSpecImpl::javaobject()>();
+    jni::local_ref<JHybridDrapeImageSegmenterSpec::JavaPart> javaPart = javaClassStatic()->newObject(constructorFn);
+    return javaPart->getJHybridDrapeImageSegmenterSpec();
+  }
+};
 
 void registerAllNatives() {
   using namespace margelo::nitro;
   using namespace margelo::nitro::drape::vision;
 
   // Register native JNI methods
+  margelo::nitro::drape::vision::JHybridDrapeFaceLandmarkerSpec::CxxPart::registerNatives();
+  margelo::nitro::drape::vision::JHybridDrapeHandLandmarkerSpec::CxxPart::registerNatives();
+  margelo::nitro::drape::vision::JHybridDrapeImageSegmenterSpec::CxxPart::registerNatives();
   margelo::nitro::drape::vision::JHybridDrapePoseLandmarkerSpec::CxxPart::registerNatives();
 
   // Register Nitro Hybrid Objects
@@ -47,6 +77,24 @@ void registerAllNatives() {
     "DrapePoseLandmarker",
     []() -> std::shared_ptr<HybridObject> {
       return JHybridDrapePoseLandmarkerSpecImpl::create();
+    }
+  );
+  HybridObjectRegistry::registerHybridObjectConstructor(
+    "DrapeHandLandmarker",
+    []() -> std::shared_ptr<HybridObject> {
+      return JHybridDrapeHandLandmarkerSpecImpl::create();
+    }
+  );
+  HybridObjectRegistry::registerHybridObjectConstructor(
+    "DrapeFaceLandmarker",
+    []() -> std::shared_ptr<HybridObject> {
+      return JHybridDrapeFaceLandmarkerSpecImpl::create();
+    }
+  );
+  HybridObjectRegistry::registerHybridObjectConstructor(
+    "DrapeImageSegmenter",
+    []() -> std::shared_ptr<HybridObject> {
+      return JHybridDrapeImageSegmenterSpecImpl::create();
     }
   );
 }

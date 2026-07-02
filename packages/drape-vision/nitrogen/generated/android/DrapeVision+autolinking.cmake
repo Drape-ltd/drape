@@ -33,8 +33,14 @@ target_sources(
   # Autolinking Setup
   ../nitrogen/generated/android/DrapeVisionOnLoad.cpp
   # Shared Nitrogen C++ sources
+  ../nitrogen/generated/shared/c++/HybridDrapeFaceLandmarkerSpec.cpp
+  ../nitrogen/generated/shared/c++/HybridDrapeHandLandmarkerSpec.cpp
+  ../nitrogen/generated/shared/c++/HybridDrapeImageSegmenterSpec.cpp
   ../nitrogen/generated/shared/c++/HybridDrapePoseLandmarkerSpec.cpp
   # Android-specific Nitrogen C++ sources
+  ../nitrogen/generated/android/c++/JHybridDrapeFaceLandmarkerSpec.cpp
+  ../nitrogen/generated/android/c++/JHybridDrapeHandLandmarkerSpec.cpp
+  ../nitrogen/generated/android/c++/JHybridDrapeImageSegmenterSpec.cpp
   ../nitrogen/generated/android/c++/JHybridDrapePoseLandmarkerSpec.cpp
 )
 

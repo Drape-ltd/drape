@@ -18,6 +18,36 @@
         "language": "kotlin",
         "implementationClassName": "HybridDrapePoseLandmarker"
       }
+    },
+    "DrapeHandLandmarker": {
+      "ios": {
+        "language": "swift",
+        "implementationClassName": "HybridDrapeHandLandmarker"
+      },
+      "android": {
+        "language": "kotlin",
+        "implementationClassName": "HybridDrapeHandLandmarker"
+      }
+    },
+    "DrapeFaceLandmarker": {
+      "ios": {
+        "language": "swift",
+        "implementationClassName": "HybridDrapeFaceLandmarker"
+      },
+      "android": {
+        "language": "kotlin",
+        "implementationClassName": "HybridDrapeFaceLandmarker"
+      }
+    },
+    "DrapeImageSegmenter": {
+      "ios": {
+        "language": "swift",
+        "implementationClassName": "HybridDrapeImageSegmenter"
+      },
+      "android": {
+        "language": "kotlin",
+        "implementationClassName": "HybridDrapeImageSegmenter"
+      }
     }
   },
   "ignorePaths": ["**/node_modules"]

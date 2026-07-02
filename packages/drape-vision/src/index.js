@@ -22,5 +22,8 @@ __exportStar(require("./ellipseFitter"), exports);
 __exportStar(require("./fieldDictionary"), exports);
 __exportStar(require("./measurementCalculator"), exports);
 __exportStar(require("./native"), exports);
+__exportStar(require("./specs/DrapeFaceLandmarker.nitro"), exports);
+__exportStar(require("./specs/DrapeHandLandmarker.nitro"), exports);
+__exportStar(require("./specs/DrapeImageSegmenter.nitro"), exports);
 __exportStar(require("./specs/DrapePoseLandmarker.nitro"), exports);
 __exportStar(require("./types"), exports);

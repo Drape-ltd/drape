@@ -9,6 +9,9 @@
 
 // Include C++ implementation defined types
 #include "DrapeVision-Swift-Cxx-Umbrella.hpp"
+#include "HybridDrapeFaceLandmarkerSpecSwift.hpp"
+#include "HybridDrapeHandLandmarkerSpecSwift.hpp"
+#include "HybridDrapeImageSegmenterSpecSwift.hpp"
 #include "HybridDrapePoseLandmarkerSpecSwift.hpp"
 #include <NitroModules/NitroDefines.hpp>
 #include <VisionCamera/VisionCamera-Swift-Cxx-Bridge.hpp>
@@ -23,6 +26,54 @@ namespace margelo::nitro::drape::vision::bridge::swift {
   void* NON_NULL get_std__shared_ptr_margelo__nitro__camera__HybridFrameSpec_(std__shared_ptr_margelo__nitro__camera__HybridFrameSpec_ cppType) {
     // Implemented in VisionCamera
     return margelo::nitro::camera::bridge::swift::get_std__shared_ptr_HybridFrameSpec_(cppType);
+  }
+
+  // pragma MARK: std::shared_ptr<HybridDrapeFaceLandmarkerSpec>
+  std::shared_ptr<HybridDrapeFaceLandmarkerSpec> create_std__shared_ptr_HybridDrapeFaceLandmarkerSpec_(void* NON_NULL swiftUnsafePointer) noexcept {
+    DrapeVision::HybridDrapeFaceLandmarkerSpec_cxx swiftPart = DrapeVision::HybridDrapeFaceLandmarkerSpec_cxx::fromUnsafe(swiftUnsafePointer);
+    return std::make_shared<margelo::nitro::drape::vision::HybridDrapeFaceLandmarkerSpecSwift>(swiftPart);
+  }
+  void* NON_NULL get_std__shared_ptr_HybridDrapeFaceLandmarkerSpec_(std__shared_ptr_HybridDrapeFaceLandmarkerSpec_ cppType) {
+    std::shared_ptr<margelo::nitro::drape::vision::HybridDrapeFaceLandmarkerSpecSwift> swiftWrapper = std::dynamic_pointer_cast<margelo::nitro::drape::vision::HybridDrapeFaceLandmarkerSpecSwift>(cppType);
+    #ifdef NITRO_DEBUG
+    if (swiftWrapper == nullptr) [[unlikely]] {
+      throw std::runtime_error("Class \"HybridDrapeFaceLandmarkerSpec\" is not implemented in Swift!");
+    }
+    #endif
+    DrapeVision::HybridDrapeFaceLandmarkerSpec_cxx& swiftPart = swiftWrapper->getSwiftPart();
+    return swiftPart.toUnsafe();
+  }
+
+  // pragma MARK: std::shared_ptr<HybridDrapeHandLandmarkerSpec>
+  std::shared_ptr<HybridDrapeHandLandmarkerSpec> create_std__shared_ptr_HybridDrapeHandLandmarkerSpec_(void* NON_NULL swiftUnsafePointer) noexcept {
+    DrapeVision::HybridDrapeHandLandmarkerSpec_cxx swiftPart = DrapeVision::HybridDrapeHandLandmarkerSpec_cxx::fromUnsafe(swiftUnsafePointer);
+    return std::make_shared<margelo::nitro::drape::vision::HybridDrapeHandLandmarkerSpecSwift>(swiftPart);
+  }
+  void* NON_NULL get_std__shared_ptr_HybridDrapeHandLandmarkerSpec_(std__shared_ptr_HybridDrapeHandLandmarkerSpec_ cppType) {
+    std::shared_ptr<margelo::nitro::drape::vision::HybridDrapeHandLandmarkerSpecSwift> swiftWrapper = std::dynamic_pointer_cast<margelo::nitro::drape::vision::HybridDrapeHandLandmarkerSpecSwift>(cppType);
+    #ifdef NITRO_DEBUG
+    if (swiftWrapper == nullptr) [[unlikely]] {
+      throw std::runtime_error("Class \"HybridDrapeHandLandmarkerSpec\" is not implemented in Swift!");
+    }
+    #endif
+    DrapeVision::HybridDrapeHandLandmarkerSpec_cxx& swiftPart = swiftWrapper->getSwiftPart();
+    return swiftPart.toUnsafe();
+  }
+
+  // pragma MARK: std::shared_ptr<HybridDrapeImageSegmenterSpec>
+  std::shared_ptr<HybridDrapeImageSegmenterSpec> create_std__shared_ptr_HybridDrapeImageSegmenterSpec_(void* NON_NULL swiftUnsafePointer) noexcept {
+    DrapeVision::HybridDrapeImageSegmenterSpec_cxx swiftPart = DrapeVision::HybridDrapeImageSegmenterSpec_cxx::fromUnsafe(swiftUnsafePointer);
+    return std::make_shared<margelo::nitro::drape::vision::HybridDrapeImageSegmenterSpecSwift>(swiftPart);
+  }
+  void* NON_NULL get_std__shared_ptr_HybridDrapeImageSegmenterSpec_(std__shared_ptr_HybridDrapeImageSegmenterSpec_ cppType) {
+    std::shared_ptr<margelo::nitro::drape::vision::HybridDrapeImageSegmenterSpecSwift> swiftWrapper = std::dynamic_pointer_cast<margelo::nitro::drape::vision::HybridDrapeImageSegmenterSpecSwift>(cppType);
+    #ifdef NITRO_DEBUG
+    if (swiftWrapper == nullptr) [[unlikely]] {
+      throw std::runtime_error("Class \"HybridDrapeImageSegmenterSpec\" is not implemented in Swift!");
+    }
+    #endif
+    DrapeVision::HybridDrapeImageSegmenterSpec_cxx& swiftPart = swiftWrapper->getSwiftPart();
+    return swiftPart.toUnsafe();
   }
 
   // pragma MARK: std::shared_ptr<HybridDrapePoseLandmarkerSpec>

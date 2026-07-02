@@ -30,6 +30,17 @@ Pod::Spec.new do |s|
     "ios/**/*.{swift,m,mm}",
   ]).uniq
 
+  generated_header_search_paths = [
+    "$(PODS_TARGET_SRCROOT)/nitrogen/generated/shared/c++",
+    "$(PODS_TARGET_SRCROOT)/nitrogen/generated/ios",
+    "$(PODS_TARGET_SRCROOT)/nitrogen/generated/ios/c++",
+  ]
+  current_pod_target_xcconfig = s.attributes_hash["pod_target_xcconfig"] || {}
+  existing_header_search_paths = Array(current_pod_target_xcconfig["HEADER_SEARCH_PATHS"])
+  s.pod_target_xcconfig = current_pod_target_xcconfig.merge({
+    "HEADER_SEARCH_PATHS" => (existing_header_search_paths + generated_header_search_paths).join(" "),
+  })
+
   s.dependency "VisionCamera"
   s.dependency "MediaPipeTasksVision"
   s.dependency "React-jsi"

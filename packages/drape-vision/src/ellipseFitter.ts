@@ -40,8 +40,8 @@ export function projectedEllipseWidth(semiMajor: number, semiMinor: number, angl
 
 export function fitEllipseFromWidths(samples: EllipseWidthSample[]): EllipseFit {
   const validSamples = samples.filter((sample) => Number.isFinite(sample.width) && sample.width > 0)
-  if (validSamples.length < 3) {
-    throw new Error('At least 3 positive width samples are required to fit an ellipse.')
+  if (validSamples.length < 2) {
+    throw new Error('At least 2 positive width samples are required to fit an ellipse.')
   }
 
   let s11 = 0

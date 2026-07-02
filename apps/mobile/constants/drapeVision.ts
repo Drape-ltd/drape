@@ -24,6 +24,104 @@ export const DRAPE_VISION_BODY_SCAN_MODES = ['customer_scan', 'tailor_client_sca
 
 export type DrapeVisionMode = (typeof DRAPE_VISION_MODES)[number]
 
+export type DrapeVisionSpecialistScanMode =
+  | 'fit_360'
+  | 'hand_wrist'
+  | 'headwear'
+  | 'bodice_corset'
+  | 'lower_body_detail'
+
+export type DrapeVisionSpecialistScanMeta = {
+  mode: DrapeVisionSpecialistScanMode
+  title: string
+  subtitle: string
+  status: 'active' | 'planned_ios_first'
+  icon:
+    | 'rotate-360'
+    | 'hand-front-right-outline'
+    | 'hat-fedora'
+    | 'human-female'
+    | 'human-male-height-variant'
+  fields: readonly DrapeVisionMeasurementField[]
+}
+
+export const DRAPE_VISION_SPECIALIST_SCAN_MODULES: readonly DrapeVisionSpecialistScanMeta[] = [
+  {
+    mode: 'fit_360',
+    title: 'Fit 360',
+    subtitle: 'A guided full-body turn for your core fit profile.',
+    status: 'active',
+    icon: 'rotate-360',
+    fields: [
+      'chest',
+      'waist',
+      'hips',
+      'shoulderWidth',
+      'height',
+      'torsoLength',
+      'sleeveLength',
+      'backLength',
+      'inseam',
+      'outseam',
+      'thighCircumference',
+    ],
+  },
+  {
+    mode: 'hand_wrist',
+    title: 'Hand/Wrist Scan',
+    subtitle: 'For cuff, bracelet, bangle, wrist, palm, and sleeve-opening fit.',
+    status: 'active',
+    icon: 'hand-front-right-outline',
+    fields: ['wristCircumference'],
+  },
+  {
+    mode: 'headwear',
+    title: 'Headwear Scan',
+    subtitle: 'For fila, gele, hats, bands, and headwear prep.',
+    status: 'active',
+    icon: 'hat-fedora',
+    fields: [
+      'headCircumference',
+      'hatBandLine',
+      'headLength',
+      'headWidth',
+      'earToEarOverCrown',
+      'frontToBackOverCrown',
+      'filaHeight',
+    ],
+  },
+  {
+    mode: 'bodice_corset',
+    title: 'Bodice/Corset Scan',
+    subtitle: 'For corsets, fitted bodices, bust fit, ribcage, waist, and torso detail.',
+    status: 'active',
+    icon: 'human-female',
+    fields: ['underBust', 'chest', 'waist', 'shoulderWidth', 'torsoLength', 'backLength', 'bicepCircumference'],
+  },
+  {
+    mode: 'lower_body_detail',
+    title: 'Lower Body Detail',
+    subtitle: 'For trousers, hems, thigh, knee, calf, and ankle fit.',
+    status: 'active',
+    icon: 'human-male-height-variant',
+    fields: ['thighCircumference', 'kneeCircumference', 'inseam', 'outseam'],
+  },
+]
+
+export const DRAPE_VISION_FIELD_SCAN_MODULES: Partial<Record<DrapeVisionMeasurementField, DrapeVisionSpecialistScanMode>> = {
+  wristCircumference: 'hand_wrist',
+  headCircumference: 'headwear',
+  hatBandLine: 'headwear',
+  headLength: 'headwear',
+  headWidth: 'headwear',
+  earToEarOverCrown: 'headwear',
+  frontToBackOverCrown: 'headwear',
+  filaHeight: 'headwear',
+  underBust: 'bodice_corset',
+  bicepCircumference: 'bodice_corset',
+  kneeCircumference: 'lower_body_detail',
+}
+
 export type DrapeVisionModeMeta = {
   eyebrow: string
   title: string
@@ -38,20 +136,20 @@ export type DrapeVisionModeMeta = {
 export const DRAPE_VISION_MODE_META: Record<DrapeVisionMode, DrapeVisionModeMeta> = {
   customer_scan: {
     eyebrow: 'Fit Passport',
-    title: 'Drapeon Vision for your measurements',
-    subtitle: 'Your measurement profile will power custom orders, ready-made fit checks, and tailor briefs from one place.',
+    title: 'Create your Drapeon Vision profile',
+    subtitle: 'A guided turn helps estimate your core measurements for custom orders, ready-made fit checks, and tailor briefs.',
     destinationTitle: 'Saved to your profile',
-    destinationBody: 'Vision measurements flow into your measurement profile, custom order measurement step, ready-made fit guide, and every tailor brief you approve.',
+    destinationBody: 'Reviewed measurements flow into your profile, custom orders, ready-made fit guide, and every tailor brief you approve.',
     primaryLabel: 'Open measurements',
     fallbackRoute: '/(customer)/profile/measurements',
     icon: 'aperture',
   },
   tailor_client_scan: {
-    eyebrow: 'Tailor assisted',
-    title: 'Measure a client into Drapeon',
-    subtitle: 'Capture a client with consent, keep the session in Diary, then invite them to claim their Fit Passport.',
+    eyebrow: 'Tailor Guide',
+    title: 'Guide a client Vision scan',
+    subtitle: 'Capture an in-person or remote client with consent, keep the draft in Diary, then invite them to claim their Fit Passport.',
     destinationTitle: 'Saved to Diary',
-    destinationBody: 'Tailor-assisted scans will prefill the client diary, preserve fitting context, and create a claimable passport without storing raw video.',
+    destinationBody: 'Tailor Guide drafts prefill the client diary, preserve fitting context, and create a claimable passport without storing raw video.',
     primaryLabel: 'Open client diary',
     fallbackRoute: '/(tailor)/clients/diary/new',
     icon: 'user-check',
@@ -80,13 +178,13 @@ export const DRAPE_VISION_MODE_META: Record<DrapeVisionMode, DrapeVisionModeMeta
 
 export const DRAPE_VISION_CAPABILITIES = [
   {
-    title: 'Customer Fit Passport',
-    body: 'Vision measurements carry into profiles, custom orders, ready-made fit checks, and tailor briefs.',
+    title: 'Vision measurements',
+    body: 'Core measurements carry into profiles, custom orders, ready-made fit checks, and tailor briefs.',
     icon: 'aperture',
   },
   {
-    title: 'Tailor-assisted scans',
-    body: 'Tailors can measure walk-in, home, or event clients into Diary before passport claim.',
+    title: 'Tailor Guide',
+    body: 'Tailors can guide walk-in, home, event, or remote clients into Diary before passport claim.',
     icon: 'user-check',
   },
   {
@@ -98,16 +196,16 @@ export const DRAPE_VISION_CAPABILITIES = [
 
 export const DRAPE_VISION_PRIVACY_POINTS = [
   'No scan video is saved or uploaded.',
-  'Landmarks are processed in memory and cleared after calculation.',
-  'Only reviewed measurements are saved; proof photos save only when you attach one.',
+  'Body shape data is processed on your device and cleared after scanning.',
+  'Only measurements you review are saved; photos save only when you attach one.',
 ] as const
 
 export const DRAPE_VISION_CALCULATION_MESSAGES = [
-  'Detecting body landmarks...',
-  'Calibrating with your height...',
-  'Fitting measurement model...',
-  'Calculating circumference...',
-  'Finalising your profile...',
+  'Reading your proportions...',
+  'Building your fit profile...',
+  'Checking the key measurements...',
+  'Preparing your results...',
+  'Almost there...',
 ] as const
 
 export const DRAPE_VISION_HEIGHT_STEP_CM = 1
@@ -147,8 +245,22 @@ export const DRAPE_VISION_RESULT_FIELDS: DrapeVisionMeasurementField[] = [
   'shoulderWidth',
   'sleeveLength',
   'backLength',
+  'torsoLength',
   'inseam',
   'outseam',
+  'thighCircumference',
+  'kneeCircumference',
+  'neckCircumference',
+  'underBust',
+  'bicepCircumference',
+  'wristCircumference',
+  'headCircumference',
+  'hatBandLine',
+  'headLength',
+  'headWidth',
+  'earToEarOverCrown',
+  'frontToBackOverCrown',
+  'filaHeight',
 ]
 
 export function isDrapeVisionMode(value: unknown): value is DrapeVisionMode {

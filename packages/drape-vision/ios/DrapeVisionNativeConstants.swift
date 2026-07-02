@@ -3,6 +3,9 @@ import Foundation
 enum DrapeVisionNativeConstants {
   static let liteModelResourceName = "pose_landmarker_lite"
   static let fullModelResourceName = "pose_landmarker_full"
+  static let handModelResourceName = "hand_landmarker"
+  static let faceModelResourceName = "face_landmarker"
+  static let imageSegmenterModelResourceName = "image_segmenter"
   static let modelResourceExtension = "task"
   static let numPoses = 1
   static let defaultConfidenceThreshold: Float = 0.5

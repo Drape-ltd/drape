@@ -8,33 +8,73 @@
 #pragma once
 
 // Forward declarations of C++ defined types
+// Forward declaration of `HybridDrapeFaceLandmarkerSpec` to properly resolve imports.
+namespace margelo::nitro::drape::vision { class HybridDrapeFaceLandmarkerSpec; }
+// Forward declaration of `HybridDrapeHandLandmarkerSpec` to properly resolve imports.
+namespace margelo::nitro::drape::vision { class HybridDrapeHandLandmarkerSpec; }
+// Forward declaration of `HybridDrapeImageSegmenterSpec` to properly resolve imports.
+namespace margelo::nitro::drape::vision { class HybridDrapeImageSegmenterSpec; }
 // Forward declaration of `HybridDrapePoseLandmarkerSpec` to properly resolve imports.
 namespace margelo::nitro::drape::vision { class HybridDrapePoseLandmarkerSpec; }
 // Forward declaration of `HybridFrameSpec` to properly resolve imports.
 namespace margelo::nitro::camera { class HybridFrameSpec; }
+// Forward declaration of `VisionBoundingBox` to properly resolve imports.
+namespace margelo::nitro::drape::vision { struct VisionBoundingBox; }
+// Forward declaration of `VisionFaceBlendshape` to properly resolve imports.
+namespace margelo::nitro::drape::vision { struct VisionFaceBlendshape; }
+// Forward declaration of `VisionFaceDetectionResult` to properly resolve imports.
+namespace margelo::nitro::drape::vision { struct VisionFaceDetectionResult; }
+// Forward declaration of `VisionHandDetectionResult` to properly resolve imports.
+namespace margelo::nitro::drape::vision { struct VisionHandDetectionResult; }
+// Forward declaration of `VisionHandDetection` to properly resolve imports.
+namespace margelo::nitro::drape::vision { struct VisionHandDetection; }
+// Forward declaration of `VisionHandedness` to properly resolve imports.
+namespace margelo::nitro::drape::vision { enum class VisionHandedness; }
 // Forward declaration of `VisionLandmark` to properly resolve imports.
 namespace margelo::nitro::drape::vision { struct VisionLandmark; }
 // Forward declaration of `VisionPoseDetectionResult` to properly resolve imports.
 namespace margelo::nitro::drape::vision { struct VisionPoseDetectionResult; }
 // Forward declaration of `VisionSegmentWidthsPx` to properly resolve imports.
 namespace margelo::nitro::drape::vision { struct VisionSegmentWidthsPx; }
+// Forward declaration of `VisionSegmentationMaskSummary` to properly resolve imports.
+namespace margelo::nitro::drape::vision { struct VisionSegmentationMaskSummary; }
+// Forward declaration of `VisionSegmentationResult` to properly resolve imports.
+namespace margelo::nitro::drape::vision { struct VisionSegmentationResult; }
 
 // Forward declarations of Swift defined types
+// Forward declaration of `HybridDrapeFaceLandmarkerSpec_cxx` to properly resolve imports.
+namespace DrapeVision { class HybridDrapeFaceLandmarkerSpec_cxx; }
+// Forward declaration of `HybridDrapeHandLandmarkerSpec_cxx` to properly resolve imports.
+namespace DrapeVision { class HybridDrapeHandLandmarkerSpec_cxx; }
+// Forward declaration of `HybridDrapeImageSegmenterSpec_cxx` to properly resolve imports.
+namespace DrapeVision { class HybridDrapeImageSegmenterSpec_cxx; }
 // Forward declaration of `HybridDrapePoseLandmarkerSpec_cxx` to properly resolve imports.
 namespace DrapeVision { class HybridDrapePoseLandmarkerSpec_cxx; }
 // Forward declaration of `HybridFrameSpec_cxx` to properly resolve imports.
 namespace VisionCamera { class HybridFrameSpec_cxx; }
 
 // Include C++ defined types
+#include "HybridDrapeFaceLandmarkerSpec.hpp"
+#include "HybridDrapeHandLandmarkerSpec.hpp"
+#include "HybridDrapeImageSegmenterSpec.hpp"
 #include "HybridDrapePoseLandmarkerSpec.hpp"
+#include "VisionBoundingBox.hpp"
+#include "VisionFaceBlendshape.hpp"
+#include "VisionFaceDetectionResult.hpp"
+#include "VisionHandDetection.hpp"
+#include "VisionHandDetectionResult.hpp"
+#include "VisionHandedness.hpp"
 #include "VisionLandmark.hpp"
 #include "VisionPoseDetectionResult.hpp"
 #include "VisionSegmentWidthsPx.hpp"
+#include "VisionSegmentationMaskSummary.hpp"
+#include "VisionSegmentationResult.hpp"
 #include <NitroModules/Result.hpp>
 #include <VisionCamera/HybridFrameSpec.hpp>
 #include <exception>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 /**
@@ -69,6 +109,98 @@ namespace margelo::nitro::drape::vision::bridge::swift {
     return vector;
   }
 
+  // pragma MARK: std::vector<VisionFaceBlendshape>
+  /**
+   * Specialized version of `std::vector<VisionFaceBlendshape>`.
+   */
+  using std__vector_VisionFaceBlendshape_ = std::vector<VisionFaceBlendshape>;
+  inline std::vector<VisionFaceBlendshape> create_std__vector_VisionFaceBlendshape_(size_t size) noexcept {
+    std::vector<VisionFaceBlendshape> vector;
+    vector.reserve(size);
+    return vector;
+  }
+
+  // pragma MARK: std::optional<std::vector<VisionFaceBlendshape>>
+  /**
+   * Specialized version of `std::optional<std::vector<VisionFaceBlendshape>>`.
+   */
+  using std__optional_std__vector_VisionFaceBlendshape__ = std::optional<std::vector<VisionFaceBlendshape>>;
+  inline std::optional<std::vector<VisionFaceBlendshape>> create_std__optional_std__vector_VisionFaceBlendshape__(const std::vector<VisionFaceBlendshape>& value) noexcept {
+    return std::optional<std::vector<VisionFaceBlendshape>>(value);
+  }
+  inline bool has_value_std__optional_std__vector_VisionFaceBlendshape__(const std::optional<std::vector<VisionFaceBlendshape>>& optional) noexcept {
+    return optional.has_value();
+  }
+  inline std::vector<VisionFaceBlendshape> get_std__optional_std__vector_VisionFaceBlendshape__(const std::optional<std::vector<VisionFaceBlendshape>>& optional) noexcept {
+    return optional.value();
+  }
+
+  // pragma MARK: std::shared_ptr<margelo::nitro::camera::HybridFrameSpec>
+  /**
+   * Specialized version of `std::shared_ptr<margelo::nitro::camera::HybridFrameSpec>`.
+   */
+  using std__shared_ptr_margelo__nitro__camera__HybridFrameSpec_ = std::shared_ptr<margelo::nitro::camera::HybridFrameSpec>;
+  std::shared_ptr<margelo::nitro::camera::HybridFrameSpec> create_std__shared_ptr_margelo__nitro__camera__HybridFrameSpec_(void* NON_NULL swiftUnsafePointer) noexcept;
+  void* NON_NULL get_std__shared_ptr_margelo__nitro__camera__HybridFrameSpec_(std__shared_ptr_margelo__nitro__camera__HybridFrameSpec_ cppType);
+
+  // pragma MARK: std::weak_ptr<margelo::nitro::camera::HybridFrameSpec>
+  using std__weak_ptr_margelo__nitro__camera__HybridFrameSpec_ = std::weak_ptr<margelo::nitro::camera::HybridFrameSpec>;
+  inline std__weak_ptr_margelo__nitro__camera__HybridFrameSpec_ weakify_std__shared_ptr_margelo__nitro__camera__HybridFrameSpec_(const std::shared_ptr<margelo::nitro::camera::HybridFrameSpec>& strong) noexcept { return strong; }
+
+  // pragma MARK: std::optional<bool>
+  /**
+   * Specialized version of `std::optional<bool>`.
+   */
+  using std__optional_bool_ = std::optional<bool>;
+  inline std::optional<bool> create_std__optional_bool_(const bool& value) noexcept {
+    return std::optional<bool>(value);
+  }
+  inline bool has_value_std__optional_bool_(const std::optional<bool>& optional) noexcept {
+    return optional.has_value();
+  }
+  inline bool get_std__optional_bool_(const std::optional<bool>& optional) noexcept {
+    return optional.value();
+  }
+
+  // pragma MARK: std::shared_ptr<HybridDrapeFaceLandmarkerSpec>
+  /**
+   * Specialized version of `std::shared_ptr<HybridDrapeFaceLandmarkerSpec>`.
+   */
+  using std__shared_ptr_HybridDrapeFaceLandmarkerSpec_ = std::shared_ptr<HybridDrapeFaceLandmarkerSpec>;
+  std::shared_ptr<HybridDrapeFaceLandmarkerSpec> create_std__shared_ptr_HybridDrapeFaceLandmarkerSpec_(void* NON_NULL swiftUnsafePointer) noexcept;
+  void* NON_NULL get_std__shared_ptr_HybridDrapeFaceLandmarkerSpec_(std__shared_ptr_HybridDrapeFaceLandmarkerSpec_ cppType);
+
+  // pragma MARK: std::weak_ptr<HybridDrapeFaceLandmarkerSpec>
+  using std__weak_ptr_HybridDrapeFaceLandmarkerSpec_ = std::weak_ptr<HybridDrapeFaceLandmarkerSpec>;
+  inline std__weak_ptr_HybridDrapeFaceLandmarkerSpec_ weakify_std__shared_ptr_HybridDrapeFaceLandmarkerSpec_(const std::shared_ptr<HybridDrapeFaceLandmarkerSpec>& strong) noexcept { return strong; }
+
+  // pragma MARK: Result<bool>
+  using Result_bool_ = Result<bool>;
+  inline Result_bool_ create_Result_bool_(bool value) noexcept {
+    return Result<bool>::withValue(std::move(value));
+  }
+  inline Result_bool_ create_Result_bool_(const std::exception_ptr& error) noexcept {
+    return Result<bool>::withError(error);
+  }
+
+  // pragma MARK: Result<VisionFaceDetectionResult>
+  using Result_VisionFaceDetectionResult_ = Result<VisionFaceDetectionResult>;
+  inline Result_VisionFaceDetectionResult_ create_Result_VisionFaceDetectionResult_(const VisionFaceDetectionResult& value) noexcept {
+    return Result<VisionFaceDetectionResult>::withValue(value);
+  }
+  inline Result_VisionFaceDetectionResult_ create_Result_VisionFaceDetectionResult_(const std::exception_ptr& error) noexcept {
+    return Result<VisionFaceDetectionResult>::withError(error);
+  }
+
+  // pragma MARK: Result<void>
+  using Result_void_ = Result<void>;
+  inline Result_void_ create_Result_void_() noexcept {
+    return Result<void>::withValue();
+  }
+  inline Result_void_ create_Result_void_(const std::exception_ptr& error) noexcept {
+    return Result<void>::withError(error);
+  }
+
   // pragma MARK: std::optional<std::vector<VisionLandmark>>
   /**
    * Specialized version of `std::optional<std::vector<VisionLandmark>>`.
@@ -82,6 +214,104 @@ namespace margelo::nitro::drape::vision::bridge::swift {
   }
   inline std::vector<VisionLandmark> get_std__optional_std__vector_VisionLandmark__(const std::optional<std::vector<VisionLandmark>>& optional) noexcept {
     return optional.value();
+  }
+
+  // pragma MARK: std::optional<VisionHandedness>
+  /**
+   * Specialized version of `std::optional<VisionHandedness>`.
+   */
+  using std__optional_VisionHandedness_ = std::optional<VisionHandedness>;
+  inline std::optional<VisionHandedness> create_std__optional_VisionHandedness_(const VisionHandedness& value) noexcept {
+    return std::optional<VisionHandedness>(value);
+  }
+  inline bool has_value_std__optional_VisionHandedness_(const std::optional<VisionHandedness>& optional) noexcept {
+    return optional.has_value();
+  }
+  inline VisionHandedness get_std__optional_VisionHandedness_(const std::optional<VisionHandedness>& optional) noexcept {
+    return optional.value();
+  }
+
+  // pragma MARK: std::vector<VisionHandDetection>
+  /**
+   * Specialized version of `std::vector<VisionHandDetection>`.
+   */
+  using std__vector_VisionHandDetection_ = std::vector<VisionHandDetection>;
+  inline std::vector<VisionHandDetection> create_std__vector_VisionHandDetection_(size_t size) noexcept {
+    std::vector<VisionHandDetection> vector;
+    vector.reserve(size);
+    return vector;
+  }
+
+  // pragma MARK: std::shared_ptr<HybridDrapeHandLandmarkerSpec>
+  /**
+   * Specialized version of `std::shared_ptr<HybridDrapeHandLandmarkerSpec>`.
+   */
+  using std__shared_ptr_HybridDrapeHandLandmarkerSpec_ = std::shared_ptr<HybridDrapeHandLandmarkerSpec>;
+  std::shared_ptr<HybridDrapeHandLandmarkerSpec> create_std__shared_ptr_HybridDrapeHandLandmarkerSpec_(void* NON_NULL swiftUnsafePointer) noexcept;
+  void* NON_NULL get_std__shared_ptr_HybridDrapeHandLandmarkerSpec_(std__shared_ptr_HybridDrapeHandLandmarkerSpec_ cppType);
+
+  // pragma MARK: std::weak_ptr<HybridDrapeHandLandmarkerSpec>
+  using std__weak_ptr_HybridDrapeHandLandmarkerSpec_ = std::weak_ptr<HybridDrapeHandLandmarkerSpec>;
+  inline std__weak_ptr_HybridDrapeHandLandmarkerSpec_ weakify_std__shared_ptr_HybridDrapeHandLandmarkerSpec_(const std::shared_ptr<HybridDrapeHandLandmarkerSpec>& strong) noexcept { return strong; }
+
+  // pragma MARK: Result<VisionHandDetectionResult>
+  using Result_VisionHandDetectionResult_ = Result<VisionHandDetectionResult>;
+  inline Result_VisionHandDetectionResult_ create_Result_VisionHandDetectionResult_(const VisionHandDetectionResult& value) noexcept {
+    return Result<VisionHandDetectionResult>::withValue(value);
+  }
+  inline Result_VisionHandDetectionResult_ create_Result_VisionHandDetectionResult_(const std::exception_ptr& error) noexcept {
+    return Result<VisionHandDetectionResult>::withError(error);
+  }
+
+  // pragma MARK: std::optional<VisionBoundingBox>
+  /**
+   * Specialized version of `std::optional<VisionBoundingBox>`.
+   */
+  using std__optional_VisionBoundingBox_ = std::optional<VisionBoundingBox>;
+  inline std::optional<VisionBoundingBox> create_std__optional_VisionBoundingBox_(const VisionBoundingBox& value) noexcept {
+    return std::optional<VisionBoundingBox>(value);
+  }
+  inline bool has_value_std__optional_VisionBoundingBox_(const std::optional<VisionBoundingBox>& optional) noexcept {
+    return optional.has_value();
+  }
+  inline VisionBoundingBox get_std__optional_VisionBoundingBox_(const std::optional<VisionBoundingBox>& optional) noexcept {
+    return optional.value();
+  }
+
+  // pragma MARK: std::optional<VisionSegmentationMaskSummary>
+  /**
+   * Specialized version of `std::optional<VisionSegmentationMaskSummary>`.
+   */
+  using std__optional_VisionSegmentationMaskSummary_ = std::optional<VisionSegmentationMaskSummary>;
+  inline std::optional<VisionSegmentationMaskSummary> create_std__optional_VisionSegmentationMaskSummary_(const VisionSegmentationMaskSummary& value) noexcept {
+    return std::optional<VisionSegmentationMaskSummary>(value);
+  }
+  inline bool has_value_std__optional_VisionSegmentationMaskSummary_(const std::optional<VisionSegmentationMaskSummary>& optional) noexcept {
+    return optional.has_value();
+  }
+  inline VisionSegmentationMaskSummary get_std__optional_VisionSegmentationMaskSummary_(const std::optional<VisionSegmentationMaskSummary>& optional) noexcept {
+    return optional.value();
+  }
+
+  // pragma MARK: std::shared_ptr<HybridDrapeImageSegmenterSpec>
+  /**
+   * Specialized version of `std::shared_ptr<HybridDrapeImageSegmenterSpec>`.
+   */
+  using std__shared_ptr_HybridDrapeImageSegmenterSpec_ = std::shared_ptr<HybridDrapeImageSegmenterSpec>;
+  std::shared_ptr<HybridDrapeImageSegmenterSpec> create_std__shared_ptr_HybridDrapeImageSegmenterSpec_(void* NON_NULL swiftUnsafePointer) noexcept;
+  void* NON_NULL get_std__shared_ptr_HybridDrapeImageSegmenterSpec_(std__shared_ptr_HybridDrapeImageSegmenterSpec_ cppType);
+
+  // pragma MARK: std::weak_ptr<HybridDrapeImageSegmenterSpec>
+  using std__weak_ptr_HybridDrapeImageSegmenterSpec_ = std::weak_ptr<HybridDrapeImageSegmenterSpec>;
+  inline std__weak_ptr_HybridDrapeImageSegmenterSpec_ weakify_std__shared_ptr_HybridDrapeImageSegmenterSpec_(const std::shared_ptr<HybridDrapeImageSegmenterSpec>& strong) noexcept { return strong; }
+
+  // pragma MARK: Result<VisionSegmentationResult>
+  using Result_VisionSegmentationResult_ = Result<VisionSegmentationResult>;
+  inline Result_VisionSegmentationResult_ create_Result_VisionSegmentationResult_(const VisionSegmentationResult& value) noexcept {
+    return Result<VisionSegmentationResult>::withValue(value);
+  }
+  inline Result_VisionSegmentationResult_ create_Result_VisionSegmentationResult_(const std::exception_ptr& error) noexcept {
+    return Result<VisionSegmentationResult>::withError(error);
   }
 
   // pragma MARK: std::optional<VisionSegmentWidthsPx>
@@ -99,18 +329,6 @@ namespace margelo::nitro::drape::vision::bridge::swift {
     return optional.value();
   }
 
-  // pragma MARK: std::shared_ptr<margelo::nitro::camera::HybridFrameSpec>
-  /**
-   * Specialized version of `std::shared_ptr<margelo::nitro::camera::HybridFrameSpec>`.
-   */
-  using std__shared_ptr_margelo__nitro__camera__HybridFrameSpec_ = std::shared_ptr<margelo::nitro::camera::HybridFrameSpec>;
-  std::shared_ptr<margelo::nitro::camera::HybridFrameSpec> create_std__shared_ptr_margelo__nitro__camera__HybridFrameSpec_(void* NON_NULL swiftUnsafePointer) noexcept;
-  void* NON_NULL get_std__shared_ptr_margelo__nitro__camera__HybridFrameSpec_(std__shared_ptr_margelo__nitro__camera__HybridFrameSpec_ cppType);
-
-  // pragma MARK: std::weak_ptr<margelo::nitro::camera::HybridFrameSpec>
-  using std__weak_ptr_margelo__nitro__camera__HybridFrameSpec_ = std::weak_ptr<margelo::nitro::camera::HybridFrameSpec>;
-  inline std__weak_ptr_margelo__nitro__camera__HybridFrameSpec_ weakify_std__shared_ptr_margelo__nitro__camera__HybridFrameSpec_(const std::shared_ptr<margelo::nitro::camera::HybridFrameSpec>& strong) noexcept { return strong; }
-
   // pragma MARK: std::shared_ptr<HybridDrapePoseLandmarkerSpec>
   /**
    * Specialized version of `std::shared_ptr<HybridDrapePoseLandmarkerSpec>`.
@@ -123,15 +341,6 @@ namespace margelo::nitro::drape::vision::bridge::swift {
   using std__weak_ptr_HybridDrapePoseLandmarkerSpec_ = std::weak_ptr<HybridDrapePoseLandmarkerSpec>;
   inline std__weak_ptr_HybridDrapePoseLandmarkerSpec_ weakify_std__shared_ptr_HybridDrapePoseLandmarkerSpec_(const std::shared_ptr<HybridDrapePoseLandmarkerSpec>& strong) noexcept { return strong; }
 
-  // pragma MARK: Result<bool>
-  using Result_bool_ = Result<bool>;
-  inline Result_bool_ create_Result_bool_(bool value) noexcept {
-    return Result<bool>::withValue(std::move(value));
-  }
-  inline Result_bool_ create_Result_bool_(const std::exception_ptr& error) noexcept {
-    return Result<bool>::withError(error);
-  }
-
   // pragma MARK: Result<VisionPoseDetectionResult>
   using Result_VisionPoseDetectionResult_ = Result<VisionPoseDetectionResult>;
   inline Result_VisionPoseDetectionResult_ create_Result_VisionPoseDetectionResult_(const VisionPoseDetectionResult& value) noexcept {
@@ -139,15 +348,6 @@ namespace margelo::nitro::drape::vision::bridge::swift {
   }
   inline Result_VisionPoseDetectionResult_ create_Result_VisionPoseDetectionResult_(const std::exception_ptr& error) noexcept {
     return Result<VisionPoseDetectionResult>::withError(error);
-  }
-
-  // pragma MARK: Result<void>
-  using Result_void_ = Result<void>;
-  inline Result_void_ create_Result_void_() noexcept {
-    return Result<void>::withValue();
-  }
-  inline Result_void_ create_Result_void_(const std::exception_ptr& error) noexcept {
-    return Result<void>::withError(error);
   }
 
 } // namespace margelo::nitro::drape::vision::bridge::swift

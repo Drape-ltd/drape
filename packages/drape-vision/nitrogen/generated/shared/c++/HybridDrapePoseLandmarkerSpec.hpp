@@ -52,7 +52,7 @@ namespace margelo::nitro::drape::vision {
 
     public:
       // Properties
-      
+
 
     public:
       // Methods

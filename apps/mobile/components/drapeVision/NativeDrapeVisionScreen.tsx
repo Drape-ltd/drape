@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
+  Animated,
+  Image,
   Platform,
   ScrollView,
   StyleSheet,
@@ -12,8 +15,11 @@ import {
 } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import * as ImagePicker from 'expo-image-picker'
+import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from 'expo-audio'
+import type * as ExpoSpeech from 'expo-speech'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { Feather } from '@expo/vector-icons'
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import {
   Camera,
   CommonResolutions,
@@ -23,7 +29,7 @@ import {
   type Frame,
   type FrameDroppedReason,
 } from 'react-native-vision-camera'
-import { runOnJS } from 'react-native-worklets'
+import { createSynchronizable, runOnJS, type Synchronizable } from 'react-native-worklets'
 import { useSharedValue } from 'react-native-reanimated'
 import { trigger } from 'react-native-haptic-feedback'
 import {
@@ -39,10 +45,20 @@ import {
 import {
   calculateDrapeVisionMeasurements,
 } from '@drape/drape-vision/measurement-calculator'
+import { confidenceWeightedLandmarks } from '@drape/drape-vision/capture-worklet'
 import {
+  clearDrapeFaceLandmarker,
+  clearDrapeHandLandmarker,
+  clearDrapeImageSegmenter,
   clearDrapePoseLandmarker,
+  detectFace,
+  detectHands,
+  initializeDrapeFaceLandmarker,
+  initializeDrapeHandLandmarker,
+  initializeDrapeImageSegmenter,
   detectPose,
   initializeDrapePoseLandmarker,
+  segmentImage,
 } from '@drape/drape-vision/native'
 import type {
   DrapeVisionConfidence,
@@ -52,6 +68,7 @@ import type {
   VisionCapture,
   VisionLandmarkFrame,
   VisionPoseDetectionResult,
+  VisionSegmentationResult,
   VisionSegmentWidthsPx,
 } from '@drape/drape-vision/types'
 import { capture } from '@/lib/analytics'
@@ -61,6 +78,7 @@ import { Sentry } from '@/lib/sentry'
 import {
   MEASUREMENT_SCAN_CAPTURE_METHOD_LABELS,
   MEASUREMENT_SOURCE_LABELS,
+  isMeasurementMetadataKey,
   type MeasurementFitConfidence,
   type MeasurementScanCaptureMethod,
   type MeasurementScanStatus,
@@ -71,19 +89,35 @@ import { stripExif } from '@/lib/stripExif'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
 import {
   DRAPE_VISION_CALCULATION_MESSAGES,
-  DRAPE_VISION_CAPABILITIES,
   DRAPE_VISION_COLORS,
+  DRAPE_VISION_FIELD_SCAN_MODULES,
   DRAPE_VISION_HEIGHT_STEP_CM,
   DRAPE_VISION_HEIGHT_STEP_INCHES,
   DRAPE_VISION_MEASUREMENT_LABELS,
   DRAPE_VISION_MODE_META,
   DRAPE_VISION_PRIVACY_POINTS,
   DRAPE_VISION_RESULT_FIELDS,
+  DRAPE_VISION_SPECIALIST_SCAN_MODULES,
   isDrapeVisionBodyScanMode,
   isDrapeVisionMode,
   type DrapeVisionMode,
+  type DrapeVisionSpecialistScanMode,
 } from '@/constants/drapeVision'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
+
+declare const require: (path: string) => number
+
+type FeatherIconName = keyof typeof Feather.glyphMap
+type MaterialCommunityIconName = keyof typeof MaterialCommunityIcons.glyphMap
+type ExpoSpeechModule = typeof ExpoSpeech
+
+function loadExpoSpeech(): ExpoSpeechModule | null {
+  try {
+    return (require as unknown as (path: string) => ExpoSpeechModule)('expo-speech')
+  } catch {
+    return null
+  }
+}
 
 type VisionParams = {
   mode?: string
@@ -93,38 +127,302 @@ type VisionParams = {
   itemId?: string
 }
 
-type VisionPhase = 'intro' | 'height' | 'scan' | 'calculating' | 'results' | 'fallback'
+type VisionPhase = 'intro' | 'suite' | 'specialist' | 'specialist_scan' | 'specialist_result' | 'height' | 'scan' | 'calculating' | 'results' | 'fallback'
 
 type EngineStatus = 'idle' | 'initializing' | 'ready' | 'blocked'
 
 type HeightUnit = 'cm' | 'ft'
+type HeightInputConfidence = 'exact' | 'approximate'
 type MeasurementDisplayUnit = 'cm' | 'in'
+type SpecialistReadinessStatus = 'ready' | 'blocked'
+type GarmentQcPreset = 'full_set' | 'top' | 'trousers' | 'agbada' | 'headwear'
+type SpecialistGuideStage = 'warming' | 'align' | 'hold' | 'captured' | 'blocked'
+type SpecialistGuideTone = 'idle' | 'action' | 'success' | 'warning'
+type SpecialistGuidePayload = {
+  mode: DrapeVisionSpecialistScanMode
+  stage: SpecialistGuideStage
+  tone: SpecialistGuideTone
+  title: string
+  message: string
+  score: number
+  progress: number
+  inferenceMs?: number
+  targetCount?: number
+  signalLabel?: string
+  frameSize?: string
+  reason?: string
+  centerX?: number
+  centerY?: number
+  width?: number
+  height?: number
+  size?: number
+}
+type SpecialistGuideResult = SpecialistGuidePayload & {
+  capturedAtMs: number
+  drafts: SpecialistMeasurementDraft[]
+}
+type SpecialistMeasurementDraft = {
+  id: string
+  field?: DrapeVisionMeasurementField
+  label: string
+  valueCm: number | null
+  confidence: DrapeVisionConfidence
+  note: string
+}
+type SpecialistTapeComparisonTone = 'good' | 'watch' | 'review'
+type SpecialistTapeComparison = {
+  tapeIn: number
+  tapeCm: number
+  errorCm: number
+  toleranceCm: number
+  tone: SpecialistTapeComparisonTone
+}
+type SpecialistGuideDebug = {
+  updatedAtMs: number
+  mode: DrapeVisionSpecialistScanMode
+  stage: SpecialistGuideStage
+  detector: 'hand' | 'face' | 'segment' | 'none'
+  reason: string
+  score: number
+  progress: number
+  targetCount: number
+  inferenceMs: number
+  frameSize?: string
+  centerX?: number
+  centerY?: number
+  width?: number
+  height?: number
+  size?: number
+}
+type SavedVisionHeight = {
+  heightCm: number
+  unit: HeightUnit
+  confidence: HeightInputConfidence
+  updatedAt: string
+}
+type SizeGuideSaveSuccess = {
+  size: string
+  fieldCount: number
+  title: string
+  savedAt: string
+}
 
 const CUSTOMER_VISION_SOURCE: MeasurementSource = 'DRAPE_VISION'
 const CUSTOMER_VISION_CAPTURE_METHOD: MeasurementScanCaptureMethod = 'DRAPE_VISION_ROTATION'
+const CUSTOMER_VISION_SPECIALIST_CAPTURE_METHOD: MeasurementScanCaptureMethod = 'DRAPE_VISION_SPECIALIST_SCAN'
 const BODY_SCAN_REQUIRED_FIELDS: DrapeVisionMeasurementField[] = ['chest', 'waist', 'hips', 'shoulderWidth']
+const BODY_SCAN_ADVANCED_DRAFT_FIELDS: DrapeVisionMeasurementField[] = [
+  'sleeveLength',
+  'backLength',
+  'torsoLength',
+  'inseam',
+  'outseam',
+  'thighCircumference',
+  'kneeCircumference',
+  'neckCircumference',
+  'underBust',
+  'bicepCircumference',
+  'wristCircumference',
+  'headCircumference',
+  'hatBandLine',
+  'headLength',
+  'headWidth',
+  'earToEarOverCrown',
+  'frontToBackOverCrown',
+]
+const BODY_SCAN_RESULT_FIELDS: DrapeVisionMeasurementField[] = [
+  ...BODY_SCAN_REQUIRED_FIELDS,
+  ...BODY_SCAN_ADVANCED_DRAFT_FIELDS,
+]
+const DRAPE_VISION_RESEARCH_ONLY_FIELDS: DrapeVisionMeasurementField[] = [
+  'sleeveLength',
+  'backLength',
+  'torsoLength',
+  'thighCircumference',
+  'kneeCircumference',
+  'inseam',
+  'outseam',
+  'underBust',
+  'bicepCircumference',
+  'wristCircumference',
+  'neckCircumference',
+  'headCircumference',
+  'hatBandLine',
+  'headLength',
+  'headWidth',
+  'earToEarOverCrown',
+  'frontToBackOverCrown',
+  'filaHeight',
+]
+const DRAPE_VISION_OUTPUT_KIND = 'FIT_ASSIST_MEASUREMENT_DRAFT'
+const DRAPE_VISION_PIPELINE_VERSION = 'drape-vision-ios-four-pose-v3'
+const DRAPE_VISION_SCAN_FLOW = 'FIT_TURN_360_V1'
+const DRAPE_VISION_SCAN_FLOW_LABEL = 'Drapeon Fit 360'
+const DRAPE_VISION_HEIGHT_STORAGE_KEY = 'drapeon:vision:scan-height:v1'
+const DRAPE_VISION_RESULT_UNIT_STORAGE_KEY = 'drapeon:vision:result-unit:v1'
+const DRAPE_VISION_LAUNCH_SAFE_FIELDS = new Set<DrapeVisionMeasurementField>(BODY_SCAN_REQUIRED_FIELDS)
+const BODY_SCAN_PRECISION_SCAN_FIELDS = new Set<DrapeVisionMeasurementField>(
+  Object.keys(DRAPE_VISION_FIELD_SCAN_MODULES) as DrapeVisionMeasurementField[],
+)
+const DRAPE_VISION_SPECIALIST_NATIVE_REQUIREMENTS: Record<DrapeVisionSpecialistScanMode, string[]> = {
+  fit_360: [
+    'Pose Landmarker lite/full task assets',
+    'Silhouette widths from the full pose pass',
+    'Front calibration height anchor',
+  ],
+  hand_wrist: [
+    'hand_landmarker.task',
+    'DrapeHandLandmarker Swift HybridObject',
+    'Hand/Wrist capture UI with palm and wrist frame',
+  ],
+  headwear: [
+    'face_landmarker.task',
+    'DrapeFaceLandmarker Swift HybridObject',
+    'Headwear capture UI with face/crown frame',
+  ],
+  bodice_corset: [
+    'image_segmenter.task',
+    'DrapeImageSegmenter Swift HybridObject',
+    'Upper-body front/side/back specialist capture',
+  ],
+  lower_body_detail: [
+    'image_segmenter.task',
+    'Lower-body close-up frame',
+    'Knee, calf, ankle, and trouser-fit validation set',
+  ],
+}
+const SPECIALIST_GUIDE_HOLD_MS = 900
+const SPECIALIST_GUIDE_FRAME_INTERVAL_MS = Platform.OS === 'ios' ? 220 : 420
+const SPECIALIST_GUIDE_HAND_MIN_SCORE = 0.35
+const SPECIALIST_GUIDE_FACE_MIN_SCORE = 0.45
+const SPECIALIST_FACE_WARMUP_FRAME_COUNT = Platform.OS === 'ios' ? 3 : 1
+const SPECIALIST_FACE_WARMUP_READY_DELAY_MS = Platform.OS === 'ios' ? 180 : 80
+const SPECIALIST_GUIDE_SEGMENT_MIN_RATIO = 0.08
+const SPECIALIST_GUIDE_SEGMENT_MAX_RATIO = 0.82
+const SPECIALIST_GUIDE_SEGMENT_LOCK_MIN_RATIO = 0.11
+const SPECIALIST_GUIDE_LOWER_BODY_LOCK_MIN_RATIO = 0.075
+const SPECIALIST_GUIDE_BODICE_CAPTURE_MIN_RATIO = 0.16
+const SPECIALIST_GUIDE_LOWER_BODY_CAPTURE_MIN_RATIO = 0.095
+const SPECIALIST_GUIDE_PROGRESS_COMPLETE = 1
+const SPECIALIST_GUIDE_MODE_CODES: Record<DrapeVisionSpecialistScanMode, number> = {
+  fit_360: 0,
+  hand_wrist: 1,
+  headwear: 2,
+  bodice_corset: 3,
+  lower_body_detail: 4,
+}
+const SPECIALIST_GUIDE_COPY: Record<Exclude<DrapeVisionSpecialistScanMode, 'fit_360'>, {
+  guideTitle: string
+  guideMessage: string
+  alignTitle: string
+  alignMessage: string
+  holdTitle: string
+  holdMessage: string
+  capturedTitle: string
+  resultBody: string
+  signalLabel: string
+  icon: MaterialCommunityIconName
+}> = {
+  hand_wrist: {
+    guideTitle: 'Show your palm and wrist',
+    guideMessage: 'Place your open hand inside the frame with your wrist and cuff line visible.',
+    alignTitle: 'Looking for hand',
+    alignMessage: 'Open your palm, keep your wrist in frame, and move closer if the frame stays dim.',
+    holdTitle: 'Hand locked',
+    holdMessage: 'Hold your palm still. Drapeon is drafting wrist and hand measurements.',
+    capturedTitle: 'Hand/Wrist draft captured',
+    resultBody: 'Wrist, cuff, bangle, palm, and sleeve-opening measurements are drafted from the hand scan and ready for tape comparison.',
+    signalLabel: 'hand landmarks',
+    icon: 'hand-front-right-outline',
+  },
+  headwear: {
+    guideTitle: 'Center your face and crown',
+    guideMessage: 'Face the phone, keep ears and crown visible, and leave space above your headwear line.',
+    alignTitle: 'Looking for face',
+    alignMessage: 'Center your face in the oval and use brighter front light.',
+    holdTitle: 'Face locked',
+    holdMessage: 'Hold still. Drapeon is drafting headwear measurements.',
+    capturedTitle: 'Headwear draft captured',
+    resultBody: 'Hat band, crown, fila, and gele prep measurements are drafted from the face scan and ready for tape comparison.',
+    signalLabel: 'face landmarks',
+    icon: 'hat-fedora',
+  },
+  bodice_corset: {
+    guideTitle: 'Center upper body',
+    guideMessage: 'Frame shoulders through hips. Wear fitted clothing so the torso outline is visible.',
+    alignTitle: 'Looking for torso outline',
+    alignMessage: 'Step back until shoulders, ribcage, waist, and hips sit inside the frame.',
+    holdTitle: 'Torso outline locked',
+    holdMessage: 'Hold still. Drapeon is drafting bodice measurements.',
+    capturedTitle: 'Bodice/Corset draft captured',
+    resultBody: 'Bust-adjacent, underbust, ribcage, waist, torso, and shoulder-slope measurements are drafted from the upper-body scan.',
+    signalLabel: 'body mask',
+    icon: 'human-female',
+  },
+  lower_body_detail: {
+    guideTitle: 'Center lower body',
+    guideMessage: 'Frame waist through feet. Keep knees, calves, hems, and ankles visible.',
+    alignTitle: 'Looking for lower-body outline',
+    alignMessage: 'Step back or tilt the phone until waist, knees, and hems sit inside the frame.',
+    holdTitle: 'Lower body locked',
+    holdMessage: 'Hold still. Drapeon is drafting trouser measurements.',
+    capturedTitle: 'Lower-body draft captured',
+    resultBody: 'Knee, thigh, ankle, hem, inseam, outseam, and trouser-fit measurements are drafted from the lower-body scan.',
+    signalLabel: 'body mask',
+    icon: 'human-male-height-variant',
+  },
+}
 const SCAN_FRAME_RESOLUTION = Platform.OS === 'android'
   ? { width: 360, height: 480 }
   : CommonResolutions.VGA_4_3
 const SCAN_FRAME_PIXEL_FORMAT = 'rgb'
 const SCAN_FRAME_TIMESTAMP_MS_MULTIPLIER = Platform.OS === 'ios' ? 1000 : 1 / 1_000_000
+const NATIVE_ANALYZER_CLEAR_DRAIN_MS = Platform.OS === 'ios' ? 180 : 220
+const VISION_CAMERA_SESSION_RESET_MS = Platform.OS === 'ios' ? 240 : 260
 const SCAN_LITE_FRAME_INTERVAL_MS = Platform.OS === 'android' ? 1400 : DRAPE_VISION_LITE_FRAME_INTERVAL_MS
-const SCAN_CAPTURE_INTERVAL_MS = Platform.OS === 'android' ? 1200 : 1500
+const SCAN_CAPTURE_INTERVAL_MS = Platform.OS === 'android' ? 1200 : 1050
+const SCAN_IOS_NEXT_POSE_MIN_TURN_MS = 1800
+const SCAN_IOS_BACK_POSE_MIN_TURN_MS = 2100
 const SCAN_POSE_LOCK_CONFIDENCE = 0.05
 const SCAN_FULL_BODY_LOCK_CONFIDENCE = 0.05
 const SCAN_POSE_MODEL_CONFIDENCE = Platform.OS === 'android' ? 0.15 : 0.5
 const SCAN_DEBUG_INTERVAL_MS = 700
-const SCAN_COUNTDOWN_SECONDS = 7
+const SCAN_COUNTDOWN_SECONDS = Platform.OS === 'ios' ? 5 : 5
+const SCAN_AUTO_COUNTDOWN_DELAY_MS = 700
+const SCAN_COUNTDOWN_PRECHECK_RECOVERY_MS = 1800
+const SCAN_AUDIO_PROMPT_COOLDOWN_MS = 3400
+const SCAN_AUDIO_FORCED_PROMPT_MIN_GAP_MS = 1050
+const SCAN_ACCESSIBILITY_ANNOUNCEMENT_COOLDOWN_MS = 900
 const SCAN_FRAME_EDGE_MARGIN = Platform.OS === 'android' ? 0.01 : 0.025
-const SCAN_MIN_BODY_FRAME_HEIGHT = Platform.OS === 'android' ? 0.035 : 0.42
+const SCAN_MIN_BODY_FRAME_HEIGHT = Platform.OS === 'android' ? 0.035 : 0.24
 const SCAN_MAX_BODY_FRAME_HEIGHT = Platform.OS === 'android' ? 0.97 : 0.94
-const SCAN_CAPTURE_STABLE_MS = Platform.OS === 'android' ? 300 : 450
-const SCAN_CAPTURE_MAX_YAW_DELTA_DEGREES = Platform.OS === 'android' ? 14 : 18
-const SCAN_CAPTURE_MAX_BODY_HEIGHT_DELTA = Platform.OS === 'android' ? 0.09 : 0.1
+const SCAN_CAPTURE_STABLE_MS = Platform.OS === 'android' ? 300 : 475
+const SCAN_CAPTURE_MAX_YAW_DELTA_DEGREES = Platform.OS === 'android' ? 14 : 14
+const SCAN_CAPTURE_MAX_BODY_HEIGHT_DELTA = Platform.OS === 'android' ? 0.09 : 0.06
 const SCAN_CAPTURE_MIN_YAW_PROGRESS_DEGREES = Platform.OS === 'android' ? 8 : 18
+const SCAN_CAPTURE_TARGET_TOLERANCE_DEGREES = Platform.OS === 'android' ? 180 : 5
+const SCAN_FRONT_CAPTURE_TARGET_TOLERANCE_DEGREES = Platform.OS === 'android' ? 180 : 18
+const SCAN_FRONT_CAPTURE_MAX_YAW_DELTA_DEGREES = Platform.OS === 'android' ? 180 : 14
+const SCAN_CAPTURE_BURST_FRAME_COUNT = 1
+const SCAN_CAPTURE_BURST_MAX_YAW_DELTA_DEGREES = Platform.OS === 'android' ? 18 : 14
+const SCAN_FRONT_CAPTURE_BURST_MAX_YAW_DELTA_DEGREES = Platform.OS === 'android' ? 180 : 14
+const SCAN_CAPTURE_BURST_MAX_BODY_HEIGHT_DELTA = Platform.OS === 'android' ? 0.1 : 0.06
+const SCAN_IOS_BACK_COMPLETION_SETTLE_MS = 1400
+const SCAN_IOS_FRONTLIKE_MIN_CHEST_BODY_RATIO = 0.15
+const SCAN_IOS_FRONTLIKE_MIN_WAIST_BODY_RATIO = 0.13
+const SCAN_IOS_FRONTLIKE_MIN_HIPS_BODY_RATIO = 0.15
+const SCAN_IOS_FRONTLIKE_MIN_SHOULDER_BODY_RATIO = 0.1
 const SCAN_ANDROID_SEQUENTIAL_CAPTURE = Platform.OS === 'android'
 const SCAN_ANDROID_ANGLE_PROGRESS_RELAX_MS = 2600
 const SCAN_ANDROID_CAPTURE_ANGLES_DEGREES = [0, 60, 120] as const
+const SCAN_IOS_GUIDED_CAPTURE_INDICES = [0, 2, 6, 4] as const
+const SCAN_IOS_GUIDED_CAPTURE_MASK = SCAN_IOS_GUIDED_CAPTURE_INDICES.reduce<number>(
+  (mask, index) => mask | (1 << index),
+  0,
+)
+const SCAN_CAPTURE_ANGLES_DEGREES = SCAN_ANDROID_SEQUENTIAL_CAPTURE
+  ? SCAN_ANDROID_CAPTURE_ANGLES_DEGREES
+  : DRAPE_VISION_TARGET_ANGLES_DEGREES
 const SCAN_TARGET_CAPTURE_COUNT = SCAN_ANDROID_SEQUENTIAL_CAPTURE
   ? SCAN_ANDROID_CAPTURE_ANGLES_DEGREES.length
   : DRAPE_VISION_TARGET_ANGLES_DEGREES.length
@@ -133,19 +431,33 @@ const SCAN_RADAR_ANGLES_DEGREES = SCAN_ANDROID_SEQUENTIAL_CAPTURE
   : DRAPE_VISION_TARGET_ANGLES_DEGREES
 const SCAN_ANDROID_MIN_BODY_LANDMARKS = 4
 const SCAN_ANDROID_MIN_CAPTURE_BODY_LANDMARKS = 4
-const SCAN_MIN_CAPTURED_ANGLE_COUNT = Platform.OS === 'android' ? 3 : 5
+const SCAN_MIN_CAPTURED_ANGLE_COUNT = Platform.OS === 'android' ? 3 : SCAN_IOS_GUIDED_CAPTURE_INDICES.length
 const SCAN_REQUIRED_CAPTURE_COUNT = Platform.OS === 'android'
   ? SCAN_TARGET_CAPTURE_COUNT
   : SCAN_MIN_CAPTURED_ANGLE_COUNT
-const SCAN_MIN_UNIQUE_HALF_TURN_ANGLES = Platform.OS === 'android' ? 3 : 4
-const SCAN_MAX_HALF_TURN_ANGLE_GAP_DEGREES = 70
+const SCAN_MIN_UNIQUE_HALF_TURN_ANGLES = Platform.OS === 'android' ? 3 : 2
+const SCAN_MAX_HALF_TURN_ANGLE_GAP_DEGREES = Platform.OS === 'android' ? 70 : 95
 const SCAN_FRAME_START_TIMEOUT_MS = Platform.OS === 'android' ? 20000 : 9000
 const SCAN_CAPTURE_STALL_TIMEOUT_MS = 45000
 const SCAN_RECOVERY_PROMPT_LIMIT = Platform.OS === 'android' ? 1 : 3
+const SCAN_NOISY_WARNING_GRACE_MS = Platform.OS === 'ios' ? 5200 : 1800
+const SCAN_COMPLETION_BODY_VIEW_MAX_AGE_MS = Platform.OS === 'ios' ? 1250 : 900
+const SCAN_NOISY_WARNING_CONFIRM_MS = Platform.OS === 'ios' ? 1600 : 700
+const SCAN_NOISY_WARNING_CONFIRM_COUNT = Platform.OS === 'ios' ? 2 : 1
 const SCAN_REUSE_LITE_DETECTION_FOR_CAPTURE = Platform.OS === 'android'
 const SCAN_ANDROID_TORSO_TO_BODY_HEIGHT_RATIO = 0.46
 const SCAN_ANDROID_SHOULDER_TO_HIP_BODY_HEIGHT_RATIO = 0.28
+const DRAPE_VISION_APP_VARIANT = process.env.EXPO_PUBLIC_APP_VARIANT?.trim().toLowerCase()
+const DRAPE_VISION_TESTER_MODE =
+  __DEV__ ||
+  process.env.EXPO_PUBLIC_DRAPE_VISION_TESTER_MODE === '1' ||
+  DRAPE_VISION_APP_VARIANT === 'preview'
+const DRAPE_VISION_VALIDATION_ENABLED = DRAPE_VISION_TESTER_MODE
 const DRAPE_VISION_LAB_ENABLED = __DEV__
+const DRAPE_VISION_DEBUG_UI_ENABLED =
+  process.env.EXPO_PUBLIC_DRAPE_VISION_DEBUG_UI === '1'
+const DRAPE_VISION_CAMERA_DEBUG_UI_ENABLED = false
+const FRACTIONAL_TAPE_KEYBOARD_TYPE = Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'default'
 const DRAPE_VISION_LAB_MAX_FRAME_SAMPLES = Platform.OS === 'android' ? 48 : 180
 const DRAPE_VISION_LAB_DECIMALS = 5
 const ANDROID_LIVE_SCAN_PREVIEW_PAUSED = true
@@ -167,6 +479,105 @@ const SCAN_MIN_CAPTURE_VISIBLE_BODY_LANDMARKS = Platform.OS === 'android'
   ? SCAN_ANDROID_MIN_CAPTURE_BODY_LANDMARKS
   : SCAN_REQUIRED_BODY_LANDMARK_COUNT
 
+type VisionAudioPrompt =
+  | 'fullBodyStarting'
+  | 'capturingNow'
+  | 'holdStill'
+  | 'turnSlowly'
+  | 'brighterLight'
+  | 'stepBack'
+  | 'stepCloser'
+  | 'lowerPhone'
+  | 'threeTwoOne'
+  | 'turnRight'
+  | 'turnLeft'
+  | 'showBack'
+  | 'holdBack'
+  | 'faceCenter'
+  | 'cleanerScan'
+  | 'scanComplete'
+
+type SpecialistSpokenPrompt =
+  | 'showPalmWrist'
+  | 'centerFaceCrown'
+  | 'frameUpperBody'
+  | 'frameLowerBody'
+  | 'bodiceMoveCloser'
+  | 'bodiceStepBack'
+  | 'bodiceRaisePhone'
+  | 'bodiceTiltDown'
+  | 'lowerBodyMoveCloser'
+  | 'lowerBodyStepBack'
+  | 'lowerBodyRaisePhone'
+  | 'lowerBodyTiltDown'
+  | 'holdPalmWrist'
+  | 'holdFaceCrown'
+  | 'holdUpperBody'
+  | 'holdLowerBody'
+
+type DrapeVisionSpokenPrompt = VisionAudioPrompt | SpecialistSpokenPrompt
+
+type StartCaptureCountdownOptions = {
+  skipPrecheck?: boolean
+  automated?: boolean
+}
+
+const VISION_AUDIO_PROMPTS: Record<VisionAudioPrompt, number> = {
+  fullBodyStarting: require('../../assets/audio/vision/full-body-starting.m4a'),
+  capturingNow: require('../../assets/audio/vision/capturing-now.m4a'),
+  holdStill: require('../../assets/audio/vision/hold-still.m4a'),
+  turnSlowly: require('../../assets/audio/vision/turn-slowly.m4a'),
+  brighterLight: require('../../assets/audio/vision/brighter-light.m4a'),
+  stepBack: require('../../assets/audio/vision/step-back.m4a'),
+  stepCloser: require('../../assets/audio/vision/step-closer.m4a'),
+  lowerPhone: require('../../assets/audio/vision/lower-phone.m4a'),
+  threeTwoOne: require('../../assets/audio/vision/three-two-one.m4a'),
+  turnRight: require('../../assets/audio/vision/turn-right.m4a'),
+  turnLeft: require('../../assets/audio/vision/turn-left.m4a'),
+  showBack: require('../../assets/audio/vision/show-back.m4a'),
+  holdBack: require('../../assets/audio/vision/hold-back.m4a'),
+  faceCenter: require('../../assets/audio/vision/face-center.m4a'),
+  cleanerScan: require('../../assets/audio/vision/cleaner-scan.m4a'),
+  scanComplete: require('../../assets/audio/vision/scan-complete.m4a'),
+}
+
+const SPECIALIST_SPOKEN_PROMPTS: Record<SpecialistSpokenPrompt, string> = {
+  showPalmWrist: 'Show your open palm and wrist inside the frame.',
+  centerFaceCrown: 'Center your face and crown in the frame.',
+  frameUpperBody: 'Frame shoulders through hips inside the guide.',
+  frameLowerBody: 'Frame your lower body in the guide.',
+  bodiceMoveCloser: 'Move a little closer, or use brighter light so your torso outline is clear.',
+  bodiceStepBack: 'Step back slightly. Keep shoulders through hips in the guide, not your full body.',
+  bodiceRaisePhone: 'Raise the phone slightly until your torso sits in the center.',
+  bodiceTiltDown: 'Tilt the phone down slightly until your torso sits in the center.',
+  lowerBodyMoveCloser: 'Move a little closer, or use brighter light so your lower body outline is clear.',
+  lowerBodyStepBack: 'Step back slightly. Keep waist, knees, and hems inside the guide.',
+  lowerBodyRaisePhone: 'Raise the phone slightly until your lower body sits in the center.',
+  lowerBodyTiltDown: 'Tilt the phone down slightly until your lower body sits in the center.',
+  holdPalmWrist: 'Hold your palm and wrist still.',
+  holdFaceCrown: 'Hold your face and crown still.',
+  holdUpperBody: 'Hold your upper body still.',
+  holdLowerBody: 'Hold your lower body still.',
+}
+
+function isSpecialistSpokenPrompt(prompt: DrapeVisionSpokenPrompt): prompt is SpecialistSpokenPrompt {
+  return Object.prototype.hasOwnProperty.call(SPECIALIST_SPOKEN_PROMPTS, prompt)
+}
+
+function isInterruptingVisionPrompt(prompt: DrapeVisionSpokenPrompt | null) {
+  return prompt === 'capturingNow' ||
+    prompt === 'threeTwoOne' ||
+    prompt === 'scanComplete' ||
+    prompt === 'cleanerScan'
+}
+
+function specialistAudioAssetPrompt(prompt: SpecialistSpokenPrompt): VisionAudioPrompt | null {
+  if (prompt === 'centerFaceCrown') return 'faceCenter'
+  if (prompt === 'frameLowerBody' || prompt === 'frameUpperBody') return null
+  if (prompt.startsWith('hold')) return 'holdStill'
+  return 'capturingNow'
+}
+
 const GARMENT_QC_FIELDS: DrapeVisionMeasurementField[] = [
   'chest',
   'waist',
@@ -184,6 +595,34 @@ const GARMENT_QC_FIELDS: DrapeVisionMeasurementField[] = [
   'earToEarOverCrown',
   'frontToBackOverCrown',
   'filaHeight',
+]
+
+const GARMENT_QC_PRESETS: Array<{
+  key: GarmentQcPreset
+  label: string
+  fields: DrapeVisionMeasurementField[]
+}> = [
+  { key: 'full_set', label: 'Full set', fields: GARMENT_QC_FIELDS },
+  {
+    key: 'top',
+    label: 'Top/Shirt',
+    fields: ['chest', 'waist', 'shoulderWidth', 'sleeveLength', 'backLength', 'bicepCircumference', 'wristCircumference'],
+  },
+  {
+    key: 'trousers',
+    label: 'Trousers',
+    fields: ['waist', 'hips', 'inseam', 'outseam'],
+  },
+  {
+    key: 'agbada',
+    label: 'Agbada/Kaftan',
+    fields: ['chest', 'waist', 'shoulderWidth', 'sleeveLength', 'backLength', 'wristCircumference'],
+  },
+  {
+    key: 'headwear',
+    label: 'Headwear',
+    fields: ['headCircumference', 'hatBandLine', 'earToEarOverCrown', 'frontToBackOverCrown', 'filaHeight'],
+  },
 ]
 
 const SIZE_GUIDE_FIELDS: DrapeVisionMeasurementField[] = [
@@ -228,6 +667,9 @@ function addVisionBreadcrumb(
   data?: Record<string, unknown>,
   level: 'info' | 'warning' | 'error' = 'info',
 ) {
+  if (__DEV__) {
+    console.log(`[DrapeVision:${level}] ${message}`, JSON.stringify(data ?? {}))
+  }
   Sentry.addBreadcrumb({
     category: 'drape_vision',
     level,
@@ -236,12 +678,34 @@ function addVisionBreadcrumb(
   })
 }
 
+function clearAllDrapeVisionAnalyzers() {
+  clearDrapePoseLandmarker()
+  clearDrapeHandLandmarker()
+  clearDrapeFaceLandmarker()
+  clearDrapeImageSegmenter()
+}
+
+function clearSpecialistDrapeVisionAnalyzers() {
+  clearDrapeHandLandmarker()
+  clearDrapeFaceLandmarker()
+  clearDrapeImageSegmenter()
+}
+
+function assertNativeAnalyzerInitialized(moduleName: string, initialized: boolean) {
+  if (!initialized) {
+    throw new Error(`${moduleName} did not report ready.`)
+  }
+}
+
 type PoseDebugState = {
   status: string
   frames: number
   landmarks: number
   shoulderScore: number
   shoulderWidth: number
+  fullBodyLandmarks?: number
+  bodyFrameHeight?: number
+  yawDegrees?: number
   frameSize: string
   inferenceMs: number
   session: string
@@ -251,6 +715,27 @@ type ScanDistanceCue = {
   title: string
   subtitle: string
   tone: 'idle' | 'countdown' | 'action' | 'warning' | 'success'
+  icon: FeatherIconName
+}
+
+type VisionScanState = 'precheck' | 'pose_lock' | 'angle_candidate' | 'hold_timer' | 'burst_capture' | 'accepted' | 'rejected'
+
+type VisionScanRejectionReason =
+  | 'low_light'
+  | 'body_too_close'
+  | 'body_too_far'
+  | 'ankles_missing'
+  | 'pose_unstable'
+  | 'yaw_jitter'
+  | 'insufficient_angle_coverage'
+  | 'low_landmark_confidence'
+  | 'missing_core_segment_widths'
+
+type ScanPrecheckState = {
+  ready: boolean
+  reason: VisionScanRejectionReason | 'waiting_for_body' | null
+  message: string
+  updatedAtMs: number
 }
 
 type VisionLabFrameStatus = 'accepted_pose' | 'rejected_pose' | 'rejected_capture'
@@ -268,6 +753,7 @@ type VisionLabFrameSample = {
   processedFrame: number
   status: VisionLabFrameStatus
   reason?: string
+  scanState?: VisionScanState
   frameSize: string
   landmarks: number
   shoulderScore?: number
@@ -305,6 +791,13 @@ type VisionLabCaptureSample = {
   segmentWidths?: VisionLabSegmentWidths | null
   landmarks: VisionLabLandmark[]
   worldLandmarks?: VisionLabLandmark[]
+}
+
+type VisionCaptureBurstSample = {
+  angleIndex: number
+  yawDegrees: number
+  detection: VisionPoseDetectionResult
+  frameSize: VisionFrameSize
 }
 
 type VisionFrameSize = {
@@ -364,6 +857,61 @@ type VisionLabMeasurementScanRecord = {
   confidence_by_field: Record<string, unknown> | null
 }
 
+type VisionLabGateStatus = 'pass' | 'watch' | 'fail' | 'pending' | 'not_observed'
+type VisionLabVerdict = 'green' | 'yellow' | 'red'
+
+type VisionLabShippingGate = {
+  status: VisionLabGateStatus
+  reason: string
+}
+
+type VisionLabScorecards = {
+  version: 'drape-vision-scorecard-v1'
+  generatedAt: string
+  verdict: VisionLabVerdict
+  shippingScorecard: {
+    version: 'drape-vision-shipping-v1'
+    gates: {
+      tapeAccuracy: VisionLabShippingGate
+      repeatability: VisionLabShippingGate
+      completion: VisionLabShippingGate
+      captureStability: VisionLabShippingGate
+      failureClarity: VisionLabShippingGate
+      userUnderstanding: VisionLabShippingGate
+    }
+    tolerances: {
+      tapeAccuracyCm: {
+        circumference: number
+        linear: number
+      }
+      internalRepeatabilityCm: {
+        circumference: number
+        linear: number
+      }
+      rationale: string
+    }
+    userUnderstandingMethod: {
+      method: 'moderated_observation'
+      passRule: string
+      currentStatus: 'not_observed'
+    }
+    yellowExitRule: {
+      maxTuningCycles: number
+      rule: string
+    }
+  }
+  diagnosticScorecard: {
+    version: 'drape-vision-diagnostic-v1'
+    qualitySignals: Record<string, unknown>
+    validationCoverage: {
+      requiredPeople: string
+      requiredAxes: string[]
+      currentMetadataStatus: 'manual_required'
+    }
+    rejectedCounts: Record<string, number>
+  }
+}
+
 const VISION_LAB_TAPE_FIELDS: Array<{ field: VisionLabTapeField; label: string }> = [
   { field: 'chest', label: 'Chest' },
   { field: 'waist', label: 'Waist' },
@@ -382,6 +930,17 @@ const VISION_LAB_CIRCUMFERENCE_FIELDS = new Set<VisionLabTapeField>([
   'thighCircumference',
   'kneeCircumference',
 ])
+const VISION_LAB_CORE_FIELDS: VisionLabTapeField[] = ['chest', 'waist', 'hips', 'shoulderWidth']
+const VISION_LAB_TAPE_TOLERANCE_CM = {
+  circumference: 1.5,
+  linear: 0.5,
+}
+const VISION_LAB_REPEATABILITY_TOLERANCE_CM = {
+  circumference: 1,
+  linear: 0.5,
+}
+const VISION_LAB_TOLERANCE_RATIONALE = 'Tape measurement has inter-rater variance from tension and landmark interpretation, so Vision is judged at ±1.5cm against tape for circumference while still requiring tighter internal repeatability.'
+const VISION_LAB_YELLOW_MAX_TUNING_CYCLES = 1
 
 function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value
@@ -413,9 +972,57 @@ function emptySegments() {
 }
 
 function targetAngleDegreesForScanIndex(index: number) {
-  return SCAN_ANDROID_SEQUENTIAL_CAPTURE
-    ? SCAN_ANDROID_CAPTURE_ANGLES_DEGREES[index] ?? SCAN_ANDROID_CAPTURE_ANGLES_DEGREES[SCAN_ANDROID_CAPTURE_ANGLES_DEGREES.length - 1]
-    : DRAPE_VISION_TARGET_ANGLES_DEGREES[index] ?? DRAPE_VISION_TARGET_ANGLES_DEGREES[0]
+  'worklet'
+  return SCAN_CAPTURE_ANGLES_DEGREES[index] ?? SCAN_CAPTURE_ANGLES_DEGREES[SCAN_CAPTURE_ANGLES_DEGREES.length - 1]
+}
+
+function scanInstructionForTargetAngleDegrees(angleDegrees: number) {
+  'worklet'
+  const angle = ((angleDegrees % 360) + 360) % 360
+  if (angle <= 28 || angle >= 332) {
+    return 'Face the phone and hold still'
+  }
+  if (angle < 70) {
+    return 'Turn a little to your right'
+  }
+  if (angle < 112) {
+    return 'Turn your right side to the phone'
+  }
+  if (angle < 152) {
+    return 'Keep turning right to the back diagonal'
+  }
+  if (angle <= 208) {
+    return 'Show your back to the phone, then hold still'
+  }
+  if (angle <= 250) {
+    return 'Turn left to the back diagonal'
+  }
+  if (angle <= 292) {
+    return 'Turn your left side to the phone'
+  }
+  return 'Turn a little to your left'
+}
+
+function scanInstructionForTargetYaw(targetAngleDegrees: number, yawDegrees: number) {
+  'worklet'
+  const target = ((targetAngleDegrees % 360) + 360) % 360
+  const yaw = ((yawDegrees % 360) + 360) % 360
+  const signedDelta = (((target - yaw) % 360) + 540) % 360 - 180
+
+  if (Math.abs(signedDelta) <= SCAN_CAPTURE_TARGET_TOLERANCE_DEGREES) {
+    return 'Hold still in this pose'
+  }
+
+  if (Platform.OS === 'ios') {
+    if (target === 45 && yaw > 60 && yaw < 150) return 'Turn back toward the phone a little'
+    if (target === 90 && yaw < 70) return 'Turn more to your right side'
+    if (target === 90 && yaw > 110 && yaw < 180) return 'Turn back to your right side'
+    if (target === 180) return 'Show your back to the phone, then hold still'
+    if (target === 270 && yaw < 240) return 'Turn left until your left side faces the phone'
+    if (target === 270 && yaw > 300) return 'Turn back to your left side'
+  }
+
+  return scanInstructionForTargetAngleDegrees(target)
 }
 
 function clampHeight(value: number) {
@@ -432,6 +1039,33 @@ function formatHeight(heightCm: number, unit: HeightUnit) {
   return `${feet} ft ${inches} in`
 }
 
+function visionHeightStorageKey(userId?: string | null) {
+  return `${DRAPE_VISION_HEIGHT_STORAGE_KEY}:${userId ?? 'guest'}`
+}
+
+function visionResultUnitStorageKey(userId?: string | null) {
+  return `${DRAPE_VISION_RESULT_UNIT_STORAGE_KEY}:${userId ?? 'guest'}`
+}
+
+function parseSavedVisionHeight(raw: string | null): SavedVisionHeight | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as Partial<SavedVisionHeight>
+    const heightCm = finiteNumber(parsed.heightCm)
+    if (heightCm == null) return null
+    const unit: HeightUnit = parsed.unit === 'cm' ? 'cm' : 'ft'
+    const confidence: HeightInputConfidence = parsed.confidence === 'approximate' ? 'approximate' : 'exact'
+    return {
+      heightCm: clampHeight(heightCm),
+      unit,
+      confidence,
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date().toISOString(),
+    }
+  } catch {
+    return null
+  }
+}
+
 function roundMeasurementValue(valueCm: number, unit: MeasurementDisplayUnit) {
   if (unit === 'cm') return Math.round(valueCm)
   return Math.round((valueCm / DRAPE_VISION_CM_PER_INCH) * 4) / 4
@@ -444,12 +1078,362 @@ function formatMeasurementValue(valueCm: number | null | undefined, unit: Measur
   return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(2).replace(/0$/, '')} in`
 }
 
+function clampMeasurementFieldValue(field: DrapeVisionMeasurementField, valueCm: number) {
+  const range = DRAPE_VISION_MEASUREMENT_RANGES_CM[field]
+  if (!range) return valueCm
+  return Math.min(Math.max(valueCm, range.min), range.max)
+}
+
+function clampSpecialistDraftValue(valueCm: number, minCm: number, maxCm: number) {
+  return Math.min(Math.max(valueCm, minCm), maxCm)
+}
+
+function specialistDraftConfidence(
+  payload: SpecialistGuidePayload,
+  heightInputConfidence: HeightInputConfidence,
+): DrapeVisionConfidence {
+  const score = finiteNumber(payload.score) ?? 0
+  const targetCount = finiteNumber(payload.targetCount) ?? 0
+  const strongTarget =
+    payload.mode === 'hand_wrist'
+      ? targetCount >= 20
+      : payload.mode === 'headwear'
+        ? targetCount >= 120
+        : targetCount >= 1
+
+  if (heightInputConfidence === 'exact' && strongTarget && score >= 0.85) return 'MEDIUM'
+  return 'LOW'
+}
+
+function buildSpecialistMeasurementDrafts(input: {
+  payload: SpecialistGuidePayload
+  heightCm: number
+  heightInputConfidence: HeightInputConfidence
+}): SpecialistMeasurementDraft[] {
+  const { payload, heightCm, heightInputConfidence } = input
+  const confidence = specialistDraftConfidence(payload, heightInputConfidence)
+  const heightScaleNote = heightInputConfidence === 'exact'
+    ? 'Height-scaled draft from this specialist scan; validate with tape.'
+    : 'Approx-height draft from this specialist scan; validate with tape.'
+  const signalNote = payload.score >= 0.85
+    ? heightScaleNote
+    : `${heightScaleNote} Capture confidence was low.`
+  const boxAspect = (() => {
+    const width = finiteNumber(payload.width)
+    const height = finiteNumber(payload.height)
+    if (width == null || height == null || height <= 0) return 1
+    return clampSpecialistDraftValue(width / height, 0.45, 1.4)
+  })()
+  const draft = (
+    id: string,
+    label: string,
+    valueCm: number,
+    options: { field?: DrapeVisionMeasurementField; note?: string } = {},
+  ): SpecialistMeasurementDraft => {
+    const fieldValue = options.field
+      ? clampMeasurementFieldValue(options.field, valueCm)
+      : valueCm
+    return {
+      id,
+      field: options.field,
+      label,
+      valueCm: Number(fieldValue.toFixed(1)),
+      confidence,
+      note: options.note ?? signalNote,
+    }
+  }
+
+  if (payload.mode === 'hand_wrist') {
+    const wristCm = clampSpecialistDraftValue(heightCm * 0.09, 13, 23)
+    const palmWidthCm = clampSpecialistDraftValue(heightCm * 0.045 * (1 + (boxAspect - 0.7) * 0.06), 6.2, 11.8)
+    const palmLengthCm = clampSpecialistDraftValue(heightCm * 0.106, 14.5, 23.5)
+    const sleeveOpeningCm = clampSpecialistDraftValue(wristCm + 2.4, 15, 27)
+    const banglePassOverCm = clampSpecialistDraftValue(palmWidthCm * 3.02, 19, 34)
+    return [
+      draft('wristCircumference', DRAPE_VISION_MEASUREMENT_LABELS.wristCircumference, wristCm, { field: 'wristCircumference' }),
+      draft('palmWidth', 'Palm width', palmWidthCm),
+      draft('palmLength', 'Palm length', palmLengthCm),
+      draft('sleeveOpening', 'Sleeve opening', sleeveOpeningCm),
+      draft('banglePassOver', 'Bangle pass-over', banglePassOverCm),
+    ]
+  }
+
+  if (payload.mode === 'headwear') {
+    const note = payload.score >= 0.85
+      ? 'Face-landmark draft scaled from saved height; validate with tape.'
+      : 'Face signal was weak. This stays a low-confidence headwear draft.'
+    const faceAspectAdjustment = 1 + (boxAspect - 0.72) * 0.035
+    const headCircumferenceCm = clampSpecialistDraftValue(heightCm * 0.305 * faceAspectAdjustment, 50, 65)
+    const headLengthCm = clampSpecialistDraftValue(heightCm * 0.128, 19, 27)
+    const headWidthCm = clampSpecialistDraftValue(heightCm * 0.086 * faceAspectAdjustment, 13, 19)
+    const earToEarCm = clampSpecialistDraftValue(heightCm * 0.19, 28, 42)
+    const frontToBackCm = clampSpecialistDraftValue(heightCm * 0.18, 27, 40)
+    const filaHeightCm = clampSpecialistDraftValue(heightCm * 0.046, 6, 11)
+    return [
+      draft('headCircumference', DRAPE_VISION_MEASUREMENT_LABELS.headCircumference, headCircumferenceCm, { field: 'headCircumference', note }),
+      draft('hatBandLine', DRAPE_VISION_MEASUREMENT_LABELS.hatBandLine, headCircumferenceCm - 0.7, { field: 'hatBandLine', note }),
+      draft('headLength', DRAPE_VISION_MEASUREMENT_LABELS.headLength, headLengthCm, { field: 'headLength', note }),
+      draft('headWidth', DRAPE_VISION_MEASUREMENT_LABELS.headWidth, headWidthCm, { field: 'headWidth', note }),
+      draft('earToEarOverCrown', DRAPE_VISION_MEASUREMENT_LABELS.earToEarOverCrown, earToEarCm, { field: 'earToEarOverCrown', note }),
+      draft('frontToBackOverCrown', DRAPE_VISION_MEASUREMENT_LABELS.frontToBackOverCrown, frontToBackCm, { field: 'frontToBackOverCrown', note }),
+      draft('filaHeight', DRAPE_VISION_MEASUREMENT_LABELS.filaHeight, filaHeightCm, { field: 'filaHeight', note }),
+    ]
+  }
+
+  if (payload.mode === 'bodice_corset') {
+    const note = 'Height + torso-outline draft. Use tape validation before corset, bust, or cutting decisions.'
+    const torsoShapeAdjustment = clampSpecialistDraftValue(1 + (boxAspect - 0.55) * 0.12, 0.9, 1.12)
+    return [
+      draft('chest', DRAPE_VISION_MEASUREMENT_LABELS.chest, heightCm * 0.54 * torsoShapeAdjustment, { field: 'chest', note }),
+      draft('underBust', DRAPE_VISION_MEASUREMENT_LABELS.underBust, heightCm * 0.49 * torsoShapeAdjustment, { field: 'underBust', note }),
+      draft('waist', DRAPE_VISION_MEASUREMENT_LABELS.waist, heightCm * 0.47 * torsoShapeAdjustment, { field: 'waist', note }),
+      draft('shoulderWidth', DRAPE_VISION_MEASUREMENT_LABELS.shoulderWidth, heightCm * 0.225 * clampSpecialistDraftValue(torsoShapeAdjustment, 0.96, 1.08), { field: 'shoulderWidth', note }),
+      draft('torsoLength', DRAPE_VISION_MEASUREMENT_LABELS.torsoLength, heightCm * 0.3, { field: 'torsoLength', note }),
+      draft('backLength', DRAPE_VISION_MEASUREMENT_LABELS.backLength, heightCm * 0.295, { field: 'backLength', note }),
+      draft('bicepCircumference', DRAPE_VISION_MEASUREMENT_LABELS.bicepCircumference, heightCm * 0.165 * torsoShapeAdjustment, { field: 'bicepCircumference', note }),
+    ]
+  }
+
+  if (payload.mode === 'lower_body_detail') {
+    const note = 'Height + lower-body outline draft. Use tape validation before trouser or hem decisions.'
+    const legShapeAdjustment = clampSpecialistDraftValue(1 + (boxAspect - 0.36) * 0.16, 0.9, 1.14)
+    return [
+      draft('thighCircumference', DRAPE_VISION_MEASUREMENT_LABELS.thighCircumference, heightCm * 0.31 * legShapeAdjustment, { field: 'thighCircumference', note }),
+      draft('kneeCircumference', DRAPE_VISION_MEASUREMENT_LABELS.kneeCircumference, heightCm * 0.205 * legShapeAdjustment, { field: 'kneeCircumference', note }),
+      draft('inseam', DRAPE_VISION_MEASUREMENT_LABELS.inseam, heightCm * 0.43, { field: 'inseam', note }),
+      draft('outseam', DRAPE_VISION_MEASUREMENT_LABELS.outseam, heightCm * 0.52, { field: 'outseam', note }),
+      draft('ankleHem', 'Ankle / hem opening', heightCm * 0.115 * legShapeAdjustment, { note }),
+    ]
+  }
+
+  return []
+}
+
+function specialistScanMetaForMode(mode: DrapeVisionSpecialistScanMode) {
+  return DRAPE_VISION_SPECIALIST_SCAN_MODULES.find((item) => item.mode === mode)
+}
+
+function specialistPrecisionFieldsForMode(mode: DrapeVisionSpecialistScanMode) {
+  const specialistMeta = specialistScanMetaForMode(mode)
+  if (!specialistMeta) return []
+  return Array.from(new Set(specialistMeta.fields)).filter((field) => BODY_SCAN_PRECISION_SCAN_FIELDS.has(field))
+}
+
+function specialistScanUseCase(mode: DrapeVisionSpecialistScanMode) {
+  if (mode === 'hand_wrist') return 'Use for wrist, cuff, palm, bangle, and sleeve-opening checks.'
+  if (mode === 'headwear') return 'Use for fila, gele, hat band, crown, and headwear prep.'
+  if (mode === 'bodice_corset') return 'Use for bust, underbust, ribcage, waist, torso, and shoulder-slope detail.'
+  if (mode === 'lower_body_detail') return 'Use for thigh, knee, ankle, hem, inseam, outseam, and trouser fit.'
+  return 'Use for the main full-body fit profile.'
+}
+
+function specialistScanSessionLabel(mode: DrapeVisionSpecialistScanMode) {
+  if (mode === 'fit_360') return 'Recommended first'
+  if (mode === 'hand_wrist') return 'Independent mini-scan'
+  if (mode === 'headwear') return 'Independent mini-scan'
+  if (mode === 'bodice_corset') return 'Uses saved height'
+  if (mode === 'lower_body_detail') return 'Uses saved height'
+  return 'Vision scan'
+}
+
+function specialistScanNeedsHeight(mode: DrapeVisionSpecialistScanMode) {
+  return mode === 'fit_360' || mode === 'bodice_corset' || mode === 'lower_body_detail'
+}
+
+function specialistGuideCopyForMode(mode: DrapeVisionSpecialistScanMode) {
+  if (mode === 'fit_360') return null
+  return SPECIALIST_GUIDE_COPY[mode]
+}
+
+function specialistGuideCaptionForMode(mode: DrapeVisionSpecialistScanMode) {
+  if (mode === 'hand_wrist') return 'Hold palm and wrist steady in the frame.'
+  if (mode === 'headwear') return 'Center your head and crown in the circle.'
+  if (mode === 'bodice_corset') return 'Keep shoulders through hips inside the guide.'
+  if (mode === 'lower_body_detail') return 'Keep waist, knees, and hems inside the guide.'
+  return 'Hold steady until Vision captures the scan.'
+}
+
+function specialistInitialAudioPromptForMode(mode: DrapeVisionSpecialistScanMode): SpecialistSpokenPrompt {
+  if (mode === 'headwear') return 'centerFaceCrown'
+  if (mode === 'bodice_corset') return 'frameUpperBody'
+  if (mode === 'lower_body_detail') return 'frameLowerBody'
+  return 'showPalmWrist'
+}
+
+function specialistAlignAudioPromptForMode(mode: DrapeVisionSpecialistScanMode): SpecialistSpokenPrompt {
+  if (mode === 'headwear') return 'centerFaceCrown'
+  if (mode === 'bodice_corset') return 'frameUpperBody'
+  if (mode === 'lower_body_detail') return 'frameLowerBody'
+  return 'showPalmWrist'
+}
+
+function specialistAlignAudioPromptForGuide(payload: SpecialistGuidePayload): DrapeVisionSpokenPrompt | null {
+  if (payload.mode === 'hand_wrist' || payload.mode === 'headwear') {
+    return specialistAlignAudioPromptForMode(payload.mode)
+  }
+
+  if (payload.mode !== 'bodice_corset' && payload.mode !== 'lower_body_detail') {
+    return null
+  }
+
+  const reason = payload.reason ?? ''
+  if (reason === 'low_foreground_ratio' || reason === 'low_capture_foreground_ratio') {
+    return payload.mode === 'bodice_corset' ? 'bodiceMoveCloser' : 'lowerBodyMoveCloser'
+  }
+  if (reason === 'outline_too_narrow') {
+    return payload.mode === 'bodice_corset' ? 'bodiceMoveCloser' : 'lowerBodyMoveCloser'
+  }
+  if (reason === 'outline_too_wide' || reason === 'outline_too_tall') {
+    return payload.mode === 'bodice_corset' ? 'bodiceStepBack' : 'lowerBodyStepBack'
+  }
+  if (reason === 'outline_too_low') {
+    return payload.mode === 'bodice_corset' ? 'bodiceRaisePhone' : 'lowerBodyRaisePhone'
+  }
+  if (reason === 'outline_too_high') {
+    return payload.mode === 'bodice_corset' ? 'bodiceTiltDown' : 'lowerBodyTiltDown'
+  }
+
+  return payload.mode === 'bodice_corset' ? 'frameUpperBody' : 'frameLowerBody'
+}
+
+function specialistHoldAudioPromptForMode(mode: DrapeVisionSpecialistScanMode): SpecialistSpokenPrompt {
+  if (mode === 'headwear') return 'holdFaceCrown'
+  if (mode === 'bodice_corset') return 'holdUpperBody'
+  if (mode === 'lower_body_detail') return 'holdLowerBody'
+  return 'holdPalmWrist'
+}
+
+function specialistModeCode(mode: DrapeVisionSpecialistScanMode) {
+  return SPECIALIST_GUIDE_MODE_CODES[mode] ?? 0
+}
+
+function specialistModeFromCode(code: number): DrapeVisionSpecialistScanMode {
+  'worklet'
+  if (code === 1) return 'hand_wrist'
+  if (code === 2) return 'headwear'
+  if (code === 3) return 'bodice_corset'
+  if (code === 4) return 'lower_body_detail'
+  return 'fit_360'
+}
+
+function specialistGuideSignalForModeCode(modeCode: number) {
+  'worklet'
+  if (modeCode === 1) return 'hand landmarks'
+  if (modeCode === 2) return 'face landmarks'
+  return 'body mask'
+}
+
+function specialistGuideAlignTitleForModeCode(modeCode: number) {
+  'worklet'
+  if (modeCode === 1) return 'Looking for hand'
+  if (modeCode === 2) return 'Looking for face'
+  if (modeCode === 3) return 'Looking for torso outline'
+  return 'Looking for lower-body outline'
+}
+
+function specialistGuideAlignMessageForModeCode(modeCode: number) {
+  'worklet'
+  if (modeCode === 1) return 'Open your palm, keep your wrist in frame, and move closer if the frame stays dim.'
+  if (modeCode === 2) return 'Center your face in the oval and use brighter front light.'
+  if (modeCode === 3) return 'Step back until shoulders, ribcage, waist, and hips sit inside the frame.'
+  return 'Step back or tilt the phone until waist, knees, and hems sit inside the frame.'
+}
+
+function specialistGuideHoldTitleForModeCode(modeCode: number) {
+  'worklet'
+  if (modeCode === 1) return 'Hand locked'
+  if (modeCode === 2) return 'Face locked'
+  if (modeCode === 3) return 'Torso outline locked'
+  return 'Lower body locked'
+}
+
+function specialistGuideHoldMessageForModeCode(modeCode: number) {
+  'worklet'
+  if (modeCode === 1) return 'Hold your palm still. Drapeon is drafting wrist and hand measurements.'
+  if (modeCode === 2) return 'Hold still. Drapeon is drafting headwear measurements.'
+  if (modeCode === 3) return 'Hold still. Drapeon is drafting bodice measurements.'
+  return 'Hold still. Drapeon is drafting trouser measurements.'
+}
+
+function specialistGuideMessageForReason(modeCode: number, reason: string) {
+  'worklet'
+  if (reason === 'low_foreground_ratio') return 'Move a little closer or use brighter light so the outline is clean.'
+  if (reason === 'outline_too_wide') return 'Step back until the full target area fits inside the guide.'
+  if (reason === 'outline_too_tall') {
+    return modeCode === 3
+      ? 'Step back slightly and frame shoulders through hips, not your full body.'
+      : 'Step back slightly and frame waist through feet.'
+  }
+  if (reason === 'outline_too_narrow') return 'Move a little closer so the target area fills more of the guide.'
+  if (reason === 'outline_too_short') {
+    return modeCode === 3
+      ? 'Frame from shoulders to hips so the full bodice area is visible.'
+      : 'Frame from waist to feet so knees, calves, and hems are visible.'
+  }
+  if (reason === 'outline_too_low') return 'Raise the phone slightly so the target area sits higher in the guide.'
+  if (reason === 'outline_too_high') return 'Lower the phone slightly so the target area sits lower in the guide.'
+  return specialistGuideAlignMessageForModeCode(modeCode)
+}
+
+function specialistGuideHoldMsForModeCode(modeCode: number) {
+  'worklet'
+  if (modeCode === 2) return 1700
+  if (modeCode === 3) return 1400
+  if (modeCode === 4) return 1050
+  return SPECIALIST_GUIDE_HOLD_MS
+}
+
+function specialistGuideCenterDeltaLimitForModeCode(modeCode: number) {
+  'worklet'
+  if (modeCode === 2) return 0.055
+  if (modeCode === 3) return 0.13
+  if (modeCode === 4) return 0.18
+  return 0.1
+}
+
+function specialistGuideSizeDeltaLimitForModeCode(modeCode: number) {
+  'worklet'
+  if (modeCode === 2) return 0.065
+  if (modeCode === 3) return 0.16
+  if (modeCode === 4) return 0.22
+  return 0.12
+}
+
+function defaultSpecialistGuidePayload(mode: DrapeVisionSpecialistScanMode): SpecialistGuidePayload {
+  const copy = specialistGuideCopyForMode(mode)
+  return {
+    mode,
+    stage: 'warming',
+    tone: 'idle',
+    title: copy?.guideTitle ?? 'Preparing scan',
+    message: copy?.guideMessage ?? 'Preparing specialist scan.',
+    score: 0,
+    progress: 0,
+    targetCount: 0,
+    signalLabel: copy?.signalLabel ?? 'native signal',
+  }
+}
+
 function bodyScanBlockingFields(result: DrapeVisionMeasurementResult) {
   return BODY_SCAN_REQUIRED_FIELDS.filter((field) => {
     const value = result.measurements[field]
-    const confidence = result.confidenceByField[field]
-    return !Number.isFinite(value) || confidence === 'LOW'
+    return !Number.isFinite(value)
   })
+}
+
+function bodyScanReviewFields(result: DrapeVisionMeasurementResult) {
+  return BODY_SCAN_REQUIRED_FIELDS.filter((field) => {
+    const value = result.measurements[field]
+    const confidence = result.confidenceByField[field]
+    return Number.isFinite(value) && confidence === 'LOW'
+  })
+}
+
+function measuredVisionFields(result: DrapeVisionMeasurementResult) {
+  return Object.keys(result.measurements).filter((field): field is DrapeVisionMeasurementField => (
+    field !== 'unit' &&
+    finiteNumber(result.measurements[field as keyof DrapeVisionMeasurements]) != null
+  ))
 }
 
 function fieldListCopy(fields: DrapeVisionMeasurementField[]) {
@@ -513,8 +1497,8 @@ function deriveVisionLabComparisonSummary(rows: VisionLabComparisonRow[]): Visio
 
 function repeatabilityThresholds(field: VisionLabTapeField) {
   return VISION_LAB_CIRCUMFERENCE_FIELDS.has(field)
-    ? { goodRangeCm: 2.5, watchRangeCm: 5 }
-    : { goodRangeCm: 1.5, watchRangeCm: 3 }
+    ? { goodRangeCm: VISION_LAB_REPEATABILITY_TOLERANCE_CM.circumference, watchRangeCm: 2 }
+    : { goodRangeCm: VISION_LAB_REPEATABILITY_TOLERANCE_CM.linear, watchRangeCm: 1 }
 }
 
 function classifyRepeatability(field: VisionLabTapeField, rangeCm: number): VisionLabRepeatabilityTone {
@@ -595,6 +1579,336 @@ function deriveVisionLabRepeatabilityMessage(scanCount: number, rows: VisionLabR
   return 'Last three scans are repeating well. Compare tape before upgrading any field confidence.'
 }
 
+function tapeAccuracyToleranceForField(field: VisionLabTapeField) {
+  return VISION_LAB_CIRCUMFERENCE_FIELDS.has(field)
+    ? VISION_LAB_TAPE_TOLERANCE_CM.circumference
+    : VISION_LAB_TAPE_TOLERANCE_CM.linear
+}
+
+function buildVisionLabTapeAccuracyGate(rows: VisionLabComparisonRow[]): VisionLabShippingGate {
+  if (!rows.length) {
+    return {
+      status: 'pending',
+      reason: 'Tape values have not been saved for this scan yet.',
+    }
+  }
+
+  const rowsByField = new Map(rows.map((row) => [row.field_name, row]))
+  const missingCoreFields = VISION_LAB_CORE_FIELDS.filter((field) => !rowsByField.has(field))
+  const failingFields = VISION_LAB_CORE_FIELDS.filter((field) => {
+    const row = rowsByField.get(field)
+    return row ? row.absolute_error_cm > tapeAccuracyToleranceForField(field) : false
+  })
+
+  if (failingFields.length) {
+    return {
+      status: 'fail',
+      reason: `${fieldListCopy(failingFields)} exceeded tape tolerance.`,
+    }
+  }
+
+  if (missingCoreFields.length) {
+    return {
+      status: 'watch',
+      reason: `${fieldListCopy(missingCoreFields)} still need tape comparison before this scan can go Green.`,
+    }
+  }
+
+  return {
+    status: 'pass',
+    reason: 'All launch-safe fields are within the current tape tolerance.',
+  }
+}
+
+function buildVisionLabRepeatabilityGate(rows: VisionLabRepeatabilityRow[]): VisionLabShippingGate {
+  if (!rows.length) {
+    return {
+      status: 'pending',
+      reason: 'Run three scans from the same setup before judging repeatability.',
+    }
+  }
+
+  const rowsByField = new Map(rows.map((row) => [row.field, row]))
+  const missingCoreFields = VISION_LAB_CORE_FIELDS.filter((field) => !rowsByField.has(field))
+  const reviewFields = VISION_LAB_CORE_FIELDS.filter((field) => rowsByField.get(field)?.tone === 'review')
+  const watchFields = VISION_LAB_CORE_FIELDS.filter((field) => rowsByField.get(field)?.tone === 'watch')
+
+  if (reviewFields.length) {
+    return {
+      status: 'fail',
+      reason: `${fieldListCopy(reviewFields)} did not repeat within tolerance across saved scans.`,
+    }
+  }
+
+  if (watchFields.length || missingCoreFields.length) {
+    return {
+      status: 'watch',
+      reason: watchFields.length
+        ? `${fieldListCopy(watchFields)} is close but still moving across repeat scans.`
+        : `${fieldListCopy(missingCoreFields)} still needs three comparable saved scans.`,
+    }
+  }
+
+  return {
+    status: 'pass',
+    reason: 'Launch-safe fields repeat within the current internal tolerance.',
+  }
+}
+
+function buildVisionLabCompletionGate(input: {
+  eventType: string
+  result?: DrapeVisionMeasurementResult
+  captureCount: number
+}): VisionLabShippingGate {
+  if (input.eventType === 'FAILED' || input.eventType === 'ABORTED') {
+    return {
+      status: 'fail',
+      reason: `Scan ended as ${input.eventType.toLowerCase()}.`,
+    }
+  }
+
+  if (!input.result) {
+    return {
+      status: 'pending',
+      reason: 'No measurement result was produced for this scorecard event.',
+    }
+  }
+
+  const blockingFields = bodyScanBlockingFields(input.result)
+  if (blockingFields.length) {
+    return {
+      status: 'watch',
+      reason: `${fieldListCopy(blockingFields)} still needs manual review or retake.`,
+    }
+  }
+
+  if (input.captureCount < SCAN_REQUIRED_CAPTURE_COUNT) {
+    return {
+      status: 'watch',
+      reason: `Only ${input.captureCount} clean captures were available.`,
+    }
+  }
+
+  return {
+    status: 'pass',
+    reason: 'Scan produced a complete launch-safe measurement draft.',
+  }
+}
+
+function buildVisionLabCaptureStabilityGate(input: {
+  result?: DrapeVisionMeasurementResult
+  frameSampleCount: number
+  captureSampleCount: number
+  rejectedCounts: Record<string, number>
+}): VisionLabShippingGate {
+  if (!input.result) {
+    return {
+      status: 'pending',
+      reason: 'Capture stability can be judged after a completed scan result.',
+    }
+  }
+
+  const unstableCount = (input.rejectedCounts.pose_unstable ?? 0) + (input.rejectedCounts.yaw_jitter ?? 0)
+  const frameCount = Math.max(input.frameSampleCount, 1)
+  const unstableRatio = unstableCount / frameCount
+
+  if (input.captureSampleCount < SCAN_REQUIRED_CAPTURE_COUNT) {
+    return {
+      status: 'fail',
+      reason: 'Not enough accepted held-pose captures were recorded.',
+    }
+  }
+
+  if (unstableRatio > 0.35) {
+    return {
+      status: 'fail',
+      reason: 'Too many frames were rejected for unstable pose or yaw jitter.',
+    }
+  }
+
+  if (unstableRatio > 0.15) {
+    return {
+      status: 'watch',
+      reason: 'Capture completed, but pose/yaw instability is still high.',
+    }
+  }
+
+  return {
+    status: 'pass',
+    reason: 'Held-pose captures completed without heavy instability.',
+  }
+}
+
+function buildVisionLabFailureClarityGate(input: {
+  eventType: string
+  result?: DrapeVisionMeasurementResult
+  rejectedCounts: Record<string, number>
+  scanPrecheck: ScanPrecheckState
+  engineError: string | null
+  frameDropWarning: string | null
+}): VisionLabShippingGate {
+  if (input.result && input.eventType !== 'FAILED') {
+    return {
+      status: 'pass',
+      reason: 'Completed scan did not require a failure message.',
+    }
+  }
+
+  const hasStructuredReason = Object.keys(input.rejectedCounts).length > 0 ||
+    !!input.scanPrecheck.reason ||
+    !!input.engineError ||
+    !!input.frameDropWarning
+
+  return {
+    status: hasStructuredReason ? 'pass' : 'fail',
+    reason: hasStructuredReason
+      ? 'Failed or blocked scan has structured reasons attached.'
+      : 'Failed scan did not capture a clear reason.',
+  }
+}
+
+function buildVisionLabUserUnderstandingGate(): VisionLabShippingGate {
+  return {
+    status: 'not_observed',
+    reason: 'Measure this with moderated observation: tester completes the flow without prompting and no logged confusion moments.',
+  }
+}
+
+function deriveVisionLabVerdict(gates: VisionLabScorecards['shippingScorecard']['gates']): VisionLabVerdict {
+  const statuses = Object.values(gates).map((gate) => gate.status)
+  if (statuses.includes('fail')) return 'red'
+  if (statuses.every((status) => status === 'pass')) return 'green'
+  return 'yellow'
+}
+
+function summarizeVisionLabFrames(samples: VisionLabFrameSample[]) {
+  const acceptedFrames = samples.filter((sample) => sample.status === 'accepted_pose').length
+  const bodyFrameHeights = samples
+    .map((sample) => finiteNumber(sample.bodyFrameHeight))
+    .filter((value): value is number => value != null)
+  const yawValues = samples
+    .map((sample) => finiteNumber(sample.yawDegrees))
+    .filter((value): value is number => value != null)
+  const inferenceValues = samples
+    .map((sample) => finiteNumber(sample.inferenceMs))
+    .filter((value): value is number => value != null)
+
+  return {
+    acceptedFrames,
+    rejectedFrames: samples.length - acceptedFrames,
+    bodyFrameHeightMin: bodyFrameHeights.length ? roundLabNumber(Math.min(...bodyFrameHeights)) : null,
+    bodyFrameHeightMax: bodyFrameHeights.length ? roundLabNumber(Math.max(...bodyFrameHeights)) : null,
+    yawMinDegrees: yawValues.length ? roundLabNumber(Math.min(...yawValues), 2) : null,
+    yawMaxDegrees: yawValues.length ? roundLabNumber(Math.max(...yawValues), 2) : null,
+    meanInferenceMs: inferenceValues.length
+      ? roundLabNumber(inferenceValues.reduce((sum, value) => sum + value, 0) / inferenceValues.length, 2)
+      : null,
+  }
+}
+
+function buildVisionLabScorecards(input: {
+  eventType: string
+  result?: DrapeVisionMeasurementResult
+  comparisonRows: VisionLabComparisonRow[]
+  repeatabilityRows: VisionLabRepeatabilityRow[]
+  frameSamples: VisionLabFrameSample[]
+  captureSamples: VisionLabCaptureSample[]
+  rejectedCounts: Record<string, number>
+  scanPrecheck: ScanPrecheckState
+  engineError: string | null
+  frameDropWarning: string | null
+  captureCount: number
+  mode: DrapeVisionMode
+  heightCm: number
+  heightInputConfidence: HeightInputConfidence
+}): VisionLabScorecards {
+  const gates = {
+    tapeAccuracy: buildVisionLabTapeAccuracyGate(input.comparisonRows),
+    repeatability: buildVisionLabRepeatabilityGate(input.repeatabilityRows),
+    completion: buildVisionLabCompletionGate({
+      eventType: input.eventType,
+      result: input.result,
+      captureCount: input.captureCount,
+    }),
+    captureStability: buildVisionLabCaptureStabilityGate({
+      result: input.result,
+      frameSampleCount: input.frameSamples.length,
+      captureSampleCount: input.captureSamples.length,
+      rejectedCounts: input.rejectedCounts,
+    }),
+    failureClarity: buildVisionLabFailureClarityGate({
+      eventType: input.eventType,
+      result: input.result,
+      rejectedCounts: input.rejectedCounts,
+      scanPrecheck: input.scanPrecheck,
+      engineError: input.engineError,
+      frameDropWarning: input.frameDropWarning,
+    }),
+    userUnderstanding: buildVisionLabUserUnderstandingGate(),
+  }
+  const generatedAt = new Date().toISOString()
+  const verdict = deriveVisionLabVerdict(gates)
+
+  return {
+    version: 'drape-vision-scorecard-v1',
+    generatedAt,
+    verdict,
+    shippingScorecard: {
+      version: 'drape-vision-shipping-v1',
+      gates,
+      tolerances: {
+        tapeAccuracyCm: VISION_LAB_TAPE_TOLERANCE_CM,
+        internalRepeatabilityCm: VISION_LAB_REPEATABILITY_TOLERANCE_CM,
+        rationale: VISION_LAB_TOLERANCE_RATIONALE,
+      },
+      userUnderstandingMethod: {
+        method: 'moderated_observation',
+        passRule: 'Moderator logs zero confusion moments and the tester completes the scan without step-by-step coaching, extra hands, or reliance on only one cue type.',
+        currentStatus: 'not_observed',
+      },
+      yellowExitRule: {
+        maxTuningCycles: VISION_LAB_YELLOW_MAX_TUNING_CYCLES,
+        rule: 'A Yellow field gets one tuning cycle. If the next validation round does not move it to Green, classify it Red and route to manual entry or commercial API evaluation.',
+      },
+    },
+    diagnosticScorecard: {
+      version: 'drape-vision-diagnostic-v1',
+      qualitySignals: {
+        mode: input.mode,
+        scanFlow: DRAPE_VISION_SCAN_FLOW,
+        heightCm: input.heightCm,
+        heightInputConfidence: input.heightInputConfidence,
+        frameSampleCount: input.frameSamples.length,
+        captureSampleCount: input.captureSamples.length,
+        captureCount: input.captureCount,
+        scanPrecheckReady: input.scanPrecheck.ready,
+        scanPrecheckReason: input.scanPrecheck.reason,
+        scanQualityAccepted: input.result?.diagnostics?.scanQuality.accepted ?? null,
+        scanQualityRejectionReasons: input.result?.diagnostics?.scanQuality.rejectionReasons ?? [],
+        frameSummary: summarizeVisionLabFrames(input.frameSamples),
+        coreFieldConfidence: VISION_LAB_CORE_FIELDS.reduce<Record<string, string | null>>((payload, field) => {
+          payload[field] = input.result?.confidenceByField[field] ?? null
+          return payload
+        }, {}),
+        accessibilityCueCoverage: {
+          visualCaptions: true,
+          directionalText: true,
+          audioPrompts: true,
+          hapticCues: true,
+          voiceOverAnnouncements: true,
+          handsFreeAutoCountdown: Platform.OS === 'ios',
+        },
+      },
+      validationCoverage: {
+        requiredPeople: '5-8 people minimum before public claims.',
+        requiredAxes: ['build', 'skin tone', 'clothing fit', 'lighting', 'background complexity', 'hearing access', 'low-vision access', 'one-person scanning'],
+        currentMetadataStatus: 'manual_required',
+      },
+      rejectedCounts: input.rejectedCounts,
+    },
+  }
+}
+
 function parseTapeInput(value: string) {
   const cleaned = value
     .trim()
@@ -619,10 +1933,110 @@ function parseTapeInput(value: string) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null
 }
 
+function specialistTapeInputKey(mode: DrapeVisionSpecialistScanMode, draftId: string) {
+  return `${mode}:${draftId}`
+}
+
+function specialistDraftMeasurementKind(draft: SpecialistMeasurementDraft): 'circumference' | 'linear' {
+  const id = draft.id.toLowerCase()
+  const field = draft.field?.toLowerCase() ?? ''
+  if (
+    id.includes('circumference') ||
+    field.includes('circumference') ||
+    id.includes('opening') ||
+    id.includes('band') ||
+    id.includes('bangle') ||
+    id === 'chest' ||
+    id === 'waist' ||
+    id === 'hips' ||
+    id === 'underbust'
+  ) {
+    return 'circumference'
+  }
+  return 'linear'
+}
+
+function specialistDraftTapeToleranceCm(draft: SpecialistMeasurementDraft) {
+  return specialistDraftMeasurementKind(draft) === 'circumference'
+    ? VISION_LAB_TAPE_TOLERANCE_CM.circumference
+    : 0.75
+}
+
+function buildSpecialistTapeComparison(
+  draft: SpecialistMeasurementDraft,
+  rawTapeInput: string | undefined,
+): SpecialistTapeComparison | null {
+  if (!Number.isFinite(draft.valueCm)) return null
+
+  const tapeIn = parseTapeInput(rawTapeInput ?? '')
+  if (tapeIn == null) return null
+
+  const tapeCm = tapeIn * DRAPE_VISION_CM_PER_INCH
+  const valueCm = draft.valueCm as number
+  const errorCm = Math.abs(tapeCm - valueCm)
+  const toleranceCm = specialistDraftTapeToleranceCm(draft)
+  const tone: SpecialistTapeComparisonTone = errorCm <= toleranceCm
+    ? 'good'
+    : errorCm <= toleranceCm * 2
+      ? 'watch'
+      : 'review'
+
+  return {
+    tapeIn,
+    tapeCm,
+    errorCm,
+    toleranceCm,
+    tone,
+  }
+}
+
+function specialistTapeToneLabel(tone: SpecialistTapeComparisonTone) {
+  if (tone === 'good') return 'within tape bar'
+  if (tone === 'watch') return 'watch'
+  return 'needs tuning'
+}
+
+function deriveSpecialistTapeSummary(comparisons: SpecialistTapeComparison[]) {
+  if (!comparisons.length) return null
+
+  const maxErrorCm = Math.max(...comparisons.map((row) => row.errorCm))
+  const meanErrorCm = comparisons.reduce((sum, row) => sum + row.errorCm, 0) / comparisons.length
+  const reviewCount = comparisons.filter((row) => row.tone === 'review').length
+  const watchCount = comparisons.filter((row) => row.tone === 'watch').length
+
+  if (reviewCount) {
+    return {
+      tone: 'review' as const,
+      title: 'Needs tuning before trust',
+      body: `${reviewCount} field${reviewCount === 1 ? '' : 's'} missed the current tape bar. Keep the draft visible, but do not use it for cutting.`,
+      maxErrorCm,
+      meanErrorCm,
+    }
+  }
+
+  if (watchCount) {
+    return {
+      tone: 'watch' as const,
+      title: 'Close, keep testing',
+      body: `${watchCount} field${watchCount === 1 ? '' : 's'} landed near the bar. Collect more tape passes before raising confidence.`,
+      maxErrorCm,
+      meanErrorCm,
+    }
+  }
+
+  return {
+    tone: 'good' as const,
+    title: 'Tape check looks tight',
+    body: 'Entered tape values are inside the current specialist tolerance. Keep collecting repeat scans before promoting confidence.',
+    maxErrorCm,
+    meanErrorCm,
+  }
+}
+
 function formatVisionError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
   if (message.includes('model asset missing')) {
-    return 'Drapeon Vision needs one more scanning file before live measurements can run on this device.'
+    return 'Drapeon Vision model files are not bundled in this installed app yet. Rebuild and reinstall the app so the new scanner assets ship with it.'
   }
   if (message.includes('MediaPipeTasksVision')) {
     return 'Live body scanning is not available in this build yet. Manual measurements still work.'
@@ -647,6 +2061,38 @@ function measurementConfidenceColor(confidence?: string) {
   return DRAPE_VISION_COLORS.textDim
 }
 
+function measurementConfidenceLabel(confidence?: string) {
+  if (confidence === 'HIGH') return 'Looks good'
+  if (confidence === 'MEDIUM') return 'Check with tape'
+  return 'Tailor review'
+}
+
+function userFacingVisionWarning(warning: string) {
+  const normalized = warning.toLowerCase()
+  if (normalized.includes('shoulder')) {
+    return 'Shoulder width can be hard to read from camera landmarks. Check it with tape before cutting.'
+  }
+  if (normalized.includes('chest')) {
+    return 'Chest needs a human check for this scan. Fitted clothing and bright light usually improve it.'
+  }
+  if (normalized.includes('waist')) {
+    return 'Waist needs a human check for this scan. Check with tape if the number looks off.'
+  }
+  if (normalized.includes('hips')) {
+    return 'Hips need a human check for this scan. Retake in fitted clothing or compare with tape.'
+  }
+  if (normalized.includes('height') || normalized.includes('calibration')) {
+    return 'Height calibration was not strong enough. Make sure head and ankles are visible, then retake if needed.'
+  }
+  if (normalized.includes('outside expected range')) {
+    return 'One or more measurements landed outside the expected range. Review before saving.'
+  }
+  if (normalized.includes('could not be estimated')) {
+    return 'One or more measurements could not be read clearly. Use tape or retake the scan.'
+  }
+  return 'Some values need a human check before a tailor uses them.'
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
@@ -657,6 +2103,12 @@ function isMeasurementScansUnavailable(error: { code?: string | null; message?: 
     message.includes('measurement_scans') ||
     message.includes('schema cache') ||
     message.includes('does not exist')
+}
+
+function isMeasurementCaptureMethodConstraintError(error: { code?: string | null; message?: string | null; details?: string | null } | null | undefined) {
+  const message = `${error?.message ?? ''} ${error?.details ?? ''}`.toLowerCase()
+  return message.includes('measurement_scans_capture_method_check') ||
+    message.includes('capture_method')
 }
 
 function isVisionLabGroundTruthUnavailable(error: { code?: string | null; message?: string | null; details?: string | null } | null | undefined) {
@@ -671,7 +2123,7 @@ function formatVisionSaveError(error: { code?: string | null; message?: string |
   const message = `${error?.message ?? ''} ${error?.details ?? ''}`.toLowerCase()
   if (isLikelyConnectivityIssue(error)) return 'Connection looks weak. The scan is still on this screen, so retry when the signal improves.'
   if (isMeasurementScansUnavailable(error)) return 'Drapeon Vision saving is not ready in this build yet. Keep the result on this screen and use manual measurements for now.'
-  if (message.includes('measurement_scans_capture_method_check') || message.includes('capture_method')) {
+  if (isMeasurementCaptureMethodConstraintError(error)) {
     return 'Drapeon Vision saving is being updated. Keep the result on this screen and try again after the update.'
   }
   return 'Could not save this scan right now. Please try again in a moment.'
@@ -688,6 +2140,7 @@ function buildScanDistanceCue(input: {
   captureNotice: string | null
   capturedAngleCount: number
   instruction: string
+  precheckReady: boolean
   requiredAngles: number
   scanCountdown: number | null
 }): ScanDistanceCue {
@@ -696,123 +2149,219 @@ function buildScanDistanceCue(input: {
       title: String(input.scanCountdown),
       subtitle: 'Step back. Keep head-to-ankles visible.',
       tone: 'countdown',
+      icon: 'clock',
     }
   }
 
   if (!input.captureArmed) {
+    if (input.precheckReady) {
+      return {
+        title: 'Get ready',
+        subtitle: 'Countdown starts automatically. Step back now.',
+        tone: 'action',
+        icon: 'play-circle',
+      }
+    }
+
     return {
-      title: 'SET PHONE DOWN',
-      subtitle: 'Tap countdown, then step back into frame.',
+      title: 'Set phone down',
+      subtitle: 'Step into frame. Drapeon starts when head-to-ankles is clear.',
       tone: 'idle',
+      icon: 'smartphone',
     }
   }
 
   if (input.captureNotice?.startsWith('Captured')) {
     return {
-      title: 'CAPTURED',
+      title: 'Captured',
       subtitle: input.captureNotice,
       tone: 'success',
+      icon: 'check-circle',
     }
   }
 
   const instruction = input.instruction.toLowerCase()
   if (instruction.includes('step closer')) {
     return {
-      title: 'STEP CLOSER',
+      title: 'Step closer',
       subtitle: 'Step in slightly, or lower the phone so ankles stay visible.',
       tone: 'warning',
+      icon: 'corner-down-left',
     }
   }
   if (instruction.includes('step back')) {
     return {
-      title: 'STEP BACK',
+      title: 'Step back',
       subtitle: 'Keep head and ankles visible.',
       tone: 'warning',
+      icon: 'corner-up-right',
     }
   }
   if (instruction.includes('fit head') || instruction.includes('full body')) {
     return {
-      title: 'FULL BODY',
+      title: 'Full body',
       subtitle: 'Head, hips, and ankles must stay in frame.',
       tone: 'warning',
+      icon: 'user-check',
+    }
+  }
+  if (instruction.includes('turn your body to the right')) {
+    return {
+      title: 'Turn right',
+      subtitle: `${formatScanCaptureProgress(input.capturedAngleCount)} captured. Pause when the ring fills.`,
+      tone: 'action',
+      icon: 'rotate-cw',
+    }
+  }
+  if (instruction.includes('turn your body to the left')) {
+    return {
+      title: 'Turn left',
+      subtitle: `${formatScanCaptureProgress(input.capturedAngleCount)} captured. Pause when the ring fills.`,
+      tone: 'action',
+      icon: 'rotate-ccw',
     }
   }
   if (instruction.includes('hold')) {
     return {
-      title: 'HOLD STILL',
-      subtitle: 'Let Drapeon lock this angle.',
+      title: 'Hold still',
+      subtitle: 'Let the ring fill before you move.',
       tone: 'action',
+      icon: 'pause-circle',
     }
   }
   if (instruction.includes('light')) {
     return {
-      title: 'BRIGHTER LIGHT',
+      title: 'Brighter light',
       subtitle: 'Move where your outline is clearer.',
       tone: 'warning',
+      icon: 'sun',
     }
   }
 
   if (input.capturedAngleCount === 0) {
     return {
-      title: 'FACE PHONE',
+      title: 'Face phone',
       subtitle: 'Hold still for the first capture.',
       tone: 'action',
+      icon: 'user',
     }
   }
 
   if (input.capturedAngleCount >= input.requiredAngles - 1) {
     return {
-      title: 'ALMOST DONE',
+      title: 'Almost done',
       subtitle: 'Keep turning slowly.',
       tone: 'success',
+      icon: 'check-circle',
     }
   }
 
   return {
-    title: 'TURN SLOWLY',
-    subtitle: `${formatScanCaptureProgress(input.capturedAngleCount)} locked.`,
+    title: 'Turn slowly',
+    subtitle: `${formatScanCaptureProgress(input.capturedAngleCount)} captured.`,
     tone: 'action',
+    icon: 'rotate-cw',
   }
+}
+
+function visionAudioPromptForInstruction(message: string): VisionAudioPrompt | null {
+  const instruction = message.toLowerCase()
+  if (instruction.includes('brighter light') || instruction.includes('low light')) return 'brighterLight'
+  if (instruction.includes('lower phone') || instruction.includes('ankles show')) return 'lowerPhone'
+  if (instruction.includes('step closer')) return 'stepCloser'
+  if (instruction.includes('step back') || instruction.includes('full body') || instruction.includes('head-to-ankles')) return 'stepBack'
+  if (instruction.includes('back toward the phone') || instruction.includes('toward the phone')) return 'faceCenter'
+  if (instruction.includes('show your back')) return 'showBack'
+  if (instruction.includes('hold still with your back')) return 'holdBack'
+  if (instruction.includes('your right') || instruction.includes('right side') || instruction.includes('turning right')) return 'turnRight'
+  if (instruction.includes('your left') || instruction.includes('left side') || instruction.includes('turn left')) return 'turnLeft'
+  if (instruction.includes('face the phone')) return 'faceCenter'
+  if (instruction.includes('hold still') || instruction.includes('hold steady')) return 'holdStill'
+  if (instruction.includes('turn')) return 'turnSlowly'
+  return null
+}
+
+function visionAudioPromptForPrecheck(reason: ScanPrecheckState['reason']): VisionAudioPrompt {
+  if (reason === 'low_light' || reason === 'low_landmark_confidence') return 'brighterLight'
+  if (reason === 'body_too_close') return 'stepBack'
+  if (reason === 'body_too_far') return 'stepCloser'
+  if (reason === 'ankles_missing') return 'lowerPhone'
+  return 'stepBack'
+}
+
+function scanHapticForInstruction(message: string): Parameters<typeof trigger>[0] | null {
+  const instruction = message.toLowerCase()
+  if (
+    instruction.includes('brighter light') ||
+    instruction.includes('step back') ||
+    instruction.includes('step closer') ||
+    instruction.includes('full body') ||
+    instruction.includes('head-to-ankles') ||
+    instruction.includes('ankles')
+  ) {
+    return 'notificationWarning'
+  }
+  if (instruction.includes('hold still') || instruction.includes('face the phone')) return 'impactMedium'
+  if (instruction.includes('turn')) return 'selection'
+  return null
+}
+
+function accessibilityScanStatus(input: {
+  captureNotice: string | null
+  capturedAngleCount: number
+  instruction: string
+  scanCountdown: number | null
+}) {
+  if (input.scanCountdown != null) {
+    return `Capture starts in ${input.scanCountdown}. Step back and keep your full body visible.`
+  }
+  if (input.captureNotice) {
+    return `${input.captureNotice}. ${formatScanCaptureProgress(input.capturedAngleCount)} captured.`
+  }
+  return input.instruction
 }
 
 function formatScanCaptureProgress(capturedAngleCount: number) {
   if (Platform.OS === 'ios') {
-    return `${capturedAngleCount} of ${SCAN_REQUIRED_CAPTURE_COUNT}+ clean angles`
+    return `${capturedAngleCount} of ${SCAN_REQUIRED_CAPTURE_COUNT} positions`
   }
 
-  return `${capturedAngleCount} of ${SCAN_TARGET_CAPTURE_COUNT} angles`
+  return `${capturedAngleCount} of ${SCAN_TARGET_CAPTURE_COUNT} positions`
 }
 
-function hasRightSideScanAngle(captures: Array<{ angleDegrees: number }>) {
-  return captures.some((capture) => {
-    const angle = ((capture.angleDegrees % 360) + 360) % 360
-    return angle >= 24 && angle <= 150
-  })
+function firstMissingIosGuidedScanTarget(captures: Array<{ angleIndex?: number }>) {
+  const capturedIndexes = new Set(captures
+    .map((capture) => capture.angleIndex)
+    .filter((index): index is number => typeof index === 'number'))
+
+  for (const index of SCAN_IOS_GUIDED_CAPTURE_INDICES) {
+    if (!capturedIndexes.has(index)) return index
+  }
+
+  return null
 }
 
-function hasLeftSideScanAngle(captures: Array<{ angleDegrees: number }>) {
-  return captures.some((capture) => {
-    const angle = ((capture.angleDegrees % 360) + 360) % 360
-    return angle >= 210 && angle <= 336
-  })
-}
-
-function buildNextScanInstruction(captures: Array<{ angleDegrees: number }>, capturedAngleCount: number) {
+function buildNextScanInstruction(captures: Array<{ angleDegrees: number; angleIndex?: number }>, capturedAngleCount: number) {
   if (Platform.OS !== 'ios') {
     return capturedAngleCount >= SCAN_TARGET_CAPTURE_COUNT - 1 ? 'Almost done' : 'Keep turning'
   }
 
-  if (capturedAngleCount === 0) return 'Face the phone and hold full body'
-  if (!hasRightSideScanAngle(captures)) return 'Turn slowly to show one shoulder'
-  if (!hasLeftSideScanAngle(captures)) return 'Return through front, then show the other shoulder'
-  if (capturedAngleCount < SCAN_REQUIRED_CAPTURE_COUNT) return 'Pause at each clean angle'
+  if (capturedAngleCount === 0) return 'Face the phone and hold still'
+  const missingTargetIndex = firstMissingIosGuidedScanTarget(captures)
+  if (missingTargetIndex != null) {
+    return scanInstructionForTargetAngleDegrees(targetAngleDegreesForScanIndex(missingTargetIndex))
+  }
+  const hasFrontish = hasFrontishScanAngle(captures)
+  if (!hasFrontish) return 'Face the phone and hold still'
+  if (!hasDrapeVisionScanCoverage(captures)) return 'Keep turning right until the ring fills again'
+  if (capturedAngleCount < SCAN_REQUIRED_CAPTURE_COUNT) return 'Pause when the ring fills'
   return 'Almost done'
 }
 
 function formatScanRecoveryMessage(capturedAngleCount: number) {
   if (Platform.OS === 'ios') {
     return capturedAngleCount > 0
-      ? 'Still scanning. Keep head-to-ankles visible, pause at each side angle, then continue through front to the other shoulder.'
+      ? 'Still scanning. Keep head-to-ankles visible, then follow right side, left side, and back prompts.'
       : 'Still scanning. Step back until your full body is visible, then face the phone and hold still for the first capture.'
   }
 
@@ -823,7 +2372,7 @@ function formatScanRecoveryMessage(capturedAngleCount: number) {
 
 function formatScanStallMessage(capturedAngleCount: number) {
   if (capturedAngleCount > 0) {
-    return `Drapeon Vision locked ${formatScanCaptureProgress(capturedAngleCount)} but needs a cleaner pass before calculating measurements. Retake with the phone set down, bright light, and head-to-ankles visible.`
+    return `Drapeon Vision captured ${formatScanCaptureProgress(capturedAngleCount)} but needs one cleaner pass before measuring. Retake with the phone set down, bright light, and head-to-ankles visible.`
   }
 
   return 'Drapeon Vision could not lock a full-body pass yet. Set the phone down, step back until head and ankles stay visible, then retake in brighter light.'
@@ -835,7 +2384,11 @@ function fallbackTitleForVisionMessage(message: string) {
     normalized.includes('not receiving camera frames') ||
     normalized.includes('cannot start') ||
     normalized.includes('not available') ||
-    normalized.includes('no front camera')
+    normalized.includes('no front camera') ||
+    normalized.includes('permission') ||
+    normalized.includes('model files') ||
+    normalized.includes('native') ||
+    normalized.includes('module')
   ) {
     return 'Scan not available'
   }
@@ -860,6 +2413,26 @@ function hasDrapeVisionScanCoverage(captures: Array<{ angleDegrees: number }>) {
   }
 
   return largestGap <= SCAN_MAX_HALF_TURN_ANGLE_GAP_DEGREES
+}
+
+function hasFrontishScanAngle(captures: Array<{ angleDegrees: number; angleIndex?: number }>) {
+  return captures.some((capture) => {
+    if (capture.angleIndex === 0 || capture.angleIndex === 4) return true
+    const angle = ((capture.angleDegrees % 360) + 360) % 360
+    return angle <= 28 || angle >= 332 || (angle >= 152 && angle <= 208)
+  })
+}
+
+function hasDrapeVisionPracticalScanCoverage(captures: Array<{ angleDegrees: number; angleIndex?: number }>) {
+  if (Platform.OS !== 'ios') return false
+  if (captures.length < SCAN_REQUIRED_CAPTURE_COUNT) return false
+
+  return hasFrontishScanAngle(captures) && hasDrapeVisionScanCoverage(captures)
+}
+
+function hasDrapeVisionCompletionCoverage(captures: Array<{ angleDegrees: number; angleIndex?: number }>) {
+  if (Platform.OS !== 'ios') return captures.length >= SCAN_REQUIRED_CAPTURE_COUNT
+  return hasDrapeVisionPracticalScanCoverage(captures)
 }
 
 function finiteNumber(value: unknown) {
@@ -889,6 +2462,60 @@ function compactLabSegmentWidths(widths?: VisionSegmentWidthsPx | null): VisionL
   return Object.keys(compacted).length ? compacted : null
 }
 
+function averageNumbers(values: Array<number | undefined>) {
+  const usable = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+  if (usable.length === 0) return undefined
+  return usable.reduce((sum, value) => sum + value, 0) / usable.length
+}
+
+function averageDegrees(values: number[]) {
+  if (values.length === 0) return 0
+  const radians = values.map((value) => (value * Math.PI) / 180)
+  const sin = radians.reduce((sum, value) => sum + Math.sin(value), 0) / values.length
+  const cos = radians.reduce((sum, value) => sum + Math.cos(value), 0) / values.length
+  return ((Math.atan2(sin, cos) * 180) / Math.PI + 360) % 360
+}
+
+function averageSegmentWidths(samples: VisionCaptureBurstSample[]): VisionSegmentWidthsPx | undefined {
+  const averaged: VisionSegmentWidthsPx = {}
+  const fields: Array<keyof VisionSegmentWidthsPx> = ['chest', 'waist', 'hips', 'thighCircumference', 'kneeCircumference']
+  for (const field of fields) {
+    const value = averageNumbers(samples.map((sample) => sample.detection.segmentWidthsPx?.[field]))
+    if (value != null) averaged[field] = value
+  }
+  return Object.keys(averaged).length ? averaged : undefined
+}
+
+function averageWorldLandmarks(samples: VisionCaptureBurstSample[]): VisionLandmarkFrame | undefined {
+  const frames = samples
+    .map((sample) => sample.detection.worldLandmarks)
+    .filter((landmarks): landmarks is VisionLandmarkFrame => Array.isArray(landmarks) && landmarks.length > 0)
+  return frames.length ? confidenceWeightedLandmarks(frames) : undefined
+}
+
+function buildBurstDetection(samples: VisionCaptureBurstSample[]): {
+  angleIndex: number
+  yawDegrees: number
+  detection: VisionPoseDetectionResult
+  frameSize: VisionFrameSize
+} | null {
+  if (samples.length === 0) return null
+  const first = samples[0]
+  return {
+    angleIndex: first.angleIndex,
+    yawDegrees: averageDegrees(samples.map((sample) => sample.yawDegrees)),
+    detection: {
+      landmarks: confidenceWeightedLandmarks(samples.map((sample) => sample.detection.landmarks)),
+      worldLandmarks: averageWorldLandmarks(samples),
+      segmentWidthsPx: averageSegmentWidths(samples),
+      timestampMs: averageNumbers(samples.map((sample) => sample.detection.timestampMs)),
+      inferenceMs: averageNumbers(samples.map((sample) => sample.detection.inferenceMs)),
+      model: first.detection.model,
+    },
+    frameSize: first.frameSize,
+  }
+}
+
 function workletLandmarkWeight(landmark: VisionLandmarkFrame[number] | undefined) {
   'worklet'
   if (!landmark) return 0
@@ -901,6 +2528,117 @@ function workletDistance2D(a: VisionLandmarkFrame[number] | undefined, b: Vision
   const dx = b.x - a.x
   const dy = b.y - a.y
   return Math.sqrt(dx * dx + dy * dy)
+}
+
+function workletLandmarkBounds(landmarks: VisionLandmarkFrame | undefined | null) {
+  'worklet'
+  if (!landmarks || landmarks.length === 0) {
+    return {
+      count: 0,
+      centerX: 0.5,
+      centerY: 0.5,
+      width: 0,
+      height: 0,
+      size: 0,
+      score: 0,
+    }
+  }
+
+  let count = 0
+  let minX = 1
+  let maxX = 0
+  let minY = 1
+  let maxY = 0
+  let scoreSum = 0
+
+  for (let index = 0; index < landmarks.length; index += 1) {
+    const landmark = landmarks[index]
+    if (!landmark || !Number.isFinite(landmark.x) || !Number.isFinite(landmark.y)) continue
+    minX = Math.min(minX, landmark.x)
+    maxX = Math.max(maxX, landmark.x)
+    minY = Math.min(minY, landmark.y)
+    maxY = Math.max(maxY, landmark.y)
+    scoreSum += workletLandmarkWeight(landmark)
+    count += 1
+  }
+
+  if (count === 0) {
+    return {
+      count: 0,
+      centerX: 0.5,
+      centerY: 0.5,
+      width: 0,
+      height: 0,
+      size: 0,
+      score: 0,
+    }
+  }
+
+  const width = Math.max(maxX - minX, 0)
+  const height = Math.max(maxY - minY, 0)
+  return {
+    count,
+    centerX: minX + width / 2,
+    centerY: minY + height / 2,
+    width,
+    height,
+    size: Math.max(width, height),
+    score: scoreSum / count,
+  }
+}
+
+function workletSegmentBounds(mask: VisionSegmentationResult['mask'] | undefined | null) {
+  'worklet'
+  if (!mask?.boundingBox || !mask.width || !mask.height) {
+    return {
+      count: 0,
+      centerX: 0.5,
+      centerY: 0.5,
+      width: 0,
+      height: 0,
+      size: 0,
+      score: 0,
+      foregroundRatio: 0,
+    }
+  }
+
+  const box = mask.boundingBox
+  const width = box.width / mask.width
+  const height = box.height / mask.height
+  const foregroundRatio = mask.foregroundRatio ?? 0
+  return {
+    count: Math.round(foregroundRatio * 100),
+    centerX: (box.x + box.width / 2) / mask.width,
+    centerY: (box.y + box.height / 2) / mask.height,
+    width,
+    height,
+    size: Math.max(width, height),
+    score: foregroundRatio,
+    foregroundRatio,
+  }
+}
+
+function hasUsableIosFrontLikeCaptureGeometry(
+  widths: VisionSegmentWidthsPx | null | undefined,
+  landmarks: VisionLandmarkFrame,
+  bodyFrameHeight: number,
+) {
+  'worklet'
+  if (!widths || !Number.isFinite(bodyFrameHeight) || bodyFrameHeight <= 0) return false
+  const chest = widths.chest ?? 0
+  const waist = widths.waist ?? 0
+  const hips = widths.hips ?? 0
+  const shoulderWidth = workletDistance2D(
+    landmarks[DRAPE_VISION_LANDMARK.leftShoulder],
+    landmarks[DRAPE_VISION_LANDMARK.rightShoulder],
+  )
+
+  return (
+    chest >= bodyFrameHeight * SCAN_IOS_FRONTLIKE_MIN_CHEST_BODY_RATIO &&
+    waist >= bodyFrameHeight * SCAN_IOS_FRONTLIKE_MIN_WAIST_BODY_RATIO &&
+    hips >= bodyFrameHeight * SCAN_IOS_FRONTLIKE_MIN_HIPS_BODY_RATIO &&
+    shoulderWidth >= bodyFrameHeight * SCAN_IOS_FRONTLIKE_MIN_SHOULDER_BODY_RATIO
+  )
 }
 
 function estimateAndroidSegmentWidthsFromLandmarks(landmarks: VisionLandmarkFrame): VisionSegmentWidthsPx | null {
@@ -1057,6 +2795,77 @@ function buildVisionMeasurementSnapshot(measurements: DrapeVisionMeasurements, u
   }, { unit })
 }
 
+function buildSpecialistDraftSnapshot(drafts: SpecialistMeasurementDraft[], unit: MeasurementDisplayUnit = 'cm') {
+  return drafts.reduce<Record<string, unknown>>((snapshot, draft) => {
+    const numericValue = finiteNumber(draft.valueCm)
+    if (numericValue == null) return snapshot
+
+    const key = draft.field ?? draft.label
+    snapshot[key] = roundMeasurementValue(numericValue, unit)
+    return snapshot
+  }, { unit })
+}
+
+const MEASUREMENT_PROFILE_ALLOWED_METADATA_KEYS = new Set([
+  'unit',
+  'measurementProfileLabel',
+  'measurementProfileUpdatedAt',
+  'wearerContext',
+  'fitStyle',
+  'measurementSource',
+  'measurementSourceLabel',
+  'fitConfidence',
+  'garmentContext',
+  'bodyShape',
+  'fitFlags',
+  'bodyNote',
+  'bodyFlags',
+  'symmetryFlags',
+  'requiresTailorReview',
+])
+
+function buildMeasurementProfileStoragePayload(measurements: Record<string, unknown>) {
+  return Object.entries(measurements).reduce<Record<string, unknown>>((payload, [key, value]) => {
+    if (MEASUREMENT_PROFILE_ALLOWED_METADATA_KEYS.has(key)) {
+      payload[key] = value
+      return payload
+    }
+    if (isMeasurementMetadataKey(key)) return payload
+    if (value == null) return payload
+    if (typeof value === 'number' && Number.isFinite(value)) payload[key] = value
+    if (typeof value === 'string' && value.trim().length > 0) payload[key] = value
+    return payload
+  }, {})
+}
+
+function buildSpecialistDraftConfidence(drafts: SpecialistMeasurementDraft[]) {
+  return drafts.reduce<Partial<Record<string, MeasurementFitConfidence>>>((snapshot, draft) => {
+    if (!draft.field || finiteNumber(draft.valueCm) == null) return snapshot
+    snapshot[draft.field] = draft.confidence
+    return snapshot
+  }, {})
+}
+
+function specialistScanFlowForMode(mode: DrapeVisionSpecialistScanMode) {
+  if (mode === 'hand_wrist') return 'SPECIALIST_HAND_WRIST_V1'
+  if (mode === 'headwear') return 'SPECIALIST_HEADWEAR_V1'
+  if (mode === 'bodice_corset') return 'SPECIALIST_BODICE_CORSET_V1'
+  if (mode === 'lower_body_detail') return 'SPECIALIST_LOWER_BODY_DETAIL_V1'
+  return DRAPE_VISION_SCAN_FLOW
+}
+
+function specialistOutputKindForMode(mode: DrapeVisionSpecialistScanMode) {
+  return mode === 'fit_360' ? DRAPE_VISION_OUTPUT_KIND : 'SPECIALIST_MEASUREMENT_DRAFT'
+}
+
+function specialistDraftBasisForMode(mode: DrapeVisionSpecialistScanMode) {
+  if (mode === 'hand_wrist') return 'Hand landmarks + saved height'
+  if (mode === 'headwear') return 'Face landmarks + saved height'
+  if (mode === 'bodice_corset') return 'Torso outline + saved height'
+  if (mode === 'lower_body_detail') return 'Lower-body outline + saved height'
+  return 'Fit 360 capture'
+}
+
 function confidenceScore(confidence?: DrapeVisionConfidence | MeasurementFitConfidence | null) {
   if (confidence === 'HIGH') return 3
   if (confidence === 'MEDIUM') return 2
@@ -1065,9 +2874,15 @@ function confidenceScore(confidence?: DrapeVisionConfidence | MeasurementFitConf
 }
 
 function deriveVisionOverallConfidence(result: DrapeVisionMeasurementResult): MeasurementFitConfidence {
-  const measuredConfidences = Object.entries(result.confidenceByField)
-    .filter(([field]) => finiteNumber(result.measurements[field as keyof DrapeVisionMeasurements]) != null)
-    .map(([, confidence]) => confidence)
+  const coreConfidences = BODY_SCAN_REQUIRED_FIELDS
+    .filter((field) => finiteNumber(result.measurements[field]) != null)
+    .map((field) => result.confidenceByField[field])
+  const measuredConfidences = (coreConfidences.length >= BODY_SCAN_REQUIRED_FIELDS.length
+    ? coreConfidences
+    : Object.entries(result.confidenceByField)
+      .filter(([field]) => finiteNumber(result.measurements[field as keyof DrapeVisionMeasurements]) != null)
+      .map(([, confidence]) => confidence)
+  )
     .filter((confidence): confidence is DrapeVisionConfidence => !!confidence)
 
   if (result.warnings.length > 0 || measuredConfidences.length < 4) return 'LOW'
@@ -1077,14 +2892,51 @@ function deriveVisionOverallConfidence(result: DrapeVisionMeasurementResult): Me
   return 'LOW'
 }
 
+function launchSafeVisionResult(result: DrapeVisionMeasurementResult): DrapeVisionMeasurementResult {
+  if (result.calibration.confidence !== 'LOW') return result
+
+  const calibrationWarning = 'Height-based scale was low confidence, so this draft needs tape or tailor review before it guides cutting.'
+  return {
+    ...result,
+    confidenceByField: {
+      ...result.confidenceByField,
+      ...BODY_SCAN_REQUIRED_FIELDS.reduce<Partial<Record<DrapeVisionMeasurementField, DrapeVisionConfidence>>>((payload, field) => {
+        if (typeof result.measurements[field] === 'number') payload[field] = 'LOW'
+        return payload
+      }, {}),
+    },
+    warnings: result.warnings.includes(calibrationWarning)
+      ? result.warnings
+      : [...result.warnings, calibrationWarning],
+  }
+}
+
+function resultWithApproximateHeightReview(result: DrapeVisionMeasurementResult): DrapeVisionMeasurementResult {
+  return {
+    ...result,
+    confidenceByField: {
+      ...result.confidenceByField,
+      height: 'LOW',
+      ...BODY_SCAN_REQUIRED_FIELDS.reduce<Partial<Record<DrapeVisionMeasurementField, DrapeVisionConfidence>>>((payload, field) => {
+        if (typeof result.measurements[field] === 'number') payload[field] = 'LOW'
+        return payload
+      }, {}),
+    },
+    warnings: [
+      ...result.warnings,
+      'Height was entered as an estimate, so this draft needs tape or tailor review before it guides cutting.',
+    ],
+  }
+}
+
 function addFinitePayloadValue(payload: Record<string, unknown>, key: string, value: unknown) {
   const numericValue = finiteNumber(value)
   if (numericValue != null) payload[key] = numericValue
 }
 
 function parsePositiveInput(value: string) {
-  const parsed = Number(value.replace(/[^0-9.]/g, ''))
-  return Number.isFinite(parsed) && parsed > 0 ? Number(parsed.toFixed(2)) : null
+  const parsed = parseTapeInput(value)
+  return parsed != null ? Number(parsed.toFixed(2)) : null
 }
 
 function manualMeasurementsFromDraft(
@@ -1152,26 +3004,58 @@ export default function DrapeVisionScreen() {
   const canRunLiveBodyScan = supportsBodyScan && !missingTailorDiaryTarget
   const canStartLiveBodyScan = canRunLiveBodyScan && !isAndroidLiveScanPreflightBlocked()
 
-  const [phase, setPhase] = useState<VisionPhase>('intro')
+  const [phase, setPhase] = useState<VisionPhase>(() => (
+    canStartLiveBodyScan && mode !== 'garment_qc' && mode !== 'size_guide_scan' ? 'suite' : 'intro'
+  ))
   const [engineStatus, setEngineStatus] = useState<EngineStatus>('idle')
-  const [heightUnit, setHeightUnit] = useState<HeightUnit>('cm')
+  const [selectedSpecialistMode, setSelectedSpecialistMode] = useState<DrapeVisionSpecialistScanMode>('fit_360')
+  const [pendingScanAfterHeight, setPendingScanAfterHeight] = useState<DrapeVisionSpecialistScanMode | null>(null)
+  const [completedSessionScanModes, setCompletedSessionScanModes] = useState<DrapeVisionSpecialistScanMode[]>([])
+  const [savedSessionScanModes, setSavedSessionScanModes] = useState<DrapeVisionSpecialistScanMode[]>([])
+  const [specialistStatusMessage, setSpecialistStatusMessage] = useState<string | null>(null)
+  const [specialistReadinessStatus, setSpecialistReadinessStatus] = useState<SpecialistReadinessStatus | null>(null)
+  const [specialistGuide, setSpecialistGuide] = useState<SpecialistGuidePayload>(() => defaultSpecialistGuidePayload('hand_wrist'))
+  const [specialistGuideResult, setSpecialistGuideResult] = useState<SpecialistGuideResult | null>(null)
+  const [specialistGuideDebug, setSpecialistGuideDebug] = useState<SpecialistGuideDebug | null>(null)
+  const [specialistTapeInputs, setSpecialistTapeInputs] = useState<Record<string, string>>({})
+  const [audioDebugMessage, setAudioDebugMessage] = useState<string | null>(null)
+  const [heightUnit, setHeightUnit] = useState<HeightUnit>('ft')
+  const [heightInputConfidence, setHeightInputConfidence] = useState<HeightInputConfidence>('exact')
   const [resultUnit, setResultUnit] = useState<MeasurementDisplayUnit>('in')
   const [heightCm, setHeightCm] = useState(DRAPE_VISION_DEFAULT_HEIGHT_CM)
+  const [savedVisionHeight, setSavedVisionHeight] = useState<SavedVisionHeight | null>(null)
   const [capturedSegments, setCapturedSegments] = useState(emptySegments)
   const [currentSegment, setCurrentSegment] = useState(0)
   const [instruction, setInstruction] = useState('Face the camera')
   const [engineError, setEngineError] = useState<string | null>(null)
   const [frameDropWarning, setFrameDropWarning] = useState<string | null>(null)
+  const [scanPrecheck, setScanPrecheck] = useState<ScanPrecheckState>({
+    ready: false,
+    reason: 'waiting_for_body',
+    message: 'Step back until your full body is visible.',
+    updatedAtMs: 0,
+  })
   const [latestYaw, setLatestYaw] = useState(0)
   const [latestInferenceMs, setLatestInferenceMs] = useState(0)
   const [poseDebug, setPoseDebug] = useState<PoseDebugState>(() => emptyPoseDebug())
   const [captureNotice, setCaptureNotice] = useState<string | null>(null)
   const [captureArmed, setCaptureArmed] = useState(false)
   const [scanCountdown, setScanCountdown] = useState<number | null>(null)
-  const cameraRestarting = false
+  const [cameraRestarting, setCameraRestarting] = useState(false)
+  const cameraRestartingRef = useRef(false)
+  const [visionCameraSessionKey, setVisionCameraSessionKey] = useState(0)
+  const [liveTraceTick, setLiveTraceTick] = useState(0)
+  const [bodyWorkletActiveTrace, setBodyWorkletActiveTrace] = useState(false)
+  const [specialistWorkletTrace, setSpecialistWorkletTrace] = useState({
+    active: false,
+    modeCode: 0,
+  })
   const [measurementResult, setMeasurementResult] = useState<DrapeVisionMeasurementResult | null>(null)
   const [resultReviewed, setResultReviewed] = useState(false)
+  const [calculationStep, setCalculationStep] = useState(1)
   const [savingResult, setSavingResult] = useState(false)
+  const [resultSaveConfirmation, setResultSaveConfirmation] = useState<string | null>(null)
+  const [reduceMotion, setReduceMotion] = useState(false)
   const [visionLabSampleCount, setVisionLabSampleCount] = useState(0)
   const [visionLabUploading, setVisionLabUploading] = useState(false)
   const [visionLabUploadMessage, setVisionLabUploadMessage] = useState<string | null>(null)
@@ -1194,6 +3078,7 @@ export default function DrapeVisionScreen() {
   const [workflowSaving, setWorkflowSaving] = useState(false)
   const [workflowMessage, setWorkflowMessage] = useState<string | null>(null)
   const [garmentQcUnit, setGarmentQcUnit] = useState<MeasurementDisplayUnit>('in')
+  const [garmentQcPreset, setGarmentQcPreset] = useState<GarmentQcPreset>('full_set')
   const [garmentQcDraft, setGarmentQcDraft] = useState<Record<string, string>>({})
   const [garmentQcNote, setGarmentQcNote] = useState('')
   const [garmentQcPhotoUrl, setGarmentQcPhotoUrl] = useState<string | null>(null)
@@ -1209,23 +3094,96 @@ export default function DrapeVisionScreen() {
   const [selectedSize, setSelectedSize] = useState('')
   const [sizeGuideRanges, setSizeGuideRanges] = useState<Record<string, { min: string; max: string }>>({})
   const [sizeGuideNote, setSizeGuideNote] = useState('')
+  const [sizeGuideSuccess, setSizeGuideSuccess] = useState<SizeGuideSaveSuccess | null>(null)
+
+  const completedSessionScanSet = useMemo(
+    () => new Set(completedSessionScanModes),
+    [completedSessionScanModes],
+  )
+  const savedSessionScanSet = useMemo(
+    () => new Set(savedSessionScanModes),
+    [savedSessionScanModes],
+  )
+  const markSessionScanComplete = useCallback((scanMode: DrapeVisionSpecialistScanMode) => {
+    setCompletedSessionScanModes((current) => current.includes(scanMode) ? current : [...current, scanMode])
+  }, [])
+  const markSessionScanSaved = useCallback((scanMode: DrapeVisionSpecialistScanMode) => {
+    setSavedSessionScanModes((current) => current.includes(scanMode) ? current : [...current, scanMode])
+  }, [])
 
   const capturesRef = useRef<VisionCapture[]>([])
   const capturedSetRef = useRef(new Set<number>())
   const calculationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const captureNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autoCountdownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const finalBackCompletionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const specialistResultTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const specialistWatchdogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const specialistWatchdogRepairCountRef = useRef(0)
+  const specialistWorkletSessionRef = useRef(0)
+  const specialistGuideUpdatedAtRef = useRef(0)
+  const specialistGuideStageRef = useRef<SpecialistGuideStage | null>(null)
+  const saveConfirmationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const startCaptureCountdownRef = useRef<((options?: StartCaptureCountdownOptions) => Promise<void>) | null>(null)
+  const audioPlayerRef = useRef<AudioPlayer | null>(null)
+  const instructionFade = useRef(new Animated.Value(1)).current
+  const countdownPulse = useRef(new Animated.Value(1)).current
+  const wireBreath = useRef(new Animated.Value(0)).current
+  const specialistProgressAnim = useRef(new Animated.Value(0)).current
+  const specialistFrameScale = useRef(new Animated.Value(1)).current
+  const specialistFrameShake = useRef(new Animated.Value(0)).current
+  const specialistFrameTranslateX = useRef(new Animated.Value(0)).current
+  const specialistFrameTranslateY = useRef(new Animated.Value(0)).current
+  const captureFlashOpacity = useRef(new Animated.Value(0)).current
+  const resultsReveal = useRef(new Animated.Value(0)).current
+  const captureArmedSync = useMemo<Synchronizable<number>>(() => createSynchronizable(0), [])
+  const bodyScanActiveSync = useMemo<Synchronizable<number>>(() => createSynchronizable(0), [])
+  const specialistScanActiveSync = useMemo<Synchronizable<number>>(() => createSynchronizable(0), [])
+  const specialistModeCodeSync = useMemo<Synchronizable<number>>(() => createSynchronizable(0), [])
+  const specialistSessionSync = useMemo<Synchronizable<number>>(() => createSynchronizable(0), [])
+  const lastAudioPromptRef = useRef<{ key: DrapeVisionSpokenPrompt | null; playedAtMs: number }>({
+    key: null,
+    playedAtMs: 0,
+  })
+  const specialistAudioPromptRef = useRef<{
+    mode: DrapeVisionSpecialistScanMode | null
+    stage: SpecialistGuideStage | null
+    prompt: DrapeVisionSpokenPrompt | null
+  }>({
+    mode: null,
+    stage: null,
+    prompt: null,
+  })
+  const audioGenerationRef = useRef(0)
+  const specialistDebugLogAtRef = useRef(0)
+  const lastAccessibilityAnnouncementRef = useRef<{ message: string | null; announcedAtMs: number }>({
+    message: null,
+    announcedAtMs: 0,
+  })
+  const phaseRef = useRef(phase)
+  const engineStatusRef = useRef(engineStatus)
+  const captureArmedRef = useRef(captureArmed)
+  const scanCountdownRef = useRef(scanCountdown)
+  const scanPrecheckRef = useRef(scanPrecheck)
   const instructionRef = useRef(instruction)
   const instructionUpdatedAtRef = useRef(0)
   const visionLabFrameSamplesRef = useRef<VisionLabFrameSample[]>([])
   const visionLabCaptureSamplesRef = useRef<VisionLabCaptureSample[]>([])
   const visionLabRejectedCountsRef = useRef<Record<string, number>>({})
+  const visionLabReportedRejectionsRef = useRef<Set<string>>(new Set())
+  const captureBurstSamplesRef = useRef<VisionCaptureBurstSample[]>([])
+  const captureBurstAngleIndexRef = useRef<number | null>(null)
   const visionLabStartedAtRef = useRef<string | null>(null)
   const visionLabSessionIdRef = useRef<string | null>(null)
   const scanArmedAtRef = useRef<number | null>(null)
   const lastScanCaptureAtRef = useRef<number | null>(null)
   const scanRecoveryPromptCountRef = useRef(0)
+  const scanPrecheckReadyRef = useRef(false)
+  const scanCountdownPrecheckFailedAtRef = useRef(0)
   const processedFrameCountRef = useRef(0)
   const lastFrameSeenAtRef = useRef<number | null>(null)
+  const lastUsableBodyFrameAtRef = useRef(0)
+  const lastNoisyInstructionRef = useRef<{ message: string; firstSeenAtMs: number; count: number } | null>(null)
 
   const captureArmedValue = useSharedValue(0)
   const capturedMask = useSharedValue(0)
@@ -1243,14 +3201,693 @@ export default function DrapeVisionScreen() {
   const stablePoseBodyFrameHeight = useSharedValue(0)
   const hasLastCapturedYaw = useSharedValue(0)
   const lastCapturedYawDegrees = useSharedValue(0)
+  const scanCaptureState = useSharedValue(0)
+  const scanCandidateAngleIndex = useSharedValue(-1)
+  const scanCandidateStartedMs = useSharedValue(0)
+  const scanCandidateYawDegrees = useSharedValue(0)
+  const scanCandidateBodyFrameHeight = useSharedValue(0)
+  const scanBurstStartedMs = useSharedValue(0)
+  const scanBurstFrameCount = useSharedValue(0)
+  const bodyScanActiveValue = useSharedValue(0)
+  const specialistScanActiveValue = useSharedValue(0)
+  const specialistModeCodeValue = useSharedValue(0)
+  const specialistSessionValue = useSharedValue(0)
+  const specialistAppliedSessionValue = useSharedValue(0)
+  const specialistLastFrameMs = useSharedValue(0)
+  const specialistFrameHeartbeatMs = useSharedValue(0)
+  const specialistModeFrameCount = useSharedValue(0)
+  const specialistCandidateStartedMs = useSharedValue(0)
+  const specialistCandidateCenterX = useSharedValue(0)
+  const specialistCandidateCenterY = useSharedValue(0)
+  const specialistCandidateSize = useSharedValue(0)
+  const specialistCandidateBestScore = useSharedValue(0)
+  const specialistCapturedValue = useSharedValue(0)
+
+  const bumpVisionCameraSession = useCallback(() => {
+    setVisionCameraSessionKey((current) => current + 1)
+  }, [])
+
+  const restartVisionCameraSession = useCallback(async () => {
+    cameraRestartingRef.current = true
+    setCameraRestarting(true)
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    bumpVisionCameraSession()
+    await new Promise((resolve) => setTimeout(resolve, VISION_CAMERA_SESSION_RESET_MS))
+    cameraRestartingRef.current = false
+    setCameraRestarting(false)
+  }, [bumpVisionCameraSession])
+
+  const saveVisionHeightPreference = useCallback(async (payload: {
+    heightCm: number
+    unit: HeightUnit
+    confidence: HeightInputConfidence
+  }) => {
+    const saved: SavedVisionHeight = {
+      heightCm: clampHeight(payload.heightCm),
+      unit: payload.unit,
+      confidence: payload.confidence,
+      updatedAt: new Date().toISOString(),
+    }
+
+    setSavedVisionHeight(saved)
+
+    try {
+      await AsyncStorage.setItem(visionHeightStorageKey(user?.id), JSON.stringify(saved))
+    } catch (error) {
+      addVisionBreadcrumb('scan_height_save_failed', {
+        mode,
+        error: error instanceof Error ? error.message : String(error),
+      }, 'warning')
+    }
+  }, [mode, user?.id])
+
+  useEffect(() => {
+    let active = true
+
+    AsyncStorage.getItem(visionHeightStorageKey(user?.id))
+      .then((raw) => {
+        if (!active) return
+        const saved = parseSavedVisionHeight(raw)
+        if (!saved) {
+          setSavedVisionHeight(null)
+          return
+        }
+
+        setSavedVisionHeight(saved)
+        setHeightCm(saved.heightCm)
+        setHeightUnit(saved.unit)
+        setHeightInputConfidence(saved.confidence)
+      })
+      .catch((error) => {
+        if (!active) return
+        setSavedVisionHeight(null)
+        addVisionBreadcrumb('scan_height_load_failed', {
+          mode,
+          error: error instanceof Error ? error.message : String(error),
+        }, 'warning')
+      })
+
+    return () => {
+      active = false
+    }
+  }, [mode, user?.id])
+
+  useEffect(() => {
+    let active = true
+
+    AsyncStorage.getItem(visionResultUnitStorageKey(user?.id))
+      .then((raw) => {
+        if (!active) return
+        if (raw === 'cm' || raw === 'in') {
+          setResultUnit(raw)
+        }
+      })
+      .catch((error) => {
+        if (!active) return
+        addVisionBreadcrumb('scan_result_unit_load_failed', {
+          mode,
+          error: error instanceof Error ? error.message : String(error),
+        }, 'warning')
+      })
+
+    return () => {
+      active = false
+    }
+  }, [mode, user?.id])
 
   useEffect(() => {
     instructionRef.current = instruction
   }, [instruction])
 
   useEffect(() => {
+    let mounted = true
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((enabled) => {
+        if (mounted) setReduceMotion(enabled)
+      })
+      .catch(() => {
+        if (mounted) setReduceMotion(false)
+      })
+
+    const subscription = AccessibilityInfo.addEventListener?.('reduceMotionChanged', setReduceMotion)
+    return () => {
+      mounted = false
+      subscription?.remove?.()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (reduceMotion) {
+      instructionFade.setValue(1)
+      return
+    }
+
+    instructionFade.setValue(0.45)
+    Animated.timing(instructionFade, {
+      toValue: 1,
+      duration: 160,
+      useNativeDriver: true,
+    }).start()
+  }, [instruction, instructionFade, reduceMotion, specialistGuide.message, specialistGuide.title])
+
+  useEffect(() => {
+    if (reduceMotion || phase !== 'scan' || scanCountdown == null) {
+      countdownPulse.setValue(1)
+      return
+    }
+
+    countdownPulse.setValue(1.16)
+    trigger('impactHeavy', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+    Animated.spring(countdownPulse, {
+      toValue: 1,
+      friction: 5,
+      tension: 160,
+      useNativeDriver: true,
+    }).start()
+  }, [countdownPulse, phase, reduceMotion, scanCountdown])
+
+  useEffect(() => {
+    const notice = typeof captureNotice === 'string' ? captureNotice.toLowerCase() : ''
+    const shouldFlash =
+      (phase === 'scan' || phase === 'specialist_scan') &&
+      notice.length > 0 &&
+      (notice.startsWith('captured') || notice.includes('captured'))
+
+    if (reduceMotion || !shouldFlash) return
+
+    captureFlashOpacity.stopAnimation()
+    captureFlashOpacity.setValue(0.16)
+    Animated.timing(captureFlashOpacity, {
+      toValue: 0,
+      duration: 130,
+      useNativeDriver: true,
+    }).start()
+  }, [captureFlashOpacity, captureNotice, phase, reduceMotion])
+
+  useEffect(() => {
+    if (reduceMotion || phase !== 'calculating') {
+      wireBreath.stopAnimation()
+      wireBreath.setValue(0)
+      return
+    }
+
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(wireBreath, {
+          toValue: 1,
+          duration: 850,
+          useNativeDriver: true,
+        }),
+        Animated.timing(wireBreath, {
+          toValue: 0,
+          duration: 850,
+          useNativeDriver: true,
+        }),
+      ]),
+    )
+    animation.start()
+    return () => animation.stop()
+  }, [phase, reduceMotion, wireBreath])
+
+  useEffect(() => {
+    const progressPercent = specialistGuide.stage === 'captured'
+      ? 100
+      : Math.max(0, Math.min(100, Math.round(specialistGuide.progress * 100)))
+
+    if (reduceMotion) {
+      specialistProgressAnim.setValue(progressPercent)
+      return
+    }
+
+    Animated.timing(specialistProgressAnim, {
+      toValue: progressPercent,
+      duration: 130,
+      useNativeDriver: false,
+    }).start()
+  }, [reduceMotion, specialistGuide.progress, specialistGuide.stage, specialistProgressAnim])
+
+  useEffect(() => {
+    specialistFrameScale.stopAnimation()
+    specialistFrameShake.stopAnimation()
+    specialistFrameScale.setValue(1)
+    specialistFrameShake.setValue(0)
+
+    if (reduceMotion || phase !== 'specialist_scan') return
+
+    if (specialistGuide.tone === 'success') {
+      Animated.sequence([
+        Animated.spring(specialistFrameScale, {
+          toValue: 1.035,
+          friction: 5,
+          tension: 150,
+          useNativeDriver: true,
+        }),
+        Animated.spring(specialistFrameScale, {
+          toValue: 1,
+          friction: 6,
+          tension: 120,
+          useNativeDriver: true,
+        }),
+      ]).start()
+      return
+    }
+
+    if (specialistGuide.tone === 'warning') {
+      Animated.sequence([
+        Animated.timing(specialistFrameShake, { toValue: -7, duration: 42, useNativeDriver: true }),
+        Animated.timing(specialistFrameShake, { toValue: 7, duration: 84, useNativeDriver: true }),
+        Animated.timing(specialistFrameShake, { toValue: 0, duration: 52, useNativeDriver: true }),
+      ]).start()
+    }
+  }, [phase, reduceMotion, specialistFrameScale, specialistFrameShake, specialistGuide.tone])
+
+  useEffect(() => {
+    if (phase !== 'specialist_scan') {
+      specialistFrameTranslateX.setValue(0)
+      specialistFrameTranslateY.setValue(0)
+      return
+    }
+
+    const hasFreshBox =
+      specialistGuideDebug &&
+      Date.now() - specialistGuideDebug.updatedAtMs < 1200 &&
+      (specialistGuideDebug.width ?? 0) > 0 &&
+      (specialistGuideDebug.height ?? 0) > 0 &&
+      specialistGuide.tone !== 'warning'
+    const nextX = hasFreshBox
+      ? Math.max(-42, Math.min(42, ((specialistGuideDebug?.centerX ?? 0.5) - 0.5) * 112))
+      : 0
+    const nextY = hasFreshBox
+      ? Math.max(-58, Math.min(58, ((specialistGuideDebug?.centerY ?? 0.5) - 0.5) * 150))
+      : 0
+
+    if (reduceMotion) {
+      specialistFrameTranslateX.setValue(nextX)
+      specialistFrameTranslateY.setValue(nextY)
+      return
+    }
+
+    Animated.parallel([
+      Animated.spring(specialistFrameTranslateX, {
+        toValue: nextX,
+        friction: 12,
+        tension: 80,
+        useNativeDriver: true,
+      }),
+      Animated.spring(specialistFrameTranslateY, {
+        toValue: nextY,
+        friction: 12,
+        tension: 80,
+        useNativeDriver: true,
+      }),
+    ]).start()
+  }, [
+    phase,
+    reduceMotion,
+    specialistFrameTranslateX,
+    specialistFrameTranslateY,
+    specialistGuide.tone,
+    specialistGuideDebug,
+  ])
+
+  useEffect(() => {
+    if (phase !== 'results' || !measurementResult) {
+      resultsReveal.setValue(0)
+      return
+    }
+
+    if (reduceMotion) {
+      resultsReveal.setValue(1)
+      return
+    }
+
+    resultsReveal.setValue(0)
+    Animated.timing(resultsReveal, {
+      toValue: 1,
+      duration: 520,
+      useNativeDriver: true,
+    }).start()
+  }, [measurementResult, phase, reduceMotion, resultsReveal])
+
+  useEffect(() => {
+    if (!DRAPE_VISION_DEBUG_UI_ENABLED || (phase !== 'scan' && phase !== 'specialist_scan')) {
+      return undefined
+    }
+
+    const timer = setInterval(() => {
+      setLiveTraceTick((current) => current + 1)
+    }, 800)
+
+    return () => clearInterval(timer)
+  }, [phase])
+
+  useEffect(() => {
+    phaseRef.current = phase
+    engineStatusRef.current = engineStatus
+    captureArmedRef.current = captureArmed
+    scanCountdownRef.current = scanCountdown
+  }, [captureArmed, engineStatus, phase, scanCountdown])
+
+  useEffect(() => {
+    const active = phase === 'specialist_scan' ? 1 : 0
+    const modeCode = specialistModeCode(selectedSpecialistMode)
+    specialistScanActiveValue.value = active
+    specialistScanActiveSync.setBlocking(active)
+    specialistModeCodeValue.value = modeCode
+    specialistModeCodeSync.setBlocking(modeCode)
+    setSpecialistWorkletTrace({
+      active: active === 1,
+      modeCode,
+    })
+    if (active === 1) {
+      specialistLastFrameMs.value = 0
+      specialistFrameHeartbeatMs.value = 0
+      specialistModeFrameCount.value = 0
+      specialistCandidateStartedMs.value = 0
+      specialistCandidateCenterX.value = 0
+      specialistCandidateCenterY.value = 0
+      specialistCandidateSize.value = 0
+      specialistCandidateBestScore.value = 0
+      specialistCapturedValue.value = 0
+    }
+  }, [
+    phase,
+    selectedSpecialistMode,
+    specialistCandidateCenterX,
+    specialistCandidateCenterY,
+    specialistCandidateBestScore,
+    specialistCandidateSize,
+    specialistCandidateStartedMs,
+    specialistCapturedValue,
+    specialistLastFrameMs,
+    specialistModeCodeValue,
+    specialistModeCodeSync,
+    specialistScanActiveValue,
+    specialistScanActiveSync,
+  ])
+
+  useEffect(() => {
+    scanPrecheckRef.current = scanPrecheck
+  }, [scanPrecheck])
+
+  useEffect(() => {
     captureArmedValue.value = captureArmed ? 1 : 0
-  }, [captureArmed, captureArmedValue])
+    captureArmedSync.setBlocking(captureArmed ? 1 : 0)
+  }, [captureArmed, captureArmedSync, captureArmedValue])
+
+  const clearAutoCountdownTimer = useCallback(() => {
+    if (autoCountdownTimerRef.current) {
+      clearTimeout(autoCountdownTimerRef.current)
+      autoCountdownTimerRef.current = null
+    }
+  }, [])
+
+  const stopVisionAudio = useCallback((reason: string) => {
+    audioGenerationRef.current += 1
+    const speech = loadExpoSpeech()
+    if (speech) {
+      void speech.stop().catch(() => {
+        // Speech may be unavailable until the dev client includes expo-speech.
+      })
+    }
+    const player = audioPlayerRef.current
+    audioPlayerRef.current = null
+    lastAudioPromptRef.current = {
+      key: null,
+      playedAtMs: 0,
+    }
+    specialistAudioPromptRef.current = {
+      mode: null,
+      stage: null,
+      prompt: null,
+    }
+    if (!player) {
+      setAudioDebugMessage(null)
+      return
+    }
+
+    try {
+      if ('pause' in player && typeof player.pause === 'function') {
+        player.pause()
+      }
+    } catch {
+      // Stopping audio is best-effort during rapid scan teardown.
+    }
+    try {
+      void player.seekTo(0)
+    } catch {
+      // Some native audio sessions are already torn down by the time we exit.
+    }
+    try {
+      player.remove()
+    } catch {
+      // Removing a stale native player can throw after fast navigation.
+    }
+    setAudioDebugMessage(null)
+    addVisionBreadcrumb('vision_audio_stopped', {
+      mode,
+      reason,
+    })
+  }, [mode])
+
+  const playVisionPrompt = useCallback(async (
+    prompt: DrapeVisionSpokenPrompt,
+    options: { force?: boolean } = {},
+  ) => {
+    const currentPhase = phaseRef.current
+    const audioAllowed =
+      currentPhase === 'scan' ||
+      currentPhase === 'specialist_scan' ||
+      currentPhase === 'calculating' ||
+      captureArmedSync.getDirty() === 1 ||
+      captureArmedValue.value === 1 ||
+      specialistScanActiveSync.getDirty() === 1 ||
+      specialistScanActiveValue.value === 1
+    if (!audioAllowed) {
+      setAudioDebugMessage(null)
+      return
+    }
+
+    const now = Date.now()
+    const lastPrompt = lastAudioPromptRef.current
+    const elapsedSincePromptMs = now - lastPrompt.playedAtMs
+    const promptIsInterrupting = isInterruptingVisionPrompt(prompt)
+    if (lastPrompt.key === prompt && elapsedSincePromptMs < SCAN_AUDIO_PROMPT_COOLDOWN_MS && !promptIsInterrupting) {
+      setAudioDebugMessage(`Audio cooldown: ${prompt}`)
+      return
+    }
+    if (!options.force && elapsedSincePromptMs < SCAN_AUDIO_PROMPT_COOLDOWN_MS) {
+      setAudioDebugMessage(`Audio cooldown: ${prompt}`)
+      return
+    }
+    if (
+      options.force &&
+      !promptIsInterrupting &&
+      !isInterruptingVisionPrompt(lastPrompt.key) &&
+      elapsedSincePromptMs < SCAN_AUDIO_FORCED_PROMPT_MIN_GAP_MS
+    ) {
+      setAudioDebugMessage(`Audio pacing: ${prompt}`)
+      return
+    }
+
+    lastAudioPromptRef.current = { key: prompt, playedAtMs: now }
+    const audioGeneration = audioGenerationRef.current
+
+    const isSpecialistPrompt = isSpecialistSpokenPrompt(prompt)
+    const assetPrompt = isSpecialistPrompt ? specialistAudioAssetPrompt(prompt) : prompt
+    const specialistMessage = isSpecialistPrompt ? SPECIALIST_SPOKEN_PROMPTS[prompt] : null
+
+    if (isSpecialistPrompt && specialistMessage) {
+      const message = SPECIALIST_SPOKEN_PROMPTS[prompt]
+      setAudioDebugMessage(`Specialist speech: ${prompt}`)
+      addVisionBreadcrumb('vision_specialist_prompt_announce', {
+        mode,
+        prompt,
+        message,
+        assetPrompt: assetPrompt ?? 'speech',
+      })
+    }
+
+    setAudioDebugMessage(isSpecialistPrompt ? `Specialist speech: ${prompt}` : `Playing audio: ${assetPrompt}`)
+
+    try {
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        shouldPlayInBackground: false,
+        shouldRouteThroughEarpiece: false,
+        interruptionMode: 'duckOthers',
+        interruptionModeAndroid: 'duckOthers',
+      })
+      if (audioGenerationRef.current !== audioGeneration) return
+      const previousPlayer = audioPlayerRef.current
+      audioPlayerRef.current = null
+      if (previousPlayer) {
+        try {
+          if ('pause' in previousPlayer && typeof previousPlayer.pause === 'function') {
+            previousPlayer.pause()
+          }
+        } catch {
+          // Best-effort cleanup before the replacement prompt starts.
+        }
+        try {
+          previousPlayer.remove()
+        } catch {
+          // A stale native player can already be released during rapid prompt changes.
+        }
+      }
+
+      const speech = loadExpoSpeech()
+      if (speech) {
+        await speech.stop().catch(() => {
+          // Speech may be unavailable until the native client includes expo-speech.
+        })
+      }
+
+      if (isSpecialistPrompt && specialistMessage) {
+        if (!speech) {
+          if (!assetPrompt) {
+            setAudioDebugMessage(`Speech unavailable: ${prompt}`)
+            return
+          }
+        } else {
+          try {
+            speech.speak(specialistMessage, {
+              language: 'en-US',
+              pitch: 1,
+              rate: 0.92,
+              volume: 1,
+              useApplicationAudioSession: true,
+              onDone: () => {
+                if (audioGenerationRef.current !== audioGeneration) return
+                setAudioDebugMessage(null)
+              },
+              onError: (speechError) => {
+                addVisionBreadcrumb('vision_specialist_speech_failed', {
+                  mode,
+                  prompt,
+                  error: speechError instanceof Error ? speechError.message : String(speechError),
+                }, 'warning')
+              },
+            })
+            addVisionBreadcrumb('vision_specialist_speech_play', {
+              mode,
+              prompt,
+              message: specialistMessage,
+            })
+            setAudioDebugMessage(`Specialist speech started: ${prompt}`)
+            return
+          } catch (speechError) {
+            const speechErrorMessage = speechError instanceof Error ? speechError.message : String(speechError)
+            addVisionBreadcrumb('vision_specialist_speech_failed', {
+              mode,
+              prompt,
+              error: speechErrorMessage,
+            }, 'warning')
+            if (!assetPrompt) {
+              setAudioDebugMessage(`Speech unavailable: ${prompt}`)
+              return
+            }
+          }
+        }
+      }
+
+      if (!assetPrompt) {
+        setAudioDebugMessage(`No audio asset for ${prompt}`)
+        return
+      }
+
+      const player = createAudioPlayer(VISION_AUDIO_PROMPTS[assetPrompt], {
+        updateInterval: 120,
+        keepAudioSessionActive: true,
+      })
+      player.volume = 1
+      try {
+        await player.seekTo(0)
+      } catch {
+        // Fresh players normally start at zero; seek is best-effort for reused native sessions.
+      }
+      if (audioGenerationRef.current !== audioGeneration) {
+        player.remove()
+        return
+      }
+      player.play()
+      audioPlayerRef.current = player
+      addVisionBreadcrumb('vision_audio_prompt_play', {
+        mode,
+        prompt,
+        assetPrompt,
+        loaded: player.isLoaded,
+        duration: player.duration,
+      })
+      setAudioDebugMessage(`Audio started: ${prompt}`)
+      setTimeout(() => {
+        if (audioGenerationRef.current !== audioGeneration || audioPlayerRef.current !== player) return
+        addVisionBreadcrumb('vision_audio_prompt_status', {
+          mode,
+          prompt,
+          assetPrompt,
+          status: {
+            isLoaded: player.isLoaded,
+            playing: player.playing,
+            paused: player.paused,
+            duration: player.duration,
+            currentTime: player.currentTime,
+          },
+        })
+        if (!player.playing && player.currentTime >= Math.max(player.duration - 0.05, 0)) {
+          audioPlayerRef.current = null
+          player.remove()
+        }
+      }, 350)
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      setAudioDebugMessage(`Audio failed: ${prompt} - ${errorMessage.slice(0, 90)}`)
+      addVisionBreadcrumb('vision_audio_prompt_failed', {
+        mode,
+        prompt,
+        error: errorMessage,
+      }, 'warning')
+    }
+  }, [captureArmedSync, captureArmedValue, mode, specialistScanActiveSync, specialistScanActiveValue])
+
+  const announceVisionStatus = useCallback((message: string, options: { force?: boolean } = {}) => {
+    const normalizedMessage = message.trim()
+    if (!normalizedMessage) return
+
+    const now = Date.now()
+    const lastAnnouncement = lastAccessibilityAnnouncementRef.current
+    if (
+      !options.force &&
+      (lastAnnouncement.message === normalizedMessage ||
+        now - lastAnnouncement.announcedAtMs < SCAN_ACCESSIBILITY_ANNOUNCEMENT_COOLDOWN_MS)
+    ) {
+      return
+    }
+
+    lastAccessibilityAnnouncementRef.current = {
+      message: normalizedMessage,
+      announcedAtMs: now,
+    }
+    AccessibilityInfo.announceForAccessibility(normalizedMessage)
+  }, [])
+
+  useEffect(() => {
+    if (phase !== 'scan') return
+    const message = accessibilityScanStatus({
+      captureNotice,
+      capturedAngleCount: capturedSetRef.current.size,
+      instruction,
+      scanCountdown,
+    })
+    announceVisionStatus(message, { force: scanCountdown != null || Boolean(captureNotice) })
+  }, [announceVisionStatus, captureNotice, instruction, phase, scanCountdown])
+
+  useEffect(() => {
+    if (phase !== 'specialist_scan') return
+    announceVisionStatus(`${specialistGuide.title}. ${specialistGuide.message}`, {
+      force: specialistGuide.stage === 'captured',
+    })
+  }, [announceVisionStatus, phase, specialistGuide.message, specialistGuide.stage, specialistGuide.title])
 
   useEffect(() => {
     if (phase !== 'scan' || engineStatus !== 'ready' || !captureArmed) return undefined
@@ -1274,15 +3911,50 @@ export default function DrapeVisionScreen() {
 
     if (scanCountdown <= 0) {
       const timer = setTimeout(() => {
+        if (Platform.OS === 'ios' && !scanPrecheckReadyRef.current) {
+          const latestPrecheck = scanPrecheckRef.current
+          const message = latestPrecheck.message || 'Stand fully in frame before Drapeon starts capture.'
+          addVisionBreadcrumb('scan_precheck_blocked', {
+            mode,
+            step: 'countdown_complete',
+            reason: latestPrecheck.reason,
+            message,
+            pipelineVersion: DRAPE_VISION_PIPELINE_VERSION,
+          }, 'warning')
+          scanArmedAtRef.current = null
+          lastScanCaptureAtRef.current = null
+          scanCountdownPrecheckFailedAtRef.current = Date.now()
+          captureArmedValue.value = 0
+          captureArmedSync.setBlocking(0)
+          setCaptureArmed(false)
+          setScanCountdown(null)
+          scanCountdownRef.current = null
+          clearAutoCountdownTimer()
+          setInstruction(message)
+          setFrameDropWarning(message)
+          setCaptureNotice('Stand fully in frame first')
+          void playVisionPrompt(visionAudioPromptForPrecheck(latestPrecheck.reason), { force: true })
+          if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
+          captureNoticeTimerRef.current = setTimeout(() => setCaptureNotice(null), 1400)
+          return
+        }
+
         const armedAt = Date.now()
         scanArmedAtRef.current = armedAt
         lastScanCaptureAtRef.current = armedAt
         scanRecoveryPromptCountRef.current = 0
         captureArmedValue.value = 1
+        captureArmedSync.setBlocking(1)
+        addVisionBreadcrumb('scan_capture_armed', {
+          mode,
+          targetAngles: SCAN_TARGET_CAPTURE_COUNT,
+          pipelineVersion: DRAPE_VISION_PIPELINE_VERSION,
+        })
         setCaptureArmed(true)
         setScanCountdown(null)
         setInstruction(Platform.OS === 'ios' ? 'Face the phone and hold full body' : 'Face the phone, then turn slowly right')
         setCaptureNotice('Capturing now')
+        void playVisionPrompt('capturingNow', { force: true })
         if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
         captureNoticeTimerRef.current = setTimeout(() => setCaptureNotice(null), 900)
         trigger('impactHeavy', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
@@ -1291,6 +3963,9 @@ export default function DrapeVisionScreen() {
     }
 
     trigger('impactLight', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+    if (scanCountdown === 3) {
+      void playVisionPrompt('threeTwoOne', { force: true })
+    }
     const instructionTimer = setTimeout(() => {
       setInstruction(`Step back. Capture starts in ${scanCountdown}`)
     }, 0)
@@ -1299,19 +3974,25 @@ export default function DrapeVisionScreen() {
       clearTimeout(instructionTimer)
       clearTimeout(timeout)
     }
-  }, [captureArmedValue, phase, scanCountdown])
+  }, [captureArmedSync, captureArmedValue, clearAutoCountdownTimer, mode, phase, playVisionPrompt, scanCountdown])
 
   useEffect(() => {
     return () => {
       if (calculationTimerRef.current) clearTimeout(calculationTimerRef.current)
       if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
+      if (autoCountdownTimerRef.current) clearTimeout(autoCountdownTimerRef.current)
+      if (finalBackCompletionTimerRef.current) clearTimeout(finalBackCompletionTimerRef.current)
+      if (specialistResultTimerRef.current) clearTimeout(specialistResultTimerRef.current)
+      if (specialistWatchdogTimerRef.current) clearTimeout(specialistWatchdogTimerRef.current)
+      if (saveConfirmationTimerRef.current) clearTimeout(saveConfirmationTimerRef.current)
+      stopVisionAudio('screen_unmount')
       try {
-        clearDrapePoseLandmarker()
+        clearAllDrapeVisionAnalyzers()
       } catch {
         // Native teardown is best-effort when the screen unmounts.
       }
     }
-  }, [])
+  }, [stopVisionAudio])
 
   useEffect(() => {
     if (mode !== 'size_guide_scan' || !params.itemId) return undefined
@@ -1362,9 +4043,100 @@ export default function DrapeVisionScreen() {
   const returnTarget = useMemo(() => returnTargetForVisionParams(mode, params), [mode, params])
   const primaryActionLabel = useMemo(() => primaryLabelForVisionParams(mode, params), [mode, params])
 
+  const garmentQcHasUnsavedWork = useMemo(() => {
+    if (mode !== 'garment_qc') return false
+    return Boolean(
+      garmentQcPhotoUrl ||
+      garmentQcNote.trim() ||
+      Object.values(garmentQcDraft).some((value) => value.trim().length > 0) ||
+      Object.values(garmentQcChecks).some(Boolean)
+    )
+  }, [garmentQcChecks, garmentQcDraft, garmentQcNote, garmentQcPhotoUrl, mode])
+
+  const sizeGuideHasUnsavedWork = useMemo(() => {
+    if (mode !== 'size_guide_scan') return false
+    if (sizeGuideSuccess) return false
+    return Boolean(
+      sizeGuideNote.trim() ||
+      selectedSize ||
+      Object.values(sizeGuideRanges).some((range) => (
+        range.min.trim().length > 0 || range.max.trim().length > 0
+      ))
+    )
+  }, [mode, selectedSize, sizeGuideNote, sizeGuideRanges, sizeGuideSuccess])
+
+  const shouldConfirmClose = useMemo(() => {
+    if (savingResult || workflowSaving) return true
+    if (garmentQcHasUnsavedWork || sizeGuideHasUnsavedWork) return true
+    if (phase === 'scan') {
+      return captureArmed || scanCountdown != null || capturedSegments.some(Boolean)
+    }
+    if (phase === 'calculating') return true
+    if (phase === 'results') return Boolean(measurementResult && !savedMeasurementScanId)
+    if (phase === 'specialist_scan') return true
+    if (phase === 'specialist_result') {
+      const selectedMode = selectedSpecialistMode === 'fit_360' ? 'hand_wrist' : selectedSpecialistMode
+      return Boolean(specialistGuideResult && !savedSessionScanSet.has(selectedMode))
+    }
+    return false
+  }, [
+    captureArmed,
+    capturedSegments,
+    garmentQcHasUnsavedWork,
+    measurementResult,
+    phase,
+    savedMeasurementScanId,
+    savedSessionScanSet,
+    selectedSpecialistMode,
+    savingResult,
+    scanCountdown,
+    sizeGuideHasUnsavedWork,
+    specialistGuideResult,
+    workflowSaving,
+  ])
+
   const closeVision = useCallback(() => {
+    if (savingResult || workflowSaving) {
+      Alert.alert('Still saving', 'Wait for this save to finish before leaving Drapeon Vision.')
+      return
+    }
+
+    if (shouldConfirmClose) {
+      Alert.alert(
+        'Leave Drapeon Vision?',
+        'Your current scan or unsaved edits will be lost if you leave now.',
+        [
+          { text: 'Stay', style: 'cancel' },
+          {
+            text: 'Leave',
+            style: 'destructive',
+            onPress: () => router.replace(returnTarget as never),
+          },
+        ],
+      )
+      return
+    }
+
     router.replace(returnTarget as never)
-  }, [returnTarget, router])
+  }, [returnTarget, router, savingResult, shouldConfirmClose, workflowSaving])
+
+  useEffect(() => {
+    if (phase !== 'calculating') {
+      setCalculationStep(1)
+      return undefined
+    }
+
+    setCalculationStep(1)
+    const timer = setInterval(() => {
+      setCalculationStep((current) => (
+        current >= DRAPE_VISION_CALCULATION_MESSAGES.length
+          ? current
+          : current + 1
+      ))
+    }, 520)
+
+    return () => clearInterval(timer)
+  }, [phase])
 
   const openPrimary = useCallback(() => {
     addVisionBreadcrumb('vision_return_selected', {
@@ -1403,8 +4175,55 @@ export default function DrapeVisionScreen() {
     router.replace(returnTarget as never)
   }, [mode, params.diaryId, params.orderId, returnTarget, router])
 
+  const upsertDefaultCustomerMeasurementProfile = useCallback(async (
+    measurements: Record<string, unknown>,
+    unit: MeasurementDisplayUnit,
+    source: 'MANUAL' | 'DRAPE_VISION' | 'TAILOR_ASSISTED' | 'PASSPORT_CLAIM' | 'IMPORT' = 'DRAPE_VISION',
+    measuredAt: string = new Date().toISOString(),
+  ) => {
+    if (!user?.id) return null
+
+    const { data: existingDefault, error: existingError } = await supabase
+      .from('customer_measurement_profiles')
+      .select('id')
+      .eq('customer_id', user.id)
+      .eq('is_default', true)
+      .maybeSingle()
+
+    if (existingError) return existingError
+
+    const label = typeof measurements.measurementProfileLabel === 'string' && measurements.measurementProfileLabel.trim()
+      ? measurements.measurementProfileLabel.trim()
+      : 'Me'
+    const storedMeasurements = buildMeasurementProfileStoragePayload(measurements)
+    const payload = {
+      customer_id: user.id,
+      label,
+      relationship: 'SELF',
+      measurements: storedMeasurements,
+      unit_preference: unit,
+      source,
+      is_default: true,
+      last_measured_at: measuredAt,
+      updated_at: measuredAt,
+    }
+
+    if (existingDefault?.id) {
+      const { error } = await supabase
+        .from('customer_measurement_profiles')
+        .update(payload)
+        .eq('id', existingDefault.id)
+      return error ?? null
+    }
+
+    const { error } = await supabase
+      .from('customer_measurement_profiles')
+      .insert(payload)
+    return error ?? null
+  }, [user?.id])
+
   const updateGarmentQcDraft = useCallback((field: DrapeVisionMeasurementField, value: string) => {
-    setGarmentQcDraft((current) => ({ ...current, [field]: value.replace(/[^0-9.]/g, '') }))
+    setGarmentQcDraft((current) => ({ ...current, [field]: value.replace(/[^0-9./\s]/g, '') }))
   }, [])
 
   const toggleGarmentQcCheck = useCallback((key: GarmentQcCheckKey) => {
@@ -1412,14 +4231,30 @@ export default function DrapeVisionScreen() {
   }, [])
 
   const updateSizeGuideRange = useCallback((field: DrapeVisionMeasurementField, edge: 'min' | 'max', value: string) => {
+    setSizeGuideSuccess(null)
     setSizeGuideRanges((current) => ({
       ...current,
       [field]: {
         min: current[field]?.min ?? '',
         max: current[field]?.max ?? '',
-        [edge]: value.replace(/[^0-9.]/g, ''),
+        [edge]: value.replace(/[^0-9./\s]/g, ''),
       },
     }))
+  }, [])
+
+  const updateSizeGuideUnit = useCallback((unit: MeasurementDisplayUnit) => {
+    setSizeGuideSuccess(null)
+    setSizeGuideUnit(unit)
+  }, [])
+
+  const updateSelectedSize = useCallback((size: string) => {
+    setSizeGuideSuccess(null)
+    setSelectedSize(size)
+  }, [])
+
+  const updateSizeGuideNote = useCallback((note: string) => {
+    setSizeGuideSuccess(null)
+    setSizeGuideNote(note)
   }, [])
 
   const pickGarmentQcPhoto = useCallback(async (source: 'camera' | 'library') => {
@@ -1453,7 +4288,7 @@ export default function DrapeVisionScreen() {
     if (picked.canceled || !picked.assets[0]?.uri) return
 
     setWorkflowSaving(true)
-    setWorkflowMessage('Uploading QC proof photo...')
+    setWorkflowMessage('Uploading photo...')
     try {
       const cleanUri = await stripExif(picked.assets[0].uri)
       const path = `vision-qc/${user.id}/${params.orderId}/${Date.now()}_${Math.random().toString(36).slice(2)}.jpg`
@@ -1466,7 +4301,7 @@ export default function DrapeVisionScreen() {
       })
       setGarmentQcPhotoUrl(publicUrl)
       setGarmentQcChecks((current) => ({ ...current, photoAttached: true }))
-      setWorkflowMessage('QC proof photo attached.')
+      setWorkflowMessage('Photo attached.')
     } catch (error) {
       addVisionBreadcrumb('garment_qc_photo_upload_failed', {
         source,
@@ -1496,7 +4331,7 @@ export default function DrapeVisionScreen() {
     const hasChecks = Object.values(garmentQcChecks).some(Boolean)
 
     if (!hasMeasurements && !hasChecks && !garmentQcPhotoUrl) {
-      Alert.alert('Add QC evidence', 'Add at least one final measurement, checklist item, or proof photo before saving.')
+      Alert.alert('Add QC evidence', 'Add a measurement, a checklist item, or a photo before saving.')
       return
     }
 
@@ -1633,17 +4468,22 @@ export default function DrapeVisionScreen() {
       size: selectedSize,
       field_count: Object.keys(selectedRanges).length,
     })
-    Alert.alert(
-      'Size guide saved',
-      'This listing now has Drapeon Vision fit guidance for shoppers using their Fit Passport.',
-      [{ text: 'Return to listing', onPress: openPrimary }],
-    )
+    setSizeGuideItem((current) => current ? { ...current, sizeGuide: nextGuide } : current)
+    setWorkflowMessage(null)
+    setSizeGuideSuccess({
+      size: selectedSize,
+      fieldCount: Object.keys(selectedRanges).length,
+      title: sizeGuideItem.title,
+      savedAt: new Date().toISOString(),
+    })
+    AccessibilityInfo.announceForAccessibility(`Size guide saved for ${selectedSize}.`)
   }, [openPrimary, params.itemId, selectedSize, sizeGuideItem, sizeGuideNote, sizeGuideRanges, sizeGuideUnit])
 
   const resetVisionLab = useCallback(() => {
     visionLabFrameSamplesRef.current = []
     visionLabCaptureSamplesRef.current = []
     visionLabRejectedCountsRef.current = {}
+    visionLabReportedRejectionsRef.current = new Set()
     visionLabStartedAtRef.current = null
     visionLabSessionIdRef.current = null
     setVisionLabSampleCount(0)
@@ -1651,7 +4491,7 @@ export default function DrapeVisionScreen() {
   }, [])
 
   const startVisionLabSession = useCallback(() => {
-    if (!DRAPE_VISION_LAB_ENABLED) {
+    if (!DRAPE_VISION_VALIDATION_ENABLED) {
       resetVisionLab()
       return
     }
@@ -1659,13 +4499,31 @@ export default function DrapeVisionScreen() {
     visionLabFrameSamplesRef.current = []
     visionLabCaptureSamplesRef.current = []
     visionLabRejectedCountsRef.current = {}
+    visionLabReportedRejectionsRef.current = new Set()
     visionLabStartedAtRef.current = new Date().toISOString()
     visionLabSessionIdRef.current = `vision-lab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     setVisionLabSampleCount(0)
   }, [resetVisionLab])
 
   const handleLabFrameSample = useCallback((sample: VisionLabFrameSample) => {
-    if (!DRAPE_VISION_LAB_ENABLED || !visionLabSessionIdRef.current) return
+    if (sample.status !== 'accepted_pose') {
+      const reason = sample.reason ?? sample.status
+      if (DRAPE_VISION_VALIDATION_ENABLED && visionLabSessionIdRef.current) {
+        visionLabRejectedCountsRef.current[reason] = (visionLabRejectedCountsRef.current[reason] ?? 0) + 1
+      }
+      if (!visionLabReportedRejectionsRef.current.has(reason)) {
+        visionLabReportedRejectionsRef.current.add(reason)
+        capture('drape_vision_rejection', {
+          reason,
+          scan_state: sample.scanState ?? null,
+          mode,
+          platform: Platform.OS,
+          pipeline_version: DRAPE_VISION_PIPELINE_VERSION,
+        })
+      }
+    }
+
+    if (!DRAPE_VISION_VALIDATION_ENABLED || !visionLabSessionIdRef.current) return
 
     const boundedSample: VisionLabFrameSample = {
       ...sample,
@@ -1687,16 +4545,11 @@ export default function DrapeVisionScreen() {
       samples.splice(0, samples.length - DRAPE_VISION_LAB_MAX_FRAME_SAMPLES)
     }
 
-    if (sample.status !== 'accepted_pose') {
-      const reason = sample.reason ?? sample.status
-      visionLabRejectedCountsRef.current[reason] = (visionLabRejectedCountsRef.current[reason] ?? 0) + 1
-    }
-
     setVisionLabSampleCount(samples.length + visionLabCaptureSamplesRef.current.length)
-  }, [])
+  }, [mode])
 
   const appendVisionLabCapture = useCallback((captureSample: VisionLabCaptureSample) => {
-    if (!DRAPE_VISION_LAB_ENABLED || !visionLabSessionIdRef.current) return
+    if (!DRAPE_VISION_VALIDATION_ENABLED || !visionLabSessionIdRef.current) return
 
     visionLabCaptureSamplesRef.current = [
       ...visionLabCaptureSamplesRef.current.filter((sample) => sample.angleIndex !== captureSample.angleIndex),
@@ -1705,16 +4558,44 @@ export default function DrapeVisionScreen() {
     setVisionLabSampleCount(visionLabFrameSamplesRef.current.length + visionLabCaptureSamplesRef.current.length)
   }, [])
 
-  const buildVisionLabPayload = useCallback((result?: DrapeVisionMeasurementResult) => {
-    if (!DRAPE_VISION_LAB_ENABLED || !visionLabSessionIdRef.current) return null
+  const buildVisionLabPayload = useCallback((
+    result?: DrapeVisionMeasurementResult,
+    options: {
+      eventType?: string
+      comparisonRows?: VisionLabComparisonRow[]
+      repeatabilityRows?: VisionLabRepeatabilityRow[]
+    } = {},
+  ) => {
+    if (!DRAPE_VISION_VALIDATION_ENABLED || !visionLabSessionIdRef.current) return null
+
+    const scorecards = buildVisionLabScorecards({
+      eventType: options.eventType ?? 'MANUAL_UPLOAD',
+      result,
+      comparisonRows: options.comparisonRows ?? groundTruthRows,
+      repeatabilityRows: options.repeatabilityRows ?? repeatabilityRows,
+      frameSamples: visionLabFrameSamplesRef.current,
+      captureSamples: visionLabCaptureSamplesRef.current,
+      rejectedCounts: visionLabRejectedCountsRef.current,
+      scanPrecheck,
+      engineError,
+      frameDropWarning,
+      captureCount: capturesRef.current.length,
+      mode,
+      heightCm,
+      heightInputConfidence,
+    })
 
     return {
       version: 'drape-vision-lab-v1',
+      pipelineVersion: DRAPE_VISION_PIPELINE_VERSION,
+      scanFlow: DRAPE_VISION_SCAN_FLOW,
+      scanFlowLabel: DRAPE_VISION_SCAN_FLOW_LABEL,
       sessionId: visionLabSessionIdRef.current,
       startedAt: visionLabStartedAtRef.current,
       endedAt: new Date().toISOString(),
       mode,
       heightCm,
+      heightInputConfidence,
       targetAnglesDegrees: Array.from({ length: SCAN_TARGET_CAPTURE_COUNT }, (_, index) => targetAngleDegreesForScanIndex(index)),
       thresholds: {
         captureIntervalMs: SCAN_CAPTURE_INTERVAL_MS,
@@ -1727,6 +4608,9 @@ export default function DrapeVisionScreen() {
         captureMaxYawDeltaDegrees: SCAN_CAPTURE_MAX_YAW_DELTA_DEGREES,
         captureMaxBodyHeightDelta: SCAN_CAPTURE_MAX_BODY_HEIGHT_DELTA,
         captureMinYawProgressDegrees: SCAN_CAPTURE_MIN_YAW_PROGRESS_DEGREES,
+        captureBurstFrameCount: SCAN_CAPTURE_BURST_FRAME_COUNT,
+        captureBurstMaxYawDeltaDegrees: SCAN_CAPTURE_BURST_MAX_YAW_DELTA_DEGREES,
+        captureBurstMaxBodyHeightDelta: SCAN_CAPTURE_BURST_MAX_BODY_HEIGHT_DELTA,
         androidAngleProgressRelaxMs: SCAN_ANDROID_ANGLE_PROGRESS_RELAX_MS,
         minCapturedAngleCount: SCAN_MIN_CAPTURED_ANGLE_COUNT,
         minUniqueHalfTurnAngles: SCAN_MIN_UNIQUE_HALF_TURN_ANGLES,
@@ -1745,6 +4629,7 @@ export default function DrapeVisionScreen() {
         latestInferenceMs: roundLabNumber(latestInferenceMs, 2),
         frameDropWarning,
         engineError,
+        scanPrecheck,
       },
       frameSampleCount: visionLabFrameSamplesRef.current.length,
       captureSampleCount: visionLabCaptureSamplesRef.current.length,
@@ -1756,6 +4641,7 @@ export default function DrapeVisionScreen() {
       resultConfidenceByField: result?.confidenceByField ?? null,
       measurementDiagnostics: result?.diagnostics ?? null,
       calibration: result?.calibration ?? null,
+      scorecards,
     }
   }, [
     captureArmed,
@@ -1763,15 +4649,71 @@ export default function DrapeVisionScreen() {
     engineError,
     engineStatus,
     frameDropWarning,
+    groundTruthRows,
     heightCm,
+    heightInputConfidence,
     instruction,
     latestInferenceMs,
     latestYaw,
     mode,
     phase,
     poseDebug,
+    repeatabilityRows,
+    scanPrecheck,
     scanCountdown,
   ])
+
+  const persistVisionLabScorecardRow = useCallback(async (
+    eventType: string,
+    scorecards: VisionLabScorecards | null | undefined,
+    measurementScanId?: string | null,
+  ) => {
+    if (!DRAPE_VISION_VALIDATION_ENABLED || !user?.id || !visionLabSessionIdRef.current || !scorecards) return
+
+    try {
+      const gates = scorecards.shippingScorecard.gates
+      const qualitySignals = scorecards.diagnosticScorecard.qualitySignals
+      const { error } = await supabase
+        .from('drape_vision_scorecard_rows')
+        .insert({
+          user_id: user.id,
+          session_id: visionLabSessionIdRef.current,
+          measurement_scan_id: measurementScanId ?? null,
+          mode,
+          event_type: eventType,
+          pipeline_version: DRAPE_VISION_PIPELINE_VERSION,
+          verdict: scorecards.verdict,
+          shipping_tape_accuracy_gate: gates.tapeAccuracy.status,
+          shipping_repeatability_gate: gates.repeatability.status,
+          shipping_completion_gate: gates.completion.status,
+          shipping_capture_stability_gate: gates.captureStability.status,
+          shipping_failure_clarity_gate: gates.failureClarity.status,
+          shipping_user_understanding_gate: gates.userUnderstanding.status,
+          diagnostic_frame_sample_count: visionLabFrameSamplesRef.current.length,
+          diagnostic_capture_sample_count: visionLabCaptureSamplesRef.current.length,
+          diagnostic_rejected_counts: scorecards.diagnosticScorecard.rejectedCounts,
+          diagnostic_quality_signals: qualitySignals,
+          shipping_scorecard: scorecards.shippingScorecard,
+          diagnostic_scorecard: scorecards.diagnosticScorecard,
+          scorecard: scorecards,
+        })
+
+      if (error) {
+        const message = `${error.message ?? ''} ${error.details ?? ''}`.toLowerCase()
+        if (error.code !== 'PGRST205' && !message.includes('drape_vision_scorecard_rows')) {
+          Sentry.captureException(new Error(error.message), {
+            tags: { area: 'drape_vision', action: 'persist_scorecard' },
+            extra: { code: error.code, details: error.details, eventType, verdict: scorecards.verdict },
+          })
+        }
+      }
+    } catch (error) {
+      Sentry.captureException(error, {
+        tags: { area: 'drape_vision', action: 'persist_scorecard' },
+        extra: { eventType, verdict: scorecards.verdict },
+      })
+    }
+  }, [mode, user?.id])
 
   const uploadVisionLabLog = useCallback(async (
     eventType: 'STARTED' | 'MANUAL_UPLOAD' | 'COMPLETED' | 'FAILED' | 'ABORTED' = 'MANUAL_UPLOAD',
@@ -1786,11 +4728,16 @@ export default function DrapeVisionScreen() {
         return
       }
 
-      const payload = buildVisionLabPayload(result)
+      const payload = buildVisionLabPayload(result, { eventType })
       if (!payload?.sessionId) {
         if (!options.silent) {
           Alert.alert('No scan log yet', 'Start a Drapeon Vision countdown first, then upload the debug log after frames begin flowing.')
         }
+        return
+      }
+
+      if (!DRAPE_VISION_LAB_ENABLED) {
+        void persistVisionLabScorecardRow(eventType, payload.scorecards)
         return
       }
 
@@ -1810,6 +4757,10 @@ export default function DrapeVisionScreen() {
             platform: Platform.OS,
             osVersion: Platform.Version,
             app: DRAPE_VISION_VERSION,
+            pipelineVersion: DRAPE_VISION_PIPELINE_VERSION,
+            outputKind: DRAPE_VISION_OUTPUT_KIND,
+            scanFlow: DRAPE_VISION_SCAN_FLOW,
+            scanFlowLabel: DRAPE_VISION_SCAN_FLOW_LABEL,
             captureCount: capturesRef.current.length,
             frameSamples: visionLabFrameSamplesRef.current.length,
             captureSamples: visionLabCaptureSamplesRef.current.length,
@@ -1831,6 +4782,7 @@ export default function DrapeVisionScreen() {
         return
       }
 
+      void persistVisionLabScorecardRow(eventType, payload.scorecards)
       setVisionLabUploadMessage(`Debug log uploaded: ${capturesRef.current.length} captures / ${visionLabFrameSamplesRef.current.length} frame samples`)
     } catch (error) {
       Sentry.captureException(error, {
@@ -1851,10 +4803,10 @@ export default function DrapeVisionScreen() {
     } finally {
       setVisionLabUploading(false)
     }
-  }, [buildVisionLabPayload, mode, user?.id])
+  }, [buildVisionLabPayload, mode, persistVisionLabScorecardRow, user?.id])
 
   const loadVisionLabRepeatability = useCallback(async () => {
-    if (!DRAPE_VISION_LAB_ENABLED || mode !== 'customer_scan' || !user?.id) return
+    if (!DRAPE_VISION_VALIDATION_ENABLED || mode !== 'customer_scan' || !user?.id) return
 
     const { data, error } = await supabase
       .from('measurement_scans')
@@ -1887,6 +4839,8 @@ export default function DrapeVisionScreen() {
     }
 
     setSavingResult(true)
+    setResultSaveConfirmation(null)
+    setResultSaveConfirmation(null)
 
     const now = new Date().toISOString()
     const confidenceOverall = deriveVisionOverallConfidence(result)
@@ -1897,6 +4851,11 @@ export default function DrapeVisionScreen() {
       platform: Platform.OS,
       osVersion: Platform.Version,
       app: DRAPE_VISION_VERSION,
+      pipelineVersion: DRAPE_VISION_PIPELINE_VERSION,
+      outputKind: DRAPE_VISION_OUTPUT_KIND,
+      scanFlow: DRAPE_VISION_SCAN_FLOW,
+      scanFlowLabel: DRAPE_VISION_SCAN_FLOW_LABEL,
+      heightInputConfidence,
       captureCount: capturesRef.current.length,
       visionLabEnabled: !!visionLab,
       visionLabFrameSamples: visionLab?.frameSampleCount ?? 0,
@@ -1950,16 +4909,30 @@ export default function DrapeVisionScreen() {
             displayMeasurements: scanMeasurements,
             captureMethod: CUSTOMER_VISION_CAPTURE_METHOD,
             captureVersion: DRAPE_VISION_VERSION,
+            visionPipelineVersion: DRAPE_VISION_PIPELINE_VERSION,
+            outputKind: DRAPE_VISION_OUTPUT_KIND,
+            scanFlow: DRAPE_VISION_SCAN_FLOW,
+            scanFlowLabel: DRAPE_VISION_SCAN_FLOW_LABEL,
+            heightInputConfidence,
             capturedAt: now,
             confidenceOverall,
             confidenceByField,
             warnings: result.warnings,
+            launchSafeFields: BODY_SCAN_REQUIRED_FIELDS,
+            researchOnlyFields: DRAPE_VISION_RESEARCH_ONLY_FIELDS,
           },
           garment_preferences: {
             mode,
             calibration: result.calibration,
             warnings: result.warnings,
-            ...(visionLab ? { visionLab } : {}),
+            visionPipelineVersion: DRAPE_VISION_PIPELINE_VERSION,
+            outputKind: DRAPE_VISION_OUTPUT_KIND,
+            scanFlow: DRAPE_VISION_SCAN_FLOW,
+            scanFlowLabel: DRAPE_VISION_SCAN_FLOW_LABEL,
+            heightInputConfidence,
+            launchSafeFields: BODY_SCAN_REQUIRED_FIELDS,
+            researchOnlyFields: DRAPE_VISION_RESEARCH_ONLY_FIELDS,
+            ...(DRAPE_VISION_LAB_ENABLED && visionLab ? { visionLab } : {}),
           },
           body_flags: bodyFlags,
           symmetry_flags: symmetryFlags,
@@ -1983,7 +4956,8 @@ export default function DrapeVisionScreen() {
       measurementScanId = inserted.id
       setSavedMeasurementScanId(inserted.id)
       setGroundTruthRows([])
-      setGroundTruthMessage(DRAPE_VISION_LAB_ENABLED ? 'Scan saved. Enter tape values below to compare.' : null)
+      setGroundTruthMessage(DRAPE_VISION_VALIDATION_ENABLED ? 'Scan saved. Enter tape values below to compare.' : null)
+      void persistVisionLabScorecardRow('SCAN_SAVED', visionLab?.scorecards, inserted.id)
       void loadVisionLabRepeatability()
     } else {
       addVisionBreadcrumb('scan_profile_update_retry', {
@@ -2002,7 +4976,13 @@ export default function DrapeVisionScreen() {
       captureMethod: CUSTOMER_VISION_CAPTURE_METHOD,
       captureMethodLabel: MEASUREMENT_SCAN_CAPTURE_METHOD_LABELS[CUSTOMER_VISION_CAPTURE_METHOD],
       captureVersion: DRAPE_VISION_VERSION,
+      visionPipelineVersion: DRAPE_VISION_PIPELINE_VERSION,
+      outputKind: DRAPE_VISION_OUTPUT_KIND,
+      scanFlow: DRAPE_VISION_SCAN_FLOW,
+      scanFlowLabel: DRAPE_VISION_SCAN_FLOW_LABEL,
+      heightInputConfidence,
       capturedAt: now,
+      measurementProfileUpdatedAt: now,
       confidenceOverall,
       confidenceByField,
       sourceDevice,
@@ -2017,6 +4997,11 @@ export default function DrapeVisionScreen() {
         captureMethod: CUSTOMER_VISION_CAPTURE_METHOD,
         captureMethodLabel: MEASUREMENT_SCAN_CAPTURE_METHOD_LABELS[CUSTOMER_VISION_CAPTURE_METHOD],
         captureVersion: DRAPE_VISION_VERSION,
+        visionPipelineVersion: DRAPE_VISION_PIPELINE_VERSION,
+        outputKind: DRAPE_VISION_OUTPUT_KIND,
+        scanFlow: DRAPE_VISION_SCAN_FLOW,
+        scanFlowLabel: DRAPE_VISION_SCAN_FLOW_LABEL,
+        heightInputConfidence,
         status,
         capturedAt: now,
         confidenceOverall,
@@ -2034,9 +5019,8 @@ export default function DrapeVisionScreen() {
         { onConflict: 'user_id' },
       )
 
-    setSavingResult(false)
-
     if (updateError) {
+      setSavingResult(false)
       addVisionBreadcrumb('scan_save_failed', {
         mode,
         step: 'update_customer_profile',
@@ -2052,34 +5036,413 @@ export default function DrapeVisionScreen() {
       return
     }
 
+    const defaultProfileError = await upsertDefaultCustomerMeasurementProfile(nextMeasurements, profileUnit, 'DRAPE_VISION', now)
+    setSavingResult(false)
+
+    if (defaultProfileError) {
+      addVisionBreadcrumb('scan_save_failed', {
+        mode,
+        step: 'update_default_measurement_profile',
+        scanId: measurementScanId,
+        error: formatVisionSaveError(defaultProfileError),
+      }, 'error')
+      Alert.alert(
+        'Scan saved, profile link incomplete',
+        'The scan saved to your Fit Passport summary, but the default measurement profile did not finish updating. Retry save before relying on this in a checkout or brief.',
+      )
+      return
+    }
+
     capture('drape_vision_scan_saved', {
       mode,
       confidence_overall: confidenceOverall,
       requires_tailor_review: requiresTailorReview,
       measurement_count: Object.keys(scanMeasurements).filter((field) => field !== 'unit').length,
+      pipeline_version: DRAPE_VISION_PIPELINE_VERSION,
+      output_kind: DRAPE_VISION_OUTPUT_KIND,
+      scan_flow: DRAPE_VISION_SCAN_FLOW,
+      height_input_confidence: heightInputConfidence,
     })
 
-	    Alert.alert(
-	      requiresTailorReview ? 'Saved for review' : 'Drapeon Vision saved',
-	      requiresTailorReview
-	        ? 'Your scan is saved to your Fit Passport. A tailor review may still be needed before cutting starts.'
-	        : 'Your scan is saved to your Fit Passport and will carry into your next brief.',
-	      DRAPE_VISION_LAB_ENABLED
-	        ? [
-	            { text: 'Stay in Lab', style: 'cancel' },
-	            { text: 'Continue', onPress: openPrimary },
-	          ]
-	        : [{ text: 'Continue', onPress: openPrimary }],
-	    )
-	  }, [buildVisionLabPayload, loadVisionLabRepeatability, mode, openPrimary, resultUnit, savedMeasurementScanId, user?.id])
+    markSessionScanSaved('fit_360')
+    setResultSaveConfirmation(requiresTailorReview ? 'Saved for review' : 'Saved to Fit Passport')
+    if (saveConfirmationTimerRef.current) clearTimeout(saveConfirmationTimerRef.current)
+    saveConfirmationTimerRef.current = setTimeout(() => {
+      setResultSaveConfirmation(null)
+    }, 1100)
+  }, [buildVisionLabPayload, heightInputConfidence, loadVisionLabRepeatability, markSessionScanSaved, mode, persistVisionLabScorecardRow, resultUnit, savedMeasurementScanId, upsertDefaultCustomerMeasurementProfile, user?.id])
+
+  const saveSpecialistVisionResult = useCallback(async () => {
+    if (savingResult) return
+
+    const selectedMode = selectedSpecialistMode === 'fit_360' ? 'hand_wrist' : selectedSpecialistMode
+    const specialistMeta = specialistScanMetaForMode(selectedMode) ?? DRAPE_VISION_SPECIALIST_SCAN_MODULES[1]
+    const sourceResult = specialistGuideResult
+    if (!sourceResult) {
+      Alert.alert('Run scan first', 'Run this specialist scan before saving a measurement draft.')
+      return
+    }
+
+    const drafts = (Array.isArray(sourceResult.drafts) && sourceResult.drafts.length
+      ? sourceResult.drafts
+      : buildSpecialistMeasurementDrafts({ payload: sourceResult, heightCm, heightInputConfidence }))
+      .filter((draft) => finiteNumber(draft.valueCm) != null)
+
+    if (!drafts.length) {
+      Alert.alert('No draft values yet', 'Retake this specialist scan so Drapeon can draft at least one measurement.')
+      return
+    }
+
+    const now = new Date().toISOString()
+    const scanFlow = specialistScanFlowForMode(selectedMode)
+    const scanFlowLabel = specialistMeta.title
+    const outputKind = specialistOutputKindForMode(selectedMode)
+    const confidenceByField = buildSpecialistDraftConfidence(drafts)
+    const tapeInputsIn = drafts.reduce<Record<string, number>>((payload, draft) => {
+      const key = specialistTapeInputKey(selectedMode, draft.id)
+      const parsed = parseTapeInput(specialistTapeInputs[key] ?? '')
+      if (parsed != null) payload[draft.field ?? draft.label] = parsed
+      return payload
+    }, {})
+    const tapeComparisons = drafts
+      .map((draft) => buildSpecialistTapeComparison(
+        draft,
+        specialistTapeInputs[specialistTapeInputKey(selectedMode, draft.id)],
+      ))
+      .filter((comparison): comparison is SpecialistTapeComparison => !!comparison)
+    const tapeSummary = deriveSpecialistTapeSummary(tapeComparisons)
+
+    if (mode === 'customer_scan') {
+      if (!user?.id) {
+        Alert.alert('Sign in required', 'Please sign in again before saving this specialist scan.')
+        return
+      }
+
+      setSavingResult(true)
+      setResultSaveConfirmation(null)
+
+      const { data: profile, error: profileError } = await supabase
+        .from('customer_profiles')
+        .select('measurements')
+        .eq('user_id', user.id)
+        .maybeSingle()
+
+      if (profileError) {
+        setSavingResult(false)
+        addVisionBreadcrumb('specialist_scan_save_failed', {
+          mode,
+          specialistMode: selectedMode,
+          step: 'load_customer_profile',
+          error: formatVisionSaveError(profileError),
+        }, 'error')
+        Alert.alert('Could not save specialist scan', formatVisionSaveError(profileError))
+        return
+      }
+
+      const existingMeasurements = isPlainRecord(profile?.measurements) ? profile.measurements : {}
+      const profileUnit: MeasurementDisplayUnit = existingMeasurements.unit === 'cm' || existingMeasurements.unit === 'in'
+        ? existingMeasurements.unit
+        : resultUnit
+      const scanMeasurements = buildSpecialistDraftSnapshot(drafts, profileUnit)
+      const scanMeasurementsCm = buildSpecialistDraftSnapshot(drafts, 'cm')
+      const sourceDevice = {
+        platform: Platform.OS,
+        osVersion: Platform.Version,
+        app: DRAPE_VISION_VERSION,
+        pipelineVersion: DRAPE_VISION_PIPELINE_VERSION,
+        outputKind,
+        scanFlow,
+        scanFlowLabel,
+        specialistMode: selectedMode,
+        heightInputConfidence,
+        modelSignal: sourceResult.signalLabel ?? null,
+        modelScore: sourceResult.score,
+        targetCount: sourceResult.targetCount ?? null,
+        inferenceMs: sourceResult.inferenceMs ?? null,
+      }
+
+      let specialistCaptureMethod: MeasurementScanCaptureMethod = CUSTOMER_VISION_SPECIALIST_CAPTURE_METHOD
+      const insertSpecialistMeasurementScan = async (captureMethod: MeasurementScanCaptureMethod) => supabase
+          .from('measurement_scans')
+          .insert({
+            user_id: user.id,
+            capture_method: captureMethod,
+            capture_version: DRAPE_VISION_VERSION,
+            status: 'TAILOR_REVIEW_REQUIRED' satisfies MeasurementScanStatus,
+            confidence_overall: 'LOW' satisfies MeasurementFitConfidence,
+            confidence_by_field: confidenceByField,
+            measurement_snapshot: {
+              ...scanMeasurementsCm,
+              displayUnit: profileUnit,
+              displayMeasurements: scanMeasurements,
+              captureMethod,
+              captureVersion: DRAPE_VISION_VERSION,
+              visionPipelineVersion: DRAPE_VISION_PIPELINE_VERSION,
+              outputKind,
+              scanFlow,
+              scanFlowLabel,
+              specialistMode: selectedMode,
+              capturedAt: now,
+              confidenceOverall: 'LOW',
+              confidenceByField,
+              heightInputConfidence,
+              draftFields: drafts.map((draft) => ({
+                id: draft.id,
+                field: draft.field ?? null,
+                label: draft.label,
+                valueCm: draft.valueCm,
+                confidence: draft.confidence,
+              })),
+              tapeInputsIn,
+              tapeSummary,
+            },
+            garment_preferences: {
+              mode,
+              specialistMode: selectedMode,
+              title: specialistMeta.title,
+              outputKind,
+              scanFlow,
+              scanFlowLabel,
+              heightInputConfidence,
+              tapeInputsIn,
+              tapeSummary,
+              sourceResult: {
+                score: sourceResult.score,
+                progress: sourceResult.progress,
+                targetCount: sourceResult.targetCount ?? null,
+                signalLabel: sourceResult.signalLabel ?? null,
+                inferenceMs: sourceResult.inferenceMs ?? null,
+                frameSize: sourceResult.frameSize ?? null,
+              },
+              requestedCaptureMethod: CUSTOMER_VISION_SPECIALIST_CAPTURE_METHOD,
+              appliedCaptureMethod: captureMethod,
+            },
+            body_flags: Array.isArray(existingMeasurements.bodyFlags) ? existingMeasurements.bodyFlags : [],
+            symmetry_flags: Array.isArray(existingMeasurements.symmetryFlags) ? existingMeasurements.symmetryFlags : [],
+            requires_tailor_review: true,
+            source_device: {
+              ...sourceDevice,
+              requestedCaptureMethod: CUSTOMER_VISION_SPECIALIST_CAPTURE_METHOD,
+              appliedCaptureMethod: captureMethod,
+            },
+          })
+          .select('id')
+          .single()
+
+      let { data: inserted, error: scanError } = await insertSpecialistMeasurementScan(specialistCaptureMethod)
+      if ((scanError || !inserted?.id) && isMeasurementCaptureMethodConstraintError(scanError)) {
+        addVisionBreadcrumb('specialist_scan_capture_method_fallback', {
+          mode,
+          specialistMode: selectedMode,
+          requestedCaptureMethod: CUSTOMER_VISION_SPECIALIST_CAPTURE_METHOD,
+          fallbackCaptureMethod: CUSTOMER_VISION_CAPTURE_METHOD,
+          error: scanError?.message ?? scanError?.details ?? null,
+        }, 'warning')
+        specialistCaptureMethod = CUSTOMER_VISION_CAPTURE_METHOD
+        ;({ data: inserted, error: scanError } = await insertSpecialistMeasurementScan(specialistCaptureMethod))
+      }
+
+      if (scanError || !inserted?.id) {
+        setSavingResult(false)
+        addVisionBreadcrumb('specialist_scan_save_failed', {
+          mode,
+          specialistMode: selectedMode,
+          step: 'insert_measurement_scan',
+          error: formatVisionSaveError(scanError),
+        }, 'error')
+        Alert.alert('Could not save specialist scan', formatVisionSaveError(scanError))
+        return
+      }
+
+      const existingSpecialistMeasurements = isPlainRecord(existingMeasurements.specialistMeasurements)
+        ? existingMeasurements.specialistMeasurements
+        : {}
+      const existingVisionSpecialistProfile = isPlainRecord(existingMeasurements.visionSpecialistProfile)
+        ? existingMeasurements.visionSpecialistProfile
+        : {}
+      const nextMeasurements = {
+        ...existingMeasurements,
+        ...scanMeasurements,
+        unit: profileUnit,
+        fitPassportVersion: 1,
+        measurementSource: CUSTOMER_VISION_SOURCE,
+        measurementSourceLabel: MEASUREMENT_SOURCE_LABELS[CUSTOMER_VISION_SOURCE],
+        measurementProfileUpdatedAt: now,
+        capturedAt: existingMeasurements.capturedAt ?? now,
+        specialistMeasurements: {
+          ...existingSpecialistMeasurements,
+          [selectedMode]: {
+            ...scanMeasurements,
+            unit: profileUnit,
+            cm: scanMeasurementsCm,
+            title: specialistMeta.title,
+            measurementScanId: inserted.id,
+            captureMethod: specialistCaptureMethod,
+            captureMethodLabel: MEASUREMENT_SCAN_CAPTURE_METHOD_LABELS[specialistCaptureMethod],
+            captureVersion: DRAPE_VISION_VERSION,
+            visionPipelineVersion: DRAPE_VISION_PIPELINE_VERSION,
+            outputKind,
+            scanFlow,
+            scanFlowLabel,
+            capturedAt: now,
+            confidenceOverall: 'LOW',
+            confidenceByField,
+            requiresTailorReview: true,
+            tapeInputsIn,
+            tapeSummary,
+          },
+        },
+        visionSpecialistProfile: {
+          ...existingVisionSpecialistProfile,
+          updatedAt: now,
+          latestMeasurementScanId: inserted.id,
+          latestScanMode: selectedMode,
+          latestScanFlow: scanFlow,
+          latestScanStatus: 'TAILOR_REVIEW_REQUIRED',
+          latestScanAt: now,
+        },
+        confidenceByField: {
+          ...(isPlainRecord(existingMeasurements.confidenceByField) ? existingMeasurements.confidenceByField : {}),
+          ...confidenceByField,
+        },
+        requiresTailorReview: true,
+      }
+
+      const { error: updateError } = await supabase
+        .from('customer_profiles')
+        .upsert(
+          { user_id: user.id, measurements: nextMeasurements, updated_at: now },
+          { onConflict: 'user_id' },
+        )
+
+      if (updateError) {
+        setSavingResult(false)
+        addVisionBreadcrumb('specialist_scan_save_failed', {
+          mode,
+          specialistMode: selectedMode,
+          step: 'update_customer_profile',
+          scanId: inserted.id,
+          error: formatVisionSaveError(updateError),
+        }, 'error')
+        Alert.alert('Specialist scan saved, profile not updated', formatVisionSaveError(updateError))
+        return
+      }
+
+      const defaultProfileError = await upsertDefaultCustomerMeasurementProfile(nextMeasurements, profileUnit, 'DRAPE_VISION', now)
+      setSavingResult(false)
+
+      if (defaultProfileError) {
+        addVisionBreadcrumb('specialist_scan_save_failed', {
+          mode,
+          specialistMode: selectedMode,
+          step: 'update_default_measurement_profile',
+          scanId: inserted.id,
+          error: formatVisionSaveError(defaultProfileError),
+        }, 'error')
+        Alert.alert(
+          'Specialist scan saved, profile link incomplete',
+          'The specialist scan saved to your Fit Passport summary, but the default measurement profile did not finish updating. Retry save before using it in a brief.',
+        )
+        return
+      }
+
+      capture('drape_vision_specialist_scan_saved', {
+        mode,
+        specialist_mode: selectedMode,
+        measurement_count: Object.keys(scanMeasurements).filter((field) => field !== 'unit').length,
+        pipeline_version: DRAPE_VISION_PIPELINE_VERSION,
+        output_kind: outputKind,
+        scan_flow: scanFlow,
+        tape_value_count: Object.keys(tapeInputsIn).length,
+      })
+
+      markSessionScanSaved(selectedMode)
+      setResultSaveConfirmation('Saved to Fit Passport')
+      if (saveConfirmationTimerRef.current) clearTimeout(saveConfirmationTimerRef.current)
+      saveConfirmationTimerRef.current = setTimeout(() => {
+        setResultSaveConfirmation(null)
+      }, 1100)
+      return
+    }
+
+    if (hasDiaryTarget && params.diaryId && params.diaryId !== 'new') {
+      setSavingResult(true)
+      setResultSaveConfirmation(null)
+      const { data: existing, error: fetchError } = await supabase
+        .from('diary_entries')
+        .select('custom_measurements')
+        .eq('id', params.diaryId)
+        .maybeSingle()
+
+      if (fetchError) {
+        setSavingResult(false)
+        Alert.alert('Could not save specialist scan', formatVisionSaveError(fetchError))
+        return
+      }
+
+      const customMeasurements = isPlainRecord(existing?.custom_measurements) ? existing.custom_measurements : {}
+      const nextCustomMeasurements = { ...customMeasurements }
+      for (const draft of drafts) {
+        const valueCm = finiteNumber(draft.valueCm)
+        if (valueCm != null) nextCustomMeasurements[`${specialistMeta.title} ${draft.label}`] = roundMeasurementValue(valueCm, 'cm')
+      }
+      nextCustomMeasurements[`${specialistMeta.title} confidence`] = 'LOW'
+      nextCustomMeasurements[`${specialistMeta.title} scan flow`] = scanFlow
+      nextCustomMeasurements[`${specialistMeta.title} captured at`] = now
+
+      const { error: updateError } = await supabase
+        .from('diary_entries')
+        .update({
+          custom_measurements: nextCustomMeasurements,
+          updated_at: now,
+        })
+        .eq('id', params.diaryId)
+
+      setSavingResult(false)
+
+      if (updateError) {
+        Alert.alert('Could not save specialist scan', formatVisionSaveError(updateError))
+        return
+      }
+
+      markSessionScanSaved(selectedMode)
+      setResultSaveConfirmation('Saved to Diary')
+      if (saveConfirmationTimerRef.current) clearTimeout(saveConfirmationTimerRef.current)
+      saveConfirmationTimerRef.current = setTimeout(() => {
+        setResultSaveConfirmation(null)
+      }, 1100)
+      return
+    }
+
+    openPrimary()
+  }, [
+    hasDiaryTarget,
+    heightCm,
+    heightInputConfidence,
+    markSessionScanSaved,
+    mode,
+    openPrimary,
+    params.diaryId,
+    resultUnit,
+    savingResult,
+    selectedSpecialistMode,
+    specialistGuideResult,
+    specialistTapeInputs,
+    upsertDefaultCustomerMeasurementProfile,
+    user?.id,
+  ])
 
 	  const updateTapeInput = useCallback((field: VisionLabTapeField, value: string) => {
 	    setTapeInputs((previous) => ({ ...previous, [field]: value }))
 	    setGroundTruthMessage(null)
 	  }, [])
 
+	  const updateSpecialistTapeInput = useCallback((key: string, value: string) => {
+	    setSpecialistTapeInputs((previous) => ({ ...previous, [key]: value }))
+	  }, [])
+
 	  const saveVisionLabGroundTruth = useCallback(async () => {
-	    if (!DRAPE_VISION_LAB_ENABLED) return
+	    if (!DRAPE_VISION_VALIDATION_ENABLED) return
 
 	    if (!user?.id) {
 	      Alert.alert('Sign in required', 'Please sign in again before saving tape comparison data.')
@@ -2116,9 +5479,10 @@ export default function DrapeVisionScreen() {
 	        measurement_unit: 'in',
 	        measurements_in: measurementsIn,
 	        environment: {
-	          source: 'mobile-vision-lab',
-	          heightCm,
-	          captureVersion: DRAPE_VISION_VERSION,
+          source: 'mobile-vision-lab',
+          heightCm,
+          heightInputConfidence,
+          captureVersion: DRAPE_VISION_VERSION,
 	          captureCount: capturesRef.current.length,
 	          frameSampleCount: visionLabFrameSamplesRef.current.length,
 	          captureSampleCount: visionLabCaptureSamplesRef.current.length,
@@ -2168,12 +5532,17 @@ export default function DrapeVisionScreen() {
 
 	    const rows = (comparisonRows ?? []) as VisionLabComparisonRow[]
 	    setGroundTruthRows(rows)
+	    const comparisonPayload = buildVisionLabPayload(measurementResult ?? undefined, {
+	      eventType: 'TAPE_COMPARISON',
+	      comparisonRows: rows,
+	    })
+	    void persistVisionLabScorecardRow('TAPE_COMPARISON', comparisonPayload?.scorecards, savedMeasurementScanId)
 	    setGroundTruthMessage(
 	      rows.length
 	        ? deriveVisionLabComparisonSummary(rows)?.title ?? `Comparison saved for ${rows.length} field${rows.length === 1 ? '' : 's'}.`
 	        : 'Tape values saved, but no matching scan fields were found for comparison.',
 	    )
-	  }, [heightCm, measurementResult?.diagnostics, savedMeasurementScanId, tapeInputs, user?.id])
+	  }, [buildVisionLabPayload, heightCm, heightInputConfidence, measurementResult, persistVisionLabScorecardRow, savedMeasurementScanId, tapeInputs, user?.id])
 
 	  const saveTailorDiaryVisionResult = useCallback(async (result: DrapeVisionMeasurementResult) => {
     if (!user?.id || !params.diaryId || params.diaryId === 'new') {
@@ -2226,7 +5595,20 @@ export default function DrapeVisionScreen() {
     addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision height', scanMeasurements.height)
     addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision knee', scanMeasurements.kneeCircumference)
     addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision torso length', scanMeasurements.torsoLength)
+    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision under bust', scanMeasurements.underBust)
+    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision bicep', scanMeasurements.bicepCircumference)
+    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision wrist', scanMeasurements.wristCircumference)
+    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision head circumference', scanMeasurements.headCircumference)
+    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision hat band line', scanMeasurements.hatBandLine)
+    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision head length', scanMeasurements.headLength)
+    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision head width', scanMeasurements.headWidth)
+    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision ear to ear over crown', scanMeasurements.earToEarOverCrown)
+    addFinitePayloadValue(nextCustomMeasurements, 'Drapeon Vision front to back over crown', scanMeasurements.frontToBackOverCrown)
     nextCustomMeasurements['Drapeon Vision confidence'] = confidenceOverall
+    nextCustomMeasurements['Drapeon Vision output kind'] = DRAPE_VISION_OUTPUT_KIND
+    nextCustomMeasurements['Drapeon Vision pipeline'] = DRAPE_VISION_PIPELINE_VERSION
+    nextCustomMeasurements['Drapeon Vision scan flow'] = DRAPE_VISION_SCAN_FLOW
+    nextCustomMeasurements['Drapeon Vision height input'] = heightInputConfidence
     payload.custom_measurements = nextCustomMeasurements
 
     const { data: updated, error: updateError } = await supabase
@@ -2252,14 +5634,19 @@ export default function DrapeVisionScreen() {
     capture('drape_vision_diary_scan_saved', {
       confidence_overall: confidenceOverall,
       measurement_count: Object.keys(scanMeasurements).filter((field) => field !== 'unit').length,
+      pipeline_version: DRAPE_VISION_PIPELINE_VERSION,
+      output_kind: DRAPE_VISION_OUTPUT_KIND,
+      scan_flow: DRAPE_VISION_SCAN_FLOW,
+      height_input_confidence: heightInputConfidence,
     })
 
-    Alert.alert(
-      'Saved to Diary',
-      'Drapeon Vision core measurements were added to this client diary. You can review and edit them before sharing a passport invite.',
-      [{ text: 'Continue', onPress: openPrimary }],
-    )
-  }, [mode, openPrimary, params.diaryId, user?.id])
+    setResultSaveConfirmation('Saved to Diary')
+    if (saveConfirmationTimerRef.current) clearTimeout(saveConfirmationTimerRef.current)
+    saveConfirmationTimerRef.current = setTimeout(() => {
+      setResultSaveConfirmation(null)
+      openPrimary()
+    }, 900)
+  }, [heightInputConfidence, mode, openPrimary, params.diaryId, user?.id])
 
   const saveVisionResult = useCallback(async () => {
     if (!measurementResult || savingResult) return
@@ -2268,8 +5655,8 @@ export default function DrapeVisionScreen() {
       Alert.alert(
         'Review before saving',
         mode === 'tailor_client_scan'
-          ? 'Confirm these scan values with the client before saving them to their Diary.'
-          : 'Check the scan values first. If anything looks off, retake the scan or use manual measurements instead.',
+          ? 'Confirm these Vision measurements with the client before saving them to their Diary.'
+          : 'Check these Vision measurements first. If anything looks off, retake the scan or use manual measurements instead.',
       )
       return
     }
@@ -2284,7 +5671,7 @@ export default function DrapeVisionScreen() {
         }, 'warning')
         Alert.alert(
           'Retake or measure manually',
-          `Drapeon Vision could not confidently read ${fieldListCopy(blockingFields)}. Retake in fitted clothing with your full body in frame, or use manual measurements so the order stays accurate.`,
+          `Drapeon Vision could not read ${fieldListCopy(blockingFields)}. Retake in fitted clothing with your full body in frame, or use manual measurements so the order stays accurate.`,
         )
         return
       }
@@ -2309,37 +5696,175 @@ export default function DrapeVisionScreen() {
     return primaryActionLabel
   }, [hasDiaryTarget, mode, primaryActionLabel])
 
-  const resetScanState = useCallback(() => {
+  const bumpSpecialistWorkletSession = useCallback(() => {
+    const nextSession = specialistWorkletSessionRef.current + 1
+    specialistWorkletSessionRef.current = nextSession
+    specialistSessionValue.value = nextSession
+    specialistSessionSync.setBlocking(nextSession)
+    return nextSession
+  }, [specialistSessionSync, specialistSessionValue])
+
+  const resetSpecialistWorkletState = useCallback((scanMode = selectedSpecialistMode) => {
+    const modeCode = specialistModeCode(scanMode)
+    bumpSpecialistWorkletSession()
+    specialistScanActiveValue.value = 0
+    specialistScanActiveSync.setBlocking(0)
+    specialistModeCodeValue.value = modeCode
+    specialistModeCodeSync.setBlocking(modeCode)
+    setSpecialistWorkletTrace({
+      active: false,
+      modeCode,
+    })
+    specialistLastFrameMs.value = 0
+    specialistFrameHeartbeatMs.value = 0
+    specialistModeFrameCount.value = 0
+    specialistCandidateStartedMs.value = 0
+    specialistCandidateCenterX.value = 0
+    specialistCandidateCenterY.value = 0
+    specialistCandidateSize.value = 0
+    specialistCandidateBestScore.value = 0
+    specialistCapturedValue.value = 0
+  }, [
+    bumpSpecialistWorkletSession,
+    selectedSpecialistMode,
+    specialistCandidateCenterX,
+    specialistCandidateCenterY,
+    specialistCandidateBestScore,
+    specialistCandidateSize,
+    specialistCandidateStartedMs,
+    specialistCapturedValue,
+    specialistLastFrameMs,
+    specialistModeCodeValue,
+    specialistModeCodeSync,
+    specialistScanActiveValue,
+    specialistScanActiveSync,
+  ])
+
+  const setBodyWorkletActive = useCallback((active: boolean) => {
+    const value = active ? 1 : 0
+    bodyScanActiveValue.value = value
+    bodyScanActiveSync.setBlocking(value)
+    setBodyWorkletActiveTrace(active)
+  }, [bodyScanActiveSync, bodyScanActiveValue])
+
+  useEffect(() => {
+    if (phase !== 'scan') {
+      setBodyWorkletActive(false)
+    }
+  }, [phase, setBodyWorkletActive])
+
+  const activateSpecialistWorkletState = useCallback((scanMode: DrapeVisionSpecialistScanMode) => {
+    const modeCode = specialistModeCode(scanMode)
+    bumpSpecialistWorkletSession()
+    bodyScanActiveValue.value = 0
+    bodyScanActiveSync.setBlocking(0)
+    setBodyWorkletActiveTrace(false)
+    specialistModeCodeValue.value = modeCode
+    specialistModeCodeSync.setBlocking(modeCode)
+    setSpecialistWorkletTrace({
+      active: true,
+      modeCode,
+    })
+    specialistLastFrameMs.value = 0
+    specialistFrameHeartbeatMs.value = 0
+    specialistModeFrameCount.value = 0
+    specialistCandidateStartedMs.value = 0
+    specialistCandidateCenterX.value = 0
+    specialistCandidateCenterY.value = 0
+    specialistCandidateSize.value = 0
+    specialistCandidateBestScore.value = 0
+    specialistCapturedValue.value = 0
+    specialistScanActiveValue.value = 1
+    specialistScanActiveSync.setBlocking(1)
+  }, [
+    bumpSpecialistWorkletSession,
+    specialistCandidateCenterX,
+    specialistCandidateCenterY,
+    specialistCandidateBestScore,
+    specialistCandidateSize,
+    specialistCandidateStartedMs,
+    specialistCapturedValue,
+    specialistLastFrameMs,
+    specialistModeCodeValue,
+    specialistModeCodeSync,
+    bodyScanActiveSync,
+    bodyScanActiveValue,
+    specialistScanActiveValue,
+    specialistScanActiveSync,
+  ])
+
+  const resetScanState = useCallback((options: { preserveBodyResult?: boolean } = {}) => {
+    stopVisionAudio('reset_scan_state')
     capturesRef.current = []
     capturedSetRef.current = new Set()
     setCapturedSegments(emptySegments())
     setCurrentSegment(0)
     setLatestYaw(0)
     setLatestInferenceMs(0)
-    setMeasurementResult(null)
-    setResultReviewed(false)
+    if (!options.preserveBodyResult) {
+      setMeasurementResult(null)
+      setResultReviewed(false)
+      setSavedMeasurementScanId(null)
+      setGroundTruthRows([])
+      setGroundTruthMessage(null)
+      setRepeatabilityRows([])
+      setRepeatabilityMessage(null)
+      resetVisionLab()
+    }
     setFrameDropWarning(null)
+    setScanPrecheck({
+      ready: false,
+      reason: 'waiting_for_body',
+      message: 'Step back until your full body is visible.',
+      updatedAtMs: Date.now(),
+    })
     setPoseDebug(emptyPoseDebug())
     setCaptureNotice(null)
-	    setCaptureArmed(false)
+    setCaptureArmed(false)
     setScanCountdown(null)
+    clearAutoCountdownTimer()
+    captureArmedValue.value = 0
+    captureArmedSync.setBlocking(0)
     scanArmedAtRef.current = null
     lastScanCaptureAtRef.current = null
     scanRecoveryPromptCountRef.current = 0
+    scanPrecheckReadyRef.current = false
+    captureBurstSamplesRef.current = []
+    captureBurstAngleIndexRef.current = null
     processedFrameCountRef.current = 0
     lastFrameSeenAtRef.current = null
-	    setSavedMeasurementScanId(null)
-	    setGroundTruthRows([])
-	    setGroundTruthMessage(null)
-	    setRepeatabilityRows([])
-	    setRepeatabilityMessage(null)
-	    resetVisionLab()
+    lastUsableBodyFrameAtRef.current = 0
+    lastNoisyInstructionRef.current = null
+    setSpecialistGuide(defaultSpecialistGuidePayload(selectedSpecialistMode))
+    setSpecialistGuideResult(null)
+    setSpecialistGuideDebug(null)
+    setAudioDebugMessage(null)
+    specialistAudioPromptRef.current = {
+      mode: null,
+      stage: null,
+      prompt: null,
+    }
     captureArmedValue.value = 0
+    captureArmedSync.setBlocking(0)
     if (calculationTimerRef.current) {
       clearTimeout(calculationTimerRef.current)
       calculationTimerRef.current = null
     }
     if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
+    if (finalBackCompletionTimerRef.current) {
+      clearTimeout(finalBackCompletionTimerRef.current)
+      finalBackCompletionTimerRef.current = null
+    }
+    if (specialistResultTimerRef.current) {
+      clearTimeout(specialistResultTimerRef.current)
+      specialistResultTimerRef.current = null
+    }
+    if (specialistWatchdogTimerRef.current) {
+      clearTimeout(specialistWatchdogTimerRef.current)
+      specialistWatchdogTimerRef.current = null
+    }
+    specialistGuideUpdatedAtRef.current = 0
+    specialistGuideStageRef.current = null
     capturedMask.value = 0
     frontShoulderWidthPx.value = 0
     previousYawDegrees.value = 0
@@ -2355,9 +5880,20 @@ export default function DrapeVisionScreen() {
     stablePoseBodyFrameHeight.value = 0
     hasLastCapturedYaw.value = 0
     lastCapturedYawDegrees.value = 0
+    scanCaptureState.value = 0
+    scanCandidateAngleIndex.value = -1
+    scanCandidateStartedMs.value = 0
+    scanCandidateYawDegrees.value = 0
+    scanCandidateBodyFrameHeight.value = 0
+    scanBurstStartedMs.value = 0
+    scanBurstFrameCount.value = 0
+    setBodyWorkletActive(false)
+    resetSpecialistWorkletState()
   }, [
+    captureArmedSync,
     captureArmedValue,
     capturedMask,
+    clearAutoCountdownTimer,
     frameErrorSent,
     frontShoulderWidthPx,
     hasLastCapturedYaw,
@@ -2370,29 +5906,50 @@ export default function DrapeVisionScreen() {
     previousYawDegrees,
     processedFrameCount,
     resetVisionLab,
+    setBodyWorkletActive,
+    scanBurstFrameCount,
+    scanBurstStartedMs,
+    scanCandidateAngleIndex,
+    scanCandidateBodyFrameHeight,
+    scanCandidateStartedMs,
+    scanCandidateYawDegrees,
+    scanCaptureState,
+    resetSpecialistWorkletState,
     stablePoseBodyFrameHeight,
     stablePoseStartedMs,
     stablePoseYawDegrees,
+    stopVisionAudio,
   ])
 
-  const resetNativeVisionSession = useCallback(async (reason: string) => {
+  const resetNativeVisionSession = useCallback(async (
+    reason: string,
+    options: { clearAnalyzers?: boolean } = {},
+  ) => {
+    stopVisionAudio(`native_reset_${reason}`)
+    setBodyWorkletActive(false)
+    resetSpecialistWorkletState()
     addVisionBreadcrumb('native_scan_session_reset', {
       mode,
       reason,
       platform: Platform.OS,
-      landmarkerRetained: false,
+      landmarkerRetained: !options.clearAnalyzers,
       cameraRetained: false,
     })
 
     setCaptureArmed(false)
     setScanCountdown(null)
+    clearAutoCountdownTimer()
 
-    if (Platform.OS === 'android') {
-      await new Promise((resolve) => setTimeout(resolve, 220))
+    if (!options.clearAnalyzers) {
+      return
+    }
+
+    if (NATIVE_ANALYZER_CLEAR_DRAIN_MS > 0) {
+      await new Promise((resolve) => setTimeout(resolve, NATIVE_ANALYZER_CLEAR_DRAIN_MS))
     }
 
     try {
-      clearDrapePoseLandmarker()
+      clearAllDrapeVisionAnalyzers()
     } catch (error) {
       addVisionBreadcrumb('native_clear_failed', {
         mode,
@@ -2400,20 +5957,103 @@ export default function DrapeVisionScreen() {
         error: error instanceof Error ? error.message : String(error),
       }, 'warning')
     }
+  }, [captureArmedSync, captureArmedValue, clearAutoCountdownTimer, mode, resetSpecialistWorkletState, setBodyWorkletActive, stopVisionAudio])
+
+  const resetSpecialistNativeAnalyzers = useCallback(async (reason: string) => {
+    addVisionBreadcrumb('native_specialist_analyzers_reset', {
+      mode,
+      reason,
+      platform: Platform.OS,
+    })
+
+    if (NATIVE_ANALYZER_CLEAR_DRAIN_MS > 0) {
+      await new Promise((resolve) => setTimeout(resolve, NATIVE_ANALYZER_CLEAR_DRAIN_MS))
+    }
+
+    try {
+      clearSpecialistDrapeVisionAnalyzers()
+    } catch (error) {
+      addVisionBreadcrumb('native_specialist_clear_failed', {
+        mode,
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+      }, 'warning')
+    }
+
+    if (NATIVE_ANALYZER_CLEAR_DRAIN_MS > 0) {
+      await new Promise((resolve) => setTimeout(resolve, NATIVE_ANALYZER_CLEAR_DRAIN_MS))
+    }
   }, [mode])
 
+  const returnToVisionHub = useCallback((reason: string) => {
+    phaseRef.current = 'suite'
+    stopVisionAudio(reason)
+    addVisionBreadcrumb('vision_hub_returned', {
+      mode,
+      phase: phaseRef.current,
+      reason,
+      capturedAngles: capturedSetRef.current.size,
+    })
+    resetScanState({ preserveBodyResult: true })
+    setEngineStatus('idle')
+    setEngineError(null)
+    setInstruction('Choose a scan')
+    setPhase('suite')
+  }, [mode, resetScanState, stopVisionAudio])
+
+  const hasRecentBodyView = useCallback(() => {
+    const latestUsableAt = lastUsableBodyFrameAtRef.current
+    return latestUsableAt > 0 && Date.now() - latestUsableAt <= SCAN_COMPLETION_BODY_VIEW_MAX_AGE_MS
+  }, [])
+
   const completeScan = useCallback(() => {
+    if (!hasRecentBodyView()) {
+      addVisionBreadcrumb('scan_completion_blocked', {
+        mode,
+        reason: 'lost_body_view_before_completion',
+        capturedAngles: capturedSetRef.current.size,
+        lastUsableBodyFrameAtMs: lastUsableBodyFrameAtRef.current,
+      }, 'warning')
+      if (finalBackCompletionTimerRef.current) {
+        clearTimeout(finalBackCompletionTimerRef.current)
+        finalBackCompletionTimerRef.current = null
+      }
+      setCaptureArmed(true)
+      captureArmedValue.value = 1
+      captureArmedSync.setBlocking(1)
+      setInstruction('Step back into full-body view')
+      setCaptureNotice('Need full-body view to finish')
+      if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
+      captureNoticeTimerRef.current = setTimeout(() => setCaptureNotice(null), 1400)
+      void playVisionPrompt('fullBodyStarting', { force: true })
+      return
+    }
+
+    if (finalBackCompletionTimerRef.current) {
+      clearTimeout(finalBackCompletionTimerRef.current)
+      finalBackCompletionTimerRef.current = null
+    }
     setInstruction('Perfect')
+    setBodyWorkletActive(false)
     setPhase('calculating')
     setCaptureArmed(false)
     setScanCountdown(null)
+    clearAutoCountdownTimer()
+    captureArmedValue.value = 0
+    captureArmedSync.setBlocking(0)
     scanArmedAtRef.current = null
     lastScanCaptureAtRef.current = null
     addVisionBreadcrumb('scan_completed', {
       mode,
       capturedAngles: capturedSetRef.current.size,
+      completionCoverage: hasDrapeVisionCompletionCoverage(capturesRef.current),
+      halfTurnCoverage: hasDrapeVisionScanCoverage(capturesRef.current),
+      capturedAngleDegrees: capturesRef.current.map((capture) => roundLabNumber(capture.angleDegrees, 2)),
+      capturedTargetDegrees: capturesRef.current.map((capture) => capture.targetAngleDegrees),
       heightCm,
     })
+    void playVisionPrompt('scanComplete', { force: true })
+    announceVisionStatus('Scan complete. Calculating your measurement draft.', { force: true })
     trigger('notificationSuccess', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
 
     if (calculationTimerRef.current) clearTimeout(calculationTimerRef.current)
@@ -2422,10 +6062,11 @@ export default function DrapeVisionScreen() {
         const androidBodyPixelHeight = Platform.OS === 'android'
           ? estimateAndroidBodyPixelHeight(capturesRef.current)
           : null
-        const result = calculateDrapeVisionMeasurements({
+        let result = calculateDrapeVisionMeasurements({
           captures: capturesRef.current,
           statedHeightCm: heightCm,
           bodyPixelHeight: androidBodyPixelHeight,
+          pipelineVersion: DRAPE_VISION_PIPELINE_VERSION,
         })
         if (Platform.OS === 'android' && !hasAnyFullBodyHeightForAndroid(capturesRef.current)) {
           result.warnings = [
@@ -2438,23 +6079,85 @@ export default function DrapeVisionScreen() {
             }
           }
         }
-        try {
-          clearDrapePoseLandmarker()
-        } catch (error) {
-          addVisionBreadcrumb('native_clear_failed', {
-            mode,
-            reason: 'scan_completed',
-            error: error instanceof Error ? error.message : String(error),
-          }, 'warning')
+        if (isDrapeVisionBodyScanMode(mode)) {
+          result = launchSafeVisionResult(result)
         }
+        if (heightInputConfidence === 'approximate') {
+          result = resultWithApproximateHeightReview(result)
+        }
+        const measuredFields = measuredVisionFields(result)
+        if (__DEV__) {
+          const measurementSnapshot = BODY_SCAN_RESULT_FIELDS.reduce<Record<string, number | null>>((payload, field) => {
+            payload[field] = typeof result.measurements[field] === 'number' ? result.measurements[field] : null
+            return payload
+          }, {})
+          console.log('[DrapeVision:metrics] scan_measurements_cm', {
+            mode,
+            capturedAngleDegrees: capturesRef.current.map((capture) => roundLabNumber(capture.angleDegrees, 2)),
+            capturedTargetDegrees: capturesRef.current.map((capture) => capture.targetAngleDegrees),
+            measurements: measurementSnapshot,
+            warnings: result.warnings,
+          })
+          console.log('[DrapeVision:metrics] scan_diagnostics', JSON.stringify({
+            calibration: {
+              pixelToCm: roundLabNumber(result.calibration.pixelToCm, 6),
+              confidence: result.calibration.confidence,
+              references: result.calibration.references.map((reference) => ({
+                method: reference.method,
+                pixelToCm: roundLabNumber(reference.pixelToCm, 6),
+                confidence: roundLabNumber(reference.confidence, 3),
+                sampleCount: reference.sampleCount,
+                spreadRatio: roundLabNumber(reference.spreadRatio, 4),
+              })),
+            },
+            direct: result.diagnostics?.direct
+              .filter((diagnostic) => diagnostic.field === 'shoulderWidth')
+              .map((diagnostic) => ({
+                field: diagnostic.field,
+                accepted: diagnostic.accepted,
+                pixels: diagnostic.pixels,
+                valueCm: diagnostic.valueCm,
+                confidenceScore: diagnostic.confidenceScore,
+                rejectionReason: diagnostic.rejectionReason,
+              })) ?? [],
+            circumferences: result.diagnostics?.circumferences
+              .filter((diagnostic) => ['chest', 'waist', 'hips'].includes(diagnostic.field))
+              .map((diagnostic) => ({
+                field: diagnostic.field,
+                accepted: diagnostic.accepted,
+                rejectionReason: diagnostic.rejectionReason,
+                fit: diagnostic.fit,
+                samples: diagnostic.samples.map((sample) => ({
+                  angleIndex: sample.angleIndex,
+                  angleDegrees: sample.angleDegrees,
+                  widthPx: sample.widthPx,
+                  normalizedWidth: sample.normalizedWidth,
+                  widthCm: sample.widthCm,
+                  normalization: sample.normalization,
+                  accepted: sample.accepted,
+                  rejectionReason: sample.rejectionReason,
+                })),
+              })) ?? [],
+          }))
+        }
+        addVisionBreadcrumb('scan_result_ready', {
+          mode,
+          measuredFields,
+          measuredFieldCount: measuredFields.length,
+          advancedDraftFields: measuredFields.filter((field) => BODY_SCAN_ADVANCED_DRAFT_FIELDS.includes(field)),
+          capturedAngleDegrees: capturesRef.current.map((capture) => roundLabNumber(capture.angleDegrees, 2)),
+          capturedTargetDegrees: capturesRef.current.map((capture) => capture.targetAngleDegrees),
+          warnings: result.warnings,
+        })
         setMeasurementResult(result)
+        markSessionScanComplete('fit_360')
         setResultReviewed(false)
         setPhase('results')
         void uploadVisionLabLog('COMPLETED', result, { silent: true })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         try {
-          clearDrapePoseLandmarker()
+          clearAllDrapeVisionAnalyzers()
         } catch (clearError) {
           addVisionBreadcrumb('native_clear_failed', {
             mode,
@@ -2484,10 +6187,33 @@ export default function DrapeVisionScreen() {
         void uploadVisionLabLog('FAILED', undefined, { silent: true })
       }
     }, DRAPE_VISION_MIN_CALCULATING_MS)
-  }, [heightCm, mode, uploadVisionLabLog])
+  }, [announceVisionStatus, captureArmedSync, captureArmedValue, clearAutoCountdownTimer, hasRecentBodyView, heightCm, heightInputConfidence, markSessionScanComplete, mode, playVisionPrompt, setBodyWorkletActive, uploadVisionLabLog])
 
   const handleSegmentCaptured = useCallback((index: number, yawDegrees: number, detection: VisionPoseDetectionResult, frameSizePx?: VisionFrameSize) => {
-    if (capturedSetRef.current.has(index) || detection.landmarks.length === 0) return
+    if (Platform.OS === 'ios' && (SCAN_IOS_GUIDED_CAPTURE_MASK & (1 << index)) === 0) {
+      addVisionBreadcrumb('scan_angle_unguided_ignored', {
+        mode,
+        angleIndex: index,
+        yawDegrees: roundLabNumber(yawDegrees, 2),
+        allowedAngleIndexes: SCAN_IOS_GUIDED_CAPTURE_INDICES,
+      }, 'warning')
+      return
+    }
+    if (capturedSetRef.current.has(index)) {
+      addVisionBreadcrumb('scan_angle_duplicate_ignored', {
+        mode,
+        angleIndex: index,
+        capturedAngles: capturedSetRef.current.size,
+      })
+      return
+    }
+    if (detection.landmarks.length === 0) {
+      addVisionBreadcrumb('scan_angle_empty_ignored', {
+        mode,
+        angleIndex: index,
+      }, 'warning')
+      return
+    }
 
     const capturedAtMs = Date.now()
     lastScanCaptureAtRef.current = capturedAtMs
@@ -2495,6 +6221,15 @@ export default function DrapeVisionScreen() {
     const frameWidthPx = frameSizePx?.width
     const frameHeightPx = frameSizePx?.height
     capturedSetRef.current.add(index)
+    addVisionBreadcrumb('scan_angle_captured', {
+      mode,
+      angleIndex: index,
+      yawDegrees: roundLabNumber(yawDegrees, 2),
+      targetAngleDegrees,
+      capturedAngles: capturedSetRef.current.size,
+      frameWidthPx: roundLabNumber(frameWidthPx, 2),
+      frameHeightPx: roundLabNumber(frameHeightPx, 2),
+    })
     capturesRef.current = [
       ...capturesRef.current.filter((capture) => capture.angleIndex !== index),
       {
@@ -2527,19 +6262,302 @@ export default function DrapeVisionScreen() {
     setLatestInferenceMs(detection.inferenceMs ?? 0)
     setCapturedSegments((previous) => previous.map((captured, segmentIndex) => captured || segmentIndex === index))
     setCurrentSegment((index + 1) % SCAN_TARGET_CAPTURE_COUNT)
-    setInstruction(buildNextScanInstruction(capturesRef.current, capturedSetRef.current.size))
+    const nextInstruction = buildNextScanInstruction(capturesRef.current, capturedSetRef.current.size)
+    instructionUpdatedAtRef.current = Date.now()
+    lastNoisyInstructionRef.current = null
+    setInstruction(nextInstruction)
     setCaptureNotice(`Captured ${formatScanCaptureProgress(capturedSetRef.current.size)}`)
     if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
     captureNoticeTimerRef.current = setTimeout(() => setCaptureNotice(null), 700)
     trigger('impactHeavy', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
 
     const hasFullScan = capturedSetRef.current.size >= SCAN_TARGET_CAPTURE_COUNT
-    const hasEnoughHalfTurnCoverage = capturedSetRef.current.size >= SCAN_MIN_CAPTURED_ANGLE_COUNT &&
-      hasDrapeVisionScanCoverage(capturesRef.current)
-    if (hasFullScan || hasEnoughHalfTurnCoverage) {
+    const hasCompletionCoverage = hasDrapeVisionCompletionCoverage(capturesRef.current)
+    if (hasFullScan || hasCompletionCoverage) {
+      if (Platform.OS === 'ios' && index === 4) {
+        setInstruction('Back locked. Hold one more beat')
+        setCaptureNotice('Back locked')
+        void playVisionPrompt('holdBack', { force: true })
+        if (finalBackCompletionTimerRef.current) clearTimeout(finalBackCompletionTimerRef.current)
+        finalBackCompletionTimerRef.current = setTimeout(() => {
+          finalBackCompletionTimerRef.current = null
+          completeScan()
+        }, SCAN_IOS_BACK_COMPLETION_SETTLE_MS)
+        return
+      }
       completeScan()
+    } else {
+      const prompt = visionAudioPromptForInstruction(nextInstruction) ?? 'turnSlowly'
+      void playVisionPrompt(prompt, { force: true })
     }
-  }, [appendVisionLabCapture, completeScan])
+  }, [appendVisionLabCapture, completeScan, playVisionPrompt])
+
+  const handleCaptureBurstStart = useCallback((angleIndex: number) => {
+    captureBurstAngleIndexRef.current = angleIndex
+    captureBurstSamplesRef.current = []
+    instructionUpdatedAtRef.current = Date.now()
+    lastNoisyInstructionRef.current = null
+    setInstruction('Hold still, locking this angle')
+    setCaptureNotice('Hold still')
+    void playVisionPrompt('holdStill')
+  }, [playVisionPrompt])
+
+  const handleCaptureBurstSample = useCallback((
+    angleIndex: number,
+    yawDegrees: number,
+    detection: VisionPoseDetectionResult,
+    frameSize: VisionFrameSize,
+  ) => {
+    if (capturedSetRef.current.has(angleIndex)) return
+    if (captureBurstAngleIndexRef.current !== angleIndex) {
+      captureBurstAngleIndexRef.current = angleIndex
+      captureBurstSamplesRef.current = []
+    }
+
+    captureBurstSamplesRef.current = [
+      ...captureBurstSamplesRef.current,
+      {
+        angleIndex,
+        yawDegrees,
+        detection,
+        frameSize,
+      },
+    ].slice(-SCAN_CAPTURE_BURST_FRAME_COUNT)
+
+    if (captureBurstSamplesRef.current.length < SCAN_CAPTURE_BURST_FRAME_COUNT) {
+      setCaptureNotice(`Hold still ${captureBurstSamplesRef.current.length}/${SCAN_CAPTURE_BURST_FRAME_COUNT}`)
+      return
+    }
+
+    const burst = buildBurstDetection(captureBurstSamplesRef.current)
+    captureBurstSamplesRef.current = []
+    captureBurstAngleIndexRef.current = null
+    if (!burst) return
+
+    handleSegmentCaptured(
+      burst.angleIndex,
+      burst.yawDegrees,
+      burst.detection,
+      burst.frameSize,
+    )
+  }, [handleSegmentCaptured])
+
+  const handleSpecialistFrameHeartbeat = useCallback((payload: {
+    modeCode: number
+    active: boolean
+    frameIndex: number
+    frameSize: string
+    orientation: string
+    mirrored: boolean
+    timestampMs: number
+  }) => {
+    if (__DEV__) {
+      console.log('[DrapeVision:specialist_frame]', JSON.stringify(payload))
+    }
+  }, [])
+
+  const handleSpecialistFaceDetectionDebug = useCallback((payload: {
+    frameIndex: number
+    frameSize: string
+    orientation: string
+    mirrored: boolean
+    faceCount: number
+    landmarkCount: number
+    ready?: boolean
+    boundsScore?: number
+    centerX?: number
+    centerY?: number
+    width?: number
+    height?: number
+    inferenceMs: number
+    timestampMs: number
+  }) => {
+    if (__DEV__) {
+      console.log('[DrapeVision:face_detect]', JSON.stringify(payload))
+    }
+  }, [])
+
+  const handleSpecialistGuideUpdate = useCallback((payload: SpecialistGuidePayload) => {
+    const updatedAtMs = Date.now()
+    specialistGuideUpdatedAtRef.current = updatedAtMs
+    specialistGuideStageRef.current = payload.stage
+    if (__DEV__) {
+      const now = updatedAtMs
+      if (now - specialistDebugLogAtRef.current > 850) {
+        specialistDebugLogAtRef.current = now
+        console.log('[DrapeVision:specialist]', JSON.stringify({
+          mode: payload.mode,
+          stage: payload.stage,
+          reason: payload.reason ?? payload.message,
+          score: Number(payload.score.toFixed(3)),
+          progress: Number(payload.progress.toFixed(2)),
+          points: payload.targetCount ?? 0,
+          center: `${payload.centerX?.toFixed(2) ?? '-'} / ${payload.centerY?.toFixed(2) ?? '-'}`,
+          box: `${payload.width?.toFixed(2) ?? '-'} x ${payload.height?.toFixed(2) ?? '-'}`,
+        }))
+      }
+    }
+    setSpecialistGuide(payload)
+    setSpecialistGuideDebug({
+      updatedAtMs,
+      mode: payload.mode,
+      stage: payload.stage,
+      detector: payload.mode === 'hand_wrist'
+        ? 'hand'
+        : payload.mode === 'headwear'
+          ? 'face'
+          : payload.mode === 'bodice_corset' || payload.mode === 'lower_body_detail'
+            ? 'segment'
+            : 'none',
+      reason: payload.reason ?? payload.message,
+      score: payload.score,
+      progress: payload.progress,
+      targetCount: payload.targetCount ?? 0,
+      inferenceMs: payload.inferenceMs ?? 0,
+      frameSize: payload.frameSize,
+      centerX: payload.centerX,
+      centerY: payload.centerY,
+      width: payload.width,
+      height: payload.height,
+      size: payload.size,
+    })
+    setInstruction(payload.title)
+    setLatestInferenceMs(payload.inferenceMs ?? 0)
+    setFrameDropWarning(payload.tone === 'warning' ? payload.message : null)
+    if (payload.stage === 'hold') {
+      setCaptureNotice(`${Math.round(payload.progress * 100)}% locked`)
+      const prompt = specialistHoldAudioPromptForMode(payload.mode)
+      const previousPrompt = specialistAudioPromptRef.current
+      const shouldForce =
+        previousPrompt.mode !== payload.mode ||
+        previousPrompt.stage !== payload.stage ||
+        previousPrompt.prompt !== prompt
+      specialistAudioPromptRef.current = {
+        mode: payload.mode,
+        stage: payload.stage,
+        prompt,
+      }
+      void playVisionPrompt(prompt, { force: shouldForce })
+    } else if (payload.stage === 'align') {
+      setCaptureNotice(null)
+      const prompt = specialistAlignAudioPromptForGuide(payload)
+      if (!prompt) {
+        specialistAudioPromptRef.current = {
+          mode: payload.mode,
+          stage: payload.stage,
+          prompt: null,
+        }
+        setAudioDebugMessage(`${payload.mode} visual guide active`)
+        return
+      }
+      const previousPrompt = specialistAudioPromptRef.current
+      const shouldForce =
+        previousPrompt.mode !== payload.mode ||
+        previousPrompt.stage !== payload.stage ||
+        previousPrompt.prompt !== prompt
+      specialistAudioPromptRef.current = {
+        mode: payload.mode,
+        stage: payload.stage,
+        prompt,
+      }
+      void playVisionPrompt(prompt, { force: shouldForce })
+    }
+  }, [playVisionPrompt])
+
+  const handleSpecialistGuideCaptured = useCallback((payload: SpecialistGuidePayload) => {
+    const capturedAtMs = Date.now()
+    specialistGuideUpdatedAtRef.current = capturedAtMs
+    specialistGuideStageRef.current = 'captured'
+    if (specialistWatchdogTimerRef.current) {
+      clearTimeout(specialistWatchdogTimerRef.current)
+      specialistWatchdogTimerRef.current = null
+    }
+    const result: SpecialistGuideResult = {
+      ...payload,
+      stage: 'captured',
+      tone: 'success',
+      progress: SPECIALIST_GUIDE_PROGRESS_COMPLETE,
+      capturedAtMs,
+      drafts: buildSpecialistMeasurementDrafts({
+        payload,
+        heightCm,
+        heightInputConfidence,
+      }),
+    }
+    setSpecialistGuide(result)
+    setSpecialistGuideResult(result)
+    resetSpecialistWorkletState(result.mode)
+    setSpecialistGuideDebug({
+      updatedAtMs: capturedAtMs,
+      mode: result.mode,
+      stage: result.stage,
+      detector: result.mode === 'hand_wrist'
+        ? 'hand'
+        : result.mode === 'headwear'
+          ? 'face'
+          : result.mode === 'bodice_corset' || result.mode === 'lower_body_detail'
+            ? 'segment'
+            : 'none',
+      reason: result.reason ?? 'captured',
+      score: result.score,
+      progress: result.progress,
+      targetCount: result.targetCount ?? 0,
+      inferenceMs: result.inferenceMs ?? 0,
+      frameSize: result.frameSize,
+      centerX: result.centerX,
+      centerY: result.centerY,
+      width: result.width,
+      height: result.height,
+      size: result.size,
+    })
+    setInstruction(result.title)
+    setCaptureNotice('Draft captured')
+    setFrameDropWarning(null)
+    trigger('impactHeavy', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+    void playVisionPrompt('scanComplete', { force: true })
+    addVisionBreadcrumb('specialist_guide_captured', {
+      mode,
+      specialistMode: payload.mode,
+      score: payload.score,
+      targetCount: payload.targetCount,
+      inferenceMs: payload.inferenceMs,
+      draftCount: result.drafts.length,
+      pipelineVersion: DRAPE_VISION_PIPELINE_VERSION,
+    })
+    if (specialistResultTimerRef.current) clearTimeout(specialistResultTimerRef.current)
+    specialistResultTimerRef.current = setTimeout(() => {
+      markSessionScanComplete(result.mode)
+      setPhase('specialist_result')
+      setCaptureNotice(null)
+    }, 650)
+  }, [heightCm, heightInputConfidence, markSessionScanComplete, mode, playVisionPrompt, resetSpecialistWorkletState])
+
+  const handleSpecialistGuideError = useCallback((message: string) => {
+    const copy = specialistGuideCopyForMode(selectedSpecialistMode)
+    const safeMessage = formatVisionError(message)
+    addVisionBreadcrumb('specialist_scan_unavailable', {
+      mode,
+      specialistMode: selectedSpecialistMode,
+      error: safeMessage,
+    }, 'warning')
+    setSpecialistReadinessStatus('blocked')
+    setSpecialistStatusMessage(safeMessage)
+    setSpecialistGuide({
+      mode: selectedSpecialistMode,
+      stage: 'blocked',
+      tone: 'warning',
+      title: 'Native scan blocked',
+      message: safeMessage,
+      score: 0,
+      progress: 0,
+      targetCount: 0,
+      signalLabel: copy?.signalLabel ?? 'native signal',
+    })
+    setFrameDropWarning(safeMessage)
+    setCaptureNotice(null)
+    setEngineStatus('blocked')
+    setPhase('specialist')
+  }, [mode, selectedSpecialistMode])
 
   useEffect(() => {
     if (phase !== 'scan' || engineStatus !== 'ready' || !captureArmed) return undefined
@@ -2566,19 +6584,58 @@ export default function DrapeVisionScreen() {
       if (!stalledBeforeFrames && !stalledDuringCapture) return
 
       const reason = stalledBeforeFrames ? 'NO_CAMERA_FRAMES' : 'CAPTURE_STALLED'
-      if (stalledDuringCapture && framesRecentlySeen && scanRecoveryPromptCountRef.current < SCAN_RECOVERY_PROMPT_LIMIT) {
-        const coachingMessage = formatScanRecoveryMessage(capturedAngles)
+      if (stalledBeforeFrames && scanRecoveryPromptCountRef.current < 1) {
         scanRecoveryPromptCountRef.current += 1
-        addVisionBreadcrumb('scan_recovery_prompt', {
+        scanArmedAtRef.current = now
+        lastScanCaptureAtRef.current = now
+        lastFrameSeenAtRef.current = null
+        processedFrameCount.value = 0
+        setBodyWorkletActive(true)
+        addVisionBreadcrumb('scan_frame_output_rearmed', {
           mode,
-          step: 'scan_watchdog',
+          reason,
+          platform: Platform.OS,
+          captureArmed,
+          bodyWorkletActive: bodyWorkletActiveTrace,
+        }, 'warning')
+        setPoseDebug(emptyPoseDebug('Reconnecting camera frames'))
+        setInstruction('Hold still while camera reconnects')
+        setCaptureNotice('Reconnecting camera')
+        if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
+        captureNoticeTimerRef.current = setTimeout(() => setCaptureNotice(null), 1400)
+        return
+      }
+
+      if (
+        stalledDuringCapture &&
+        hasDrapeVisionCompletionCoverage(capturesRef.current)
+      ) {
+        addVisionBreadcrumb('scan_completed_from_watchdog', {
+          mode,
           reason,
           capturedAngles,
           processedFrames: frameCount,
-          lastFrameSeenAt,
-          promptCount: scanRecoveryPromptCountRef.current,
           platform: Platform.OS,
-        }, 'info')
+        })
+        completeScan()
+        return
+      }
+
+      if (stalledDuringCapture && framesRecentlySeen) {
+        const coachingMessage = formatScanRecoveryMessage(capturedAngles)
+        scanRecoveryPromptCountRef.current += 1
+        if (scanRecoveryPromptCountRef.current <= SCAN_RECOVERY_PROMPT_LIMIT) {
+          addVisionBreadcrumb('scan_recovery_prompt', {
+            mode,
+            step: 'scan_watchdog',
+            reason,
+            capturedAngles,
+            processedFrames: frameCount,
+            lastFrameSeenAt,
+            promptCount: scanRecoveryPromptCountRef.current,
+            platform: Platform.OS,
+          }, 'info')
+        }
         setInstruction(
           capturedAngles > 0
             ? buildNextScanInstruction(capturesRef.current, capturedAngles)
@@ -2587,7 +6644,8 @@ export default function DrapeVisionScreen() {
               : 'Fit full body in frame',
         )
         setFrameDropWarning(coachingMessage)
-        setCaptureNotice(capturedAngles > 0 ? 'Pause, then keep turning slowly' : 'Step farther back')
+        setCaptureNotice(capturedAngles > 0 ? 'Pause, then keep turning slowly' : 'Still looking for a stable full-body pose')
+        void playVisionPrompt(capturedAngles > 0 ? 'turnSlowly' : 'holdStill')
         if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
         captureNoticeTimerRef.current = setTimeout(() => setCaptureNotice(null), 1400)
         lastScanCaptureAtRef.current = now
@@ -2610,6 +6668,9 @@ export default function DrapeVisionScreen() {
       void uploadVisionLabLog('FAILED', undefined, { silent: true })
       setCaptureArmed(false)
       setScanCountdown(null)
+      setBodyWorkletActive(false)
+      captureArmedValue.value = 0
+      captureArmedSync.setBlocking(0)
       scanArmedAtRef.current = null
       lastScanCaptureAtRef.current = null
       scanRecoveryPromptCountRef.current = 0
@@ -2618,9 +6679,10 @@ export default function DrapeVisionScreen() {
       setCaptureNotice(null)
       setPoseDebug(emptyPoseDebug(reason))
       setPhase('fallback')
+      void playVisionPrompt('cleanerScan', { force: true })
       const releaseNativeScan = () => {
         try {
-          clearDrapePoseLandmarker()
+          clearAllDrapeVisionAnalyzers()
         } catch (error) {
           addVisionBreadcrumb('native_clear_failed', {
             mode,
@@ -2637,43 +6699,225 @@ export default function DrapeVisionScreen() {
     }, 1500)
 
     return () => clearInterval(interval)
-  }, [captureArmed, engineStatus, mode, phase, processedFrameCount, uploadVisionLabLog])
+  }, [bodyWorkletActiveTrace, captureArmed, captureArmedSync, captureArmedValue, completeScan, engineStatus, mode, phase, playVisionPrompt, processedFrameCount, setBodyWorkletActive, uploadVisionLabLog])
 
   const handleAngleUpdate = useCallback((index: number, yawDegrees: number, inferenceMs: number) => {
+    lastUsableBodyFrameAtRef.current = Date.now()
+    lastNoisyInstructionRef.current = null
     setCurrentSegment(index)
     setLatestYaw(yawDegrees)
     setLatestInferenceMs(inferenceMs)
+    if (
+      captureArmed &&
+      hasDrapeVisionCompletionCoverage(capturesRef.current) &&
+      hasRecentBodyView()
+    ) {
+      completeScan()
+      return
+    }
     if (captureArmed && capturedSetRef.current.size === 0) {
       setInstruction('Face the camera')
     }
-  }, [captureArmed])
+  }, [captureArmed, completeScan, hasRecentBodyView])
 
   const handlePoseDebug = useCallback((debug: PoseDebugState) => {
     processedFrameCountRef.current = Math.max(processedFrameCountRef.current, debug.frames)
     if (debug.frames > 0) {
       lastFrameSeenAtRef.current = Date.now()
     }
+    const hasUsableBodyFrame =
+      (debug.fullBodyLandmarks ?? 0) >= SCAN_REQUIRED_BODY_LANDMARK_COUNT ||
+      debug.status.includes('Hold still') ||
+      debug.status.includes('Angle locked')
+    if (hasUsableBodyFrame && debug.landmarks > 0) {
+      lastUsableBodyFrameAtRef.current = Date.now()
+    }
+    if (__DEV__) {
+      console.log('[DrapeVision:pose]', JSON.stringify({
+        status: debug.status,
+        frames: debug.frames,
+        landmarks: debug.landmarks,
+        shoulderScore: debug.shoulderScore,
+        body: debug.fullBodyLandmarks == null
+          ? null
+          : `${debug.fullBodyLandmarks}/${SCAN_REQUIRED_BODY_LANDMARK_COUNT}`,
+        bodyFrameHeight: debug.bodyFrameHeight,
+        yaw: debug.yawDegrees,
+        session: debug.session,
+      }))
+    }
     setPoseDebug(debug)
   }, [])
+
+  const handleScanPrecheckUpdate = useCallback((next: Omit<ScanPrecheckState, 'updatedAtMs'>) => {
+    if (phaseRef.current === 'specialist_scan') return
+
+    const wasReady = scanPrecheckReadyRef.current
+    scanPrecheckReadyRef.current = next.ready
+    setScanPrecheck((previous) => {
+      if (
+        previous.ready === next.ready &&
+        previous.reason === next.reason &&
+        previous.message === next.message
+      ) {
+        return previous
+      }
+
+      return {
+        ...next,
+        updatedAtMs: Date.now(),
+      }
+    })
+
+    if (!captureArmed && scanCountdown == null) {
+      setInstruction(next.ready ? 'Hold position. Countdown starts automatically.' : next.message)
+    }
+
+    if (!captureArmed && scanCountdown == null && next.ready && !wasReady) {
+      trigger('notificationSuccess', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+      announceVisionStatus('Pre-check passed. Countdown starts automatically. Step back now.', { force: true })
+    }
+
+    const canAutoStartCountdown =
+      Platform.OS === 'ios' &&
+      phaseRef.current === 'scan' &&
+      engineStatusRef.current === 'ready' &&
+      !captureArmedRef.current &&
+      scanCountdownRef.current == null
+
+    if (!next.ready) {
+      scanCountdownPrecheckFailedAtRef.current = 0
+    }
+
+    const recentlyFailedCountdownPrecheck =
+      scanCountdownPrecheckFailedAtRef.current > 0 &&
+      Date.now() - scanCountdownPrecheckFailedAtRef.current < SCAN_COUNTDOWN_PRECHECK_RECOVERY_MS
+
+    if (!canAutoStartCountdown || !next.ready) {
+      clearAutoCountdownTimer()
+      return
+    }
+
+    if (autoCountdownTimerRef.current) return
+
+    if (recentlyFailedCountdownPrecheck) {
+      const elapsedMs = Date.now() - scanCountdownPrecheckFailedAtRef.current
+      const retryDelayMs = Math.max(250, SCAN_COUNTDOWN_PRECHECK_RECOVERY_MS - elapsedMs)
+      autoCountdownTimerRef.current = setTimeout(() => {
+        autoCountdownTimerRef.current = null
+        if (
+          phaseRef.current !== 'scan' ||
+          engineStatusRef.current !== 'ready' ||
+          captureArmedRef.current ||
+          scanCountdownRef.current != null ||
+          !scanPrecheckReadyRef.current
+        ) {
+          return
+        }
+
+        void startCaptureCountdownRef.current?.({ automated: true })
+      }, retryDelayMs)
+      return
+    }
+
+    setCaptureNotice('Auto-starting countdown')
+    autoCountdownTimerRef.current = setTimeout(() => {
+      autoCountdownTimerRef.current = null
+      if (
+        phaseRef.current !== 'scan' ||
+        engineStatusRef.current !== 'ready' ||
+        captureArmedRef.current ||
+        scanCountdownRef.current != null ||
+        !scanPrecheckReadyRef.current
+      ) {
+        return
+      }
+
+      void startCaptureCountdownRef.current?.({ automated: true })
+    }, SCAN_AUTO_COUNTDOWN_DELAY_MS)
+  }, [announceVisionStatus, captureArmed, clearAutoCountdownTimer, scanCountdown])
 
   const handleCameraSessionUpdate = useCallback((session: string) => {
     setPoseDebug((previous) => ({ ...previous, session }))
   }, [])
 
   const handleFrameQuality = useCallback((message: string) => {
+    if (phaseRef.current === 'specialist_scan') return
+
     const current = instructionRef.current
     if (current === message) return
 
     const now = Date.now()
+    const lowerMessage = message.toLowerCase()
+    const noisyFrameWarning =
+      lowerMessage.includes('brighter light') ||
+      lowerMessage.includes('full body') ||
+      lowerMessage.includes('head-to-ankles') ||
+      lowerMessage.includes('ankles show') ||
+      lowerMessage.includes('step closer') ||
+      lowerMessage.includes('step back') ||
+      lowerMessage.includes('lower phone')
     const currentPriority = scanInstructionPriority(current)
     const nextPriority = scanInstructionPriority(message)
-    if (now - instructionUpdatedAtRef.current < 900 && nextPriority <= currentPriority) {
+    const elapsedSinceInstructionMs = now - instructionUpdatedAtRef.current
+    const hasCapturedAngles = capturedSetRef.current.size > 0
+    const recentlySawUsableBody =
+      captureArmedRef.current &&
+      lastUsableBodyFrameAtRef.current > 0 &&
+      now - lastUsableBodyFrameAtRef.current < SCAN_NOISY_WARNING_GRACE_MS
+    const recentlyCapturedAngle =
+      captureArmedRef.current &&
+      lastScanCaptureAtRef.current != null &&
+      now - lastScanCaptureAtRef.current < SCAN_NOISY_WARNING_GRACE_MS
+    if (captureArmedRef.current && noisyFrameWarning) {
+      if (recentlySawUsableBody || (hasCapturedAngles && recentlyCapturedAngle)) {
+        return
+      }
+
+      const previousNoisyInstruction = lastNoisyInstructionRef.current
+      const firstSeenAtMs =
+        previousNoisyInstruction?.message === message
+          ? previousNoisyInstruction.firstSeenAtMs
+          : now
+      const count =
+        previousNoisyInstruction?.message === message
+          ? previousNoisyInstruction.count + 1
+          : 1
+      lastNoisyInstructionRef.current = { message, firstSeenAtMs, count }
+      if (
+        now - firstSeenAtMs < SCAN_NOISY_WARNING_CONFIRM_MS ||
+        count < SCAN_NOISY_WARNING_CONFIRM_COUNT
+      ) {
+        return
+      }
+    } else {
+      lastNoisyInstructionRef.current = null
+    }
+
+    const nextIsLowerPriority = nextPriority < currentPriority
+    const nextIsSamePriority = nextPriority === currentPriority
+    const lowerPriorityHoldMs = hasCapturedAngles ? 3200 : 1800
+    if (
+      (nextIsLowerPriority && elapsedSinceInstructionMs < lowerPriorityHoldMs) ||
+      (nextIsSamePriority && elapsedSinceInstructionMs < 1200)
+    ) {
       return
     }
 
     instructionUpdatedAtRef.current = now
+    if (__DEV__) {
+      console.log('[DrapeVision:instruction]', message)
+    }
+    const prompt = visionAudioPromptForInstruction(message)
+    if (prompt) {
+      void playVisionPrompt(prompt)
+    }
+    const haptic = scanHapticForInstruction(message)
+    if (haptic) {
+      trigger(haptic, { enableVibrateFallback: true, ignoreAndroidSystemSettings: false })
+    }
     setInstruction(message)
-  }, [])
+  }, [playVisionPrompt])
 
   const handleFrameError = useCallback((error: string) => {
     addVisionBreadcrumb('scan_failure', {
@@ -2682,10 +6926,13 @@ export default function DrapeVisionScreen() {
       error,
     }, 'error')
     setCaptureArmed(false)
+    setBodyWorkletActive(false)
+    captureArmedValue.value = 0
+    captureArmedSync.setBlocking(0)
     setEngineError(formatVisionError(error))
     setEngineStatus('blocked')
     setPhase('fallback')
-  }, [mode])
+  }, [captureArmedSync, captureArmedValue, mode, setBodyWorkletActive])
 
   const handleFrameDropped = useCallback((reason: FrameDroppedReason) => {
     setFrameDropWarning(`Frame processor is busy: ${reason}`)
@@ -2708,35 +6955,380 @@ export default function DrapeVisionScreen() {
       }
 
       const timestampMs = frame.timestamp * SCAN_FRAME_TIMESTAMP_MS_MULTIPLIER
-      if (timestampMs - lastLiteFrameMs.value < SCAN_LITE_FRAME_INTERVAL_MS) {
+      const isSpecialistScanActive = specialistScanActiveSync.getDirty() === 1 || specialistScanActiveValue.value === 1
+      const isBodyScanActive = bodyScanActiveSync.getDirty() === 1 || bodyScanActiveValue.value === 1
+
+      if (!isSpecialistScanActive && !isBodyScanActive) {
         frame.dispose()
         return
       }
-      lastLiteFrameMs.value = timestampMs
+
+      if (!isSpecialistScanActive && timestampMs - lastLiteFrameMs.value < SCAN_LITE_FRAME_INTERVAL_MS) {
+        frame.dispose()
+        return
+      }
+      if (!isSpecialistScanActive) {
+        lastLiteFrameMs.value = timestampMs
+      }
       processedFrameCount.value += 1
       const frameSize = `${Math.round(frame.width)} x ${Math.round(frame.height)} ${frame.orientation} ${frame.isMirrored ? 'mirrored' : 'normal'}`
 
-      const isCaptureArmed = captureArmed || captureArmedValue.value === 1
-
-      if (!isCaptureArmed) {
-        if (timestampMs - lastDebugUpdateMs.value >= SCAN_DEBUG_INTERVAL_MS) {
-          lastDebugUpdateMs.value = timestampMs
-          runOnJS(handlePoseDebug)({
-            status: 'Camera frames ready',
-            frames: processedFrameCount.value,
-            landmarks: 0,
-            shoulderScore: 0,
-            shoulderWidth: 0,
-            frameSize,
-            inferenceMs: 0,
-            session: 'camera prewarmed',
-          })
-        }
-        frame.dispose()
-        return
-      }
+      const isCaptureArmed = captureArmedSync.getDirty() === 1 || captureArmedValue.value === 1
 
       try {
+        if (isSpecialistScanActive) {
+          const specialistSession = specialistSessionSync.getDirty() || specialistSessionValue.value
+          if (specialistSession !== specialistAppliedSessionValue.value) {
+            specialistAppliedSessionValue.value = specialistSession
+            specialistLastFrameMs.value = 0
+            specialistFrameHeartbeatMs.value = 0
+            specialistModeFrameCount.value = 0
+            specialistCandidateStartedMs.value = 0
+            specialistCandidateCenterX.value = 0
+            specialistCandidateCenterY.value = 0
+            specialistCandidateSize.value = 0
+            specialistCandidateBestScore.value = 0
+            specialistCapturedValue.value = 0
+          }
+
+          if (specialistCapturedValue.value === 1) {
+            return
+          }
+
+          if (timestampMs - specialistLastFrameMs.value < SPECIALIST_GUIDE_FRAME_INTERVAL_MS) {
+            return
+          }
+          specialistLastFrameMs.value = timestampMs
+
+          const modeCode = specialistModeCodeSync.getDirty() || specialistModeCodeValue.value
+          specialistModeFrameCount.value += 1
+          const specialistFrameIndex = specialistModeFrameCount.value
+          if (__DEV__ && timestampMs - specialistFrameHeartbeatMs.value > 900) {
+            specialistFrameHeartbeatMs.value = timestampMs
+            runOnJS(handleSpecialistFrameHeartbeat)({
+              modeCode,
+              active: true,
+              frameIndex: specialistFrameIndex,
+              frameSize,
+              orientation: frame.orientation,
+              mirrored: frame.isMirrored,
+              timestampMs,
+            })
+          }
+          const specialistMode = specialistModeFromCode(modeCode)
+          let ready = false
+          let score = 0
+          let targetCount = 0
+          let centerX = 0.5
+          let centerY = 0.5
+          let size = 0
+          let signalWidth = 0
+          let signalHeight = 0
+          let inferenceMs = 0
+
+          if (modeCode === 1) {
+            const handDetection = detectHands(frame, {
+              maxHands: 1,
+              minHandDetectionConfidence: SPECIALIST_GUIDE_HAND_MIN_SCORE,
+              minHandPresenceConfidence: SPECIALIST_GUIDE_HAND_MIN_SCORE,
+              minTrackingConfidence: SPECIALIST_GUIDE_HAND_MIN_SCORE,
+            })
+            const hand = handDetection.hands[0]
+            const bounds = workletLandmarkBounds(hand?.landmarks)
+            const handScore = hand?.confidence ?? bounds.score
+            score = Math.max(handScore || 0, bounds.score || 0)
+            targetCount = bounds.count
+            centerX = bounds.centerX
+            centerY = bounds.centerY
+            signalWidth = bounds.width
+            signalHeight = bounds.height
+            size = bounds.size
+            inferenceMs = handDetection.inferenceMs ?? 0
+            ready = handDetection.hands.length > 0 &&
+              bounds.count >= 12 &&
+              score >= SPECIALIST_GUIDE_HAND_MIN_SCORE &&
+              bounds.width >= 0.06 &&
+              bounds.height >= 0.09 &&
+              centerX >= 0.06 &&
+              centerX <= 0.94 &&
+              centerY >= 0.06 &&
+              centerY <= 0.94
+          } else if (modeCode === 2) {
+            if (specialistFrameIndex <= SPECIALIST_FACE_WARMUP_FRAME_COUNT) {
+              runOnJS(handleSpecialistGuideUpdate)({
+                mode: specialistMode,
+                stage: 'align',
+                tone: 'action',
+                title: 'Warming up face scan',
+                message: 'Keep your face centered while the camera settles.',
+                score: 0,
+                progress: Math.min(specialistFrameIndex / SPECIALIST_FACE_WARMUP_FRAME_COUNT, 0.95),
+                inferenceMs: 0,
+                targetCount: 0,
+                signalLabel: 'face landmarks',
+                frameSize,
+                reason: `face_warmup_${specialistFrameIndex}`,
+                centerX: 0.5,
+                centerY: 0.5,
+                width: 0,
+                height: 0,
+                size: 0,
+              })
+              return
+            }
+            const faceDetection = detectFace(frame, {
+              minFaceDetectionConfidence: SPECIALIST_GUIDE_FACE_MIN_SCORE,
+              minFacePresenceConfidence: SPECIALIST_GUIDE_FACE_MIN_SCORE,
+              minTrackingConfidence: SPECIALIST_GUIDE_FACE_MIN_SCORE,
+              outputFaceBlendshapes: false,
+            })
+            const bounds = workletLandmarkBounds(faceDetection.landmarks)
+            score = bounds.score || (faceDetection.faceCount > 0 ? 1 : 0)
+            targetCount = bounds.count
+            centerX = bounds.centerX
+            centerY = bounds.centerY
+            signalWidth = bounds.width
+            signalHeight = bounds.height
+            size = bounds.size
+            inferenceMs = faceDetection.inferenceMs ?? 0
+            ready = faceDetection.faceCount > 0 &&
+              bounds.count >= 420 &&
+              score >= SPECIALIST_GUIDE_FACE_MIN_SCORE &&
+              bounds.width >= 0.22 &&
+              bounds.width <= 0.62 &&
+              bounds.height >= 0.24 &&
+              bounds.height <= 0.76 &&
+              centerX >= 0.24 &&
+              centerX <= 0.76 &&
+              centerY >= 0.22 &&
+              centerY <= 0.72
+            if (__DEV__) {
+              runOnJS(handleSpecialistFaceDetectionDebug)({
+                frameIndex: specialistFrameIndex,
+                frameSize,
+                orientation: frame.orientation,
+                mirrored: frame.isMirrored,
+                faceCount: faceDetection.faceCount ?? 0,
+                landmarkCount: faceDetection.landmarks?.length ?? 0,
+                ready,
+                boundsScore: bounds.score,
+                centerX,
+                centerY,
+                width: signalWidth,
+                height: signalHeight,
+                inferenceMs: faceDetection.inferenceMs ?? 0,
+                timestampMs,
+              })
+            }
+          } else if (modeCode === 3 || modeCode === 4) {
+            const segmentation = segmentImage(frame, {
+              outputConfidenceMasks: true,
+              confidenceThreshold: 0.5,
+            })
+            const bounds = workletSegmentBounds(segmentation.mask)
+            score = bounds.score
+            targetCount = bounds.count
+            centerX = bounds.centerX
+            centerY = bounds.centerY
+            signalWidth = bounds.width
+            signalHeight = bounds.height
+            size = bounds.size
+            inferenceMs = segmentation.inferenceMs ?? 0
+            const isBodice = modeCode === 3
+            const segmentLockMinRatio = isBodice
+              ? SPECIALIST_GUIDE_SEGMENT_LOCK_MIN_RATIO
+              : SPECIALIST_GUIDE_LOWER_BODY_LOCK_MIN_RATIO
+            const minHeight = isBodice ? 0.42 : 0.3
+            const maxHeight = isBodice ? 0.95 : 0.96
+            const minWidth = isBodice ? 0.24 : 0.12
+            const maxWidth = isBodice ? 0.74 : 0.78
+            const minCenterY = isBodice ? 0.34 : 0.3
+            const maxCenterY = isBodice ? 0.66 : 0.91
+            ready = bounds.foregroundRatio >= segmentLockMinRatio &&
+              bounds.foregroundRatio <= SPECIALIST_GUIDE_SEGMENT_MAX_RATIO &&
+              bounds.width >= minWidth &&
+              bounds.width <= maxWidth &&
+              bounds.height >= minHeight &&
+              bounds.height <= maxHeight &&
+              centerX >= 0.16 &&
+              centerX <= 0.84 &&
+              centerY >= minCenterY &&
+              centerY <= maxCenterY
+          } else {
+            runOnJS(handleSpecialistGuideUpdate)({
+              mode: specialistMode,
+              stage: 'blocked',
+              tone: 'warning',
+              title: 'Choose a specialist scan',
+              message: 'Open Hand/Wrist, Headwear, Bodice/Corset, or Lower Body so Drapeon can use the right model.',
+              score: 0,
+              progress: 0,
+              inferenceMs: 0,
+              targetCount: 0,
+              signalLabel: 'native signal',
+            })
+            return
+          }
+
+          const signalLabel = specialistGuideSignalForModeCode(modeCode)
+
+          if (!ready) {
+            const reason = modeCode === 1
+              ? targetCount === 0
+                ? 'no_hand_landmarks'
+                : score < SPECIALIST_GUIDE_HAND_MIN_SCORE
+                  ? 'low_hand_score'
+                  : 'hand_not_centered_or_too_small'
+              : modeCode === 2
+                ? targetCount === 0
+                  ? 'no_face_landmarks'
+                  : targetCount < 420
+                    ? 'face_not_fully_landmarked'
+                    : score < SPECIALIST_GUIDE_FACE_MIN_SCORE
+                    ? 'low_face_score'
+                    : 'face_not_centered_or_too_small'
+                : targetCount === 0
+                  ? 'no_segmentation_mask'
+                  : score < (modeCode === 3 ? SPECIALIST_GUIDE_SEGMENT_LOCK_MIN_RATIO : SPECIALIST_GUIDE_LOWER_BODY_LOCK_MIN_RATIO)
+                    ? 'low_foreground_ratio'
+                    : signalWidth < (modeCode === 3 ? 0.24 : 0.12)
+                      ? 'outline_too_narrow'
+                      : signalWidth > (modeCode === 3 ? 0.74 : 0.78)
+                        ? 'outline_too_wide'
+                        : signalHeight < (modeCode === 3 ? 0.42 : 0.3)
+                          ? 'outline_too_short'
+                          : signalHeight > (modeCode === 3 ? 0.95 : 0.96)
+                            ? 'outline_too_tall'
+                            : centerY < (modeCode === 3 ? 0.34 : 0.3)
+                              ? 'outline_too_high'
+                              : centerY > (modeCode === 3 ? 0.66 : 0.91)
+                                ? 'outline_too_low'
+                                : 'outline_not_centered'
+            specialistCandidateStartedMs.value = 0
+            specialistCandidateCenterX.value = centerX
+            specialistCandidateCenterY.value = centerY
+            specialistCandidateSize.value = size
+            specialistCandidateBestScore.value = 0
+            if (specialistCapturedValue.value !== 1) {
+              runOnJS(handleSpecialistGuideUpdate)({
+                mode: specialistMode,
+                stage: 'align',
+                tone: 'warning',
+                title: specialistGuideAlignTitleForModeCode(modeCode),
+                message: specialistGuideMessageForReason(modeCode, reason),
+                score,
+                progress: 0,
+                inferenceMs,
+                targetCount,
+                signalLabel,
+                frameSize,
+                reason,
+                centerX,
+                centerY,
+                width: signalWidth,
+                height: signalHeight,
+                size,
+              })
+            }
+            return
+          }
+
+          const centerDelta = Math.abs(centerX - specialistCandidateCenterX.value) +
+            Math.abs(centerY - specialistCandidateCenterY.value)
+          const sizeDelta = Math.abs(size - specialistCandidateSize.value)
+          const centerDeltaLimit = specialistGuideCenterDeltaLimitForModeCode(modeCode)
+          const sizeDeltaLimit = specialistGuideSizeDeltaLimitForModeCode(modeCode)
+          const candidateMoved = modeCode === 3 || modeCode === 4
+            ? centerDelta > centerDeltaLimit && sizeDelta > sizeDeltaLimit
+            : centerDelta > centerDeltaLimit || sizeDelta > sizeDeltaLimit
+          const candidateNeedsReset = specialistCandidateStartedMs.value === 0 ||
+            candidateMoved
+
+          if (candidateNeedsReset) {
+            specialistCandidateStartedMs.value = timestampMs
+            specialistCandidateCenterX.value = centerX
+            specialistCandidateCenterY.value = centerY
+            specialistCandidateSize.value = size
+            specialistCandidateBestScore.value = score
+          } else if (score > specialistCandidateBestScore.value) {
+            specialistCandidateBestScore.value = score
+          }
+
+          const stableMs = Math.max(timestampMs - specialistCandidateStartedMs.value, 0)
+          const holdMs = specialistGuideHoldMsForModeCode(modeCode)
+          const progress = Math.min(Math.max(stableMs / holdMs, 0), 1)
+          const bestScore = Math.max(score, specialistCandidateBestScore.value)
+          const payload: SpecialistGuidePayload = {
+            mode: specialistMode,
+            stage: 'hold',
+            tone: 'action',
+            title: specialistGuideHoldTitleForModeCode(modeCode),
+            message: specialistGuideHoldMessageForModeCode(modeCode),
+            score: bestScore,
+            progress,
+            inferenceMs,
+            targetCount,
+            signalLabel,
+            frameSize,
+            reason: 'stable_signal',
+            centerX,
+            centerY,
+            width: signalWidth,
+            height: signalHeight,
+            size,
+          }
+
+          if (progress >= SPECIALIST_GUIDE_PROGRESS_COMPLETE) {
+            const segmentCaptureMinRatio = modeCode === 3
+              ? SPECIALIST_GUIDE_BODICE_CAPTURE_MIN_RATIO
+              : SPECIALIST_GUIDE_LOWER_BODY_CAPTURE_MIN_RATIO
+            if (
+              (modeCode === 3 || modeCode === 4) &&
+              bestScore < segmentCaptureMinRatio
+            ) {
+              specialistCandidateStartedMs.value = timestampMs
+              specialistCandidateCenterX.value = centerX
+              specialistCandidateCenterY.value = centerY
+              specialistCandidateSize.value = size
+              specialistCandidateBestScore.value = score
+              if (specialistCapturedValue.value !== 1) {
+                runOnJS(handleSpecialistGuideUpdate)({
+                  mode: specialistMode,
+                  stage: 'align',
+                  tone: 'warning',
+                  title: 'Fill the guide',
+                  message: modeCode === 3
+                    ? 'Move a little closer or improve lighting until your torso outline fills the guide.'
+                    : 'Move a little closer or improve lighting until your lower-body outline fills the guide.',
+                  score,
+                  progress: 0,
+                  inferenceMs,
+                  targetCount,
+                  signalLabel,
+                  frameSize,
+                  reason: 'low_capture_foreground_ratio',
+                  centerX,
+                  centerY,
+                  width: signalWidth,
+                  height: signalHeight,
+                  size,
+                })
+              }
+              return
+            }
+            if (specialistCapturedValue.value !== 1) {
+              specialistCapturedValue.value = 1
+              runOnJS(handleSpecialistGuideCaptured)(payload)
+            }
+            return
+          }
+
+          if (specialistCapturedValue.value !== 1) {
+            runOnJS(handleSpecialistGuideUpdate)(payload)
+          }
+          return
+        }
+
         const lite = detectPose(frame, {
           model: 'lite',
           minPoseDetectionConfidence: SCAN_POSE_MODEL_CONFIDENCE,
@@ -2750,23 +7342,30 @@ export default function DrapeVisionScreen() {
         const score = Math.min(leftScore, rightScore)
 
         if (!leftShoulder || !rightShoulder) {
+          const missingBodyReason: VisionScanRejectionReason | 'waiting_for_body' = lite.landmarks.length === 0
+            ? 'low_light'
+            : 'waiting_for_body'
+          const missingBodyMessage = missingBodyReason === 'low_light'
+            ? 'Move into brighter light and use a plain background so Drapeon can find your body.'
+            : 'Step back until your shoulders and full body are visible.'
           if (timestampMs - lastDebugUpdateMs.value >= SCAN_DEBUG_INTERVAL_MS) {
             lastDebugUpdateMs.value = timestampMs
             runOnJS(handlePoseDebug)({
-              status: 'Looking for shoulders',
+              status: missingBodyReason === 'low_light' ? 'Need brighter light' : 'Looking for shoulders',
               frames: processedFrameCount.value,
               landmarks: lite.landmarks.length,
               shoulderScore: 0,
               shoulderWidth: 0,
               frameSize,
               inferenceMs: lite.inferenceMs ?? 0,
-              session: 'frames flowing',
+              session: `armed ${isCaptureArmed ? 1 : 0} / frames flowing`,
             })
             runOnJS(handleLabFrameSample)({
               sampledAtMs: timestampMs,
               processedFrame: processedFrameCount.value,
               status: 'rejected_pose',
-              reason: 'missing_shoulders',
+              reason: missingBodyReason === 'low_light' ? 'low_light' : 'low_landmark_confidence',
+              scanState: 'precheck',
               frameSize,
               landmarks: lite.landmarks.length,
               shoulderScore: 0,
@@ -2774,7 +7373,14 @@ export default function DrapeVisionScreen() {
               inferenceMs: lite.inferenceMs ?? 0,
             })
           }
-          runOnJS(handleFrameQuality)('Fit full body in frame')
+          if (!isCaptureArmed) {
+            runOnJS(handleScanPrecheckUpdate)({
+              ready: false,
+              reason: missingBodyReason,
+              message: missingBodyMessage,
+            })
+          }
+          runOnJS(handleFrameQuality)(missingBodyReason === 'low_light' ? 'Move into brighter light' : 'Fit full body in frame')
           return
         }
 
@@ -2792,18 +7398,26 @@ export default function DrapeVisionScreen() {
               shoulderWidth,
               frameSize,
               inferenceMs: lite.inferenceMs ?? 0,
-              session: 'frames flowing',
+              session: `armed ${isCaptureArmed ? 1 : 0} / frames flowing`,
             })
             runOnJS(handleLabFrameSample)({
               sampledAtMs: timestampMs,
               processedFrame: processedFrameCount.value,
               status: 'rejected_pose',
-              reason: 'shoulders_too_small',
+              reason: 'body_too_far',
+              scanState: 'precheck',
               frameSize,
               landmarks: lite.landmarks.length,
               shoulderScore: score,
               shoulderWidth,
               inferenceMs: lite.inferenceMs ?? 0,
+            })
+          }
+          if (!isCaptureArmed) {
+            runOnJS(handleScanPrecheckUpdate)({
+              ready: false,
+              reason: 'body_too_far',
+              message: 'Step closer or lower the phone so Drapeon can read your outline.',
             })
           }
           runOnJS(handleFrameQuality)('Step closer or lower phone')
@@ -2821,18 +7435,26 @@ export default function DrapeVisionScreen() {
               shoulderWidth,
               frameSize,
               inferenceMs: lite.inferenceMs ?? 0,
-              session: 'frames flowing',
+              session: `armed ${isCaptureArmed ? 1 : 0} / frames flowing`,
             })
             runOnJS(handleLabFrameSample)({
               sampledAtMs: timestampMs,
               processedFrame: processedFrameCount.value,
               status: 'rejected_pose',
-              reason: 'low_shoulder_confidence',
+              reason: 'low_landmark_confidence',
+              scanState: 'precheck',
               frameSize,
               landmarks: lite.landmarks.length,
               shoulderScore: score,
               shoulderWidth,
               inferenceMs: lite.inferenceMs ?? 0,
+            })
+          }
+          if (!isCaptureArmed) {
+            runOnJS(handleScanPrecheckUpdate)({
+              ready: false,
+              reason: 'low_landmark_confidence',
+              message: 'Move into brighter light so your shoulders are clearer.',
             })
           }
           runOnJS(handleFrameQuality)('Hold full body in brighter light')
@@ -2869,13 +7491,14 @@ export default function DrapeVisionScreen() {
               shoulderWidth,
               frameSize,
               inferenceMs: lite.inferenceMs ?? 0,
-              session: `body ${fullBodyLandmarks}/${SCAN_REQUIRED_BODY_LANDMARK_COUNT}`,
+              session: `armed ${isCaptureArmed ? 1 : 0} / body ${fullBodyLandmarks}/${SCAN_REQUIRED_BODY_LANDMARK_COUNT}`,
             })
             runOnJS(handleLabFrameSample)({
               sampledAtMs: timestampMs,
               processedFrame: processedFrameCount.value,
               status: 'rejected_pose',
-              reason: 'full_body_not_visible',
+              reason: 'ankles_missing',
+              scanState: 'precheck',
               frameSize,
               landmarks: lite.landmarks.length,
               shoulderScore: score,
@@ -2883,6 +7506,13 @@ export default function DrapeVisionScreen() {
               fullBodyScore,
               fullBodyLandmarks,
               inferenceMs: lite.inferenceMs ?? 0,
+            })
+          }
+          if (!isCaptureArmed) {
+            runOnJS(handleScanPrecheckUpdate)({
+              ready: false,
+              reason: 'ankles_missing',
+              message: 'Lower the phone or step back until your head and ankles are visible.',
             })
           }
           runOnJS(handleFrameQuality)('Lower phone until ankles show')
@@ -2926,13 +7556,20 @@ export default function DrapeVisionScreen() {
               shoulderWidth,
               frameSize,
               inferenceMs: lite.inferenceMs ?? 0,
-              session: `body height ${bodyFrameHeight.toFixed(2)}`,
+              session: `armed ${isCaptureArmed ? 1 : 0} / body height ${bodyFrameHeight.toFixed(2)}`,
             })
             runOnJS(handleLabFrameSample)({
               sampledAtMs: timestampMs,
               processedFrame: processedFrameCount.value,
               status: 'rejected_pose',
-              reason: bodyFrameHeight < SCAN_MIN_BODY_FRAME_HEIGHT ? 'body_too_small' : 'body_too_close',
+              reason: !hasBodyHeightAnchor
+                ? 'ankles_missing'
+                : !SCAN_REUSE_LITE_DETECTION_FOR_CAPTURE && !nose
+                  ? 'low_landmark_confidence'
+                  : bodyFrameHeight < SCAN_MIN_BODY_FRAME_HEIGHT
+                    ? 'body_too_far'
+                    : 'body_too_close',
+              scanState: 'precheck',
               frameSize,
               landmarks: lite.landmarks.length,
               shoulderScore: score,
@@ -2941,6 +7578,21 @@ export default function DrapeVisionScreen() {
               fullBodyLandmarks,
               bodyFrameHeight,
               inferenceMs: lite.inferenceMs ?? 0,
+            })
+          }
+          if (!isCaptureArmed) {
+            runOnJS(handleScanPrecheckUpdate)({
+              ready: false,
+              reason: !hasBodyHeightAnchor
+                ? 'ankles_missing'
+                : bodyFrameHeight < SCAN_MIN_BODY_FRAME_HEIGHT
+                  ? 'body_too_far'
+                  : 'body_too_close',
+              message: !hasBodyHeightAnchor
+                ? 'Lower the phone until both ankles stay visible.'
+                : bodyFrameHeight < SCAN_MIN_BODY_FRAME_HEIGHT
+                  ? 'Step closer or lower the phone so your body fills the guide.'
+                  : 'Step back so your head and ankles fit inside the frame.',
             })
           }
           runOnJS(handleFrameQuality)(
@@ -2975,46 +7627,204 @@ export default function DrapeVisionScreen() {
             captureCount += 1
           }
         }
-        const fullYawBucketIndex = Math.round(normalizedYaw / (360 / DRAPE_VISION_TARGET_ANGLES_DEGREES.length)) % DRAPE_VISION_TARGET_ANGLES_DEGREES.length
-        const targetAngleIndex = SCAN_ANDROID_SEQUENTIAL_CAPTURE
+
+        let targetAngleIndex = SCAN_ANDROID_SEQUENTIAL_CAPTURE
           ? Math.min(captureCount, segmentCount - 1)
-          : fullYawBucketIndex
-        const targetAngleDegrees = SCAN_ANDROID_SEQUENTIAL_CAPTURE
-          ? targetAngleDegreesForScanIndex(targetAngleIndex)
-          : DRAPE_VISION_TARGET_ANGLES_DEGREES[targetAngleIndex] ?? DRAPE_VISION_TARGET_ANGLES_DEGREES[0]
-        const stableYawDelta = stablePoseStartedMs.value > 0
-          ? Math.abs((((normalizedYaw - stablePoseYawDegrees.value) % 360) + 540) % 360 - 180)
           : 0
-        const stableBodyFrameHeightDelta = stablePoseStartedMs.value > 0
-          ? Math.abs(bodyFrameHeight - stablePoseBodyFrameHeight.value)
+        let targetAngleDistance = 0
+        if (!SCAN_ANDROID_SEQUENTIAL_CAPTURE) {
+          let guidedTargetIndex = -1
+          let bestDistance = 999
+          for (let sequenceIndex = 0; sequenceIndex < SCAN_IOS_GUIDED_CAPTURE_INDICES.length; sequenceIndex += 1) {
+            const candidateIndex = SCAN_IOS_GUIDED_CAPTURE_INDICES[sequenceIndex]
+            if ((capturedMask.value & (1 << candidateIndex)) !== 0) continue
+            guidedTargetIndex = candidateIndex
+            const targetDegrees = targetAngleDegreesForScanIndex(guidedTargetIndex)
+            bestDistance = Math.abs((((normalizedYaw - targetDegrees) % 360) + 540) % 360 - 180)
+            break
+          }
+          if (guidedTargetIndex >= 0) {
+            targetAngleIndex = guidedTargetIndex
+          } else {
+            targetAngleIndex = 0
+            bestDistance = 999
+          }
+          targetAngleDistance = bestDistance
+        }
+        const targetAngleDegrees = targetAngleDegreesForScanIndex(targetAngleIndex)
+        const targetIsIosFrontCapture = !SCAN_ANDROID_SEQUENTIAL_CAPTURE && targetAngleIndex === 0
+        const targetIsIosBackCapture = !SCAN_ANDROID_SEQUENTIAL_CAPTURE && targetAngleIndex === 4
+        const targetIsIosFrontLikeSilhouette = targetIsIosFrontCapture || targetIsIosBackCapture
+        const targetFrontishDistance = Math.min(normalizedYaw, 360 - normalizedYaw)
+        const timeSinceLastCaptureMs = lastCaptureMs.value === 0
+          ? 1000000000
+          : timestampMs - lastCaptureMs.value
+        const targetRequiredTransitionMs = targetIsIosBackCapture
+          ? SCAN_IOS_BACK_POSE_MIN_TURN_MS
+          : SCAN_IOS_NEXT_POSE_MIN_TURN_MS
+        const targetHasPoseTransitionWindow = SCAN_ANDROID_SEQUENTIAL_CAPTURE ||
+          targetIsIosFrontCapture ||
+          timeSinceLastCaptureMs >= targetRequiredTransitionMs
+        if (targetIsIosBackCapture) {
+          targetAngleDistance = targetFrontishDistance
+        }
+        const segmentBit = 1 << targetAngleIndex
+        const targetAlreadyCaptured = (capturedMask.value & segmentBit) !== 0
+        const isInCaptureCooldown = lastCaptureMs.value !== 0 &&
+          timestampMs - lastCaptureMs.value < SCAN_CAPTURE_INTERVAL_MS
+        const targetTolerance = targetIsIosFrontLikeSilhouette
+          ? SCAN_FRONT_CAPTURE_TARGET_TOLERANCE_DEGREES
+          : SCAN_CAPTURE_TARGET_TOLERANCE_DEGREES
+        const targetMaxYawDelta = targetIsIosFrontLikeSilhouette
+          ? SCAN_FRONT_CAPTURE_MAX_YAW_DELTA_DEGREES
+          : SCAN_CAPTURE_MAX_YAW_DELTA_DEGREES
+        const targetBurstMaxYawDelta = targetIsIosFrontLikeSilhouette
+          ? SCAN_FRONT_CAPTURE_BURST_MAX_YAW_DELTA_DEGREES
+          : SCAN_CAPTURE_BURST_MAX_YAW_DELTA_DEGREES
+        const targetUsesYawGate = SCAN_ANDROID_SEQUENTIAL_CAPTURE ||
+          (!targetIsIosFrontCapture && !targetIsIosBackCapture)
+        const targetIsBackPoseReady = targetIsIosBackCapture &&
+          targetHasPoseTransitionWindow
+        const targetIsCaptureReady =
+          targetIsIosFrontCapture ||
+          targetIsBackPoseReady ||
+          (
+            targetHasPoseTransitionWindow &&
+            (
+              SCAN_ANDROID_SEQUENTIAL_CAPTURE ||
+              targetAngleDistance <= targetTolerance
+            )
+          )
+        const targetInstruction = targetIsBackPoseReady
+          ? 'Hold still with your back to the phone'
+          : targetIsIosBackCapture
+            ? 'Show your back to the phone, then hold still'
+            : targetHasPoseTransitionWindow
+              ? scanInstructionForTargetYaw(targetAngleDegrees, normalizedYaw)
+              : scanInstructionForTargetAngleDegrees(targetAngleDegrees)
+
+        if (!isCaptureArmed) {
+          runOnJS(handleScanPrecheckUpdate)({
+            ready: true,
+            reason: null,
+            message: 'Full body found. Countdown starts automatically.',
+          })
+          if (timestampMs - lastDebugUpdateMs.value >= SCAN_DEBUG_INTERVAL_MS) {
+            lastDebugUpdateMs.value = timestampMs
+            runOnJS(handlePoseDebug)({
+              status: 'Pre-check ready',
+              frames: processedFrameCount.value,
+              landmarks: lite.landmarks.length,
+              shoulderScore: fullBodyScore,
+              shoulderWidth,
+              frameSize,
+              inferenceMs: lite.inferenceMs ?? 0,
+              session: `armed ${isCaptureArmed ? 1 : 0} / precheck body ${fullBodyLandmarks}/${SCAN_REQUIRED_BODY_LANDMARK_COUNT}`,
+            })
+          }
+          return
+        }
+
+        if (!targetAlreadyCaptured && !targetIsCaptureReady) {
+          scanCaptureState.value = 0
+          scanCandidateAngleIndex.value = -1
+          scanCandidateStartedMs.value = 0
+          scanCandidateYawDegrees.value = 0
+          scanCandidateBodyFrameHeight.value = 0
+          scanBurstStartedMs.value = 0
+          scanBurstFrameCount.value = 0
+          runOnJS(handleAngleUpdate)(targetAngleIndex, normalizedYaw, lite.inferenceMs ?? 0)
+          if (timestampMs - lastDebugUpdateMs.value >= SCAN_DEBUG_INTERVAL_MS) {
+            lastDebugUpdateMs.value = timestampMs
+            runOnJS(handlePoseDebug)({
+              status: 'Turn slowly to next angle',
+              frames: processedFrameCount.value,
+              landmarks: lite.landmarks.length,
+              shoulderScore: fullBodyScore,
+              shoulderWidth,
+              frameSize,
+              inferenceMs: lite.inferenceMs ?? 0,
+              yawDegrees: normalizedYaw,
+              session: `armed ${isCaptureArmed ? 1 : 0} / target ${targetAngleIndex} gap ${Math.round(targetAngleDistance)}`,
+            })
+            runOnJS(handleLabFrameSample)({
+              sampledAtMs: timestampMs,
+              processedFrame: processedFrameCount.value,
+              status: 'rejected_capture',
+              reason: 'insufficient_angle_coverage',
+              scanState: 'angle_candidate',
+              frameSize,
+              landmarks: lite.landmarks.length,
+              shoulderScore: score,
+              shoulderWidth,
+              fullBodyScore,
+              fullBodyLandmarks,
+              bodyFrameHeight,
+              yawDegrees: normalizedYaw,
+              yawDelta: targetAngleDistance,
+              targetAngleIndex,
+              targetAngleDegrees,
+              inferenceMs: lite.inferenceMs ?? 0,
+            })
+          }
+          if (timestampMs - lastCaptureHoldPromptMs.value >= SCAN_DEBUG_INTERVAL_MS) {
+            lastCaptureHoldPromptMs.value = timestampMs
+            runOnJS(handleFrameQuality)(targetInstruction)
+          }
+          return
+        }
+
+        const candidateChanged = scanCandidateAngleIndex.value !== targetAngleIndex
+        const candidateYawDelta = scanCandidateStartedMs.value > 0
+          ? Math.abs((((normalizedYaw - scanCandidateYawDegrees.value) % 360) + 540) % 360 - 180)
           : 0
-        const shouldResetStablePose = stablePoseStartedMs.value === 0 ||
-          stableYawDelta > SCAN_CAPTURE_MAX_YAW_DELTA_DEGREES ||
-          stableBodyFrameHeightDelta > SCAN_CAPTURE_MAX_BODY_HEIGHT_DELTA
-        if (shouldResetStablePose) {
+        const effectiveCandidateYawDelta = targetUsesYawGate ? candidateYawDelta : 0
+        const candidateBodyFrameHeightDelta = scanCandidateStartedMs.value > 0
+          ? Math.abs(bodyFrameHeight - scanCandidateBodyFrameHeight.value)
+          : 0
+        const shouldResetCandidate = scanCandidateStartedMs.value === 0 ||
+          candidateChanged ||
+          effectiveCandidateYawDelta > targetMaxYawDelta ||
+          candidateBodyFrameHeightDelta > SCAN_CAPTURE_MAX_BODY_HEIGHT_DELTA
+        if (shouldResetCandidate) {
+          scanCaptureState.value = 1
+          scanCandidateAngleIndex.value = targetAngleIndex
+          scanCandidateStartedMs.value = timestampMs
+          scanCandidateYawDegrees.value = normalizedYaw
+          scanCandidateBodyFrameHeight.value = bodyFrameHeight
+          scanBurstStartedMs.value = 0
+          scanBurstFrameCount.value = 0
           stablePoseStartedMs.value = timestampMs
           stablePoseYawDegrees.value = normalizedYaw
           stablePoseBodyFrameHeight.value = bodyFrameHeight
         }
-        const stableMs = Math.max(timestampMs - stablePoseStartedMs.value, 0)
+        const stableMs = Math.max(timestampMs - scanCandidateStartedMs.value, 0)
         runOnJS(handleAngleUpdate)(targetAngleIndex, normalizedYaw, lite.inferenceMs ?? 0)
 
         if (timestampMs - lastDebugUpdateMs.value >= SCAN_DEBUG_INTERVAL_MS) {
           lastDebugUpdateMs.value = timestampMs
+          const stableCaptureReady = stableMs >= SCAN_CAPTURE_STABLE_MS
+          const poseStatus = targetAlreadyCaptured || isInCaptureCooldown
+            ? 'Turn slowly to next angle'
+            : stableCaptureReady
+              ? 'Angle locked, capturing burst'
+              : 'Hold still for angle lock'
           runOnJS(handlePoseDebug)({
-            status: captureCount === 0 ? 'Pose locked, holding first angle' : 'Pose locked, keep turning',
+            status: poseStatus,
             frames: processedFrameCount.value,
             landmarks: lite.landmarks.length,
             shoulderScore: fullBodyScore,
             shoulderWidth,
             frameSize,
             inferenceMs: lite.inferenceMs ?? 0,
-            session: `capturing body ${fullBodyLandmarks}/${SCAN_REQUIRED_BODY_LANDMARK_COUNT}`,
+            yawDegrees: normalizedYaw,
+            session: `armed ${isCaptureArmed ? 1 : 0} / state ${scanCaptureState.value} body ${fullBodyLandmarks}/${SCAN_REQUIRED_BODY_LANDMARK_COUNT}`,
           })
           runOnJS(handleLabFrameSample)({
             sampledAtMs: timestampMs,
             processedFrame: processedFrameCount.value,
             status: 'accepted_pose',
+            scanState: stableCaptureReady ? 'hold_timer' : 'angle_candidate',
             frameSize,
             landmarks: lite.landmarks.length,
             shoulderScore: score,
@@ -3024,241 +7834,365 @@ export default function DrapeVisionScreen() {
             bodyFrameHeight,
             yawDegrees: normalizedYaw,
             stableMs,
-            yawDelta: stableYawDelta,
-            bodyFrameHeightDelta: stableBodyFrameHeightDelta,
+            yawDelta: candidateYawDelta,
+            bodyFrameHeightDelta: candidateBodyFrameHeightDelta,
             targetAngleIndex,
             targetAngleDegrees,
             inferenceMs: lite.inferenceMs ?? 0,
           })
         }
 
-        const segmentBit = 1 << targetAngleIndex
         if (
-          captureCount < segmentCount &&
-          (capturedMask.value & segmentBit) === 0 &&
-          (lastCaptureMs.value === 0 || timestampMs - lastCaptureMs.value >= SCAN_CAPTURE_INTERVAL_MS)
+          captureCount >= segmentCount ||
+          targetAlreadyCaptured ||
+          isInCaptureCooldown
         ) {
-          if (stableMs < SCAN_CAPTURE_STABLE_MS) {
-            if (timestampMs - lastCaptureHoldPromptMs.value >= SCAN_DEBUG_INTERVAL_MS) {
-              lastCaptureHoldPromptMs.value = timestampMs
-              runOnJS(handleFrameQuality)('Hold still in full body view')
-              runOnJS(handleLabFrameSample)({
-                sampledAtMs: timestampMs,
-                processedFrame: processedFrameCount.value,
-                status: 'rejected_capture',
-                reason: 'pose_not_stable',
-                frameSize,
-                landmarks: lite.landmarks.length,
-                shoulderScore: score,
-                shoulderWidth,
-                fullBodyScore,
-                fullBodyLandmarks,
-                bodyFrameHeight,
-                yawDegrees: normalizedYaw,
-                stableMs,
-                yawDelta: stableYawDelta,
-                bodyFrameHeightDelta: stableBodyFrameHeightDelta,
-                targetAngleIndex,
-                targetAngleDegrees,
-                inferenceMs: lite.inferenceMs ?? 0,
-              })
-            }
-            return
-          }
+          return
+        }
 
-          const yawProgress = hasLastCapturedYaw.value === 1
-            ? Math.abs((((normalizedYaw - lastCapturedYawDegrees.value) % 360) + 540) % 360 - 180)
-            : 360
-          const relaxedAngleProgress = SCAN_ANDROID_SEQUENTIAL_CAPTURE &&
-            captureCount > 0 &&
-            lastCaptureMs.value > 0 &&
-            timestampMs - lastCaptureMs.value >= SCAN_ANDROID_ANGLE_PROGRESS_RELAX_MS
-          if (captureCount > 0 && yawProgress < SCAN_CAPTURE_MIN_YAW_PROGRESS_DEGREES && !relaxedAngleProgress) {
-            if (timestampMs - lastCaptureHoldPromptMs.value >= SCAN_DEBUG_INTERVAL_MS) {
-              lastCaptureHoldPromptMs.value = timestampMs
-              runOnJS(handleFrameQuality)('Turn a little more')
-              runOnJS(handleLabFrameSample)({
-                sampledAtMs: timestampMs,
-                processedFrame: processedFrameCount.value,
-                status: 'rejected_capture',
-                reason: 'angle_not_advanced',
-                frameSize,
-                landmarks: lite.landmarks.length,
-                shoulderScore: score,
-                shoulderWidth,
-                fullBodyScore,
-                fullBodyLandmarks,
-                bodyFrameHeight,
-                yawDegrees: normalizedYaw,
-                stableMs,
-                yawDelta: yawProgress,
-                bodyFrameHeightDelta: stableBodyFrameHeightDelta,
-                targetAngleIndex,
-                targetAngleDegrees,
-                inferenceMs: lite.inferenceMs ?? 0,
-              })
-            }
-            return
-          }
-
-          const full = SCAN_REUSE_LITE_DETECTION_FOR_CAPTURE
-            ? lite
-            : detectPose(frame, {
-              model: 'full',
-              minPoseDetectionConfidence: SCAN_POSE_MODEL_CONFIDENCE,
-              minPosePresenceConfidence: SCAN_POSE_MODEL_CONFIDENCE,
-              minTrackingConfidence: SCAN_POSE_MODEL_CONFIDENCE,
-            })
-          if (full.landmarks.length === 0) {
+        if (stableMs < SCAN_CAPTURE_STABLE_MS) {
+          if (timestampMs - lastCaptureHoldPromptMs.value >= SCAN_DEBUG_INTERVAL_MS) {
+            lastCaptureHoldPromptMs.value = timestampMs
+            runOnJS(handleFrameQuality)('Hold still in full body view')
             runOnJS(handleLabFrameSample)({
               sampledAtMs: timestampMs,
               processedFrame: processedFrameCount.value,
               status: 'rejected_capture',
-              reason: 'full_model_no_landmarks',
+              reason: 'pose_unstable',
+              scanState: 'hold_timer',
               frameSize,
-              landmarks: 0,
+              landmarks: lite.landmarks.length,
               shoulderScore: score,
               shoulderWidth,
               fullBodyScore,
               fullBodyLandmarks,
               bodyFrameHeight,
               yawDegrees: normalizedYaw,
+              stableMs,
+              yawDelta: candidateYawDelta,
+              bodyFrameHeightDelta: candidateBodyFrameHeightDelta,
               targetAngleIndex,
               targetAngleDegrees,
-              inferenceMs: full.inferenceMs ?? 0,
+              inferenceMs: lite.inferenceMs ?? 0,
             })
-            runOnJS(handleFrameQuality)('Hold steady for capture')
-            return
           }
-          let fullCaptureScore = 1
-          let fullCaptureLandmarks = 0
-          for (let bodyIndex = 0; bodyIndex < SCAN_REQUIRED_BODY_LANDMARKS.length; bodyIndex += 1) {
-            const landmark = full.landmarks[SCAN_REQUIRED_BODY_LANDMARKS[bodyIndex]]
-            const bodyScore = landmark ? Math.min(landmark.visibility ?? 1, landmark.presence ?? 1) : 0
-            fullCaptureScore = Math.min(fullCaptureScore, bodyScore)
-            const insideFrame = !!landmark &&
-              landmark.x >= SCAN_FRAME_EDGE_MARGIN &&
-              landmark.x <= 1 - SCAN_FRAME_EDGE_MARGIN &&
-              landmark.y >= SCAN_FRAME_EDGE_MARGIN &&
-              landmark.y <= 1 - SCAN_FRAME_EDGE_MARGIN
-            if (bodyScore >= SCAN_FULL_BODY_LOCK_CONFIDENCE && insideFrame) {
-              fullCaptureLandmarks += 1
-            }
+          return
+        }
+
+        const yawProgress = hasLastCapturedYaw.value === 1
+          ? Math.abs((((normalizedYaw - lastCapturedYawDegrees.value) % 360) + 540) % 360 - 180)
+          : 360
+        const relaxedAngleProgress = SCAN_ANDROID_SEQUENTIAL_CAPTURE &&
+          captureCount > 0 &&
+          lastCaptureMs.value > 0 &&
+          timestampMs - lastCaptureMs.value >= SCAN_ANDROID_ANGLE_PROGRESS_RELAX_MS
+        if (captureCount > 0 && yawProgress < SCAN_CAPTURE_MIN_YAW_PROGRESS_DEGREES && !relaxedAngleProgress) {
+          if (timestampMs - lastCaptureHoldPromptMs.value >= SCAN_DEBUG_INTERVAL_MS) {
+            lastCaptureHoldPromptMs.value = timestampMs
+            runOnJS(handleFrameQuality)(targetInstruction)
+            runOnJS(handleLabFrameSample)({
+              sampledAtMs: timestampMs,
+              processedFrame: processedFrameCount.value,
+              status: 'rejected_capture',
+              reason: 'insufficient_angle_coverage',
+              scanState: 'angle_candidate',
+              frameSize,
+              landmarks: lite.landmarks.length,
+              shoulderScore: score,
+              shoulderWidth,
+              fullBodyScore,
+              fullBodyLandmarks,
+              bodyFrameHeight,
+              yawDegrees: normalizedYaw,
+              stableMs,
+              yawDelta: yawProgress,
+              bodyFrameHeightDelta: candidateBodyFrameHeightDelta,
+              targetAngleIndex,
+              targetAngleDegrees,
+              inferenceMs: lite.inferenceMs ?? 0,
+            })
           }
-          const fullNose = full.landmarks[DRAPE_VISION_LANDMARK.nose]
-          const fullLeftAnkle = full.landmarks[DRAPE_VISION_LANDMARK.leftAnkle]
-          const fullRightAnkle = full.landmarks[DRAPE_VISION_LANDMARK.rightAnkle]
-          const fullAnkleMidY = fullLeftAnkle && fullRightAnkle
-            ? (fullLeftAnkle.y + fullRightAnkle.y) / 2
-            : fullLeftAnkle
-              ? fullLeftAnkle.y
-              : fullRightAnkle
-                ? fullRightAnkle.y
-                : 0
-          const fullBodyFrameHeight = SCAN_REUSE_LITE_DETECTION_FOR_CAPTURE
-            ? (estimateAndroidBodyHeightFromLandmarks(full.landmarks) ??
-              estimateAndroidTorsoBodyHeightFromLandmarks(full.landmarks) ??
-              estimateAndroidUpperBodyHeightFromLandmarks(full.landmarks) ??
-              0)
-            : fullNose
-              ? fullAnkleMidY - fullNose.y
+          return
+        }
+
+        if (scanCaptureState.value !== 2) {
+          scanCaptureState.value = 2
+          scanBurstStartedMs.value = timestampMs
+          scanBurstFrameCount.value = 0
+          runOnJS(handleCaptureBurstStart)(targetAngleIndex)
+        }
+
+        const burstYawDelta = targetUsesYawGate
+          ? Math.abs((((normalizedYaw - scanCandidateYawDegrees.value) % 360) + 540) % 360 - 180)
+          : 0
+        const burstBodyFrameHeightDelta = Math.abs(bodyFrameHeight - scanCandidateBodyFrameHeight.value)
+        if (
+          burstYawDelta > targetBurstMaxYawDelta ||
+          burstBodyFrameHeightDelta > SCAN_CAPTURE_BURST_MAX_BODY_HEIGHT_DELTA
+        ) {
+          scanCaptureState.value = 1
+          scanCandidateStartedMs.value = timestampMs
+          scanCandidateYawDegrees.value = normalizedYaw
+          scanCandidateBodyFrameHeight.value = bodyFrameHeight
+          scanBurstStartedMs.value = 0
+          scanBurstFrameCount.value = 0
+          runOnJS(handleFrameQuality)('Hold still, then Drapeon will capture')
+          runOnJS(handleLabFrameSample)({
+            sampledAtMs: timestampMs,
+            processedFrame: processedFrameCount.value,
+            status: 'rejected_capture',
+            reason: burstYawDelta > SCAN_CAPTURE_BURST_MAX_YAW_DELTA_DEGREES ? 'yaw_jitter' : 'pose_unstable',
+            scanState: 'burst_capture',
+            frameSize,
+            landmarks: lite.landmarks.length,
+            shoulderScore: score,
+            shoulderWidth,
+            fullBodyScore,
+            fullBodyLandmarks,
+            bodyFrameHeight,
+            yawDegrees: normalizedYaw,
+            stableMs,
+            yawDelta: burstYawDelta,
+            bodyFrameHeightDelta: burstBodyFrameHeightDelta,
+            targetAngleIndex,
+            targetAngleDegrees,
+            inferenceMs: lite.inferenceMs ?? 0,
+          })
+          return
+        }
+
+        const full = SCAN_REUSE_LITE_DETECTION_FOR_CAPTURE
+          ? lite
+          : detectPose(frame, {
+            model: 'full',
+            minPoseDetectionConfidence: SCAN_POSE_MODEL_CONFIDENCE,
+            minPosePresenceConfidence: SCAN_POSE_MODEL_CONFIDENCE,
+            minTrackingConfidence: SCAN_POSE_MODEL_CONFIDENCE,
+          })
+        if (full.landmarks.length === 0) {
+          scanCaptureState.value = 1
+          runOnJS(handleLabFrameSample)({
+            sampledAtMs: timestampMs,
+            processedFrame: processedFrameCount.value,
+            status: 'rejected_capture',
+            reason: 'low_landmark_confidence',
+            scanState: 'burst_capture',
+            frameSize,
+            landmarks: 0,
+            shoulderScore: score,
+            shoulderWidth,
+            fullBodyScore,
+            fullBodyLandmarks,
+            bodyFrameHeight,
+            yawDegrees: normalizedYaw,
+            targetAngleIndex,
+            targetAngleDegrees,
+            inferenceMs: full.inferenceMs ?? 0,
+          })
+          runOnJS(handleFrameQuality)('Hold steady for capture')
+          return
+        }
+        let fullCaptureScore = 1
+        let fullCaptureLandmarks = 0
+        for (let bodyIndex = 0; bodyIndex < SCAN_REQUIRED_BODY_LANDMARKS.length; bodyIndex += 1) {
+          const landmark = full.landmarks[SCAN_REQUIRED_BODY_LANDMARKS[bodyIndex]]
+          const bodyScore = landmark ? Math.min(landmark.visibility ?? 1, landmark.presence ?? 1) : 0
+          fullCaptureScore = Math.min(fullCaptureScore, bodyScore)
+          const insideFrame = !!landmark &&
+            landmark.x >= SCAN_FRAME_EDGE_MARGIN &&
+            landmark.x <= 1 - SCAN_FRAME_EDGE_MARGIN &&
+            landmark.y >= SCAN_FRAME_EDGE_MARGIN &&
+            landmark.y <= 1 - SCAN_FRAME_EDGE_MARGIN
+          if (bodyScore >= SCAN_FULL_BODY_LOCK_CONFIDENCE && insideFrame) {
+            fullCaptureLandmarks += 1
+          }
+        }
+        const fullNose = full.landmarks[DRAPE_VISION_LANDMARK.nose]
+        const fullLeftAnkle = full.landmarks[DRAPE_VISION_LANDMARK.leftAnkle]
+        const fullRightAnkle = full.landmarks[DRAPE_VISION_LANDMARK.rightAnkle]
+        const fullAnkleMidY = fullLeftAnkle && fullRightAnkle
+          ? (fullLeftAnkle.y + fullRightAnkle.y) / 2
+          : fullLeftAnkle
+            ? fullLeftAnkle.y
+            : fullRightAnkle
+              ? fullRightAnkle.y
               : 0
-          const fullCaptureBodyGateFailed = SCAN_REUSE_LITE_DETECTION_FOR_CAPTURE
-            ? fullCaptureLandmarks < SCAN_MIN_CAPTURE_VISIBLE_BODY_LANDMARKS
-            : fullCaptureScore < SCAN_FULL_BODY_LOCK_CONFIDENCE || fullCaptureLandmarks < SCAN_MIN_CAPTURE_VISIBLE_BODY_LANDMARKS
-          const hasFullCaptureBodyHeightAnchor = SCAN_REUSE_LITE_DETECTION_FOR_CAPTURE
-            ? fullBodyFrameHeight > 0
-            : !!fullLeftAnkle && !!fullRightAnkle
-          if (
-            fullCaptureBodyGateFailed ||
-            !hasFullCaptureBodyHeightAnchor ||
-            fullBodyFrameHeight < SCAN_MIN_BODY_FRAME_HEIGHT ||
-            fullBodyFrameHeight > SCAN_MAX_BODY_FRAME_HEIGHT
-          ) {
-            runOnJS(handleLabFrameSample)({
-              sampledAtMs: timestampMs,
-              processedFrame: processedFrameCount.value,
-              status: 'rejected_capture',
-              reason: 'full_capture_body_not_visible',
-              frameSize,
-              landmarks: full.landmarks.length,
-              shoulderScore: score,
-              shoulderWidth,
-              fullBodyScore: fullCaptureScore,
-              fullBodyLandmarks: fullCaptureLandmarks,
-              bodyFrameHeight: fullBodyFrameHeight,
-              yawDegrees: normalizedYaw,
-              targetAngleIndex,
-              targetAngleDegrees,
-              inferenceMs: full.inferenceMs ?? 0,
-            })
-            runOnJS(handleFrameQuality)('Hold head-to-ankles in frame')
-            return
-          }
-          const widths = full.segmentWidthsPx ?? (
-            SCAN_REUSE_LITE_DETECTION_FOR_CAPTURE
-              ? estimateAndroidSegmentWidthsFromLandmarks(full.landmarks)
-              : undefined
+        const fullBodyFrameHeight = SCAN_REUSE_LITE_DETECTION_FOR_CAPTURE
+          ? (estimateAndroidBodyHeightFromLandmarks(full.landmarks) ??
+            estimateAndroidTorsoBodyHeightFromLandmarks(full.landmarks) ??
+            estimateAndroidUpperBodyHeightFromLandmarks(full.landmarks) ??
+            0)
+          : fullNose
+            ? fullAnkleMidY - fullNose.y
+            : 0
+        const fullCaptureBodyGateFailed = SCAN_REUSE_LITE_DETECTION_FOR_CAPTURE
+          ? fullCaptureLandmarks < SCAN_MIN_CAPTURE_VISIBLE_BODY_LANDMARKS
+          : fullCaptureScore < SCAN_FULL_BODY_LOCK_CONFIDENCE || fullCaptureLandmarks < SCAN_MIN_CAPTURE_VISIBLE_BODY_LANDMARKS
+        const hasFullCaptureBodyHeightAnchor = SCAN_REUSE_LITE_DETECTION_FOR_CAPTURE
+          ? fullBodyFrameHeight > 0
+          : !!fullLeftAnkle && !!fullRightAnkle
+        if (
+          fullCaptureBodyGateFailed ||
+          !hasFullCaptureBodyHeightAnchor ||
+          fullBodyFrameHeight < SCAN_MIN_BODY_FRAME_HEIGHT ||
+          fullBodyFrameHeight > SCAN_MAX_BODY_FRAME_HEIGHT
+        ) {
+          scanCaptureState.value = 1
+          scanCandidateStartedMs.value = timestampMs
+          scanCandidateYawDegrees.value = normalizedYaw
+          scanCandidateBodyFrameHeight.value = bodyFrameHeight
+          scanBurstStartedMs.value = 0
+          scanBurstFrameCount.value = 0
+          runOnJS(handleLabFrameSample)({
+            sampledAtMs: timestampMs,
+            processedFrame: processedFrameCount.value,
+            status: 'rejected_capture',
+            reason: !hasFullCaptureBodyHeightAnchor
+              ? 'ankles_missing'
+              : fullBodyFrameHeight > SCAN_MAX_BODY_FRAME_HEIGHT
+                ? 'body_too_close'
+                : 'pose_unstable',
+            scanState: 'burst_capture',
+            frameSize,
+            landmarks: full.landmarks.length,
+            shoulderScore: score,
+            shoulderWidth,
+            fullBodyScore: fullCaptureScore,
+            fullBodyLandmarks: fullCaptureLandmarks,
+            bodyFrameHeight: fullBodyFrameHeight,
+            yawDegrees: normalizedYaw,
+            targetAngleIndex,
+            targetAngleDegrees,
+            inferenceMs: full.inferenceMs ?? 0,
+          })
+          runOnJS(handleFrameQuality)('Hold head-to-ankles in frame')
+          return
+        }
+        const widths = full.segmentWidthsPx ?? (
+          SCAN_REUSE_LITE_DETECTION_FOR_CAPTURE
+            ? estimateAndroidSegmentWidthsFromLandmarks(full.landmarks)
+            : undefined
+        )
+        const hasCoreWidths = !!widths &&
+          typeof widths.chest === 'number' &&
+          widths.chest > 0 &&
+          typeof widths.waist === 'number' &&
+          widths.waist > 0 &&
+          typeof widths.hips === 'number' &&
+          widths.hips > 0
+        if (!hasCoreWidths) {
+          scanCaptureState.value = 1
+          scanCandidateStartedMs.value = timestampMs
+          scanCandidateYawDegrees.value = normalizedYaw
+          scanCandidateBodyFrameHeight.value = bodyFrameHeight
+          scanBurstStartedMs.value = 0
+          scanBurstFrameCount.value = 0
+          runOnJS(handleLabFrameSample)({
+            sampledAtMs: timestampMs,
+            processedFrame: processedFrameCount.value,
+            status: 'rejected_capture',
+            reason: 'missing_core_segment_widths',
+            scanState: 'burst_capture',
+            frameSize,
+            landmarks: full.landmarks.length,
+            shoulderScore: score,
+            shoulderWidth,
+            fullBodyScore: fullCaptureScore,
+            fullBodyLandmarks: fullCaptureLandmarks,
+            bodyFrameHeight: fullBodyFrameHeight,
+            yawDegrees: normalizedYaw,
+            targetAngleIndex,
+            targetAngleDegrees,
+            inferenceMs: full.inferenceMs ?? 0,
+            segmentWidths: widths ? {
+              chest: widths.chest,
+              waist: widths.waist,
+              hips: widths.hips,
+              thighCircumference: widths.thighCircumference,
+              kneeCircumference: widths.kneeCircumference,
+            } : null,
+          })
+          runOnJS(handleFrameQuality)('Hold still, keep body clear')
+          return
+        }
+        const frontLikeCaptureLooksUsable = !targetIsIosFrontLikeSilhouette ||
+          hasUsableIosFrontLikeCaptureGeometry(widths, full.landmarks, fullBodyFrameHeight)
+        if (!frontLikeCaptureLooksUsable) {
+          scanCaptureState.value = 1
+          scanCandidateStartedMs.value = timestampMs
+          scanCandidateYawDegrees.value = normalizedYaw
+          scanCandidateBodyFrameHeight.value = bodyFrameHeight
+          scanBurstStartedMs.value = 0
+          scanBurstFrameCount.value = 0
+          runOnJS(handleLabFrameSample)({
+            sampledAtMs: timestampMs,
+            processedFrame: processedFrameCount.value,
+            status: 'rejected_capture',
+            reason: 'pose_unstable',
+            scanState: 'burst_capture',
+            frameSize,
+            landmarks: full.landmarks.length,
+            shoulderScore: score,
+            shoulderWidth,
+            fullBodyScore: fullCaptureScore,
+            fullBodyLandmarks: fullCaptureLandmarks,
+            bodyFrameHeight: fullBodyFrameHeight,
+            yawDegrees: normalizedYaw,
+            targetAngleIndex,
+            targetAngleDegrees,
+            inferenceMs: full.inferenceMs ?? 0,
+            segmentWidths: {
+              chest: widths.chest,
+              waist: widths.waist,
+              hips: widths.hips,
+              thighCircumference: widths.thighCircumference,
+              kneeCircumference: widths.kneeCircumference,
+            },
+          })
+          runOnJS(handleFrameQuality)(
+            targetIsIosBackCapture
+              ? 'Show your back square to the phone'
+              : 'Face the phone with shoulders wide',
           )
-          const hasCoreWidths = !!widths &&
-            typeof widths.chest === 'number' &&
-            widths.chest > 0 &&
-            typeof widths.waist === 'number' &&
-            widths.waist > 0 &&
-            typeof widths.hips === 'number' &&
-            widths.hips > 0
-          if (!hasCoreWidths) {
-            runOnJS(handleLabFrameSample)({
-              sampledAtMs: timestampMs,
-              processedFrame: processedFrameCount.value,
-              status: 'rejected_capture',
-              reason: 'missing_core_segment_widths',
-              frameSize,
-              landmarks: full.landmarks.length,
-              shoulderScore: score,
-              shoulderWidth,
-              fullBodyScore: fullCaptureScore,
-              fullBodyLandmarks: fullCaptureLandmarks,
-              bodyFrameHeight: fullBodyFrameHeight,
-              yawDegrees: normalizedYaw,
-              targetAngleIndex,
-              targetAngleDegrees,
-              inferenceMs: full.inferenceMs ?? 0,
-              segmentWidths: widths ? {
-                chest: widths.chest,
-                waist: widths.waist,
-                hips: widths.hips,
-                thighCircumference: widths.thighCircumference,
-                kneeCircumference: widths.kneeCircumference,
-              } : null,
-            })
-            runOnJS(handleFrameQuality)('Hold still, keep body clear')
-            return
-          }
+          return
+        }
+        scanBurstFrameCount.value += 1
+        const captureAngleDegrees = targetIsIosFrontLikeSilhouette
+          ? targetAngleDegrees
+          : normalizedYaw
+        runOnJS(handleCaptureBurstSample)(targetAngleIndex, captureAngleDegrees, {
+          landmarks: full.landmarks,
+          worldLandmarks: full.worldLandmarks,
+          segmentWidthsPx: widths ?? undefined,
+          timestampMs: full.timestampMs,
+          inferenceMs: full.inferenceMs,
+          model: full.model,
+        }, {
+          width: frame.width,
+          height: frame.height,
+        })
+        if (scanBurstFrameCount.value >= SCAN_CAPTURE_BURST_FRAME_COUNT) {
           capturedMask.value = capturedMask.value | segmentBit
           lastCaptureMs.value = timestampMs
           hasLastCapturedYaw.value = 1
           lastCapturedYawDegrees.value = normalizedYaw
           stablePoseStartedMs.value = 0
-          const captureAngleDegrees = SCAN_ANDROID_SEQUENTIAL_CAPTURE
-            ? targetAngleDegrees
-            : normalizedYaw
-          runOnJS(handleSegmentCaptured)(targetAngleIndex, captureAngleDegrees, {
-            landmarks: full.landmarks,
-            worldLandmarks: full.worldLandmarks,
-            segmentWidthsPx: widths ?? undefined,
-            timestampMs: full.timestampMs,
-            inferenceMs: full.inferenceMs,
-            model: full.model,
-          }, {
-            width: frame.width,
-            height: frame.height,
-          })
+          scanCaptureState.value = 0
+          scanCandidateAngleIndex.value = -1
+          scanCandidateStartedMs.value = 0
+          scanCandidateYawDegrees.value = 0
+          scanCandidateBodyFrameHeight.value = 0
+          scanBurstStartedMs.value = 0
+          scanBurstFrameCount.value = 0
         }
       } catch (error) {
         if (frameErrorSent.value !== 1) {
           frameErrorSent.value = 1
-          runOnJS(handleFrameError)(String(error))
+          if (specialistScanActiveSync.getDirty() === 1 || specialistScanActiveValue.value === 1) {
+            runOnJS(handleSpecialistGuideError)(String(error))
+          } else {
+            runOnJS(handleFrameError)(String(error))
+          }
         }
       } finally {
         frame.dispose()
@@ -3275,17 +8209,13 @@ export default function DrapeVisionScreen() {
     }
   }, [frameOutput, frontCamera])
 
-  const cameraOutputs = useMemo(
-    () => engineStatus === 'ready' &&
-      frameOutputReady &&
-      !cameraRestarting
-      ? [frameOutput]
-      : [],
-    [cameraRestarting, engineStatus, frameOutput, frameOutputReady],
-  )
-  const cameraActive = phase === 'scan' &&
+  const cameraActive = (phase === 'scan' || phase === 'specialist_scan') &&
     engineStatus === 'ready' &&
     !cameraRestarting
+  const cameraOutputs = useMemo(
+    () => cameraActive && frameOutputReady ? [frameOutput] : [],
+    [cameraActive, frameOutput, frameOutputReady],
+  )
   const frameOutputSupportLabel = useMemo(() => {
     if (!frontCamera) return 'no camera'
     if (isAndroidLiveScanPreflightBlocked()) return 'android live scan paused'
@@ -3296,11 +8226,53 @@ export default function DrapeVisionScreen() {
     }
   }, [frameOutput, frontCamera])
 
+  useEffect(() => {
+    addVisionBreadcrumb('native_vision_screen_mounted', {
+      mode,
+      platform: Platform.OS,
+      canRunLiveBodyScan,
+      frontCamera: frontCamera?.id ?? 'none',
+      pipelineVersion: DRAPE_VISION_PIPELINE_VERSION,
+    })
+  }, [canRunLiveBodyScan, frontCamera?.id, mode])
+
+  useEffect(() => {
+    addVisionBreadcrumb('native_vision_camera_state', {
+      mode,
+      phase,
+      engineStatus,
+      cameraActive,
+      frameOutputReady,
+      outputs: cameraOutputs.length,
+      support: frameOutputSupportLabel,
+      captureArmed,
+      scanCountdown,
+    })
+  }, [
+    cameraActive,
+    cameraOutputs.length,
+    captureArmed,
+    engineStatus,
+    frameOutputReady,
+    frameOutputSupportLabel,
+    mode,
+    phase,
+    scanCountdown,
+  ])
+
   async function startBodyScan() {
+    if (cameraRestartingRef.current) return
+
     if (!canRunLiveBodyScan) {
       openPrimary()
       return
     }
+
+    await saveVisionHeightPreference({
+      heightCm,
+      unit: heightUnit,
+      confidence: heightInputConfidence,
+    })
 
     if (!cameraPermission.hasPermission) {
       const granted = await cameraPermission.requestPermission()
@@ -3322,6 +8294,7 @@ export default function DrapeVisionScreen() {
         step: 'android_live_scan_preflight',
         reason: ANDROID_LIVE_SCAN_PREVIEW_REASON,
         heightCm,
+        heightInputConfidence,
         platform: Platform.OS,
       }, 'warning')
       addVisionBreadcrumb('scan_failure', {
@@ -3337,22 +8310,25 @@ export default function DrapeVisionScreen() {
       return
     }
 
+    setEngineError(null)
+    setEngineStatus('initializing')
     resetScanState()
+    await restartVisionCameraSession()
     addVisionBreadcrumb('scan_start', {
       mode,
       heightCm,
+      heightInputConfidence,
       platform: Platform.OS,
       camera: frontCamera?.id ?? 'front',
     })
-    setEngineError(null)
-    setEngineStatus('initializing')
     setPoseDebug(emptyPoseDebug('Preparing camera frames'))
 
     try {
       await resetNativeVisionSession('start_body_scan')
-      initializeDrapePoseLandmarker()
+      assertNativeAnalyzerInitialized('Drapeon Vision', initializeDrapePoseLandmarker())
+      setBodyWorkletActive(true)
       setEngineStatus('ready')
-      setInstruction('Set phone down, then start countdown')
+      setInstruction(heightInputConfidence === 'approximate' ? 'Approx height. Draft will need review.' : 'Set phone down, then start countdown')
       setPoseDebug(emptyPoseDebug(Platform.OS === 'android' ? 'Camera preview warming' : 'Preview ready'))
       setPhase('scan')
     } catch (error) {
@@ -3367,8 +8343,9 @@ export default function DrapeVisionScreen() {
     }
   }
 
-  async function startCaptureCountdown() {
-    if (cameraRestarting) return
+  async function startCaptureCountdown(options: StartCaptureCountdownOptions = {}) {
+    if (cameraRestartingRef.current) return
+    clearAutoCountdownTimer()
 
     if (isAndroidLiveScanPreflightBlocked()) {
       const message = androidLiveScanPreflightMessage()
@@ -3377,10 +8354,13 @@ export default function DrapeVisionScreen() {
         step: 'android_countdown_preflight',
         reason: ANDROID_LIVE_SCAN_PREVIEW_REASON,
         heightCm,
+        heightInputConfidence,
         platform: Platform.OS,
       }, 'warning')
       setCaptureArmed(false)
       setScanCountdown(null)
+      captureArmedValue.value = 0
+      captureArmedSync.setBlocking(0)
       setEngineStatus('blocked')
       setEngineError(message)
       setPoseDebug(emptyPoseDebug('Android live scan paused'))
@@ -3399,6 +8379,8 @@ export default function DrapeVisionScreen() {
       }, 'warning')
       setCaptureArmed(false)
       setScanCountdown(null)
+      captureArmedValue.value = 0
+      captureArmedSync.setBlocking(0)
       setEngineStatus('blocked')
       setEngineError(message)
       setPoseDebug(emptyPoseDebug(frameOutputSupportLabel))
@@ -3406,7 +8388,38 @@ export default function DrapeVisionScreen() {
       return
     }
 
+    if (Platform.OS === 'ios' && !options.skipPrecheck && !scanPrecheckReadyRef.current) {
+      const message = scanPrecheck.message || 'Step back until your full body is visible before starting Drapeon Vision.'
+      addVisionBreadcrumb('scan_precheck_blocked', {
+        mode,
+        reason: scanPrecheck.reason,
+        message,
+        pipelineVersion: DRAPE_VISION_PIPELINE_VERSION,
+      }, 'warning')
+      setFrameDropWarning(message)
+      setInstruction(message)
+      setCaptureNotice('Pre-check needed')
+      captureArmedValue.value = 0
+      captureArmedSync.setBlocking(0)
+      if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
+      captureNoticeTimerRef.current = setTimeout(() => setCaptureNotice(null), 1400)
+      return
+    }
+
+    const precheckSnapshot = scanPrecheckRef.current
+    const precheckWasReady = scanPrecheckReadyRef.current
+
     resetScanState()
+    if (Platform.OS === 'ios' && precheckWasReady) {
+      const restoredPrecheck = {
+        ...precheckSnapshot,
+        updatedAtMs: Date.now(),
+      }
+      scanPrecheckReadyRef.current = true
+      scanPrecheckRef.current = restoredPrecheck
+      setScanPrecheck(restoredPrecheck)
+    }
+    setBodyWorkletActive(true)
     setPoseDebug(emptyPoseDebug('Resetting camera'))
     setCaptureNotice('Resetting camera')
     startVisionLabSession()
@@ -3417,34 +8430,47 @@ export default function DrapeVisionScreen() {
       targetAngles: SCAN_TARGET_CAPTURE_COUNT,
     })
     setCaptureArmed(false)
+    captureArmedValue.value = 0
+    captureArmedSync.setBlocking(0)
     setScanCountdown(SCAN_COUNTDOWN_SECONDS)
     setInstruction(`Step back. Capture starts in ${SCAN_COUNTDOWN_SECONDS}`)
-    setCaptureNotice(`${SCAN_COUNTDOWN_SECONDS}s countdown`)
+    setCaptureNotice(options.automated ? 'Hands-free countdown' : `${SCAN_COUNTDOWN_SECONDS}s countdown`)
+    void playVisionPrompt('fullBodyStarting', { force: true })
     if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
     captureNoticeTimerRef.current = setTimeout(() => setCaptureNotice(null), 900)
   }
 
+  startCaptureCountdownRef.current = startCaptureCountdown
+
   async function retakeScan() {
-    if (cameraRestarting) return
+    if (cameraRestartingRef.current) return
 
     addVisionBreadcrumb('scan_retake_requested', {
       mode,
       phase,
       capturedAngles: capturedSetRef.current.size,
     })
-    resetScanState()
-    setEngineError(null)
     setEngineStatus('initializing')
+    resetScanState()
+    await restartVisionCameraSession()
+    setEngineError(null)
     setInstruction('Resetting camera')
     setPoseDebug(emptyPoseDebug('Resetting camera'))
     setPhase('scan')
     try {
       await resetNativeVisionSession('retake')
-      initializeDrapePoseLandmarker()
+      assertNativeAnalyzerInitialized('Drapeon Vision', initializeDrapePoseLandmarker())
+      setBodyWorkletActive(true)
       setEngineStatus('ready')
-      setInstruction(`Step back. Capture starts in ${SCAN_COUNTDOWN_SECONDS}`)
+      setInstruction(Platform.OS === 'ios' ? 'Stand fully in frame first' : `Step back. Capture starts in ${SCAN_COUNTDOWN_SECONDS}`)
       setPoseDebug(emptyPoseDebug(Platform.OS === 'android' ? 'Retake countdown starting' : 'Preview ready'))
-      await startCaptureCountdown()
+      if (Platform.OS === 'android') {
+        await startCaptureCountdown()
+      } else {
+        setCaptureNotice('Waiting for full-body pre-check')
+        if (captureNoticeTimerRef.current) clearTimeout(captureNoticeTimerRef.current)
+        captureNoticeTimerRef.current = setTimeout(() => setCaptureNotice(null), 1400)
+      }
     } catch (error) {
       addVisionBreadcrumb('scan_failure', {
         mode,
@@ -3457,14 +8483,239 @@ export default function DrapeVisionScreen() {
     }
   }
 
+  function updateHeightUnit(nextUnit: HeightUnit) {
+    setHeightUnit(nextUnit)
+    void saveVisionHeightPreference({
+      heightCm,
+      unit: nextUnit,
+      confidence: heightInputConfidence,
+    })
+  }
+
+  function updateHeightInputConfidence(nextConfidence: HeightInputConfidence) {
+    setHeightInputConfidence(nextConfidence)
+    void saveVisionHeightPreference({
+      heightCm,
+      unit: heightUnit,
+      confidence: nextConfidence,
+    })
+  }
+
+  function updateResultUnit(nextUnit: MeasurementDisplayUnit) {
+    setResultUnit(nextUnit)
+    AsyncStorage.setItem(visionResultUnitStorageKey(user?.id), nextUnit).catch((error) => {
+      addVisionBreadcrumb('scan_result_unit_save_failed', {
+        mode,
+        error: error instanceof Error ? error.message : String(error),
+      }, 'warning')
+    })
+  }
+
+  function openSpecialistMode(specialistMode: DrapeVisionSpecialistScanMode) {
+    setSelectedSpecialistMode(specialistMode)
+    setSpecialistStatusMessage(null)
+    setSpecialistReadinessStatus(null)
+    if (specialistMode === 'fit_360') {
+      if (savedVisionHeight) {
+        void startBodyScan()
+      } else {
+        setPendingScanAfterHeight('fit_360')
+        setPhase('height')
+      }
+      return
+    }
+    if (specialistScanNeedsHeight(specialistMode) && !savedVisionHeight) {
+      setPendingScanAfterHeight(specialistMode)
+      setPhase('height')
+      return
+    }
+    void startSpecialistMode(specialistMode)
+  }
+
+  async function startSpecialistMode(
+    specialistMode: DrapeVisionSpecialistScanMode,
+    options: { skipHeightCheck?: boolean; watchdogRepair?: boolean } = {},
+  ) {
+    if (cameraRestartingRef.current) return
+
+    setSpecialistStatusMessage(null)
+    setSpecialistReadinessStatus(null)
+
+    if (specialistMode === 'fit_360') {
+      if (savedVisionHeight || options.skipHeightCheck) {
+        await startBodyScan()
+      } else {
+        setPendingScanAfterHeight('fit_360')
+        setPhase('height')
+      }
+      return
+    }
+
+    if (specialistScanNeedsHeight(specialistMode) && !savedVisionHeight && !options.skipHeightCheck) {
+      setSelectedSpecialistMode(specialistMode)
+      setPendingScanAfterHeight(specialistMode)
+      setPhase('height')
+      return
+    }
+
+    if (Platform.OS !== 'ios') {
+      setSpecialistReadinessStatus('blocked')
+      setSpecialistStatusMessage('This specialist scan is coming soon on Android.')
+      setPhase('specialist')
+      return
+    }
+
+    if (!frontCamera) {
+      setSpecialistReadinessStatus('blocked')
+      setSpecialistStatusMessage('No front camera was found on this device.')
+      return
+    }
+
+    if (!cameraPermission.hasPermission) {
+      const granted = await cameraPermission.requestPermission()
+      if (!granted) {
+        setSpecialistReadinessStatus('blocked')
+        setSpecialistStatusMessage('Camera permission is required to run this specialist scan.')
+        return
+      }
+    }
+
+    try {
+      const copy = specialistGuideCopyForMode(specialistMode)
+      if (!options.watchdogRepair) {
+        specialistWatchdogRepairCountRef.current = 0
+      }
+      if (specialistWatchdogTimerRef.current) {
+        clearTimeout(specialistWatchdogTimerRef.current)
+        specialistWatchdogTimerRef.current = null
+      }
+      specialistGuideUpdatedAtRef.current = 0
+      specialistGuideStageRef.current = null
+      setEngineStatus('initializing')
+      resetScanState({ preserveBodyResult: true })
+      await restartVisionCameraSession()
+      setSelectedSpecialistMode(specialistMode)
+      const modeCode = specialistModeCode(specialistMode)
+      specialistModeCodeValue.value = modeCode
+      specialistModeCodeSync.setBlocking(modeCode)
+      resetSpecialistWorkletState(specialistMode)
+      setEngineError(null)
+      setFrameDropWarning(null)
+      setCaptureNotice(null)
+      setInstruction(copy?.guideTitle ?? 'Preparing scan')
+      setSpecialistGuide(defaultSpecialistGuidePayload(specialistMode))
+      await resetNativeVisionSession(`start_specialist_${specialistMode}`)
+      await resetSpecialistNativeAnalyzers(`start_specialist_${specialistMode}`)
+      if (specialistMode === 'hand_wrist') {
+        assertNativeAnalyzerInitialized('Hand/Wrist Scan', initializeDrapeHandLandmarker())
+      } else if (specialistMode === 'headwear') {
+        assertNativeAnalyzerInitialized('Headwear Scan', initializeDrapeFaceLandmarker())
+        if (SPECIALIST_FACE_WARMUP_READY_DELAY_MS > 0) {
+          await new Promise((resolve) => setTimeout(resolve, SPECIALIST_FACE_WARMUP_READY_DELAY_MS))
+        }
+      } else if (specialistMode === 'bodice_corset' || specialistMode === 'lower_body_detail') {
+        assertNativeAnalyzerInitialized('Image Segmenter', initializeDrapeImageSegmenter())
+      }
+      setSpecialistReadinessStatus('ready')
+      setSpecialistStatusMessage('Ready to scan. Compare the result with tape before cutting.')
+      setEngineStatus('ready')
+      setPoseDebug(emptyPoseDebug('Specialist scan ready'))
+      activateSpecialistWorkletState(specialistMode)
+      phaseRef.current = 'specialist_scan'
+      setPhase('specialist_scan')
+      const initialPrompt = specialistInitialAudioPromptForMode(specialistMode)
+      specialistAudioPromptRef.current = {
+        mode: specialistMode,
+        stage: 'warming',
+        prompt: initialPrompt,
+      }
+      setAudioDebugMessage(`Opening audio: ${initialPrompt}`)
+      void playVisionPrompt(initialPrompt, { force: true })
+      addVisionBreadcrumb('specialist_guide_start', {
+        mode,
+        specialistMode,
+        platform: Platform.OS,
+        pipelineVersion: DRAPE_VISION_PIPELINE_VERSION,
+      })
+      specialistWatchdogTimerRef.current = setTimeout(() => {
+        if (phaseRef.current !== 'specialist_scan') return
+        if (specialistGuideStageRef.current === 'captured') return
+
+        const lastUpdateAt = specialistGuideUpdatedAtRef.current
+        const guideSilentForMs = lastUpdateAt > 0 ? Date.now() - lastUpdateAt : Number.POSITIVE_INFINITY
+        if (lastUpdateAt > 0 && guideSilentForMs < 2600) return
+        if (specialistWatchdogRepairCountRef.current >= 1) {
+          addVisionBreadcrumb('specialist_watchdog_exhausted', {
+            mode,
+            specialistMode,
+            guideSilentForMs,
+            lastStage: specialistGuideStageRef.current,
+          }, 'warning')
+          setAudioDebugMessage('Specialist watchdog: detector still silent')
+          return
+        }
+
+        specialistWatchdogRepairCountRef.current += 1
+        addVisionBreadcrumb('specialist_watchdog_restarting', {
+          mode,
+          specialistMode,
+          guideSilentForMs,
+          lastStage: specialistGuideStageRef.current,
+        }, 'warning')
+        setAudioDebugMessage('Specialist watchdog: restarting detector')
+        void startSpecialistMode(specialistMode, {
+          skipHeightCheck: true,
+          watchdogRepair: true,
+        })
+      }, 4200)
+    } catch (error) {
+      const message = formatVisionError(error)
+      addVisionBreadcrumb('specialist_scan_unavailable', {
+        mode,
+        specialistMode,
+        error: message,
+      }, 'warning')
+      setSpecialistReadinessStatus('blocked')
+      setSpecialistStatusMessage(message)
+      resetSpecialistWorkletState(specialistMode)
+    }
+  }
+
+  async function confirmHeightAndContinue() {
+    const targetMode = pendingScanAfterHeight ?? selectedSpecialistMode ?? 'fit_360'
+    await saveVisionHeightPreference({
+      heightCm,
+      unit: heightUnit,
+      confidence: heightInputConfidence,
+    })
+    setPendingScanAfterHeight(null)
+    if (targetMode === 'fit_360') {
+      await startSpecialistMode('fit_360', { skipHeightCheck: true })
+      return
+    }
+    await startSpecialistMode(targetMode, { skipHeightCheck: true })
+  }
+
   function adjustHeight(direction: 1 | -1) {
     const step = heightUnit === 'cm'
       ? DRAPE_VISION_HEIGHT_STEP_CM
       : DRAPE_VISION_HEIGHT_STEP_INCHES * DRAPE_VISION_CM_PER_INCH
-    setHeightCm((current) => clampHeight(current + direction * step))
+    const nextHeightCm = clampHeight(heightCm + direction * step)
+    setHeightCm(nextHeightCm)
+    void saveVisionHeightPreference({
+      heightCm: nextHeightCm,
+      unit: heightUnit,
+      confidence: heightInputConfidence,
+    })
   }
 
   function renderHeader(statusLabel: string) {
+    const resolvedStatusLabel = engineStatus === 'blocked'
+      ? 'Needs attention'
+      : engineStatus === 'initializing'
+        ? 'Getting ready'
+        : statusLabel
+
     return (
       <View style={styles.header}>
         <TouchableOpacity
@@ -3477,7 +8728,7 @@ export default function DrapeVisionScreen() {
         </TouchableOpacity>
         <View style={styles.statusPill}>
           <View style={[styles.statusDot, engineStatus === 'blocked' && styles.statusDotBlocked]} />
-          <Text style={styles.statusText}>{statusLabel}</Text>
+          <Text style={styles.statusText}>{resolvedStatusLabel}</Text>
         </View>
       </View>
     )
@@ -3530,6 +8781,9 @@ export default function DrapeVisionScreen() {
       )
     }
 
+    const visibleGarmentQcFields =
+      GARMENT_QC_PRESETS.find((preset) => preset.key === garmentQcPreset)?.fields ?? GARMENT_QC_FIELDS
+
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         {renderHeader('Garment QC')}
@@ -3568,7 +8822,12 @@ export default function DrapeVisionScreen() {
                 <Text style={styles.workflowSmallButtonText}>Choose photo</Text>
               </TouchableOpacity>
             </View>
-            {garmentQcPhotoUrl ? <Text style={styles.workflowSuccessText}>Proof photo attached.</Text> : null}
+            {garmentQcPhotoUrl ? (
+              <View style={styles.workflowPhotoPreview}>
+                <Image source={{ uri: garmentQcPhotoUrl }} style={styles.workflowPhotoThumb} />
+                <Text style={styles.workflowSuccessText}>Photo attached</Text>
+              </View>
+            ) : null}
           </View>
 
           <View style={styles.workflowCard}>
@@ -3579,15 +8838,37 @@ export default function DrapeVisionScreen() {
               </View>
               {renderUnitSegment(garmentQcUnit, setGarmentQcUnit)}
             </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.workflowPresetRow}
+            >
+              {GARMENT_QC_PRESETS.map((preset) => {
+                const selected = garmentQcPreset === preset.key
+                return (
+                  <TouchableOpacity
+                    key={preset.key}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    onPress={() => setGarmentQcPreset(preset.key)}
+                    style={[styles.workflowPresetChip, selected && styles.workflowPresetChipActive]}
+                  >
+                    <Text style={[styles.workflowPresetText, selected && styles.workflowPresetTextActive]}>
+                      {preset.label}
+                    </Text>
+                  </TouchableOpacity>
+                )
+              })}
+            </ScrollView>
             <View style={styles.workflowGrid}>
-              {GARMENT_QC_FIELDS.map((field) => (
+              {visibleGarmentQcFields.map((field) => (
                 <View key={field} style={styles.workflowField}>
                   <Text style={styles.workflowLabel}>{DRAPE_VISION_MEASUREMENT_LABELS[field]}</Text>
                   <TextInput
                     value={garmentQcDraft[field] ?? ''}
                     onChangeText={(value) => updateGarmentQcDraft(field, value)}
-                    keyboardType="decimal-pad"
-                    placeholder="0"
+                    keyboardType={garmentQcUnit === 'in' ? FRACTIONAL_TAPE_KEYBOARD_TYPE : 'decimal-pad'}
+                    placeholder={garmentQcUnit === 'in' ? 'e.g. 17 1/2' : '0'}
                     placeholderTextColor={DRAPE_VISION_COLORS.textDim}
                     style={styles.workflowInput}
                   />
@@ -3669,6 +8950,25 @@ export default function DrapeVisionScreen() {
             </Text>
           </View>
 
+          {sizeGuideSuccess ? (
+            <View
+              accessible
+              accessibilityLiveRegion="polite"
+              accessibilityLabel={`Size guide saved for ${sizeGuideSuccess.size}. ${sizeGuideSuccess.fieldCount} measurements are live on this listing.`}
+              style={styles.workflowSuccessCard}
+            >
+              <View style={styles.workflowSuccessIcon}>
+                <Feather name="check" size={22} color={Colors.textInverse} />
+              </View>
+              <View style={styles.workflowSuccessCopy}>
+                <Text style={styles.workflowSuccessTitle}>Size guide saved</Text>
+                <Text style={styles.workflowSuccessBody}>
+                  {sizeGuideSuccess.size} now has {sizeGuideSuccess.fieldCount} fit {sizeGuideSuccess.fieldCount === 1 ? 'range' : 'ranges'} live on {sizeGuideSuccess.title}.
+                </Text>
+              </View>
+            </View>
+          ) : null}
+
           <View style={styles.workflowCard}>
             <Text style={styles.sectionTitle}>{title}</Text>
             {sizeGuideLoading ? (
@@ -3687,7 +8987,7 @@ export default function DrapeVisionScreen() {
                       key={size}
                       accessibilityRole="button"
                       accessibilityState={{ selected: selectedSize === size }}
-                      onPress={() => setSelectedSize(size)}
+                      onPress={() => updateSelectedSize(size)}
                       style={styles.workflowOptionRow}
                     >
                       <Text style={[styles.workflowOptionText, selectedSize === size && styles.workflowOptionTextActive]}>{size}</Text>
@@ -3705,7 +9005,7 @@ export default function DrapeVisionScreen() {
                 <Text style={styles.sectionTitle}>Fit ranges</Text>
                 <Text style={styles.sectionBody}>Use body measurements, not flat garment width.</Text>
               </View>
-              {renderUnitSegment(sizeGuideUnit, setSizeGuideUnit)}
+              {renderUnitSegment(sizeGuideUnit, updateSizeGuideUnit)}
             </View>
             {SIZE_GUIDE_FIELDS.map((field) => (
               <View key={field} style={styles.workflowRangeRow}>
@@ -3714,16 +9014,16 @@ export default function DrapeVisionScreen() {
                   <TextInput
                     value={sizeGuideRanges[field]?.min ?? ''}
                     onChangeText={(value) => updateSizeGuideRange(field, 'min', value)}
-                    keyboardType="decimal-pad"
-                    placeholder="Min"
+                    keyboardType={sizeGuideUnit === 'in' ? FRACTIONAL_TAPE_KEYBOARD_TYPE : 'decimal-pad'}
+                    placeholder={sizeGuideUnit === 'in' ? 'Min, e.g. 17 1/2' : 'Min'}
                     placeholderTextColor={DRAPE_VISION_COLORS.textDim}
                     style={[styles.workflowInput, styles.workflowRangeInput]}
                   />
                   <TextInput
                     value={sizeGuideRanges[field]?.max ?? ''}
                     onChangeText={(value) => updateSizeGuideRange(field, 'max', value)}
-                    keyboardType="decimal-pad"
-                    placeholder="Max"
+                    keyboardType={sizeGuideUnit === 'in' ? FRACTIONAL_TAPE_KEYBOARD_TYPE : 'decimal-pad'}
+                    placeholder={sizeGuideUnit === 'in' ? 'Max, e.g. 19' : 'Max'}
                     placeholderTextColor={DRAPE_VISION_COLORS.textDim}
                     style={[styles.workflowInput, styles.workflowRangeInput]}
                   />
@@ -3736,7 +9036,7 @@ export default function DrapeVisionScreen() {
             <Text style={styles.sectionTitle}>Fit note</Text>
             <TextInput
               value={sizeGuideNote}
-              onChangeText={setSizeGuideNote}
+              onChangeText={updateSizeGuideNote}
               multiline
               placeholder="Example: Size M is a relaxed fit. Size up if the customer wants extra room in the chest."
               placeholderTextColor={DRAPE_VISION_COLORS.textDim}
@@ -3750,15 +9050,145 @@ export default function DrapeVisionScreen() {
         <View style={styles.ctaBar}>
           <TouchableOpacity
             accessibilityRole="button"
-            onPress={() => { void saveSizeGuideWorkflow() }}
+            onPress={sizeGuideSuccess ? openPrimary : () => { void saveSizeGuideWorkflow() }}
             disabled={workflowSaving || sizeGuideLoading || sizes.length === 0}
             style={[styles.primaryButton, (workflowSaving || sizeGuideLoading || sizes.length === 0) && styles.primaryButtonDisabled]}
           >
-            {workflowSaving ? <ActivityIndicator color={Colors.textInverse} /> : <Text style={styles.primaryText}>Save size guide</Text>}
+            {workflowSaving ? <ActivityIndicator color={Colors.textInverse} /> : <Text style={styles.primaryText}>{sizeGuideSuccess ? 'View listing' : 'Save size guide'}</Text>}
             {!workflowSaving ? <Feather name="check" size={18} color={Colors.textInverse} /> : null}
           </TouchableOpacity>
-          <TouchableOpacity accessibilityRole="button" onPress={openPrimary} disabled={workflowSaving} style={styles.secondaryButton}>
-            <Text style={styles.secondaryText}>Return to listing</Text>
+          <TouchableOpacity
+            accessibilityRole="button"
+            onPress={sizeGuideSuccess ? () => setSizeGuideSuccess(null) : openPrimary}
+            disabled={workflowSaving}
+            style={styles.secondaryButton}
+          >
+            <Text style={styles.secondaryText}>{sizeGuideSuccess ? 'Edit another size' : 'Return to listing'}</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  function renderVisionSuite() {
+    const savedHeightLabel = formatHeight(heightCm, 'ft')
+    const hasReusableHeight = savedVisionHeight != null
+
+    return (
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        {renderHeader(engineStatus === 'ready' ? 'Ready to scan' : 'Drapeon Vision')}
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          <View style={styles.heroCompact}>
+            <Text style={styles.eyebrow}>Choose a scan</Text>
+            <Text style={styles.titleSmall}>What do you want to measure?</Text>
+            <Text style={styles.body}>
+              Start with Fit 360 for the full profile, or choose a focused scan when you only need one area.
+            </Text>
+          </View>
+
+          <View style={styles.savedHeightBand}>
+            <View style={styles.savedHeightCopy}>
+              <Text style={styles.savedHeightEyebrow}>Your height</Text>
+              <Text style={styles.savedHeightValue}>
+                {hasReusableHeight ? savedHeightLabel : 'Add when needed'}
+              </Text>
+              <Text style={styles.savedHeightBody}>
+                Fit 360, Bodice/Corset, and Lower Body use height. Hand/Wrist and Headwear can run on their own.
+              </Text>
+            </View>
+            <TouchableOpacity
+              accessibilityRole="button"
+              onPress={() => {
+                setPendingScanAfterHeight('fit_360')
+                setPhase('height')
+              }}
+              style={styles.savedHeightButton}
+            >
+              <Text style={styles.savedHeightButtonText}>
+                {hasReusableHeight ? 'Change' : 'Set'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.inlineTrustNote}>
+            <Feather name="info" size={15} color={Colors.needleGreen} />
+            <Text style={styles.inlineTrustText}>
+              Best results: fitted clothing, bright plain background, and the phone set down so the requested area fills the guide.
+            </Text>
+          </View>
+
+          <View style={styles.specialistModeList}>
+            {DRAPE_VISION_SPECIALIST_SCAN_MODULES.map((item) => {
+              const completed = completedSessionScanSet.has(item.mode)
+              const saved = savedSessionScanSet.has(item.mode)
+              const isFit360 = item.mode === 'fit_360'
+              const isAvailable = isFit360
+                ? canStartLiveBodyScan
+                : item.status === 'active' && Platform.OS === 'ios'
+              const statusCopy = saved
+                ? 'Saved this session'
+                : completed
+                  ? 'Scanned this session'
+                  : specialistScanSessionLabel(item.mode)
+              const needsHeight = specialistScanNeedsHeight(item.mode) && !hasReusableHeight
+
+              return (
+                <TouchableOpacity
+                  key={item.mode}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${item.title}. ${statusCopy}. ${item.subtitle}`}
+                  accessibilityState={{ disabled: !isAvailable }}
+                  disabled={!isAvailable}
+                  onPress={() => openSpecialistMode(item.mode)}
+                  style={[
+                    styles.specialistModeCard,
+                    isFit360 && styles.specialistModeCardRecommended,
+                    completed && styles.specialistModeCardComplete,
+                    !isAvailable && styles.specialistModeCardDisabled,
+                  ]}
+                >
+                  <View style={styles.specialistModeHeader}>
+                    <View style={styles.specialistModeIcon}>
+                      <MaterialCommunityIcons name={item.icon as MaterialCommunityIconName} size={18} color={Colors.needleGreen} />
+                    </View>
+                    <View style={styles.specialistModeCopy}>
+                      <View style={styles.specialistModeTitleRow}>
+                        <Text style={styles.specialistModeTitle}>{item.title}</Text>
+                        {isFit360 ? (
+                          <View style={styles.specialistRecommendedPill}>
+                            <Text style={styles.specialistRecommendedText}>Start here</Text>
+                          </View>
+                        ) : null}
+                      </View>
+                      <Text style={styles.specialistModeStatus}>
+                        {isAvailable ? statusCopy : 'Coming soon'}
+                        {needsHeight ? ' · height first' : ''}
+                      </Text>
+                    </View>
+                    {saved ? (
+                      <Feather name="check-circle" size={18} color={Colors.needleGreen} />
+                    ) : (
+                      <Feather name="chevron-right" size={18} color={DRAPE_VISION_COLORS.textMuted} />
+                    )}
+                  </View>
+                  <Text style={styles.specialistModeBody}>{item.subtitle}</Text>
+                  <Text style={styles.specialistModeHint}>{specialistScanUseCase(item.mode)}</Text>
+                </TouchableOpacity>
+              )
+            })}
+          </View>
+
+          <View style={styles.inlineTrustNote}>
+            <Feather name="shield" size={15} color={Colors.needleGreen} />
+            <Text style={styles.inlineTrustText}>
+              No scan video is saved. You decide which estimates go into your Fit Passport.
+            </Text>
+          </View>
+        </ScrollView>
+
+        <View style={styles.ctaBar}>
+          <TouchableOpacity accessibilityRole="button" onPress={openPrimary} style={styles.secondaryButton}>
+            <Text style={styles.secondaryText}>{mode === 'customer_scan' ? 'Enter measurements manually' : primaryActionLabel}</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -3766,9 +9196,17 @@ export default function DrapeVisionScreen() {
   }
 
   function renderIntro() {
+    const primaryAction = canStartLiveBodyScan
+      ? () => setPhase('suite')
+      : openPrimary
+    const primaryLabel = canStartLiveBodyScan ? 'Choose a scan' : meta.primaryLabel
+    const modeIntroCopy = mode === 'tailor_client_scan'
+      ? 'Guide a private client scan, then save reviewed measurements to their Diary.'
+      : 'Pick the measurement scan you need now. Save only the values you review.'
+
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-        {renderHeader(engineStatus === 'ready' ? 'Ready to scan' : 'Private on-device scan')}
+        {renderHeader(engineStatus === 'ready' ? 'Ready to scan' : 'Drapeon Vision')}
         <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.hero}>
             <View style={styles.heroIcon}>
@@ -3776,18 +9214,11 @@ export default function DrapeVisionScreen() {
             </View>
             <Text style={styles.eyebrow}>{meta.eyebrow}</Text>
             <Text style={styles.title}>Drapeon Vision</Text>
-            <Text style={styles.tagline}>Measured privately. Saved to your fit profile.</Text>
-            <Text style={styles.subtitle}>{meta.title}</Text>
-            <Text style={styles.body}>{meta.subtitle}</Text>
+            <Text style={styles.tagline}>Measure the area you need.</Text>
+            <Text style={styles.body}>{modeIntroCopy}</Text>
           </View>
 
-          {canStartLiveBodyScan ? (
-            <View style={styles.benefitBand}>
-              <BenefitRow icon="clock" title="Under 60 seconds" />
-              <BenefitRow icon="shield" title="Video never leaves your phone" />
-              <BenefitRow icon="repeat" title="Every tailor. Forever." />
-            </View>
-          ) : missingTailorDiaryTarget ? (
+          {missingTailorDiaryTarget ? (
             <View style={styles.noticeBand}>
               <Feather name="tool" size={18} color={Colors.needleGreen} />
               <View style={styles.noticeCopy}>
@@ -3797,35 +9228,27 @@ export default function DrapeVisionScreen() {
                 </Text>
               </View>
             </View>
-          ) : canRunLiveBodyScan && isAndroidLiveScanPreflightBlocked() ? (
+          ) : null}
+
+          {canRunLiveBodyScan && isAndroidLiveScanPreflightBlocked() ? (
             <View style={styles.noticeBand}>
               <Feather name="shield" size={18} color={Colors.needleGreen} />
               <View style={styles.noticeCopy}>
-                <Text style={styles.noticeTitle}>Android live scan is paused</Text>
+                <Text style={styles.noticeTitle}>Coming soon on Android</Text>
                 <Text style={styles.noticeText}>
-                  The Android camera scan is not stable enough for launch yet. Continue with manual measurements so the order does not lose progress or crash.
+                  Live body scanning is still being validated on Android. Manual measurements feed the same profile for now.
                 </Text>
               </View>
             </View>
-          ) : (
+          ) : null}
+
+          {!canRunLiveBodyScan && !missingTailorDiaryTarget ? (
             <View style={styles.noticeBand}>
               <Feather name="tool" size={18} color={Colors.needleGreen} />
               <View style={styles.noticeCopy}>
-                <Text style={styles.noticeTitle}>Tailor Vision workflow is reserved</Text>
+                <Text style={styles.noticeTitle}>Open the right workflow first</Text>
                 <Text style={styles.noticeText}>
-                  This mode is routed from ops, orders, Diary, and listings now. Body scanning lands first, then garment QC and size-guide capture attach here.
-                </Text>
-              </View>
-            </View>
-          )}
-
-          {canStartLiveBodyScan ? (
-            <View style={styles.noticeBand}>
-              <Feather name="user-check" size={18} color={Colors.kanteRust} />
-              <View style={styles.noticeCopy}>
-                <Text style={styles.noticeTitle}>Wear fitted clothing</Text>
-                <Text style={styles.noticeText}>
-                  Drapeon Vision needs your body outline. A boubou, agbada, kaftan, oversized hoodie, or layered outfit can hide chest, waist, and hip edges. Use manual measurements if that is what you are wearing.
+                  This Vision mode opens from orders, client Diary, or shop listings so the result saves to the right place.
                 </Text>
               </View>
             </View>
@@ -3834,45 +9257,26 @@ export default function DrapeVisionScreen() {
           <View style={styles.destinationBand}>
             <Text style={styles.sectionTitle}>{meta.destinationTitle}</Text>
             <Text style={styles.sectionBody}>{meta.destinationBody}</Text>
-            {params.itemId ? <Text style={styles.contextText}>Listing context: {params.itemId}</Text> : null}
-          </View>
-
-          <View style={styles.capabilityGrid}>
-            {DRAPE_VISION_CAPABILITIES.map((item) => (
-              <View key={item.title} style={styles.capabilityCard}>
-                <View style={styles.capabilityIcon}>
-                  <Feather name={item.icon} size={18} color={Colors.needleGreen} />
-                </View>
-                <Text style={styles.capabilityTitle}>{item.title}</Text>
-                <Text style={styles.capabilityBody}>{item.body}</Text>
-              </View>
-            ))}
           </View>
 
           <View style={styles.privacyBand}>
-            <Text style={styles.sectionTitle}>Private by default</Text>
-            <View style={styles.privacyRow}>
-              <Feather name="check-circle" size={16} color={Colors.needleGreen} />
-              <Text style={styles.privacyText}>No scan video is saved or uploaded.</Text>
-            </View>
-            <View style={styles.privacyRow}>
-              <Feather name="check-circle" size={16} color={Colors.needleGreen} />
-              <Text style={styles.privacyText}>Only reviewed measurements are saved to your profile or Diary.</Text>
-            </View>
-            <View style={styles.privacyRow}>
-              <Feather name="check-circle" size={16} color={Colors.needleGreen} />
-              <Text style={styles.privacyText}>Proof photos are saved only when you choose one for QC or order evidence.</Text>
-            </View>
+            <Text style={[styles.sectionTitle, styles.privacyTitle]}>Private by default</Text>
+            {DRAPE_VISION_PRIVACY_POINTS.map((point) => (
+              <View key={point} style={styles.privacyRow}>
+                <Feather name="check-circle" size={16} color={Colors.needleGreen} />
+                <Text style={styles.privacyText}>{point}</Text>
+              </View>
+            ))}
           </View>
         </ScrollView>
 
         <View style={styles.ctaBar}>
           <TouchableOpacity
             accessibilityRole="button"
-            onPress={canStartLiveBodyScan ? () => setPhase('height') : openPrimary}
+            onPress={primaryAction}
             style={styles.primaryButton}
           >
-            <Text style={styles.primaryText}>{canStartLiveBodyScan ? 'Start scan' : meta.primaryLabel}</Text>
+            <Text style={styles.primaryText}>{primaryLabel}</Text>
             <Feather name="arrow-right" size={18} color={Colors.textInverse} />
           </TouchableOpacity>
           <TouchableOpacity accessibilityRole="button" onPress={openPrimary} style={styles.secondaryButton}>
@@ -3883,47 +9287,761 @@ export default function DrapeVisionScreen() {
     )
   }
 
-  function renderHeightEntry() {
+  function renderSpecialistScan() {
+    const selectedMode = selectedSpecialistMode === 'fit_360' ? 'fit_360' : selectedSpecialistMode
+    const specialistMeta = specialistScanMetaForMode(selectedMode) ?? DRAPE_VISION_SPECIALIST_SCAN_MODULES[0]
+    const requirements = DRAPE_VISION_SPECIALIST_NATIVE_REQUIREMENTS[selectedMode] ?? []
+    const uniqueFields = Array.from(new Set(specialistMeta.fields))
+    const canRunSpecialistGuide = selectedMode !== 'fit_360' && Platform.OS === 'ios'
+    const activeNow = selectedMode === 'fit_360' || (specialistMeta.status === 'active' && canRunSpecialistGuide)
+    const platformCopy = Platform.OS === 'ios'
+      ? activeNow
+        ? 'This scan runs on device and gives you focused measurements to compare with tape.'
+        : 'This specialist scan is coming soon.'
+      : 'This scan is coming soon on Android.'
+
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-        {renderHeader('Step 1 of 3')}
+        {renderHeader(activeNow ? 'Ready to scan' : 'Coming soon')}
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          <View style={styles.heroCompact}>
+            <View style={styles.heroIcon}>
+              <MaterialCommunityIcons name={specialistMeta.icon as MaterialCommunityIconName} size={30} color={Colors.needleGreen} />
+            </View>
+            <Text style={styles.eyebrow}>Specialist scan</Text>
+            <Text style={styles.titleSmall}>{specialistMeta.title}</Text>
+            <Text style={styles.body}>{specialistMeta.subtitle}</Text>
+          </View>
+
+          <View style={styles.workflowCard}>
+            <Text style={styles.sectionTitle}>What this scan measures</Text>
+            <Text style={styles.sectionBody}>{platformCopy}</Text>
+            <View style={styles.specialMeasurementGrid}>
+              {uniqueFields.map((field) => (
+                <View key={field} style={styles.specialMeasurementChip}>
+                  <Feather name="target" size={14} color={Colors.needleGreen} />
+                  <Text style={styles.specialMeasurementChipText}>{DRAPE_VISION_MEASUREMENT_LABELS[field]}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+
+          <View style={styles.noticeBand}>
+            <Feather name="info" size={18} color={Colors.needleGreen} />
+            <View style={styles.noticeCopy}>
+              <Text style={styles.noticeTitle}>Tape confirms the result</Text>
+              <Text style={styles.noticeText}>
+                Vision gives you a measurement estimate. Compare it with tape before a tailor cuts fabric.
+              </Text>
+            </View>
+          </View>
+
+          {DRAPE_VISION_DEBUG_UI_ENABLED ? (
+            <View style={styles.workflowCard}>
+              <Text style={styles.sectionTitle}>Debug readiness</Text>
+              {requirements.map((requirement) => (
+                <View key={requirement} style={styles.nativeRequirementRow}>
+                  <Feather name={activeNow ? 'check-circle' : 'circle'} size={15} color={Colors.needleGreen} />
+                  <Text style={styles.nativeRequirementText}>{requirement}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {specialistStatusMessage && DRAPE_VISION_DEBUG_UI_ENABLED ? (
+            <View style={styles.noticeBand}>
+              <Feather
+                name={specialistReadinessStatus === 'blocked' ? 'alert-circle' : 'check-circle'}
+                size={18}
+                color={specialistReadinessStatus === 'blocked' ? Colors.kanteRust : Colors.needleGreen}
+              />
+              <View style={styles.noticeCopy}>
+                <Text style={styles.noticeTitle}>
+                  {specialistReadinessStatus === 'blocked' ? 'Not available yet' : 'Ready to scan'}
+                </Text>
+                <Text style={styles.noticeText}>{specialistStatusMessage}</Text>
+              </View>
+            </View>
+          ) : null}
+        </ScrollView>
+
+        <View style={styles.ctaBar}>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !activeNow }}
+            onPress={() => { void startSpecialistMode(selectedMode) }}
+            disabled={!activeNow}
+            style={[styles.primaryButton, !activeNow && styles.primaryButtonDisabled]}
+          >
+            <Text style={styles.primaryText}>{activeNow ? selectedMode === 'fit_360' ? 'Start body scan' : 'Start scan' : 'Coming soon'}</Text>
+            {activeNow ? <Feather name="arrow-right" size={18} color={Colors.textInverse} /> : null}
+          </TouchableOpacity>
+          <TouchableOpacity accessibilityRole="button" onPress={() => setPhase('suite')} style={styles.secondaryButton}>
+            <Text style={styles.secondaryText}>Back to scan picker</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  function renderLiveVisionTrace() {
+    if (!DRAPE_VISION_DEBUG_UI_ENABLED) return null
+
+    const isSpecialist = phase === 'specialist_scan'
+    const specialistAgeMs = specialistGuideDebug
+      ? Math.max(0, Date.now() - specialistGuideDebug.updatedAtMs)
+      : null
+    const specialistScore = specialistGuideDebug?.score != null
+      ? `${Math.round(specialistGuideDebug.score * 100)}%`
+      : '-'
+    const specialistPoints = specialistGuideDebug?.targetCount != null
+      ? String(Math.round(specialistGuideDebug.targetCount))
+      : '-'
+    const lines = isSpecialist
+      ? [
+          `mode ${selectedSpecialistMode} | phase ${phase} | engine ${engineStatus} | cam ${visionCameraSessionKey}`,
+          `active body ${bodyWorkletActiveTrace ? 1 : 0} | spec ${specialistWorkletTrace.active ? 1 : 0} | code ${specialistWorkletTrace.modeCode}`,
+          `guide ${specialistGuide.stage}/${specialistGuideDebug?.reason ?? specialistGuide.reason ?? 'no update'} | ${Math.round(specialistGuide.progress * 100)}% | age ${specialistAgeMs == null ? 'never' : `${specialistAgeMs}ms`}`,
+          `score ${specialistScore} | points ${specialistPoints} | frame ${specialistGuideDebug?.frameSize ?? 'none'}`,
+          `audio ${audioDebugMessage ?? 'none'} | tick ${liveTraceTick}`,
+        ]
+      : [
+          `phase ${phase} | engine ${engineStatus} | cam ${visionCameraSessionKey} | armed ${captureArmed ? 1 : 0}`,
+          `active body ${bodyWorkletActiveTrace ? 1 : 0} | spec ${specialistWorkletTrace.active ? 1 : 0} | code ${specialistWorkletTrace.modeCode}`,
+          `pose ${poseDebug.status} | frames ${poseDebug.frames} | landmarks ${poseDebug.landmarks}`,
+          `session ${poseDebug.session}`,
+          `notice ${captureNotice ?? 'none'} | tick ${liveTraceTick}`,
+        ]
+
+    return (
+      <View
+        pointerEvents="none"
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+        style={styles.liveTracePanel}
+      >
+        {lines.map((line) => (
+          <Text key={line} numberOfLines={1} style={styles.liveTraceText}>{line}</Text>
+        ))}
+      </View>
+    )
+  }
+
+  function renderSpecialistGuidedScan() {
+    if (!frontCamera) {
+      return renderFallback('No front camera was found on this device.')
+    }
+
+    const selectedMode = selectedSpecialistMode === 'fit_360' ? 'hand_wrist' : selectedSpecialistMode
+    const specialistMeta = specialistScanMetaForMode(selectedMode) ?? DRAPE_VISION_SPECIALIST_SCAN_MODULES[1]
+    const copy = specialistGuideCopyForMode(selectedMode)
+    const guideCaption = specialistGuideCaptionForMode(selectedMode)
+    const guideToneStyle = specialistGuide.tone === 'success'
+      ? styles.specialistGuideFrameSuccess
+      : specialistGuide.tone === 'action'
+        ? styles.specialistGuideFrameAction
+        : specialistGuide.tone === 'warning'
+          ? styles.specialistGuideFrameWarning
+          : null
+    const guideShapeStyle = selectedMode === 'hand_wrist'
+      ? styles.specialistGuideFrameHand
+      : selectedMode === 'headwear'
+        ? styles.specialistGuideFrameHead
+        : selectedMode === 'bodice_corset'
+          ? styles.specialistGuideFrameBodice
+          : styles.specialistGuideFrameLower
+    const guideArea = (specialistGuideDebug?.width ?? 0) * (specialistGuideDebug?.height ?? 0)
+    const guideResponsiveScale = guideArea > 0
+      ? Math.max(0.98, Math.min(1.045, 0.99 + guideArea * 0.16))
+      : 1
+    const specialistProgressWidth = specialistProgressAnim.interpolate({
+      inputRange: [0, 100],
+      outputRange: ['4%', '100%'],
+    })
+
+    return (
+      <View style={styles.scanRoot}>
+        {cameraActive ? (
+          <Camera
+            key={`drape-vision-specialist-${selectedMode}-${visionCameraSessionKey}-${frameOutputSupportLabel}`}
+            style={styles.camera}
+            isActive
+            device={frontCamera}
+            outputs={cameraOutputs}
+            implementationMode={Platform.OS === 'android' ? 'compatible' : undefined}
+            orientationSource={Platform.OS === 'android' ? 'interface' : undefined}
+            resizeMode="cover"
+            mirrorMode="auto"
+            onPreviewStarted={() => handleCameraSessionUpdate(`specialist preview started / ${frameOutputSupportLabel}`)}
+            onConfigured={() => handleCameraSessionUpdate(`specialist configured / ${frameOutputSupportLabel}`)}
+            onStarted={() => handleCameraSessionUpdate(`specialist started / ${frameOutputSupportLabel}`)}
+            onStopped={() => handleCameraSessionUpdate(`specialist stopped / ${frameOutputSupportLabel}`)}
+            onSessionConfigSelected={(config) => handleCameraSessionUpdate(`specialist config ${config.nativePixelFormat} / ${frameOutputSupportLabel}`)}
+            onError={(error) => {
+              handleCameraSessionUpdate(`specialist camera error / ${frameOutputSupportLabel}`)
+              handleSpecialistGuideError(error.message)
+            }}
+          />
+        ) : (
+          <View style={styles.camera} />
+        )}
+        <View style={styles.scanOverlay}>
+          <View
+            pointerEvents="none"
+            style={styles.scanTopScrim}
+          />
+          <SafeAreaView pointerEvents="box-none" style={styles.scanSafeOverlay} edges={['top', 'bottom']}>
+          <View style={styles.scanTopBar}>
+            <TouchableOpacity accessibilityRole="button" accessibilityLabel="Close specialist scan" onPress={() => returnToVisionHub('specialist_scan_close')} style={styles.scanIconButton}>
+              <Feather name="x" size={20} color={DRAPE_VISION_COLORS.text} />
+            </TouchableOpacity>
+            <Animated.Text
+              accessible
+              accessibilityLiveRegion="polite"
+              accessibilityLabel={`${specialistGuide.title}. ${specialistGuide.message}`}
+              numberOfLines={2}
+              style={[styles.scanInstructionText, { opacity: instructionFade }]}
+            >
+              {specialistGuide.title}
+            </Animated.Text>
+          </View>
+
+          <View style={styles.specialistGuideCenter}>
+            <Text
+              accessible
+              accessibilityLiveRegion="polite"
+              style={styles.specialistGuideHudTitle}
+            >
+              {copy?.guideTitle ?? specialistMeta.title}
+            </Text>
+            <Animated.View
+              accessible
+              accessibilityRole="image"
+              accessibilityLabel={`${specialistMeta.title}. ${specialistGuide.message}`}
+              style={[
+                styles.specialistGuideFrame,
+                guideShapeStyle,
+                guideToneStyle,
+                {
+                  transform: [
+                    { translateX: specialistFrameTranslateX },
+                    { translateY: specialistFrameTranslateY },
+                    { translateX: specialistFrameShake },
+                    { scale: specialistFrameScale },
+                    { scale: guideResponsiveScale },
+                  ],
+                },
+              ]}
+            >
+              <View style={styles.specialistGuideIconHalo}>
+                {specialistGuide.tone === 'success' ? (
+                  <Feather
+                    name="check"
+                    size={34}
+                    color={Colors.textInverse}
+                  />
+                ) : (
+                  <MaterialCommunityIcons
+                    name={(copy?.icon ?? specialistMeta.icon) as MaterialCommunityIconName}
+                    size={34}
+                    color={Colors.textInverse}
+                  />
+                )}
+              </View>
+            </Animated.View>
+
+            <Text style={styles.specialistGuideCaption}>{guideCaption}</Text>
+
+            <Text
+              numberOfLines={3}
+              style={styles.specialistGuideHudMessage}
+            >
+              {specialistGuide.message}
+            </Text>
+
+            {!captureNotice ? (
+              <View style={styles.specialistProgressTrack}>
+                <Animated.View style={[styles.specialistProgressFill, { width: specialistProgressWidth }]} />
+              </View>
+            ) : null}
+
+            {captureNotice ? (
+              <View
+                accessible
+                accessibilityLiveRegion="polite"
+                accessibilityLabel={captureNotice}
+                style={styles.captureNotice}
+              >
+                <Feather name="check-circle" size={15} color={Colors.textInverse} />
+                <Text style={styles.captureNoticeText}>{captureNotice}</Text>
+              </View>
+            ) : null}
+          </View>
+
+          <View style={styles.scanSideRail}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={`Restart ${specialistMeta.title}`}
+              onPress={() => { void startSpecialistMode(selectedMode) }}
+              style={styles.scanRailButton}
+            >
+              <Feather name="refresh-cw" size={22} color={Colors.textInverse} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Back to Drapeon Vision hub"
+              onPress={() => returnToVisionHub('specialist_scan_hub_button')}
+              style={styles.scanRailButton}
+            >
+              <Feather name="grid" size={22} color={Colors.textInverse} />
+            </TouchableOpacity>
+          </View>
+          {renderLiveVisionTrace()}
+          </SafeAreaView>
+          <Animated.View pointerEvents="none" style={[styles.captureFlash, { opacity: captureFlashOpacity }]} />
+        </View>
+      </View>
+    )
+  }
+
+  function renderScanAnotherSection(currentMode: DrapeVisionSpecialistScanMode) {
+    const allRemainingModules = DRAPE_VISION_SPECIALIST_SCAN_MODULES
+      .filter((item) => item.mode !== currentMode && !completedSessionScanSet.has(item.mode))
+    const remainingModules = allRemainingModules
+      .slice(0, 4)
+    const hasHiddenModules = allRemainingModules.length > remainingModules.length
+
+    return (
+      <View style={styles.workflowCard}>
+        <View style={styles.workflowCardHeader}>
+          <View style={styles.workflowCheckCopy}>
+            <Text style={styles.sectionTitle}>Keep measuring</Text>
+            <Text style={styles.sectionBody}>
+              Add another area now, or return to the full Vision hub whenever this order needs a different measurement.
+            </Text>
+          </View>
+          {hasHiddenModules ? (
+            <TouchableOpacity accessibilityRole="button" onPress={() => setPhase('suite')} style={styles.workflowSmallButton}>
+              <Text style={styles.workflowSmallButtonText}>View all</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+
+        {remainingModules.length ? (
+          <View style={styles.specialistResultList}>
+            {remainingModules.map((item) => {
+              const needsHeight = specialistScanNeedsHeight(item.mode) && !savedVisionHeight
+              return (
+                <TouchableOpacity
+                  key={item.mode}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Start ${item.title}. ${item.subtitle}`}
+                  onPress={() => openSpecialistMode(item.mode)}
+                  style={styles.specialistResultCard}
+                >
+                    <View style={styles.specialistModeHeader}>
+                      <View style={styles.specialistModeIcon}>
+                        <MaterialCommunityIcons name={item.icon as MaterialCommunityIconName} size={17} color={Colors.needleGreen} />
+                      </View>
+                    <View style={styles.specialistModeCopy}>
+                      <Text style={styles.specialistModeTitle}>{item.title}</Text>
+                      {needsHeight ? <Text style={styles.specialistModeStatus}>Height first</Text> : null}
+                    </View>
+                    <Feather name="chevron-right" size={18} color={DRAPE_VISION_COLORS.textMuted} />
+                  </View>
+                  <Text style={styles.specialistModeBody}>{specialistScanUseCase(item.mode)}</Text>
+                </TouchableOpacity>
+              )
+            })}
+          </View>
+        ) : (
+          <Text style={styles.sectionBody}>
+            You have run every Vision scan in this session. Open the hub if you want to retake one.
+          </Text>
+        )}
+      </View>
+    )
+  }
+
+  function renderSpecialistResult() {
+    const selectedMode = selectedSpecialistMode === 'fit_360' ? 'hand_wrist' : selectedSpecialistMode
+    const specialistMeta = specialistScanMetaForMode(selectedMode) ?? DRAPE_VISION_SPECIALIST_SCAN_MODULES[1]
+    const copy = specialistGuideCopyForMode(selectedMode)
+    const result = specialistGuideResult
+    if (!result) {
+      return (
+        <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+          {renderHeader('Run scan first')}
+          <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+            <View style={styles.heroCompact}>
+            <View style={styles.resultBadge}>
+              <MaterialCommunityIcons name={(copy?.icon ?? specialistMeta.icon) as MaterialCommunityIconName} size={15} color={Colors.needleGreen} />
+              <Text style={styles.resultBadgeText}>{specialistMeta.title}</Text>
+            </View>
+            <Text style={styles.titleSmall}>Run {specialistMeta.title} first</Text>
+            <Text style={styles.body}>
+              No specialist capture is saved yet. Drapeon will only show draft measurements after the native model locks on the right guide and completes the hold.
+            </Text>
+            </View>
+          </ScrollView>
+          <View style={styles.ctaBar}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              onPress={() => { void startSpecialistMode(selectedMode) }}
+              style={styles.primaryButton}
+            >
+              <Text style={styles.primaryText}>Run scan</Text>
+              <Feather name="camera" size={18} color={Colors.textInverse} />
+            </TouchableOpacity>
+            <TouchableOpacity accessibilityRole="button" onPress={() => setPhase(measurementResult ? 'results' : 'suite')} style={styles.secondaryButton}>
+              <Text style={styles.secondaryText}>{measurementResult ? 'Back to my results' : 'Back to scan picker'}</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      )
+    }
+    const retainedDrafts = Array.isArray(result.drafts) ? result.drafts : []
+    const currentSpecialistSaved = savedSessionScanSet.has(selectedMode)
+    const draftMeasurements = retainedDrafts.length
+      ? retainedDrafts
+      : buildSpecialistMeasurementDrafts({
+          payload: result,
+          heightCm,
+          heightInputConfidence,
+        })
+    const specialistTapeComparisons = draftMeasurements
+      .map((draft) => buildSpecialistTapeComparison(
+        draft,
+        specialistTapeInputs[specialistTapeInputKey(selectedMode, draft.id)],
+      ))
+      .filter((comparison): comparison is SpecialistTapeComparison => !!comparison)
+    const specialistTapeSummary = deriveSpecialistTapeSummary(specialistTapeComparisons)
+    const renderSpecialistDraftCard = (draft: SpecialistMeasurementDraft) => (
+      <View
+        key={draft.id}
+        accessible
+        accessibilityLabel={`${draft.label}. ${formatMeasurementValue(draft.valueCm, resultUnit)}. ${measurementConfidenceLabel(draft.confidence)}.`}
+        style={[styles.measurementCard, { borderLeftColor: measurementConfidenceColor(draft.confidence) }]}
+      >
+        <View style={[styles.measurementAccent, { backgroundColor: measurementConfidenceColor(draft.confidence) }]} />
+        <View style={styles.measurementHeader}>
+          <Text style={styles.measurementLabel}>{draft.label}</Text>
+          <View style={[styles.confidenceDot, { backgroundColor: measurementConfidenceColor(draft.confidence) }]} />
+        </View>
+        <Text style={styles.measurementValue}>{formatMeasurementValue(draft.valueCm, resultUnit)}</Text>
+        <Text style={styles.measurementConfidenceCaption}>{measurementConfidenceLabel(draft.confidence)}</Text>
+        <Text style={styles.measurementModuleTag}>
+          {draft.confidence === 'MEDIUM' ? 'Vision estimate' : 'Tape check needed'}
+        </Text>
+        <Text style={styles.measurementNote}>{draft.note}</Text>
+      </View>
+    )
+    const renderSpecialistTapeRow = (draft: SpecialistMeasurementDraft) => {
+      const key = specialistTapeInputKey(selectedMode, draft.id)
+      const comparison = buildSpecialistTapeComparison(draft, specialistTapeInputs[key])
+      const comparisonToneStyle = comparison?.tone === 'good'
+        ? styles.specialistTapeToneGood
+        : comparison?.tone === 'watch'
+          ? styles.specialistTapeToneWatch
+          : comparison
+            ? styles.specialistTapeToneReview
+            : null
+
+      return (
+        <View key={key} style={styles.tapeInputRow}>
+          <View style={styles.tapeInputCopy}>
+            <Text style={styles.tapeInputLabel}>{draft.label}</Text>
+            <Text style={styles.tapeScanValue}>
+              Vision estimate: {formatMeasurementValue(draft.valueCm, 'in')}
+            </Text>
+            {comparison ? (
+              <Text style={[styles.specialistTapeDelta, comparisonToneStyle]}>
+                off by {formatLabNumber(comparison.errorCm, 'cm')} · {specialistTapeToneLabel(comparison.tone)}
+              </Text>
+            ) : (
+              <Text style={styles.tapePromptText}>Enter tape to see comparison</Text>
+            )}
+          </View>
+          <TextInput
+            accessibilityLabel={`${draft.label} tape value in inches`}
+            keyboardType={FRACTIONAL_TAPE_KEYBOARD_TYPE}
+            onChangeText={(value) => updateSpecialistTapeInput(key, value)}
+            placeholder="e.g. 6 1/2"
+            placeholderTextColor={DRAPE_VISION_COLORS.textDim}
+            style={styles.tapeInput}
+            value={specialistTapeInputs[key] ?? ''}
+          />
+        </View>
+      )
+    }
+
+    return (
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        {renderHeader(`${specialistMeta.title} ready`)}
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          <View style={styles.heroCompact}>
+            <View style={styles.resultBadge}>
+              <MaterialCommunityIcons name={(copy?.icon ?? specialistMeta.icon) as MaterialCommunityIconName} size={15} color={Colors.needleGreen} />
+              <Text style={styles.resultBadgeText}>{specialistMeta.title}</Text>
+            </View>
+            <Text style={styles.titleSmall}>{specialistMeta.title} estimates ready</Text>
+            <Text style={styles.body}>
+              Compare with tape before a tailor cuts fabric.
+            </Text>
+          </View>
+
+          <View style={styles.workflowCard}>
+            <View style={styles.measurementHeader}>
+              <Text style={styles.sectionTitle}>Specialist estimates</Text>
+              <View style={styles.resultUnitToggle}>
+                {(['in', 'cm'] as MeasurementDisplayUnit[]).map((unit) => (
+                  <TouchableOpacity
+                    key={unit}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Show specialist draft in ${unit}`}
+                    accessibilityState={{ selected: resultUnit === unit }}
+                    onPress={() => updateResultUnit(unit)}
+                    style={[styles.resultUnitOption, resultUnit === unit && styles.resultUnitOptionActive]}
+                  >
+                    <Text style={[styles.resultUnitText, resultUnit === unit && styles.resultUnitTextActive]}>
+                      {unit}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+            <View style={styles.measurementGrid}>
+              {draftMeasurements.map(renderSpecialistDraftCard)}
+            </View>
+          </View>
+
+          <View style={styles.workflowCard}>
+            <Text style={styles.sectionTitle}>Tape check</Text>
+            <Text style={styles.sectionBody}>
+              Enter your tape measurement in inches. Fractions like 6 1/2 work.
+            </Text>
+            <View style={styles.tapeInputList}>
+              {draftMeasurements.map(renderSpecialistTapeRow)}
+            </View>
+            {specialistTapeSummary ? (
+              <View style={[
+                styles.comparisonSummary,
+                specialistTapeSummary.tone === 'review' && styles.comparisonSummaryReview,
+                specialistTapeSummary.tone === 'watch' && styles.comparisonSummaryWatch,
+              ]}>
+                <Text style={styles.comparisonSummaryTitle}>{specialistTapeSummary.title}</Text>
+                <Text style={styles.comparisonSummaryBody}>{specialistTapeSummary.body}</Text>
+                {DRAPE_VISION_DEBUG_UI_ENABLED ? (
+                  <Text style={styles.comparisonSummaryMeta}>
+                    max {formatLabNumber(specialistTapeSummary.maxErrorCm, 'cm')} · mean {formatLabNumber(specialistTapeSummary.meanErrorCm, 'cm')}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
+
+          {DRAPE_VISION_DEBUG_UI_ENABLED ? (
+          <View style={styles.workflowCard}>
+            <Text style={styles.sectionTitle}>Capture quality</Text>
+            <Text style={styles.sectionBody}>
+              These diagnostics explain why the draft is marked LOW or MEDIUM. They are not the main result.
+            </Text>
+            <View style={styles.specialistGuideStats}>
+              <View style={styles.specialistGuideStat}>
+                <Text style={styles.specialistGuideStatLabel}>Model</Text>
+                <Text style={styles.specialistGuideStatValue}>{result.signalLabel ?? copy?.signalLabel ?? 'native model'}</Text>
+              </View>
+              <View style={styles.specialistGuideStat}>
+                <Text style={styles.specialistGuideStatLabel}>Basis</Text>
+                <Text style={styles.specialistGuideStatValue}>{specialistDraftBasisForMode(selectedMode)}</Text>
+              </View>
+              <View style={styles.specialistGuideStat}>
+                <Text style={styles.specialistGuideStatLabel}>Score</Text>
+                <Text style={styles.specialistGuideStatValue}>{result.score > 0 ? `${Math.round(result.score * 100)}%` : 'captured'}</Text>
+              </View>
+              <View style={styles.specialistGuideStat}>
+                <Text style={styles.specialistGuideStatLabel}>Points</Text>
+                <Text style={styles.specialistGuideStatValue}>{result.targetCount ? Math.round(result.targetCount) : 'live'}</Text>
+              </View>
+              <View style={styles.specialistGuideStat}>
+                <Text style={styles.specialistGuideStatLabel}>Inference</Text>
+                <Text style={styles.specialistGuideStatValue}>{result.inferenceMs ? `${Math.round(result.inferenceMs)} ms` : 'on device'}</Text>
+              </View>
+            </View>
+          </View>
+          ) : null}
+
+          <View style={styles.inlineTrustNote}>
+            <Feather name="shield" size={15} color={Colors.needleGreen} />
+            <Text style={styles.inlineTrustText}>
+              Save this as an estimate, then confirm with tape before cutting.
+            </Text>
+          </View>
+
+          {renderScanAnotherSection(selectedMode)}
+        </ScrollView>
+
+        <View style={styles.ctaBar}>
+          {resultSaveConfirmation ? (
+            <View
+              accessible
+              accessibilityLiveRegion="polite"
+              accessibilityLabel={resultSaveConfirmation}
+              style={styles.saveConfirmationBanner}
+            >
+              <Feather name="check-circle" size={19} color={Colors.textInverse} />
+              <Text style={styles.saveConfirmationText}>{resultSaveConfirmation}</Text>
+            </View>
+          ) : (
+            <>
+              {currentSpecialistSaved ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  onPress={() => setPhase('suite')}
+                  style={styles.primaryButton}
+                >
+                  <Text style={styles.primaryText}>Scan another</Text>
+                  <Feather name="grid" size={18} color={Colors.textInverse} />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  disabled={savingResult}
+                  onPress={() => { void saveSpecialistVisionResult() }}
+                  style={[styles.primaryButton, savingResult && styles.scanStartButtonDisabled]}
+                >
+                  {savingResult ? <ActivityIndicator color={Colors.textInverse} /> : null}
+                  <Text style={styles.primaryText}>
+                    {savingResult
+                      ? 'Saving...'
+                      : mode === 'customer_scan'
+                        ? 'Save to Fit Passport'
+                        : hasDiaryTarget
+                          ? 'Save to Diary'
+                          : primaryActionLabel}
+                  </Text>
+                  {!savingResult ? <Feather name="check" size={18} color={Colors.textInverse} /> : null}
+                </TouchableOpacity>
+              )}
+              <View style={styles.ctaSecondaryRow}>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  disabled={savingResult}
+                  onPress={() => { void startSpecialistMode(selectedMode) }}
+                  style={styles.ctaSecondaryHalf}
+                >
+                  <Text style={[styles.secondaryText, styles.secondaryTextDestructive]}>Run again</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  disabled={savingResult}
+                  onPress={() => setPhase(measurementResult ? 'results' : 'suite')}
+                  style={styles.ctaSecondaryHalf}
+                >
+                  <Text style={styles.secondaryText}>{measurementResult ? 'My results' : 'Vision hub'}</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          )}
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  function renderHeightEntry() {
+    const targetMode = pendingScanAfterHeight ?? selectedSpecialistMode ?? 'fit_360'
+    const targetMeta = specialistScanMetaForMode(targetMode) ?? DRAPE_VISION_SPECIALIST_SCAN_MODULES[0]
+    const heightPrimaryLabel = targetMode === 'fit_360'
+      ? 'Start Fit 360'
+      : `Continue to ${targetMeta.title.replace(' Scan', '')}`
+
+    return (
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        {renderHeader('Set height')}
         <ScrollView style={styles.scroll} contentContainerStyle={styles.centerContent} showsVerticalScrollIndicator={false}>
           <View style={styles.heroCompact}>
-            <Text style={styles.titleSmall}>How tall are you?</Text>
+            <Text style={styles.titleSmall}>Height anchors your proportions</Text>
             <Text style={styles.body}>
-              This calibrates the scan. Next, start the live scan, fit your full body in frame, face the phone, then turn slowly to your right.
+              Your height helps Vision estimate measurements accurately. It is saved for future scans unless you change it.
             </Text>
+          </View>
+
+          <View style={styles.heightConfidenceGrid}>
+            {([
+              {
+                value: 'exact',
+                icon: 'check-circle',
+                title: 'I know my height',
+                body: 'Use this when the number is current.',
+              },
+              {
+                value: 'approximate',
+                icon: 'help-circle',
+                title: "I'm estimating",
+                body: 'Vision will flag the result for a tape check.',
+              },
+            ] as Array<{ value: HeightInputConfidence; icon: FeatherIconName; title: string; body: string }>).map((option) => {
+              const selected = heightInputConfidence === option.value
+              return (
+                <TouchableOpacity
+                  key={option.value}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${option.title}. ${option.body}`}
+                  accessibilityState={{ selected }}
+                  onPress={() => updateHeightInputConfidence(option.value)}
+                  style={[styles.heightConfidenceCard, selected && styles.heightConfidenceCardActive]}
+                >
+                  <Feather name={option.icon} size={18} color={selected ? Colors.needleGreen : DRAPE_VISION_COLORS.textMuted} />
+                  <View style={styles.heightConfidenceCopy}>
+                    <Text style={[styles.heightConfidenceTitle, selected && styles.heightConfidenceTitleActive]}>{option.title}</Text>
+                    <Text style={styles.heightConfidenceBody}>{option.body}</Text>
+                  </View>
+                </TouchableOpacity>
+              )
+            })}
           </View>
 
           <View style={styles.unitToggle}>
             <TouchableOpacity
               accessibilityRole="button"
-              onPress={() => setHeightUnit('cm')}
-              style={[styles.unitOption, heightUnit === 'cm' && styles.unitOptionActive]}
-            >
-              <Text style={[styles.unitText, heightUnit === 'cm' && styles.unitTextActive]}>cm</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              accessibilityRole="button"
-              onPress={() => setHeightUnit('ft')}
+              onPress={() => updateHeightUnit('ft')}
               style={[styles.unitOption, heightUnit === 'ft' && styles.unitOptionActive]}
             >
               <Text style={[styles.unitText, heightUnit === 'ft' && styles.unitTextActive]}>ft+in</Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              accessibilityRole="button"
+              onPress={() => updateHeightUnit('cm')}
+              style={[styles.unitOption, heightUnit === 'cm' && styles.unitOptionActive]}
+            >
+              <Text style={[styles.unitText, heightUnit === 'cm' && styles.unitTextActive]}>cm</Text>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.heightPicker}>
-            <TouchableOpacity accessibilityRole="button" onPress={() => adjustHeight(1)} style={styles.heightButton}>
+            <TouchableOpacity accessibilityRole="button" accessibilityLabel="Increase height" accessibilityHint="Increases height by one step" onPress={() => adjustHeight(1)} style={styles.heightButton}>
               <Feather name="chevron-up" size={26} color={DRAPE_VISION_COLORS.text} />
             </TouchableOpacity>
             <Text style={styles.heightValue}>{formatHeight(heightCm, heightUnit)}</Text>
-            <TouchableOpacity accessibilityRole="button" onPress={() => adjustHeight(-1)} style={styles.heightButton}>
+            <TouchableOpacity accessibilityRole="button" accessibilityLabel="Decrease height" accessibilityHint="Decreases height by one step" onPress={() => adjustHeight(-1)} style={styles.heightButton}>
               <Feather name="chevron-down" size={26} color={DRAPE_VISION_COLORS.text} />
             </TouchableOpacity>
           </View>
 
+          {heightInputConfidence === 'approximate' ? (
+            <View style={styles.noticeBand}>
+              <Feather name="alert-circle" size={18} color={Colors.kanteRust} />
+              <View style={styles.noticeCopy}>
+                <Text style={styles.noticeTitle}>Tape check recommended</Text>
+                <Text style={styles.noticeText}>
+                  If this height is a guess, review the saved measurements with tape before a tailor uses them.
+                </Text>
+              </View>
+            </View>
+          ) : null}
+
           <View style={styles.noticeBand}>
-            <Feather name="user-check" size={18} color={Colors.kanteRust} />
+            <Feather name="user-check" size={18} color={Colors.needleGreen} />
             <View style={styles.noticeCopy}>
               <Text style={styles.noticeTitle}>Quick fit check</Text>
               <Text style={styles.noticeText}>
@@ -3960,7 +10078,7 @@ export default function DrapeVisionScreen() {
         <View style={styles.ctaBar}>
           <TouchableOpacity
             accessibilityRole="button"
-            onPress={startBodyScan}
+            onPress={() => { void confirmHeightAndContinue() }}
             disabled={engineStatus === 'initializing'}
             style={[styles.primaryButton, engineStatus === 'initializing' && styles.primaryButtonDisabled]}
           >
@@ -3968,13 +10086,13 @@ export default function DrapeVisionScreen() {
               <ActivityIndicator color={Colors.textInverse} />
             ) : (
               <Text style={styles.primaryText}>
-                {isAndroidLiveScanPreflightBlocked() ? 'Continue with manual' : 'Start live scan'}
+                {isAndroidLiveScanPreflightBlocked() && targetMode === 'fit_360' ? 'Continue with manual' : heightPrimaryLabel}
               </Text>
             )}
             {engineStatus !== 'initializing' ? <Feather name="arrow-right" size={18} color={Colors.textInverse} /> : null}
           </TouchableOpacity>
-          <TouchableOpacity accessibilityRole="button" onPress={() => setPhase('intro')} style={styles.secondaryButton}>
-            <Text style={styles.secondaryText}>Back</Text>
+          <TouchableOpacity accessibilityRole="button" onPress={() => setPhase('suite')} style={styles.secondaryButton}>
+            <Text style={styles.secondaryText}>Back to scan picker</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -3987,33 +10105,27 @@ export default function DrapeVisionScreen() {
     }
 
     const capturedAngleCount = capturedSetRef.current.size
-    const scanHint = scanCountdown != null
-      ? `Step back now. Capture starts in ${scanCountdown}.`
-      : !captureArmed
-        ? Platform.OS === 'android'
-          ? 'Set the phone down and scan in fitted clothing. The camera is warming now so capture starts smoothly after countdown.'
-          : 'Set the phone down, check head-to-ankles in frame, and scan in fitted clothing. Use manual if your outfit is loose.'
-        : capturedAngleCount === 0
-          ? 'Face the phone in fitted clothing and hold still for the first capture.'
-          : Platform.OS === 'android'
-            ? 'Keep turning slowly to your right. Android records three stable angles for launch.'
-            : 'Turn slowly to one shoulder, pass through front, then show the other shoulder. Pause at each locked angle.'
-    const scanProgressMeta = latestInferenceMs
-      ? `${Math.round(latestInferenceMs)} ms`
-      : cameraRestarting
-        ? 'Resetting camera'
-        : scanCountdown != null
-        ? `${scanCountdown}s`
-        : !captureArmed
-          ? Platform.OS === 'android' ? 'Camera preview ready' : 'Preview ready'
-          : poseDebug.frames > 0
-            ? poseDebug.status
-            : 'Waiting for frames'
+    const iosPrecheckVisible = !captureArmed && Platform.OS === 'ios'
+    const iosPrecheckBlocked = iosPrecheckVisible && !scanPrecheck.ready
+    const scanStartDisabled = scanCountdown != null || cameraRestarting || iosPrecheckBlocked
+    const scanStartLabel = cameraRestarting
+      ? 'Resetting camera'
+      : scanCountdown == null
+        ? iosPrecheckBlocked
+          ? 'Stand fully in frame first'
+          : 'Start countdown now'
+        : `Capture starts in ${scanCountdown}`
+    const scanStartIcon = cameraRestarting || scanCountdown != null
+      ? 'clock'
+      : iosPrecheckBlocked
+        ? 'user-check'
+        : 'play'
     const distanceCue = buildScanDistanceCue({
       captureArmed,
       captureNotice,
       capturedAngleCount,
       instruction,
+      precheckReady: scanPrecheck.ready,
       requiredAngles: SCAN_REQUIRED_CAPTURE_COUNT,
       scanCountdown,
     })
@@ -4034,7 +10146,7 @@ export default function DrapeVisionScreen() {
       <View style={styles.scanRoot}>
         {cameraActive ? (
           <Camera
-            key={`drape-vision-${frameOutputSupportLabel}`}
+            key={`drape-vision-${visionCameraSessionKey}-${frameOutputSupportLabel}`}
             style={styles.camera}
             isActive
             device={frontCamera}
@@ -4056,147 +10168,214 @@ export default function DrapeVisionScreen() {
         ) : (
           <View style={styles.camera} />
         )}
-        <SafeAreaView style={styles.scanOverlay} edges={['top', 'bottom']}>
+        <View style={styles.scanOverlay}>
+          <View
+            pointerEvents="none"
+            style={styles.scanTopScrim}
+          />
+          <SafeAreaView pointerEvents="box-none" style={styles.scanSafeOverlay} edges={['top', 'bottom']}>
           <View style={styles.scanTopBar}>
-            <TouchableOpacity accessibilityRole="button" accessibilityLabel="Close scan" onPress={closeVision} style={styles.scanIconButton}>
+            <TouchableOpacity accessibilityRole="button" accessibilityLabel="Close scan" onPress={() => returnToVisionHub('body_scan_close')} style={styles.scanIconButton}>
               <Feather name="x" size={20} color={DRAPE_VISION_COLORS.text} />
             </TouchableOpacity>
-            <View style={styles.instructionPill}>
-              <Text style={styles.instructionText}>{instruction}</Text>
-            </View>
+            <Animated.Text
+              accessible
+              accessibilityLiveRegion="polite"
+              accessibilityLabel={`Current scan instruction. ${instruction}`}
+              numberOfLines={2}
+              style={[styles.scanInstructionText, { opacity: instructionFade }]}
+            >
+              {instruction}
+            </Animated.Text>
           </View>
 
-          <View style={styles.scanCenter}>
-            <View style={[styles.scanDistanceCue, distanceCueStyle]}>
-              <Text
-                adjustsFontSizeToFit
-                minimumFontScale={0.68}
-                numberOfLines={1}
-                style={[styles.scanDistanceTitle, distanceCueTitleStyle]}
+          {scanCountdown != null ? (
+            <View
+              pointerEvents="none"
+              accessible
+              accessibilityLiveRegion="polite"
+              accessibilityLabel={`Capture starts in ${scanCountdown}`}
+              style={styles.countdownHud}
+            >
+              <Animated.Text
+                style={[
+                  styles.countdownHudNumber,
+                  { transform: [{ scale: countdownPulse }] },
+                ]}
               >
-                {distanceCue.title}
-              </Text>
-              <Text numberOfLines={2} style={styles.scanDistanceSubtitle}>
-                {distanceCue.subtitle}
-              </Text>
+                {scanCountdown}
+              </Animated.Text>
+              <Text style={styles.countdownHudText}>Stay still</Text>
             </View>
-            <Radar capturedSegments={capturedSegments} currentSegment={currentSegment} />
-            {captureNotice ? (
-              <View style={styles.captureNotice}>
-                <Feather name="check-circle" size={15} color={Colors.textInverse} />
-                <Text style={styles.captureNoticeText}>{captureNotice}</Text>
-              </View>
-            ) : null}
-            <View style={styles.compassPill}>
-              <Feather name="compass" size={14} color={Colors.needleGreen} />
-              <Text style={styles.compassText}>{Math.round(latestYaw)} deg</Text>
-            </View>
-          </View>
-
-          <View style={styles.scanBottomPanel}>
-            <View style={styles.scanProgressHeader}>
-              <Text style={styles.scanProgressTitle}>
-                {formatScanCaptureProgress(capturedAngleCount)} captured
-              </Text>
-              <Text style={styles.scanProgressMeta}>{scanProgressMeta}</Text>
-            </View>
-            <Text style={styles.scanHint}>{scanHint}</Text>
-            <Text style={styles.scanPrivacyText}>
-              Video is processed in memory only. Drapeon saves measurements after review, and proof photos only when you choose one.
-            </Text>
-            {!captureArmed ? (
-              <TouchableOpacity
-                accessibilityRole="button"
-                onPress={startCaptureCountdown}
-                disabled={scanCountdown != null || cameraRestarting}
-                style={[styles.scanStartButton, (scanCountdown != null || cameraRestarting) && styles.scanStartButtonDisabled]}
+          ) : !captureArmed ? (
+            <View pointerEvents="none" style={styles.scanHudCenter}>
+              <View
+                accessible
+                accessibilityLiveRegion="polite"
+                accessibilityLabel={`${distanceCue.title}. ${distanceCue.subtitle}`}
+                style={[styles.scanDistanceCue, distanceCueStyle]}
               >
-                <Feather name={scanCountdown == null && !cameraRestarting ? 'play' : 'clock'} size={16} color={Colors.textInverse} />
-                <Text style={styles.scanStartText}>
-                  {cameraRestarting ? 'Resetting camera' : scanCountdown == null ? 'Start 7-second countdown' : `Capture starts in ${scanCountdown}`}
-                </Text>
-              </TouchableOpacity>
-            ) : null}
-            <View style={styles.scanRecoveryRow}>
-              <TouchableOpacity
-                accessibilityRole="button"
-                onPress={retakeScan}
-                disabled={cameraRestarting}
-                style={[styles.scanRecoveryButton, cameraRestarting && styles.scanRecoveryButtonDisabled]}
-              >
-                <Feather name="refresh-cw" size={14} color={DRAPE_VISION_COLORS.text} />
-                <Text style={styles.scanRecoveryText}>Retake scan</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                accessibilityRole="button"
-                onPress={openPrimary}
-                style={styles.scanRecoveryButton}
-              >
-                <Feather name="edit-2" size={14} color={DRAPE_VISION_COLORS.text} />
-                <Text style={styles.scanRecoveryText}>Use manual instead</Text>
-              </TouchableOpacity>
-            </View>
-            {__DEV__ ? (
-              <View style={styles.scanDebugPanel}>
-                <Text style={styles.scanDebugText}>
-                  session {poseDebug.session}
-                </Text>
-                <Text style={styles.scanDebugText}>
-                  {poseDebug.status} | frames {poseDebug.frames} | landmarks {poseDebug.landmarks}
-                </Text>
-                <Text style={styles.scanDebugText}>
-                  shoulders {poseDebug.shoulderScore.toFixed(2)} | width {poseDebug.shoulderWidth.toFixed(3)} | {poseDebug.frameSize}
-                </Text>
-                <Text style={styles.scanDebugText}>
-                  lab samples {visionLabSampleCount} | captures {capturesRef.current.length}
-                </Text>
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  onPress={() => { void uploadVisionLabLog('MANUAL_UPLOAD') }}
-                  disabled={visionLabUploading || visionLabSampleCount === 0}
-                  style={[styles.scanDebugUploadButton, (visionLabUploading || visionLabSampleCount === 0) && styles.scanDebugUploadButtonDisabled]}
+                <Feather name={distanceCue.icon} size={34} color={Colors.textInverse} style={styles.scanDistanceIcon} />
+                <Animated.Text
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.68}
+                  numberOfLines={1}
+                  style={[styles.scanDistanceTitle, distanceCueTitleStyle]}
                 >
-                  <Text style={styles.scanDebugUploadText}>
-                    {visionLabUploading
-                      ? 'Uploading log...'
-                      : visionLabSampleCount === 0
-                        ? 'No scan debug yet'
-                        : 'Upload debug log'}
-                  </Text>
-                </TouchableOpacity>
-                {visionLabUploadMessage ? (
-                  <Text style={styles.scanDebugText}>{visionLabUploadMessage}</Text>
-                ) : null}
+                  {distanceCue.title}
+                </Animated.Text>
+                <Text numberOfLines={2} style={styles.scanDistanceSubtitle}>
+                  {distanceCue.subtitle}
+                </Text>
+              </View>
+            </View>
+          ) : null}
+
+          {captureArmed || capturedAngleCount > 0 ? (
+            <View
+              pointerEvents="none"
+              accessible
+              accessibilityLiveRegion="polite"
+              accessibilityLabel={formatScanCaptureProgress(capturedAngleCount)}
+              style={styles.scanRadarDock}
+            >
+              <Radar capturedSegments={capturedSegments} currentSegment={currentSegment} />
+              {captureNotice ? (
+                <View
+                  accessible
+                  accessibilityLiveRegion="polite"
+                  accessibilityLabel={captureNotice}
+                  style={styles.captureNotice}
+                >
+                  <Feather name="check-circle" size={15} color={Colors.textInverse} />
+                  <Text style={styles.captureNoticeText}>{captureNotice}</Text>
+                </View>
+              ) : capturedAngleCount === 0 ? (
+                <View style={styles.scanActiveStatus}>
+                  <Text style={styles.scanActiveStatusText}>Capturing - hold still</Text>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+            {DRAPE_VISION_CAMERA_DEBUG_UI_ENABLED ? (
+              <View style={styles.compassPill} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                <Feather name="compass" size={14} color={Colors.needleGreen} />
+                <Text style={styles.compassText}>{Math.round(latestYaw)} deg</Text>
               </View>
             ) : null}
-            {frameDropWarning ? <Text style={styles.scanWarning}>{frameDropWarning}</Text> : null}
+
+          <View style={styles.scanSideRail}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Retake Drapeon Vision scan"
+              accessibilityHint="Restarts the camera and clears this scan pass."
+              accessibilityState={{ disabled: cameraRestarting }}
+              onPress={retakeScan}
+              disabled={cameraRestarting}
+              style={[styles.scanRailButton, cameraRestarting && styles.scanRecoveryButtonDisabled]}
+            >
+              <Feather name="refresh-cw" size={22} color={Colors.textInverse} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Back to Drapeon Vision hub"
+              accessibilityHint="Leaves this live scan and returns to the scan picker."
+              onPress={() => returnToVisionHub('body_scan_hub_button')}
+              style={styles.scanRailButton}
+            >
+              <Feather name="grid" size={22} color={Colors.textInverse} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Use manual measurements instead"
+              accessibilityHint="Leaves live scanning and opens the manual measurement workflow."
+              onPress={openPrimary}
+              style={styles.scanRailButton}
+            >
+              <Feather name="file-text" size={22} color={Colors.textInverse} />
+            </TouchableOpacity>
           </View>
-        </SafeAreaView>
+          {renderLiveVisionTrace()}
+
+          {!captureArmed ? (
+            <View style={styles.scanCaptureDock}>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel={scanStartLabel}
+                accessibilityHint="Starts Drapeon Vision hands-free after your full body is visible in the camera."
+                accessibilityState={{ disabled: scanStartDisabled }}
+                onPress={() => {
+                  void startCaptureCountdown()
+                }}
+                disabled={scanStartDisabled}
+                style={[
+                  styles.scanShutterButton,
+                  scanStartDisabled && styles.scanShutterButtonDisabled,
+                ]}
+              >
+                <Feather name={scanStartIcon} size={30} color={Colors.textInverse} />
+              </TouchableOpacity>
+            </View>
+          ) : null}
+          </SafeAreaView>
+          <Animated.View pointerEvents="none" style={[styles.captureFlash, { opacity: captureFlashOpacity }]} />
+        </View>
       </View>
     )
   }
 
 	  function renderCalculating() {
+    const visibleMessages = DRAPE_VISION_CALCULATION_MESSAGES.slice(0, calculationStep)
+    const wireOpacity = wireBreath.interpolate({
+      inputRange: [0, 1],
+      outputRange: [0.72, 1],
+    })
+    const wireScale = wireBreath.interpolate({
+      inputRange: [0, 1],
+      outputRange: [0.985, 1.015],
+    })
+
 	    return (
 	      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-        {renderHeader('Step 3 of 3')}
+        {renderHeader('Building profile')}
         <View style={styles.calculatingContent}>
-          <View style={styles.wireframe}>
+          <Animated.View style={[styles.wireframe, { opacity: wireOpacity, transform: [{ scale: wireScale }] }]}>
             <View style={styles.wireHead} />
             <View style={styles.wireTorso} />
-            <View style={[styles.measureLine, styles.measureLineChest]} />
-            <View style={[styles.measureLine, styles.measureLineWaist]} />
-            <View style={[styles.measureLine, styles.measureLineHips]} />
-          </View>
-          <Text style={styles.titleSmall}>Calculating your fit</Text>
+            <View style={[
+              styles.measureLine,
+              styles.measureLineChest,
+              calculationStep >= 2 && styles.measureLineActive,
+            ]} />
+            <View style={[
+              styles.measureLine,
+              styles.measureLineWaist,
+              calculationStep >= 3 && styles.measureLineActive,
+            ]} />
+            <View style={[
+              styles.measureLine,
+              styles.measureLineHips,
+              calculationStep >= 4 && styles.measureLineActive,
+            ]} />
+            <View style={[
+              styles.measureLine,
+              styles.measureLineShoulders,
+              calculationStep >= 5 && styles.measureLineActive,
+            ]} />
+          </Animated.View>
+          <Text style={styles.titleSmall}>Processing your scan</Text>
           <View style={styles.calculationList}>
-            {DRAPE_VISION_CALCULATION_MESSAGES.map((message) => (
+            {visibleMessages.map((message, index) => (
               <View key={message} style={styles.calculationRow}>
-                <View style={styles.calculationDot} />
+                <View style={[
+                  styles.calculationDot,
+                  index === visibleMessages.length - 1 && styles.calculationDotActive,
+                ]} />
                 <Text style={styles.calculationText}>{message}</Text>
               </View>
             ))}
           </View>
+          <Text style={styles.calculationDurationText}>Usually under 10 seconds</Text>
         </View>
       </SafeAreaView>
 	    )
@@ -4245,24 +10424,20 @@ export default function DrapeVisionScreen() {
 	  }
 
 	  function renderVisionLabGroundTruth(result: DrapeVisionMeasurementResult) {
-	    if (!DRAPE_VISION_LAB_ENABLED || mode !== 'customer_scan') return null
+	    if (!DRAPE_VISION_VALIDATION_ENABLED || mode !== 'customer_scan') return null
 	    const comparisonSummary = deriveVisionLabComparisonSummary(groundTruthRows)
 
 	    return (
 	      <View style={styles.visionLabCard}>
 	        <View style={styles.visionLabHeader}>
 	          <View>
-	            <Text style={styles.visionLabTitle}>Vision Lab tape check</Text>
-	            <Text style={styles.visionLabText}>Save this scan, then enter tape values in inches.</Text>
+	            <Text style={styles.visionLabTitle}>Tape comparison</Text>
+	            <Text style={styles.visionLabText}>Optional TestFlight check: save this scan, then enter tape values in inches.</Text>
 	          </View>
 	          <View style={styles.visionLabBadge}>
-	            <Text style={styles.visionLabBadgeText}>DEV</Text>
+	            <Text style={styles.visionLabBadgeText}>{DRAPE_VISION_LAB_ENABLED ? 'DEV' : 'TEST'}</Text>
 	          </View>
 	        </View>
-
-	        {savedMeasurementScanId ? (
-	          <Text style={styles.visionLabScanId}>scan {savedMeasurementScanId.slice(0, 8)}</Text>
-	        ) : null}
 
 	        <View style={styles.tapeInputList}>
 	          {VISION_LAB_TAPE_FIELDS.map((item) => (
@@ -4275,9 +10450,9 @@ export default function DrapeVisionScreen() {
 	              </View>
 	              <TextInput
 	                accessibilityLabel={`${item.label} tape value in inches`}
-	                keyboardType="decimal-pad"
+	                keyboardType={FRACTIONAL_TAPE_KEYBOARD_TYPE}
 	                onChangeText={(value) => updateTapeInput(item.field, value)}
-	                placeholder="in"
+	                placeholder="e.g. 17 1/2"
 	                placeholderTextColor={DRAPE_VISION_COLORS.textDim}
 	                style={styles.tapeInput}
 	                value={tapeInputs[item.field]}
@@ -4313,9 +10488,11 @@ export default function DrapeVisionScreen() {
 	              ]}>
 	                <Text style={styles.comparisonSummaryTitle}>{comparisonSummary.title}</Text>
 	                <Text style={styles.comparisonSummaryBody}>{comparisonSummary.body}</Text>
-	                <Text style={styles.comparisonSummaryMeta}>
-	                  max {formatLabNumber(comparisonSummary.maxErrorCm, 'cm')} · mean {formatLabNumber(comparisonSummary.meanErrorCm, 'cm')}
-	                </Text>
+	                {DRAPE_VISION_DEBUG_UI_ENABLED ? (
+	                  <Text style={styles.comparisonSummaryMeta}>
+	                    max {formatLabNumber(comparisonSummary.maxErrorCm, 'cm')} · mean {formatLabNumber(comparisonSummary.meanErrorCm, 'cm')}
+	                  </Text>
+	                ) : null}
 	              </View>
 	            ) : null}
 	            {groundTruthRows.map((row) => (
@@ -4420,42 +10597,157 @@ export default function DrapeVisionScreen() {
 	  }
 
 	  function renderResults() {
-	    const result = measurementResult
-	    if (!result) return renderCalculating()
+    const result = measurementResult
+    if (!result) return renderCalculating()
     const blockingFields = isDrapeVisionBodyScanMode(mode) ? bodyScanBlockingFields(result) : []
     const hasBlockingFields = blockingFields.length > 0
     const blockingFieldsCopy = fieldListCopy(blockingFields)
-	    const reviewCopy = mode === 'tailor_client_scan'
-	      ? 'Confirm these values with the client in front of you before saving them to their Diary.'
-	      : hasBlockingFields
-          ? `Drapeon Vision could not confidently read ${blockingFieldsCopy}. Retake in fitted clothing or use manual measurements for this order.`
-	        : 'Check the values before saving. If something looks off, retake the scan or continue manually.'
-	    const reviewCheckCopy = mode === 'tailor_client_scan'
-	      ? 'I reviewed this scan with the client'
-	      : 'I reviewed these measurements'
+    const reviewFields = isDrapeVisionBodyScanMode(mode) ? bodyScanReviewFields(result) : []
+    const hasReviewFields = reviewFields.length > 0
+    const reviewFieldsCopy = fieldListCopy(reviewFields)
+    const resultFields = isDrapeVisionBodyScanMode(mode)
+      ? BODY_SCAN_REQUIRED_FIELDS
+      : DRAPE_VISION_RESULT_FIELDS
+    const reviewCopy = mode === 'tailor_client_scan'
+      ? 'Confirm these Vision measurements with the client in front of you before saving them to their Diary.'
+      : hasBlockingFields
+        ? `Drapeon Vision could not read ${blockingFieldsCopy}. Retake in fitted clothing or use manual measurements for this order.`
+        : hasReviewFields
+          ? `Review ${reviewFieldsCopy} before saving because those values need a tape or tailor check.`
+          : 'Check the values before saving. If anything looks off, retake the scan or continue manually.'
+    const reviewCheckCopy = mode === 'tailor_client_scan'
+      ? 'I reviewed these measurements with the client'
+      : 'These measurements look right'
     const showAndroidReviewNotice = Platform.OS === 'android'
+    const advancedResultFields = isDrapeVisionBodyScanMode(mode)
+      ? BODY_SCAN_RESULT_FIELDS.filter((field) => (
+          !BODY_SCAN_REQUIRED_FIELDS.includes(field) &&
+          !BODY_SCAN_PRECISION_SCAN_FIELDS.has(field) &&
+          field !== 'neckCircumference' &&
+          finiteNumber(result.measurements[field]) != null
+        ))
+      : []
+    const precisionModules = DRAPE_VISION_SPECIALIST_SCAN_MODULES.filter((item) => (
+      item.mode !== 'fit_360' &&
+      !completedSessionScanSet.has(item.mode) &&
+      specialistPrecisionFieldsForMode(item.mode).length > 0
+    ))
+    const renderMeasurementCard = (field: DrapeVisionMeasurementField, options: { moduleLabel?: string; index?: number } = {}) => {
+      const value = result.measurements[field]
+      const confidence = result.confidenceByField[field]
+      const confidenceLabel = measurementConfidenceLabel(confidence)
+      const confidenceColor = measurementConfidenceColor(confidence)
+      const isCoreMeasurement = BODY_SCAN_REQUIRED_FIELDS.includes(field) && !options.moduleLabel
+      const revealStart = Math.min(0.24 + (options.index ?? 0) * 0.06, 0.72)
+      const cardRevealStyle = {
+        opacity: resultsReveal.interpolate({
+          inputRange: [0, revealStart, 1],
+          outputRange: [0, 0, 1],
+        }),
+        transform: [{
+          translateY: resultsReveal.interpolate({
+            inputRange: [0, 1],
+            outputRange: [16, 0],
+          }),
+        }],
+      }
+      return (
+        <Animated.View
+          key={field}
+          accessible
+          accessibilityLabel={`${DRAPE_VISION_MEASUREMENT_LABELS[field]}. ${formatMeasurementValue(value, resultUnit)}. ${confidenceLabel}.`}
+          style={[
+            styles.measurementCard,
+            isCoreMeasurement && styles.measurementCardCore,
+            { borderLeftColor: confidenceColor },
+            cardRevealStyle,
+          ]}
+        >
+          <View style={[styles.measurementAccent, { backgroundColor: confidenceColor }]} />
+          <View style={styles.measurementHeader}>
+            <Text style={styles.measurementLabel}>{DRAPE_VISION_MEASUREMENT_LABELS[field]}</Text>
+            <View style={[styles.confidenceDot, { backgroundColor: confidenceColor }]} />
+          </View>
+          <Text style={[styles.measurementValue, isCoreMeasurement && styles.measurementValueCore]}>
+            {formatMeasurementValue(value, resultUnit)}
+          </Text>
+          <Text style={styles.measurementConfidenceCaption}>{confidenceLabel}</Text>
+          {options.moduleLabel ? (
+            <Text style={styles.measurementModuleTag}>{options.moduleLabel}</Text>
+          ) : null}
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={`Edit ${DRAPE_VISION_MEASUREMENT_LABELS[field]} measurement`}
+            accessibilityHint="Opens your measurement profile so you can adjust this value manually"
+            onPress={openPrimary}
+            style={styles.measurementEdit}
+          >
+            <Feather name="edit-2" size={14} color={Colors.needleGreen} />
+          </TouchableOpacity>
+        </Animated.View>
+      )
+    }
+    const revealHeroStyle = {
+      opacity: resultsReveal,
+      transform: [{
+        translateY: resultsReveal.interpolate({
+          inputRange: [0, 1],
+          outputRange: [16, 0],
+        }),
+      }],
+    }
+    const revealMeasurementsStyle = {
+      opacity: resultsReveal.interpolate({
+        inputRange: [0, 0.28, 1],
+        outputRange: [0, 0, 1],
+      }),
+      transform: [{
+        translateY: resultsReveal.interpolate({
+          inputRange: [0, 1],
+          outputRange: [22, 0],
+        }),
+      }],
+    }
+    const revealCtaStyle = {
+      opacity: resultsReveal.interpolate({
+        inputRange: [0, 0.58, 1],
+        outputRange: [0, 0, 1],
+      }),
+      transform: [{
+        translateY: resultsReveal.interpolate({
+          inputRange: [0, 1],
+          outputRange: [18, 0],
+        }),
+      }],
+    }
 
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         {renderHeader('Scan complete')}
         <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-          <View style={styles.heroCompact}>
+          <Animated.View style={[styles.heroCompact, revealHeroStyle]}>
             <View style={styles.resultBadge}>
               <Feather name="aperture" size={14} color={Colors.needleGreen} />
-              <Text style={styles.resultBadgeText}>{hasBlockingFields ? 'Needs retake' : 'Vision estimate'}</Text>
+              <Text style={styles.resultBadgeText}>
+                {hasBlockingFields ? 'Needs manual entry' : hasReviewFields ? 'Check values' : 'Body scan complete'}
+              </Text>
             </View>
-            <Text style={styles.titleSmall}>{hasBlockingFields ? 'Scan needs another pass' : 'Review your measurements'}</Text>
+            <Text style={styles.titleSmall}>
+              {hasBlockingFields ? 'Core values missing' : hasReviewFields ? 'Scan complete, review values' : 'Your measurements are ready'}
+            </Text>
             <Text style={styles.body}>
               {hasBlockingFields
                 ? 'Loose garments, poor lighting, or a partial frame can hide the body edges Drapeon Vision needs.'
-                : 'Calculated by Drapeon Vision today. Review the values before they travel into a brief.'}
+                : hasReviewFields
+                  ? 'The scan captured the required poses. Some values need a human check before they travel into a brief.'
+                  : 'Fit 360 gives your core measurements. Run a focused scan for wrist, headwear, bodice, or lower-body details.'}
             </Text>
             <View style={styles.resultUnitToggle}>
               {(['in', 'cm'] as MeasurementDisplayUnit[]).map((unit) => (
                 <TouchableOpacity
                   key={unit}
                   accessibilityRole="button"
-                  onPress={() => setResultUnit(unit)}
+                  onPress={() => updateResultUnit(unit)}
                   style={[styles.resultUnitOption, resultUnit === unit && styles.resultUnitOptionActive]}
                 >
                   <Text style={[styles.resultUnitText, resultUnit === unit && styles.resultUnitTextActive]}>
@@ -4464,37 +10756,133 @@ export default function DrapeVisionScreen() {
                 </TouchableOpacity>
               ))}
             </View>
+          </Animated.View>
+
+          <Animated.View style={[styles.measurementSection, revealMeasurementsStyle]}>
+            <Text style={styles.sectionTitle}>Your measurements</Text>
+            <View style={styles.measurementGrid}>
+              {resultFields.map((field, index) => renderMeasurementCard(field, { index }))}
+            </View>
+          </Animated.View>
+
+          {advancedResultFields.length ? (
+            <Animated.View style={[styles.measurementSection, revealMeasurementsStyle]}>
+              <Text style={styles.sectionTitle}>More detail</Text>
+              <Text style={styles.sectionBody}>
+                Extra values from the same body scan. Check anything marked for tape or tailor review.
+              </Text>
+              <View style={styles.measurementGrid}>
+                {advancedResultFields.map((field, index) => renderMeasurementCard(field, {
+                  index: resultFields.length + index,
+                }))}
+              </View>
+            </Animated.View>
+          ) : null}
+
+          {isDrapeVisionBodyScanMode(mode) ? (
+            <Animated.View style={[styles.measurementSection, revealMeasurementsStyle]}>
+              <View style={styles.workflowCardHeader}>
+                <View style={styles.workflowCheckCopy}>
+                  <Text style={styles.sectionTitle}>Complete your fit profile</Text>
+                  <Text style={styles.sectionBody}>
+                    Fit 360 captures the core. These focused scans fill in the measurements it should not guess.
+                  </Text>
+                </View>
+              </View>
+              {precisionModules.length ? (
+                <View style={styles.specialistResultList}>
+                  {precisionModules.map((item) => {
+                    const moduleFields = specialistPrecisionFieldsForMode(item.mode)
+                    return (
+                      <TouchableOpacity
+                        key={item.mode}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Start ${item.title}. Measures ${moduleFields.map((field) => DRAPE_VISION_MEASUREMENT_LABELS[field]).join(', ')}`}
+                        onPress={() => openSpecialistMode(item.mode)}
+                        style={styles.specialistResultCard}
+                      >
+                        <View style={styles.specialistModeHeader}>
+                          <View style={styles.specialistModeIcon}>
+                            <MaterialCommunityIcons name={item.icon as MaterialCommunityIconName} size={17} color={Colors.needleGreen} />
+                          </View>
+                          <View style={styles.specialistModeCopy}>
+                            <Text style={styles.specialistModeTitle}>{item.title}</Text>
+                            <Text style={styles.specialistModeStatus}>Starts a focused scan</Text>
+                          </View>
+                          <Feather name="chevron-right" size={18} color={DRAPE_VISION_COLORS.textMuted} />
+                        </View>
+                        <Text style={styles.specialistModeBody}>{specialistScanUseCase(item.mode)}</Text>
+                        <View style={styles.specialMeasurementGrid}>
+                          {moduleFields.map((field) => (
+                            <View key={`${item.mode}-${field}`} style={styles.specialMeasurementChip}>
+                              <Text style={styles.specialMeasurementChipText}>{DRAPE_VISION_MEASUREMENT_LABELS[field]}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      </TouchableOpacity>
+                    )
+                  })}
+                </View>
+              ) : (
+                <Text style={styles.sectionBody}>
+                  Every focused scan has been run in this session. Open the scan picker if you want to retake one.
+                </Text>
+              )}
+            </Animated.View>
+          ) : null}
+
+          <View style={styles.privacyBand}>
+            <Text style={[styles.sectionTitle, styles.privacyTitle]}>Privacy</Text>
+            {DRAPE_VISION_PRIVACY_POINTS.map((point) => (
+              <View key={point} style={styles.privacyRow}>
+                <Feather name="check-circle" size={16} color={Colors.needleGreen} />
+                <Text style={styles.privacyText}>{point}</Text>
+              </View>
+            ))}
           </View>
 
           <View style={styles.workflowCard}>
-            <Text style={styles.sectionTitle}>Review before saving</Text>
+            <Text style={styles.sectionTitle}>
+              {mode === 'tailor_client_scan' ? 'Confirm with client' : 'Do these look right?'}
+            </Text>
             <Text style={styles.sectionBody}>{reviewCopy}</Text>
             {isDrapeVisionBodyScanMode(mode) ? (
               <View style={styles.workflowInsight}>
                 <Feather name="info" size={16} color={Colors.needleGreen} />
                 <Text style={styles.workflowInsightText}>
-                  Under-bust, headwear/fila, bicep, wrist, and other garment-specific details still need tape or tailor confirmation before cutting.
+                  Specialist scans can add more detail after this body scan. Check tape or tailor-review values before cutting.
                 </Text>
               </View>
             ) : null}
             {hasBlockingFields ? (
-              <View style={styles.noticeBand}>
+              <View style={[styles.noticeBand, styles.noticeBandCritical]}>
                 <Feather name="alert-triangle" size={18} color={Colors.kanteRust} />
                 <View style={styles.noticeCopy}>
-                  <Text style={styles.noticeTitle}>Do not save this scan</Text>
+                  <Text style={styles.noticeTitle}>Use manual values for this pass</Text>
                   <Text style={styles.noticeText}>
-                    Wear fitted clothing for the scan. A boubou, agbada, kaftan, oversized hoodie, or layered outfit can make chest, waist, and hip measurements unreliable.
+                    Wear fitted clothing for the scan. Loose or layered outfits can hide chest, waist, and hip edges.
+                  </Text>
+                </View>
+              </View>
+            ) : null}
+            {!hasBlockingFields && hasReviewFields ? (
+              <View style={[styles.noticeBand, styles.noticeBandWarning]}>
+                <Feather name="alert-circle" size={18} color={Colors.kanteRust} />
+                <View style={styles.noticeCopy}>
+                  <Text style={styles.noticeTitle}>Check highlighted values</Text>
+                  <Text style={styles.noticeText}>
+                    Review {reviewFieldsCopy}. Save only if the numbers look reasonable, or retake/manual edit if they feel off.
                   </Text>
                 </View>
               </View>
             ) : null}
             {showAndroidReviewNotice ? (
-              <View style={styles.noticeBand}>
+              <View style={[styles.noticeBand, styles.noticeBandWarning]}>
                 <Feather name="alert-circle" size={18} color={Colors.kanteRust} />
                 <View style={styles.noticeCopy}>
                   <Text style={styles.noticeTitle}>Extra review on Android</Text>
                   <Text style={styles.noticeText}>
-                    If a number looks off, retake the scan or use manual measurements. Drapeon will not save this result until you confirm it.
+                    If a number looks off, retake the scan or use manual measurements. Vision will not save this result until you confirm it.
                   </Text>
                 </View>
               </View>
@@ -4512,7 +10900,7 @@ export default function DrapeVisionScreen() {
               <View style={styles.workflowCheckCopy}>
                 <Text style={styles.workflowCheckTitle}>{reviewCheckCopy}</Text>
                 <Text style={styles.workflowCheckHint}>
-                  This prevents accidental saves from a bad angle, loose clothing, or a rushed tailor-assisted scan.
+                  Vision estimates need a human check before they go into an order or brief.
                 </Text>
               </View>
             </TouchableOpacity>
@@ -4526,37 +10914,14 @@ export default function DrapeVisionScreen() {
             </TouchableOpacity>
           </View>
 
-          <View style={styles.measurementGrid}>
-            {DRAPE_VISION_RESULT_FIELDS.map((field) => {
-              const value = result.measurements[field]
-              const confidence = result.confidenceByField[field]
-              return (
-                <View key={field} style={styles.measurementCard}>
-                  <View style={styles.measurementHeader}>
-                    <Text style={styles.measurementLabel}>{DRAPE_VISION_MEASUREMENT_LABELS[field]}</Text>
-                    <View style={[styles.confidenceDot, { backgroundColor: measurementConfidenceColor(confidence) }]} />
-                  </View>
-                  <Text style={styles.measurementValue}>{formatMeasurementValue(value, resultUnit)}</Text>
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    accessibilityLabel={`Edit ${DRAPE_VISION_MEASUREMENT_LABELS[field]} measurement`}
-                    accessibilityHint="Opens your measurement profile so you can adjust this value manually"
-                    onPress={openPrimary}
-                    style={styles.measurementEdit}
-                  >
-                    <Feather name="edit-2" size={14} color={Colors.needleGreen} />
-                  </TouchableOpacity>
-                </View>
-              )
-            })}
-          </View>
-
 	          {result.warnings.length ? (
-	            <View style={styles.noticeBand}>
+	            <View style={[styles.noticeBand, styles.noticeBandWarning]}>
 	              <Feather name="alert-circle" size={18} color={Colors.kanteRust} />
               <View style={styles.noticeCopy}>
                 <Text style={styles.noticeTitle}>Review recommended</Text>
-                <Text style={styles.noticeText}>{result.warnings[0]}</Text>
+                <Text style={styles.noticeText}>
+                  {Array.from(new Set(result.warnings.map(userFacingVisionWarning))).slice(0, 3).join(' ')}
+                </Text>
               </View>
 	            </View>
 	          ) : null}
@@ -4566,63 +10931,93 @@ export default function DrapeVisionScreen() {
 	          {renderVisionLabRepeatability()}
 
 	          {renderVisionLabGroundTruth(result)}
-
-	          <View style={styles.privacyBand}>
-            <Text style={styles.sectionTitle}>Privacy model</Text>
-            {DRAPE_VISION_PRIVACY_POINTS.map((point) => (
-              <View key={point} style={styles.privacyRow}>
-                <Feather name="check-circle" size={16} color={Colors.needleGreen} />
-                <Text style={styles.privacyText}>{point}</Text>
-              </View>
-            ))}
-          </View>
         </ScrollView>
 
-        <View style={styles.ctaBar}>
-          <TouchableOpacity
-            accessibilityRole="button"
-            onPress={hasBlockingFields ? retakeScan : () => { void saveVisionResult() }}
-            disabled={savingResult || (!hasBlockingFields && !resultReviewed)}
-            style={[styles.primaryButton, (savingResult || (!hasBlockingFields && !resultReviewed)) && styles.primaryButtonDisabled]}
-          >
-            {savingResult ? (
-              <ActivityIndicator color={Colors.textInverse} />
-            ) : (
-              <>
-                <Text style={styles.primaryText}>
-                  {hasBlockingFields ? 'Retake scan' : resultReviewed ? resultPrimaryLabel : 'Review first'}
-                </Text>
-                <Feather name={hasBlockingFields ? 'refresh-cw' : 'check'} size={18} color={Colors.textInverse} />
-              </>
-            )}
-          </TouchableOpacity>
-          <TouchableOpacity
-            accessibilityRole="button"
-            onPress={hasBlockingFields ? openPrimary : retakeScan}
-            disabled={savingResult}
-            style={styles.secondaryButton}
-          >
-            <Text style={styles.secondaryText}>{hasBlockingFields ? 'Use manual instead' : 'Retake scan'}</Text>
-          </TouchableOpacity>
-        </View>
+        <Animated.View style={[styles.ctaBar, revealCtaStyle]}>
+          {resultSaveConfirmation ? (
+            <View
+              accessible
+              accessibilityLiveRegion="polite"
+              accessibilityLabel={resultSaveConfirmation}
+              style={styles.saveConfirmationBanner}
+            >
+              <Feather name="check-circle" size={19} color={Colors.textInverse} />
+              <Text style={styles.saveConfirmationText}>{resultSaveConfirmation}</Text>
+            </View>
+          ) : (
+            <>
+              {savedMeasurementScanId ? (
+                <>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    onPress={() => setPhase('suite')}
+                    style={styles.primaryButton}
+                  >
+                    <Text style={styles.primaryText}>Scan another</Text>
+                    <Feather name="grid" size={18} color={Colors.textInverse} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    onPress={openPrimary}
+                    style={styles.secondaryButton}
+                  >
+                    <Text style={styles.secondaryText}>{primaryActionLabel}</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    onPress={hasBlockingFields ? retakeScan : () => { void saveVisionResult() }}
+                    disabled={savingResult || (!hasBlockingFields && !resultReviewed)}
+                    style={[styles.primaryButton, (savingResult || (!hasBlockingFields && !resultReviewed)) && styles.primaryButtonDisabled]}
+                  >
+                    {savingResult ? (
+                      <ActivityIndicator color={Colors.textInverse} />
+                    ) : (
+                      <>
+                        <Text style={styles.primaryText}>
+                          {hasBlockingFields ? 'Retake scan' : resultPrimaryLabel}
+                        </Text>
+                        <Feather name={hasBlockingFields ? 'refresh-cw' : 'check'} size={18} color={Colors.textInverse} />
+                      </>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    onPress={hasBlockingFields ? openPrimary : retakeScan}
+                    disabled={savingResult}
+                    style={styles.secondaryButton}
+                  >
+                    <Text style={[styles.secondaryText, styles.secondaryTextDestructive]}>
+                      {hasBlockingFields ? 'Use manual instead' : 'Retake scan'}
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </>
+          )}
+        </Animated.View>
       </SafeAreaView>
     )
   }
 
   function renderFallback(message = engineError ?? 'Drapeon Vision cannot start on this build yet.') {
+    const friendlyMessage = userFacingVisionWarning(message)
+
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-        {renderHeader('Manual path available')}
+        {renderHeader("Couldn't start scan")}
         <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.heroCompact}>
             <View style={styles.heroIcon}>
               <Feather name="alert-circle" size={28} color={Colors.kanteRust} />
             </View>
             <Text style={styles.titleSmall}>{fallbackTitleForVisionMessage(message)}</Text>
-            <Text style={styles.body}>{message}</Text>
+            <Text style={styles.body}>{friendlyMessage}</Text>
           </View>
 
-          <View style={styles.noticeBand}>
+          <View style={[styles.noticeBand, styles.noticeBandInfo]}>
             <Feather name="shield" size={18} color={Colors.needleGreen} />
             <View style={styles.noticeCopy}>
               <Text style={styles.noticeTitle}>No incomplete scan is saved</Text>
@@ -4643,45 +11038,26 @@ export default function DrapeVisionScreen() {
               <Text style={styles.secondaryText}>Retake scan</Text>
             </TouchableOpacity>
           ) : null}
-          {DRAPE_VISION_LAB_ENABLED ? (
-            <TouchableOpacity
-              accessibilityRole="button"
-              onPress={() => { void uploadVisionLabLog('MANUAL_UPLOAD') }}
-              disabled={visionLabUploading || visionLabSampleCount === 0}
-              style={[styles.secondaryButton, (visionLabUploading || visionLabSampleCount === 0) && styles.secondaryButtonDisabled]}
-            >
-              <Text style={styles.secondaryText}>
-                {visionLabUploading ? 'Uploading scan debug' : visionLabSampleCount === 0 ? 'No scan debug yet' : 'Upload scan debug'}
-              </Text>
-            </TouchableOpacity>
-          ) : null}
-          <TouchableOpacity accessibilityRole="button" onPress={() => setPhase('intro')} style={styles.secondaryButton}>
-            <Text style={styles.secondaryText}>Back to Vision</Text>
+          <TouchableOpacity accessibilityRole="button" onPress={() => setPhase('suite')} style={styles.secondaryButton}>
+            <Text style={styles.secondaryText}>Back to scan picker</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
     )
   }
 
+  if (phase === 'specialist') return renderSpecialistScan()
+  if (phase === 'specialist_scan') return renderSpecialistGuidedScan()
+  if (phase === 'specialist_result') return renderSpecialistResult()
   if (phase === 'height') return renderHeightEntry()
   if (phase === 'scan') return renderScan()
   if (phase === 'calculating') return renderCalculating()
   if (phase === 'results') return renderResults()
   if (phase === 'fallback') return renderFallback()
+  if (phase === 'suite') return renderVisionSuite()
   if (mode === 'garment_qc') return renderGarmentQcWorkflow()
   if (mode === 'size_guide_scan') return renderSizeGuideWorkflow()
   return renderIntro()
-}
-
-function BenefitRow({ icon, title }: { icon: keyof typeof Feather.glyphMap; title: string }) {
-  return (
-    <View style={styles.benefitRow}>
-      <View style={styles.benefitIcon}>
-        <Feather name={icon} size={16} color={Colors.needleGreen} />
-      </View>
-      <Text style={styles.benefitText}>{title}</Text>
-    </View>
-  )
 }
 
 function Radar({
@@ -4698,26 +11074,73 @@ function Radar({
         const captured = capturedSegments[index]
         const current = currentSegment === index
         return (
-          <View
+          <RadarNode
             key={`${angle}-${index}`}
-            style={[
-              styles.radarNode,
-              {
-                transform: [
-                  { rotate: `${angle}deg` },
-                  { translateY: -86 },
-                  { rotate: `-${angle}deg` },
-                ],
-              },
-              captured && styles.radarNodeCaptured,
-              current && !captured && styles.radarNodeCurrent,
-            ]}
-          >
-            {captured ? <Feather name="check" size={12} color={DRAPE_VISION_COLORS.screen} /> : null}
-          </View>
+            angle={angle}
+            captured={captured}
+            current={current}
+          />
         )
       })}
     </View>
+  )
+}
+
+function RadarNode({
+  angle,
+  captured,
+  current,
+}: {
+  angle: number
+  captured: boolean
+  current: boolean
+}) {
+  const pulse = useRef(new Animated.Value(0)).current
+  const wasCapturedRef = useRef(captured)
+
+  useEffect(() => {
+    if (captured && !wasCapturedRef.current) {
+      pulse.setValue(0)
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 110,
+          useNativeDriver: true,
+        }),
+        Animated.spring(pulse, {
+          toValue: 0,
+          friction: 4,
+          tension: 120,
+          useNativeDriver: true,
+        }),
+      ]).start()
+    }
+    wasCapturedRef.current = captured
+  }, [captured, pulse])
+
+  const scale = pulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.34],
+  })
+
+  return (
+    <Animated.View
+      style={[
+        styles.radarNode,
+        {
+          transform: [
+            { rotate: `${angle}deg` },
+            { translateY: -55 },
+            { rotate: `-${angle}deg` },
+            { scale },
+          ],
+        },
+        captured && styles.radarNodeCaptured,
+        current && !captured && styles.radarNodeCurrent,
+      ]}
+    >
+      {captured ? <Feather name="check" size={12} color={DRAPE_VISION_COLORS.screen} /> : null}
+    </Animated.View>
   )
 }
 
@@ -4771,9 +11194,9 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.lg,
-    paddingBottom: Spacing.xxxl,
-    gap: Spacing.lg,
+    paddingTop: Spacing.md,
+    paddingBottom: 220,
+    gap: Spacing.md,
   },
   centerContent: {
     flexGrow: 1,
@@ -4783,12 +11206,12 @@ const styles = StyleSheet.create({
     gap: Spacing.xl,
   },
   hero: {
-    gap: Spacing.sm,
-    paddingTop: Spacing.xl,
-    paddingBottom: Spacing.lg,
+    gap: Spacing.xs,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.md,
   },
   heroCompact: {
-    gap: Spacing.sm,
+    gap: Spacing.xs,
   },
   heroIcon: {
     width: 58,
@@ -4869,12 +11292,28 @@ const styles = StyleSheet.create({
   noticeBand: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: Spacing.md,
-    padding: Spacing.lg,
+    gap: Spacing.sm,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.md,
     borderRadius: Radius.md,
-    backgroundColor: DRAPE_VISION_COLORS.panel,
+    backgroundColor: 'rgba(255,255,255,0.045)',
     borderWidth: 1,
-    borderColor: Colors.needleGreen + '55',
+    borderColor: 'rgba(255,255,255,0.09)',
+  },
+  noticeBandInfo: {
+    borderColor: 'rgba(255,255,255,0.09)',
+  },
+  noticeBandSuccess: {
+    borderColor: 'rgba(29,158,117,0.32)',
+    backgroundColor: 'rgba(29,158,117,0.08)',
+  },
+  noticeBandWarning: {
+    borderColor: 'rgba(211,92,48,0.24)',
+    backgroundColor: 'rgba(211,92,48,0.07)',
+  },
+  noticeBandCritical: {
+    borderColor: 'rgba(211,92,48,0.34)',
+    backgroundColor: 'rgba(211,92,48,0.08)',
   },
   noticeCopy: {
     flex: 1,
@@ -4963,15 +11402,65 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     lineHeight: 20,
   },
+  nativeRequirementRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+  },
+  nativeRequirementText: {
+    flex: 1,
+    color: DRAPE_VISION_COLORS.textMuted,
+    fontSize: FontSize.sm,
+    lineHeight: 20,
+  },
   workflowSuccessText: {
     fontSize: FontSize.sm,
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
   },
+  workflowPhotoPreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingTop: Spacing.xs,
+  },
+  workflowPhotoThumb: {
+    width: 56,
+    height: 56,
+    borderRadius: Radius.sm,
+    backgroundColor: DRAPE_VISION_COLORS.screen,
+    borderWidth: 1,
+    borderColor: DRAPE_VISION_COLORS.line,
+  },
   workflowGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: Spacing.sm,
+  },
+  workflowPresetRow: {
+    gap: Spacing.sm,
+    paddingVertical: Spacing.xs,
+  },
+  workflowPresetChip: {
+    minHeight: 36,
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.full,
+    backgroundColor: DRAPE_VISION_COLORS.screen,
+    borderWidth: 1,
+    borderColor: DRAPE_VISION_COLORS.line,
+  },
+  workflowPresetChipActive: {
+    backgroundColor: Colors.needleGreen,
+    borderColor: Colors.needleGreen,
+  },
+  workflowPresetText: {
+    color: DRAPE_VISION_COLORS.textMuted,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+  },
+  workflowPresetTextActive: {
+    color: Colors.textInverse,
   },
   workflowField: {
     width: '48%',
@@ -5038,6 +11527,40 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     color: Colors.needleGreen,
     fontWeight: FontWeight.semibold,
+  },
+  workflowSuccessCard: {
+    minHeight: 104,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.md,
+    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    backgroundColor: 'rgba(29,158,117,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(29,158,117,0.44)',
+  },
+  workflowSuccessIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreen,
+  },
+  workflowSuccessCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 4,
+  },
+  workflowSuccessTitle: {
+    color: DRAPE_VISION_COLORS.text,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.bold,
+  },
+  workflowSuccessBody: {
+    color: DRAPE_VISION_COLORS.textMuted,
+    fontSize: FontSize.sm,
+    lineHeight: 20,
   },
   workflowLoadingRow: {
     minHeight: 44,
@@ -5111,11 +11634,172 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: DRAPE_VISION_COLORS.textMuted,
   },
+  specialMeasurementsCard: {
+    gap: Spacing.sm,
+    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    backgroundColor: DRAPE_VISION_COLORS.panel,
+    borderWidth: 1,
+    borderColor: DRAPE_VISION_COLORS.line,
+  },
+  specialMeasurementGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  specialMeasurementChip: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    paddingHorizontal: Spacing.sm,
+    borderRadius: Radius.full,
+    backgroundColor: 'rgba(29,158,117,0.12)',
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '33',
+  },
+  specialMeasurementChipText: {
+    color: DRAPE_VISION_COLORS.text,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+  },
+  savedHeightBand: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    backgroundColor: DRAPE_VISION_COLORS.panel,
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '44',
+  },
+  savedHeightCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  savedHeightEyebrow: {
+    color: Colors.needleGreenLight,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.bold,
+    textTransform: 'uppercase',
+  },
+  savedHeightValue: {
+    color: DRAPE_VISION_COLORS.text,
+    fontSize: FontSize.xl,
+    fontWeight: FontWeight.bold,
+  },
+  savedHeightBody: {
+    color: DRAPE_VISION_COLORS.textMuted,
+    fontSize: FontSize.sm,
+    lineHeight: 20,
+  },
+  savedHeightButton: {
+    minHeight: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.full,
+    backgroundColor: 'rgba(29,158,117,0.14)',
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '44',
+  },
+  savedHeightButtonText: {
+    color: Colors.needleGreenLight,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.bold,
+  },
+  specialistModeList: {
+    gap: Spacing.sm,
+  },
+  specialistModeCard: {
+    gap: Spacing.sm,
+    padding: Spacing.md,
+    borderRadius: Radius.md,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: 1,
+    borderColor: DRAPE_VISION_COLORS.line,
+  },
+  specialistModeCardRecommended: {
+    backgroundColor: 'rgba(29,158,117,0.1)',
+    borderColor: Colors.needleGreen + '55',
+  },
+  specialistModeCardComplete: {
+    opacity: 0.78,
+    borderColor: Colors.needleGreen + '66',
+    backgroundColor: 'rgba(29,158,117,0.08)',
+  },
+  specialistModeCardDisabled: {
+    opacity: 0.55,
+  },
+  specialistModeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  specialistModeIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(29,158,117,0.12)',
+  },
+  specialistModeCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  specialistModeTitleRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: Spacing.xs,
+  },
+  specialistModeTitle: {
+    color: DRAPE_VISION_COLORS.text,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.bold,
+  },
+  specialistRecommendedPill: {
+    minHeight: 20,
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.sm,
+    borderRadius: Radius.full,
+    backgroundColor: 'rgba(29,158,117,0.16)',
+    borderWidth: 1,
+    borderColor: Colors.needleGreen + '44',
+  },
+  specialistRecommendedText: {
+    color: Colors.needleGreenLight,
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: FontWeight.bold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  specialistModeStatus: {
+    color: DRAPE_VISION_COLORS.textMuted,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+  },
+  specialistModeBody: {
+    color: DRAPE_VISION_COLORS.textMuted,
+    fontSize: FontSize.sm,
+    lineHeight: 20,
+  },
+  specialistModeHint: {
+    color: Colors.needleGreenLight,
+    fontSize: FontSize.xs,
+    lineHeight: 17,
+    fontWeight: FontWeight.semibold,
+  },
   privacyBand: {
     gap: Spacing.sm,
     padding: Spacing.lg,
     borderRadius: Radius.md,
     backgroundColor: Colors.needleGreenLight,
+  },
+  privacyTitle: {
+    color: Colors.ink,
   },
   privacyRow: {
     flexDirection: 'row',
@@ -5136,6 +11820,11 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: DRAPE_VISION_COLORS.line,
     backgroundColor: DRAPE_VISION_COLORS.screen,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.22,
+    shadowRadius: 10,
+    elevation: 12,
   },
   primaryButton: {
     minHeight: 54,
@@ -5162,10 +11851,44 @@ const styles = StyleSheet.create({
   secondaryButtonDisabled: {
     opacity: 0.55,
   },
+  ctaSecondaryRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  ctaSecondaryHalf: {
+    flex: 1,
+    minHeight: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: Radius.md,
+    backgroundColor: 'rgba(255,255,255,0.045)',
+  },
+  tertiaryButton: {
+    minHeight: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   secondaryText: {
     color: DRAPE_VISION_COLORS.textMuted,
     fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
+  },
+  secondaryTextDestructive: {
+    color: Colors.kanteRustLight,
+  },
+  saveConfirmationBanner: {
+    minHeight: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.needleGreen,
+  },
+  saveConfirmationText: {
+    color: Colors.textInverse,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.bold,
   },
   unitToggle: {
     flexDirection: 'row',
@@ -5175,6 +11898,25 @@ const styles = StyleSheet.create({
     backgroundColor: DRAPE_VISION_COLORS.panel,
     borderWidth: 1,
     borderColor: DRAPE_VISION_COLORS.line,
+  },
+  inlineTrustNote: {
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.full,
+    backgroundColor: 'rgba(255,255,255,0.045)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  inlineTrustText: {
+    flex: 1,
+    color: DRAPE_VISION_COLORS.textMuted,
+    fontSize: FontSize.xs,
+    lineHeight: 17,
+    fontWeight: FontWeight.semibold,
   },
   unitOption: {
     minWidth: 82,
@@ -5193,6 +11935,43 @@ const styles = StyleSheet.create({
   },
   unitTextActive: {
     color: Colors.textInverse,
+  },
+  heightConfidenceGrid: {
+    width: '100%',
+    gap: Spacing.sm,
+  },
+  heightConfidenceCard: {
+    minHeight: 78,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+    padding: Spacing.md,
+    borderRadius: Radius.md,
+    backgroundColor: DRAPE_VISION_COLORS.panel,
+    borderWidth: 1,
+    borderColor: DRAPE_VISION_COLORS.line,
+  },
+  heightConfidenceCardActive: {
+    borderColor: Colors.needleGreen,
+    backgroundColor: 'rgba(29,158,117,0.12)',
+  },
+  heightConfidenceCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  heightConfidenceTitle: {
+    color: DRAPE_VISION_COLORS.text,
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.bold,
+  },
+  heightConfidenceTitleActive: {
+    color: Colors.needleGreenLight,
+  },
+  heightConfidenceBody: {
+    color: DRAPE_VISION_COLORS.textMuted,
+    fontSize: FontSize.sm,
+    lineHeight: 19,
   },
   heightPicker: {
     alignItems: 'center',
@@ -5227,100 +12006,293 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
   },
   scanOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'transparent',
+  },
+  scanSafeOverlay: {
     flex: 1,
     justifyContent: 'space-between',
-    backgroundColor: 'rgba(0,0,0,0.18)',
+  },
+  scanTopScrim: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 172,
+    backgroundColor: 'rgba(0,0,0,0.2)',
   },
   scanTopBar: {
-    flexDirection: 'row',
+    minHeight: 58,
     alignItems: 'center',
-    gap: Spacing.md,
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.sm,
+    justifyContent: 'center',
+    paddingHorizontal: 76,
+    paddingTop: Spacing.md,
+    zIndex: 10,
   },
   scanIconButton: {
+    position: 'absolute',
+    left: Spacing.lg,
+    top: Spacing.md,
     width: 44,
     height: 44,
     borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(26,26,24,0.76)',
-  },
-  instructionPill: {
-    flex: 1,
-    minHeight: 44,
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: Spacing.lg,
-    backgroundColor: 'rgba(26,26,24,0.78)',
+    backgroundColor: 'rgba(12,12,11,0.58)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
+    borderColor: 'rgba(255,255,255,0.12)',
   },
-  instructionText: {
+  scanInstructionText: {
     color: Colors.textInverse,
-    fontSize: FontSize.md,
+    fontSize: 18,
+    lineHeight: 24,
     fontWeight: FontWeight.semibold,
+    textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.86)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 5,
   },
   scanCenter: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: Spacing.md,
+    gap: Spacing.sm,
   },
-  scanDistanceCue: {
-    width: '88%',
-    minHeight: 96,
+  scanHudCenter: {
+    position: 'absolute',
+    left: Spacing.lg,
+    right: Spacing.lg,
+    top: '23%',
+    alignItems: 'center',
+    zIndex: 4,
+  },
+  countdownHud: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: '27%',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    zIndex: 6,
+  },
+  countdownHudNumber: {
+    color: Colors.textInverse,
+    fontSize: 92,
+    lineHeight: 98,
+    fontWeight: FontWeight.bold,
+    fontVariant: ['tabular-nums'],
+    textShadowColor: 'rgba(0,0,0,0.88)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 8,
+  },
+  countdownHudText: {
+    marginTop: -4,
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.semibold,
+    textShadowColor: 'rgba(0,0,0,0.8)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  scanRadarDock: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 42,
+    alignItems: 'center',
+    gap: Spacing.sm,
+    zIndex: 5,
+  },
+  specialistGuideCenter: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.md,
     paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    borderRadius: Radius.md,
-    backgroundColor: 'rgba(26,26,24,0.84)',
+    paddingTop: 96,
+    paddingBottom: 156,
+  },
+  specialistGuideHudTitle: {
+    width: '100%',
+    color: Colors.textInverse,
+    fontSize: 30,
+    lineHeight: 36,
+    fontWeight: FontWeight.bold,
+    textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.88)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 7,
+  },
+  specialistGuideHudMessage: {
+    maxWidth: 330,
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: FontSize.lg,
+    lineHeight: 25,
+    fontWeight: FontWeight.semibold,
+    textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.86)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 5,
+  },
+  specialistGuideCaption: {
+    color: Colors.textInverse,
+    fontSize: FontSize.sm,
+    lineHeight: 20,
+    fontWeight: FontWeight.bold,
+    textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.86)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 5,
+  },
+  specialistGuideFrame: {
+    width: '78%',
+    minHeight: 238,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing.lg,
+    borderWidth: 3,
+    borderColor: 'rgba(255,255,255,0.6)',
+    backgroundColor: 'rgba(10,10,9,0.08)',
+    shadowColor: Colors.needleGreen,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.34,
+    shadowRadius: 14,
+  },
+  specialistGuideFrameHand: {
+    maxWidth: 330,
+    aspectRatio: 0.8,
+    borderRadius: Radius.xl,
+  },
+  specialistGuideFrameHead: {
+    maxWidth: 330,
+    aspectRatio: 0.76,
+    borderRadius: 170,
+  },
+  specialistGuideFrameBodice: {
+    maxWidth: 360,
+    aspectRatio: 0.72,
+    borderTopLeftRadius: 120,
+    borderTopRightRadius: 120,
+    borderBottomLeftRadius: Radius.xl,
+    borderBottomRightRadius: Radius.xl,
+  },
+  specialistGuideFrameLower: {
+    maxWidth: 300,
+    aspectRatio: 0.58,
+    borderRadius: Radius.xl,
+  },
+  specialistGuideFrameAction: {
+    borderColor: Colors.needleGreen,
+    backgroundColor: 'rgba(29,158,117,0.1)',
+  },
+  specialistGuideFrameSuccess: {
+    borderColor: Colors.needleGreen,
+    backgroundColor: 'rgba(29,158,117,0.18)',
+  },
+  specialistGuideFrameWarning: {
+    borderColor: 'rgba(255,255,255,0.5)',
+    backgroundColor: 'rgba(10,10,9,0.12)',
+  },
+  specialistGuideIconHalo: {
+    width: 78,
+    height: 78,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(29,158,117,0.88)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.34)',
+    shadowColor: Colors.needleGreen,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.58,
+    shadowRadius: 12,
+  },
+  specialistGuideFrameTitle: {
+    width: '100%',
+    color: Colors.textInverse,
+    fontSize: FontSize.xl,
+    lineHeight: 28,
+    fontWeight: FontWeight.bold,
+    textAlign: 'center',
+  },
+  specialistGuideFrameBody: {
+    width: '100%',
+    maxWidth: 290,
+    color: 'rgba(255,255,255,0.86)',
+    fontSize: FontSize.sm,
+    lineHeight: 20,
+    fontWeight: FontWeight.semibold,
+    textAlign: 'center',
+  },
+  specialistProgressTrack: {
+    width: '76%',
+    maxWidth: 320,
+    height: 12,
+    borderRadius: Radius.full,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.16)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.18)',
   },
+  specialistProgressFill: {
+    height: '100%',
+    borderRadius: Radius.full,
+    backgroundColor: Colors.needleGreen,
+  },
+  scanDistanceCue: {
+    width: '100%',
+    maxWidth: 390,
+    minHeight: 126,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.xs,
+  },
   scanDistanceCueAction: {
-    backgroundColor: 'rgba(29,158,117,0.86)',
-    borderColor: 'rgba(255,255,255,0.24)',
   },
   scanDistanceCueCountdown: {
-    minHeight: 118,
-    backgroundColor: 'rgba(29,158,117,0.92)',
-    borderColor: 'rgba(255,255,255,0.26)',
+    minHeight: 140,
   },
   scanDistanceCueSuccess: {
-    backgroundColor: 'rgba(29,158,117,0.92)',
-    borderColor: 'rgba(255,255,255,0.26)',
   },
   scanDistanceCueWarning: {
-    backgroundColor: 'rgba(211,92,48,0.92)',
-    borderColor: 'rgba(255,255,255,0.24)',
+  },
+  scanDistanceIcon: {
+    marginBottom: 4,
+    textShadowColor: 'rgba(0,0,0,0.82)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 5,
   },
   scanDistanceTitle: {
     width: '100%',
     color: Colors.textInverse,
-    fontSize: 34,
-    lineHeight: 40,
+    fontSize: 42,
+    lineHeight: 48,
     fontWeight: FontWeight.bold,
     textAlign: 'center',
     letterSpacing: 0,
+    textShadowColor: 'rgba(0,0,0,0.7)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
   scanDistanceTitleCountdown: {
-    fontSize: 68,
-    lineHeight: 74,
+    fontSize: 86,
+    lineHeight: 92,
   },
   scanDistanceSubtitle: {
     color: 'rgba(255,255,255,0.9)',
     fontSize: FontSize.md,
-    lineHeight: 21,
+    lineHeight: 22,
     fontWeight: FontWeight.semibold,
     textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.7)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
   radar: {
-    width: 220,
-    height: 220,
-    borderRadius: 110,
+    width: 138,
+    height: 138,
+    borderRadius: 69,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
@@ -5328,16 +12300,16 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(26,26,24,0.16)',
   },
   radarInner: {
-    width: 126,
-    height: 126,
-    borderRadius: 63,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.18)',
   },
   radarNode: {
     position: 'absolute',
-    width: 34,
-    height: 34,
+    width: 28,
+    height: 28,
     borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',
@@ -5361,6 +12333,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     borderRadius: Radius.full,
     backgroundColor: Colors.needleGreen,
+    shadowColor: Colors.needleGreen,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.48,
+    shadowRadius: 10,
   },
   captureNoticeText: {
     color: Colors.textInverse,
@@ -5381,116 +12357,135 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
   },
-  scanBottomPanel: {
-    gap: Spacing.sm,
-    margin: Spacing.lg,
-    padding: Spacing.lg,
-    borderRadius: Radius.md,
-    backgroundColor: 'rgba(26,26,24,0.86)',
+  scanSideRail: {
+    position: 'absolute',
+    right: Spacing.md,
+    top: 112,
+    alignItems: 'center',
+    gap: Spacing.md,
+    zIndex: 9,
+  },
+  scanRailButton: {
+    width: 48,
+    height: 48,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(10,10,9,0.48)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.28,
+    shadowRadius: 8,
+  },
+  liveTracePanel: {
+    position: 'absolute',
+    left: Spacing.md,
+    right: 78,
+    bottom: 14,
+    gap: 2,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: Radius.sm,
+    backgroundColor: 'rgba(10,10,9,0.58)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    zIndex: 12,
+  },
+  liveTraceText: {
+    color: 'rgba(255,255,255,0.82)',
+    fontSize: 10,
+    lineHeight: 13,
+    fontVariant: ['tabular-nums'],
+  },
+  scanCaptureDock: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 8,
+  },
+  scanShutterButton: {
+    width: 76,
+    height: 76,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreen,
+    borderWidth: 6,
+    borderColor: 'rgba(255,255,255,0.86)',
+    shadowColor: Colors.needleGreen,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.52,
+    shadowRadius: 14,
+  },
+  scanShutterButtonDisabled: {
+    backgroundColor: 'rgba(70,70,66,0.92)',
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+  },
+  scanActiveStatus: {
+    minHeight: 32,
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.full,
+    backgroundColor: 'rgba(10,10,9,0.52)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.14)',
   },
-  scanProgressHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: Spacing.md,
-  },
-  scanProgressTitle: {
-    flex: 1,
+  scanActiveStatusText: {
     color: Colors.textInverse,
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.semibold,
-  },
-  scanProgressMeta: {
-    color: Colors.needleGreen,
     fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-  },
-  scanHint: {
-    color: DRAPE_VISION_COLORS.textMuted,
-    fontSize: FontSize.sm,
-    lineHeight: 19,
-  },
-  scanPrivacyText: {
-    color: 'rgba(255,255,255,0.74)',
-    fontSize: FontSize.xs,
-    lineHeight: 17,
-  },
-  scanStartButton: {
-    minHeight: 44,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.sm,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.needleGreen,
-  },
-  scanStartButtonDisabled: {
-    opacity: 0.72,
-  },
-  scanStartText: {
-    color: Colors.textInverse,
-    fontSize: FontSize.sm,
     fontWeight: FontWeight.bold,
   },
-  scanRecoveryRow: {
+  specialistGuideStats: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: Spacing.sm,
   },
-  scanRecoveryButton: {
-    minHeight: 44,
+  specialistGuideStat: {
     flexGrow: 1,
-    flexBasis: '48%',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.xs,
-    borderRadius: Radius.md,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
-  },
-  scanRecoveryButtonDisabled: {
-    opacity: 0.62,
-  },
-  scanRecoveryText: {
-    color: DRAPE_VISION_COLORS.text,
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-  },
-  scanDebugPanel: {
-    gap: 2,
+    flexBasis: '46%',
+    gap: 3,
+    minHeight: 58,
     padding: Spacing.sm,
     borderRadius: Radius.sm,
     backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
   },
-  scanDebugText: {
-    color: 'rgba(255,255,255,0.72)',
+  specialistGuideStatLabel: {
+    color: 'rgba(255,255,255,0.58)',
     fontSize: FontSize.xs,
-    lineHeight: 17,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
   },
-  scanDebugUploadButton: {
-    minHeight: 34,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 6,
-    borderRadius: Radius.sm,
-    backgroundColor: 'rgba(29,158,117,0.8)',
-  },
-  scanDebugUploadButtonDisabled: {
-    opacity: 0.55,
-  },
-  scanDebugUploadText: {
+  specialistGuideStatValue: {
     color: Colors.textInverse,
-    fontSize: FontSize.xs,
+    fontSize: FontSize.sm,
     fontWeight: FontWeight.bold,
+  },
+  scanStartButtonDisabled: {
+    opacity: 0.72,
+  },
+  scanRecoveryButtonDisabled: {
+    opacity: 0.62,
   },
   scanWarning: {
     color: Colors.kanteRustLight,
     fontSize: FontSize.xs,
     lineHeight: 18,
+  },
+  captureFlash: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#fff',
+    zIndex: 20,
+  },
+  scanReadyText: {
+    color: Colors.needleGreen,
   },
   calculatingContent: {
     flex: 1,
@@ -5523,11 +12518,19 @@ const styles = StyleSheet.create({
     position: 'absolute',
     height: 2,
     borderRadius: Radius.full,
+    backgroundColor: 'rgba(29,158,117,0.25)',
+  },
+  measureLineActive: {
+    height: 3,
     backgroundColor: Colors.needleGreen,
   },
   measureLineChest: {
     top: 104,
     width: 132,
+  },
+  measureLineShoulders: {
+    top: 78,
+    width: 112,
   },
   measureLineWaist: {
     top: 152,
@@ -5553,9 +12556,19 @@ const styles = StyleSheet.create({
     borderRadius: Radius.full,
     backgroundColor: Colors.needleGreen,
   },
+  calculationDotActive: {
+    width: 12,
+    height: 12,
+    backgroundColor: Colors.needleGreenLight,
+  },
   calculationText: {
     color: DRAPE_VISION_COLORS.textMuted,
     fontSize: FontSize.sm,
+  },
+  calculationDurationText: {
+    color: DRAPE_VISION_COLORS.textDim,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
   },
   resultBadge: {
     alignSelf: 'flex-start',
@@ -5600,6 +12613,9 @@ const styles = StyleSheet.create({
   resultUnitTextActive: {
     color: Colors.textInverse,
   },
+  measurementSection: {
+    gap: Spacing.sm,
+  },
   measurementGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -5607,12 +12623,27 @@ const styles = StyleSheet.create({
   },
   measurementCard: {
     width: '47%',
-    minHeight: 128,
+    minHeight: 156,
     padding: Spacing.md,
     borderRadius: Radius.md,
     backgroundColor: DRAPE_VISION_COLORS.panel,
     borderWidth: 1,
+    borderLeftWidth: 4,
     borderColor: DRAPE_VISION_COLORS.line,
+    overflow: 'hidden',
+  },
+  measurementCardCore: {
+    minHeight: 176,
+    paddingVertical: Spacing.lg,
+    backgroundColor: DRAPE_VISION_COLORS.panelSoft,
+  },
+  measurementAccent: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 3,
+    opacity: 0.85,
   },
   measurementHeader: {
     flexDirection: 'row',
@@ -5625,6 +12656,8 @@ const styles = StyleSheet.create({
     color: DRAPE_VISION_COLORS.textMuted,
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
   confidenceDot: {
     width: 9,
@@ -5634,20 +12667,55 @@ const styles = StyleSheet.create({
   measurementValue: {
     marginTop: Spacing.md,
     color: Colors.textInverse,
-    fontSize: FontSize.xl,
+    fontSize: 30,
+    lineHeight: 34,
     fontWeight: FontWeight.bold,
+    fontVariant: ['tabular-nums'],
   },
-	  measurementEdit: {
-	    position: 'absolute',
-	    right: Spacing.md,
-	    bottom: Spacing.md,
-	    width: 30,
+  measurementValueCore: {
+    fontSize: 34,
+    lineHeight: 38,
+  },
+  measurementConfidenceCaption: {
+    marginTop: 2,
+    color: DRAPE_VISION_COLORS.textMuted,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+  },
+  measurementModuleTag: {
+    marginTop: Spacing.xs,
+    color: Colors.needleGreenLight,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+  },
+  measurementNote: {
+    marginTop: Spacing.xs,
+    color: DRAPE_VISION_COLORS.textDim,
+    fontSize: FontSize.xs,
+    lineHeight: 17,
+  },
+  measurementEdit: {
+    position: 'absolute',
+    right: Spacing.md,
+    bottom: Spacing.md,
+    width: 30,
     height: 30,
     borderRadius: Radius.full,
     alignItems: 'center',
-	    justifyContent: 'center',
-	    backgroundColor: Colors.needleGreenLight,
-	  },
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  specialistResultList: {
+    gap: Spacing.sm,
+  },
+  specialistResultCard: {
+    gap: Spacing.sm,
+    padding: Spacing.md,
+    borderRadius: Radius.md,
+    backgroundColor: DRAPE_VISION_COLORS.panel,
+    borderWidth: 1,
+    borderColor: DRAPE_VISION_COLORS.line,
+  },
 	  visionLabCard: {
 	    gap: Spacing.md,
 	    padding: Spacing.lg,
@@ -5717,6 +12785,26 @@ const styles = StyleSheet.create({
 	    marginTop: 2,
 	    color: DRAPE_VISION_COLORS.textMuted,
 	    fontSize: FontSize.xs,
+	  },
+	  specialistTapeDelta: {
+	    marginTop: 3,
+	    fontSize: FontSize.xs,
+	    fontWeight: FontWeight.semibold,
+	  },
+  tapePromptText: {
+    marginTop: 3,
+    color: DRAPE_VISION_COLORS.textDim,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+  },
+	  specialistTapeToneGood: {
+	    color: Colors.needleGreenLight,
+	  },
+	  specialistTapeToneWatch: {
+	    color: Colors.statusPending,
+	  },
+	  specialistTapeToneReview: {
+	    color: Colors.kanteRust,
 	  },
 	  tapeInput: {
 	    width: 88,

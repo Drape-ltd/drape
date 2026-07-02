@@ -13,6 +13,7 @@ export type MeasurementScanCaptureMethod =
   | 'GUIDED_HELPER_BASELINE'
   | 'TAILOR_REVIEWED_BASELINE'
   | 'DRAPE_VISION_ROTATION'
+  | 'DRAPE_VISION_SPECIALIST_SCAN'
   | 'TAILOR_ASSISTED_DRAPE_VISION_ROTATION'
   | 'GARMENT_QC_VISION_FLAT_LAY'
 
@@ -603,6 +604,7 @@ export const MEASUREMENT_SCAN_CAPTURE_METHOD_LABELS: Record<MeasurementScanCaptu
   GUIDED_HELPER_BASELINE: 'Guided fit intake with helper',
   TAILOR_REVIEWED_BASELINE: 'Tailor-reviewed fit intake',
   DRAPE_VISION_ROTATION: 'Drapeon Vision scan',
+  DRAPE_VISION_SPECIALIST_SCAN: 'Drapeon Vision specialist scan',
   TAILOR_ASSISTED_DRAPE_VISION_ROTATION: 'Tailor-assisted Drapeon Vision scan',
   GARMENT_QC_VISION_FLAT_LAY: 'Drapeon Vision garment QC',
 }
@@ -784,9 +786,12 @@ export function measurementGuideForField(field: unknown) {
     null
 }
 
-const MEASUREMENT_METADATA_KEYS = new Set<string>([
+export const MEASUREMENT_METADATA_KEYS = new Set<string>([
   ...MEASUREMENT_FIELD_KEYS,
   'unit',
+  'measurementProfileLabel',
+  'measurementProfileUpdatedAt',
+  'wearerContext',
   'fitStyle',
   'fitPassportVersion',
   'measurementSource',
@@ -806,26 +811,50 @@ const MEASUREMENT_METADATA_KEYS = new Set<string>([
   'captureMethod',
   'captureVersion',
   'capturedAt',
+  'visionPipelineVersion',
+  'outputKind',
+  'scanFlow',
+  'scanFlowLabel',
+  'heightInputConfidence',
   'confidenceOverall',
   'confidenceByField',
   'sourceDevice',
   'latestMeasurementScanId',
   'latestMeasurementScanStatus',
   'latestFitProfile',
+  'specialistUpdatedAt',
+  'specialistMeasurements',
+  'visionSpecialistProfile',
+  'latestSpecialistMeasurementScanId',
+  'latestSpecialistScanMode',
+  'latestSpecialistScanFlow',
+  'latestSpecialistScanStatus',
+  'latestSpecialistScanAt',
   'bodyFlags',
   'symmetryFlags',
   'requiresTailorReview',
   'displayUnit',
   'displayMeasurements',
   'warnings',
+  'launchSafeFields',
+  'researchOnlyFields',
+  'draftFields',
+  'specialistMode',
+  'tapeInputsIn',
+  'tapeSummary',
 ])
+
+export function isMeasurementMetadataKey(key: unknown): key is string {
+  if (typeof key !== 'string') return false
+  return MEASUREMENT_METADATA_KEYS.has(key) || key.startsWith('latestSpecialist')
+}
 
 export function getAdditionalMeasurementRows(measurements: Record<string, unknown> | null | undefined) {
   if (!measurements) return []
 
   return Object.entries(measurements)
     .filter(([key, value]) => {
-      if (MEASUREMENT_METADATA_KEYS.has(key)) return false
+      if (isMeasurementMetadataKey(key)) return false
       if (value == null) return false
       if (typeof value === 'number') return Number.isFinite(value)
       if (typeof value === 'string') return value.trim().length > 0
@@ -989,6 +1018,7 @@ export function isMeasurementCaptureMethod(value: unknown): value is Measurement
     value === 'GUIDED_HELPER_BASELINE' ||
     value === 'TAILOR_REVIEWED_BASELINE' ||
     value === 'DRAPE_VISION_ROTATION' ||
+    value === 'DRAPE_VISION_SPECIALIST_SCAN' ||
     value === 'TAILOR_ASSISTED_DRAPE_VISION_ROTATION' ||
     value === 'GARMENT_QC_VISION_FLAT_LAY'
   )

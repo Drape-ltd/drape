@@ -11,6 +11,9 @@
 #import <type_traits>
 
 #include "HybridDrapePoseLandmarkerSpecSwift.hpp"
+#include "HybridDrapeHandLandmarkerSpecSwift.hpp"
+#include "HybridDrapeFaceLandmarkerSpecSwift.hpp"
+#include "HybridDrapeImageSegmenterSpecSwift.hpp"
 
 @interface DrapeVisionAutolinking : NSObject
 @end
@@ -25,6 +28,27 @@
     "DrapePoseLandmarker",
     []() -> std::shared_ptr<HybridObject> {
       std::shared_ptr<HybridDrapePoseLandmarkerSpec> hybridObject = DrapeVision::DrapeVisionAutolinking::createDrapePoseLandmarker();
+      return hybridObject;
+    }
+  );
+  HybridObjectRegistry::registerHybridObjectConstructor(
+    "DrapeHandLandmarker",
+    []() -> std::shared_ptr<HybridObject> {
+      std::shared_ptr<HybridDrapeHandLandmarkerSpec> hybridObject = DrapeVision::DrapeVisionAutolinking::createDrapeHandLandmarker();
+      return hybridObject;
+    }
+  );
+  HybridObjectRegistry::registerHybridObjectConstructor(
+    "DrapeFaceLandmarker",
+    []() -> std::shared_ptr<HybridObject> {
+      std::shared_ptr<HybridDrapeFaceLandmarkerSpec> hybridObject = DrapeVision::DrapeVisionAutolinking::createDrapeFaceLandmarker();
+      return hybridObject;
+    }
+  );
+  HybridObjectRegistry::registerHybridObjectConstructor(
+    "DrapeImageSegmenter",
+    []() -> std::shared_ptr<HybridObject> {
+      std::shared_ptr<HybridDrapeImageSegmenterSpec> hybridObject = DrapeVision::DrapeVisionAutolinking::createDrapeImageSegmenter();
       return hybridObject;
     }
   );

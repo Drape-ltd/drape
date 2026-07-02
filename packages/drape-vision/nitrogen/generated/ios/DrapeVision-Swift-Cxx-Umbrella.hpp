@@ -8,14 +8,38 @@
 #pragma once
 
 // Forward declarations of C++ defined types
+// Forward declaration of `DrapeFaceDetectionOptions` to properly resolve imports.
+namespace margelo::nitro::drape::vision { struct DrapeFaceDetectionOptions; }
+// Forward declaration of `DrapeHandDetectionOptions` to properly resolve imports.
+namespace margelo::nitro::drape::vision { struct DrapeHandDetectionOptions; }
+// Forward declaration of `DrapeImageSegmentationOptions` to properly resolve imports.
+namespace margelo::nitro::drape::vision { struct DrapeImageSegmentationOptions; }
 // Forward declaration of `DrapePoseDetectionOptions` to properly resolve imports.
 namespace margelo::nitro::drape::vision { struct DrapePoseDetectionOptions; }
 // Forward declaration of `DrapePoseModel` to properly resolve imports.
 namespace margelo::nitro::drape::vision { enum class DrapePoseModel; }
+// Forward declaration of `HybridDrapeFaceLandmarkerSpec` to properly resolve imports.
+namespace margelo::nitro::drape::vision { class HybridDrapeFaceLandmarkerSpec; }
+// Forward declaration of `HybridDrapeHandLandmarkerSpec` to properly resolve imports.
+namespace margelo::nitro::drape::vision { class HybridDrapeHandLandmarkerSpec; }
+// Forward declaration of `HybridDrapeImageSegmenterSpec` to properly resolve imports.
+namespace margelo::nitro::drape::vision { class HybridDrapeImageSegmenterSpec; }
 // Forward declaration of `HybridDrapePoseLandmarkerSpec` to properly resolve imports.
 namespace margelo::nitro::drape::vision { class HybridDrapePoseLandmarkerSpec; }
 // Forward declaration of `HybridFrameSpec` to properly resolve imports.
 namespace margelo::nitro::camera { class HybridFrameSpec; }
+// Forward declaration of `VisionBoundingBox` to properly resolve imports.
+namespace margelo::nitro::drape::vision { struct VisionBoundingBox; }
+// Forward declaration of `VisionFaceBlendshape` to properly resolve imports.
+namespace margelo::nitro::drape::vision { struct VisionFaceBlendshape; }
+// Forward declaration of `VisionFaceDetectionResult` to properly resolve imports.
+namespace margelo::nitro::drape::vision { struct VisionFaceDetectionResult; }
+// Forward declaration of `VisionHandDetectionResult` to properly resolve imports.
+namespace margelo::nitro::drape::vision { struct VisionHandDetectionResult; }
+// Forward declaration of `VisionHandDetection` to properly resolve imports.
+namespace margelo::nitro::drape::vision { struct VisionHandDetection; }
+// Forward declaration of `VisionHandedness` to properly resolve imports.
+namespace margelo::nitro::drape::vision { enum class VisionHandedness; }
 // Forward declaration of `VisionLandmark` to properly resolve imports.
 namespace margelo::nitro::drape::vision { struct VisionLandmark; }
 // Forward declaration of `VisionPoseDetectionResult` to properly resolve imports.
@@ -24,20 +48,42 @@ namespace margelo::nitro::drape::vision { struct VisionPoseDetectionResult; }
 namespace margelo::nitro::drape::vision { enum class VisionPoseModel; }
 // Forward declaration of `VisionSegmentWidthsPx` to properly resolve imports.
 namespace margelo::nitro::drape::vision { struct VisionSegmentWidthsPx; }
+// Forward declaration of `VisionSegmentationMaskSummary` to properly resolve imports.
+namespace margelo::nitro::drape::vision { struct VisionSegmentationMaskSummary; }
+// Forward declaration of `VisionSegmentationResult` to properly resolve imports.
+namespace margelo::nitro::drape::vision { struct VisionSegmentationResult; }
+// Forward declaration of `VisionSpecialistModel` to properly resolve imports.
+namespace margelo::nitro::drape::vision { enum class VisionSpecialistModel; }
 
 // Include C++ defined types
+#include "DrapeFaceDetectionOptions.hpp"
+#include "DrapeHandDetectionOptions.hpp"
+#include "DrapeImageSegmentationOptions.hpp"
 #include "DrapePoseDetectionOptions.hpp"
 #include "DrapePoseModel.hpp"
+#include "HybridDrapeFaceLandmarkerSpec.hpp"
+#include "HybridDrapeHandLandmarkerSpec.hpp"
+#include "HybridDrapeImageSegmenterSpec.hpp"
 #include "HybridDrapePoseLandmarkerSpec.hpp"
+#include "VisionBoundingBox.hpp"
+#include "VisionFaceBlendshape.hpp"
+#include "VisionFaceDetectionResult.hpp"
+#include "VisionHandDetection.hpp"
+#include "VisionHandDetectionResult.hpp"
+#include "VisionHandedness.hpp"
 #include "VisionLandmark.hpp"
 #include "VisionPoseDetectionResult.hpp"
 #include "VisionPoseModel.hpp"
 #include "VisionSegmentWidthsPx.hpp"
+#include "VisionSegmentationMaskSummary.hpp"
+#include "VisionSegmentationResult.hpp"
+#include "VisionSpecialistModel.hpp"
 #include <NitroModules/Result.hpp>
 #include <VisionCamera/HybridFrameSpec.hpp>
 #include <exception>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 // C++ helpers for Swift
@@ -50,6 +96,12 @@ namespace margelo::nitro::drape::vision { struct VisionSegmentWidthsPx; }
 #include <NitroModules/DateToChronoDate.hpp>
 
 // Forward declarations of Swift defined types
+// Forward declaration of `HybridDrapeFaceLandmarkerSpec_cxx` to properly resolve imports.
+namespace DrapeVision { class HybridDrapeFaceLandmarkerSpec_cxx; }
+// Forward declaration of `HybridDrapeHandLandmarkerSpec_cxx` to properly resolve imports.
+namespace DrapeVision { class HybridDrapeHandLandmarkerSpec_cxx; }
+// Forward declaration of `HybridDrapeImageSegmenterSpec_cxx` to properly resolve imports.
+namespace DrapeVision { class HybridDrapeImageSegmenterSpec_cxx; }
 // Forward declaration of `HybridDrapePoseLandmarkerSpec_cxx` to properly resolve imports.
 namespace DrapeVision { class HybridDrapePoseLandmarkerSpec_cxx; }
 // Forward declaration of `HybridFrameSpec_cxx` to properly resolve imports.

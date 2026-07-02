@@ -3,6 +3,9 @@ package com.margelo.nitro.drape.vision
 internal object DrapeVisionNativeConstants {
   const val liteModelAsset = "pose_landmarker_lite.task"
   const val fullModelAsset = "pose_landmarker_full.task"
+  const val handModelAsset = "hand_landmarker.task"
+  const val faceModelAsset = "face_landmarker.task"
+  const val imageSegmenterModelAsset = "image_segmenter.task"
   const val defaultConfidence = 0.5f
 
   val segmentationThresholds = floatArrayOf(0.5f, 0.35f, 0.2f)

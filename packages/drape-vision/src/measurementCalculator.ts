@@ -2,14 +2,15 @@ import {
   DRAPE_VISION_LANDMARK,
   DRAPE_VISION_MEASUREMENT_RANGES_CM,
 } from './constants'
-import { calculateHeightCalibration, confidenceFromScore } from './calibration'
+import { calculateHeightCalibration, confidenceFromScore, estimatePosePixelHeight } from './calibration'
 import { fitEllipseFromWidths } from './ellipseFitter'
-import { distance2D, landmarkWeight, midpoint, normalizeDegrees } from './geometry'
+import { landmarkWeight, midpoint, normalizeDegrees } from './geometry'
 import type {
   CalibrationResult,
   DrapeVisionCircumferenceField,
   DrapeVisionCircumferenceDiagnostic,
   DrapeVisionCircumferenceSampleDiagnostic,
+  DrapeVisionCaptureQualityDiagnostic,
   DrapeVisionConfidence,
   DrapeVisionDirectField,
   DrapeVisionDirectMeasurementDiagnostic,
@@ -26,11 +27,13 @@ export type CalculateMeasurementsInput = {
   captures: VisionCapture[]
   bodyPixelHeight?: number | null
   doorFramePixelHeight?: number | null
+  pipelineVersion?: string
 }
 
 type DirectMeasurementSpec = {
   field: DrapeVisionDirectField
-  measure: (landmarks: VisionLandmarkFrame) => { pixels: number; confidence: number } | null
+  measure: (landmarks: VisionLandmarkFrame, capture?: VisionCapture) => { pixels: number; confidence: number } | null
+  confidenceCap?: number
 }
 
 type CircumferenceFitSample = {
@@ -60,48 +63,138 @@ const EXTREME_HIGH_RANGE_FACTOR = 1.45
 const MAX_ACCEPTED_CIRCUMFERENCE_RESIDUAL_RATIO = 0.12
 const MAX_BODY_HEIGHT_SPREAD_RATIO = 0.18
 const MIN_BODY_HEIGHT_STABILITY_SAMPLES = 3
-const MIN_ROBUST_FIT_SAMPLE_COUNT = 5
+const MIN_ROBUST_FIT_SAMPLE_COUNT = 4
 const MIN_ROBUST_RESIDUAL_IMPROVEMENT_RATIO = 0.65
-const MIN_UNIQUE_HALF_TURN_ANGLES = 3
-const MAX_HALF_TURN_ANGLE_GAP_DEGREES = 80
-const RELATIVE_CIRCUMFERENCE_LIMITS: Partial<Record<DrapeVisionCircumferenceField, { shoulderRatio: number; heightRatio: number }>> = {
+const MIN_FRONT_TO_SIDE_AXIS_RATIO = 1.08
+const MIN_UNIQUE_HALF_TURN_ANGLES = 2
+const MAX_HALF_TURN_ANGLE_GAP_DEGREES = 95
+const RELATIVE_CIRCUMFERENCE_LIMITS: Partial<Record<DrapeVisionCircumferenceField, {
+  shoulderRatio?: number
+  heightRatio?: number
+  waistRatio?: { min: number; max: number }
+}>> = {
   chest: { shoulderRatio: 3.25, heightRatio: 0.95 },
   waist: { shoulderRatio: 2.55, heightRatio: 0.72 },
-  hips: { shoulderRatio: 3.25, heightRatio: 0.95 },
+  hips: { heightRatio: 0.95, waistRatio: { min: 0.85, max: 1.65 } },
 }
 
 const DIRECT_MEASUREMENTS: DirectMeasurementSpec[] = [
   {
     field: 'shoulderWidth',
-    measure: (landmarks) => distanceBetween(landmarks, DRAPE_VISION_LANDMARK.leftShoulder, DRAPE_VISION_LANDMARK.rightShoulder),
+    measure: (landmarks, capture) => distanceBetween(landmarks, DRAPE_VISION_LANDMARK.leftShoulder, DRAPE_VISION_LANDMARK.rightShoulder, capture),
   },
   {
     field: 'sleeveLength',
-    measure: (landmarks) => averageChains([
+    measure: (landmarks, capture) => averageChains([
       [DRAPE_VISION_LANDMARK.leftShoulder, DRAPE_VISION_LANDMARK.leftElbow, DRAPE_VISION_LANDMARK.leftWrist],
       [DRAPE_VISION_LANDMARK.rightShoulder, DRAPE_VISION_LANDMARK.rightElbow, DRAPE_VISION_LANDMARK.rightWrist],
-    ], landmarks),
+    ], landmarks, capture),
   },
   {
     field: 'backLength',
-    measure: (landmarks) => {
+    measure: (landmarks, capture) => {
       const shoulders = midpointByIndex(landmarks, DRAPE_VISION_LANDMARK.leftShoulder, DRAPE_VISION_LANDMARK.rightShoulder)
       const hips = midpointByIndex(landmarks, DRAPE_VISION_LANDMARK.leftHip, DRAPE_VISION_LANDMARK.rightHip)
       if (!shoulders || !hips) return null
       return {
-        pixels: distance2D(shoulders.point, hips.point),
+        pixels: distance2DForCapture(shoulders.point, hips.point, capture),
         confidence: Math.min(shoulders.confidence, hips.confidence),
       }
     },
   },
   {
+    field: 'inseam',
+    measure: (landmarks, capture) => scaleMeasurement(averageChains([
+      [DRAPE_VISION_LANDMARK.leftHip, DRAPE_VISION_LANDMARK.leftKnee, DRAPE_VISION_LANDMARK.leftAnkle],
+      [DRAPE_VISION_LANDMARK.rightHip, DRAPE_VISION_LANDMARK.rightKnee, DRAPE_VISION_LANDMARK.rightAnkle],
+    ], landmarks, capture), 0.88),
+    confidenceCap: 0.62,
+  },
+  {
+    field: 'outseam',
+    measure: (landmarks, capture) => scaleMeasurement(averageChains([
+      [DRAPE_VISION_LANDMARK.leftHip, DRAPE_VISION_LANDMARK.leftKnee, DRAPE_VISION_LANDMARK.leftAnkle],
+      [DRAPE_VISION_LANDMARK.rightHip, DRAPE_VISION_LANDMARK.rightKnee, DRAPE_VISION_LANDMARK.rightAnkle],
+    ], landmarks, capture), 1.07),
+    confidenceCap: 0.62,
+  },
+  {
+    field: 'neckCircumference',
+    measure: (landmarks, capture) => scaleMeasurement(
+      distanceBetween(landmarks, DRAPE_VISION_LANDMARK.leftShoulder, DRAPE_VISION_LANDMARK.rightShoulder, capture),
+      0.82,
+    ),
+    confidenceCap: 0.58,
+  },
+  {
+    field: 'bicepCircumference',
+    measure: (landmarks, capture) => scaleMeasurement(averageChains([
+      [DRAPE_VISION_LANDMARK.leftShoulder, DRAPE_VISION_LANDMARK.leftElbow],
+      [DRAPE_VISION_LANDMARK.rightShoulder, DRAPE_VISION_LANDMARK.rightElbow],
+    ], landmarks, capture), 0.95),
+    confidenceCap: 0.5,
+  },
+  {
+    field: 'wristCircumference',
+    measure: (landmarks, capture) => scaleMeasurement(averageChains([
+      [DRAPE_VISION_LANDMARK.leftElbow, DRAPE_VISION_LANDMARK.leftWrist],
+      [DRAPE_VISION_LANDMARK.rightElbow, DRAPE_VISION_LANDMARK.rightWrist],
+    ], landmarks, capture), 0.42),
+    confidenceCap: 0.48,
+  },
+  {
+    field: 'headWidth',
+    measure: (landmarks, capture) => distanceBetween(landmarks, DRAPE_VISION_LANDMARK.leftEar, DRAPE_VISION_LANDMARK.rightEar, capture),
+    confidenceCap: 0.55,
+  },
+  {
+    field: 'headLength',
+    measure: (landmarks, capture) => scaleMeasurement(
+      distanceBetween(landmarks, DRAPE_VISION_LANDMARK.leftEar, DRAPE_VISION_LANDMARK.rightEar, capture),
+      1.18,
+    ),
+    confidenceCap: 0.45,
+  },
+  {
+    field: 'headCircumference',
+    measure: (landmarks, capture) => scaleMeasurement(
+      distanceBetween(landmarks, DRAPE_VISION_LANDMARK.leftEar, DRAPE_VISION_LANDMARK.rightEar, capture),
+      3.62,
+    ),
+    confidenceCap: 0.42,
+  },
+  {
+    field: 'hatBandLine',
+    measure: (landmarks, capture) => scaleMeasurement(
+      distanceBetween(landmarks, DRAPE_VISION_LANDMARK.leftEar, DRAPE_VISION_LANDMARK.rightEar, capture),
+      3.62,
+    ),
+    confidenceCap: 0.42,
+  },
+  {
+    field: 'earToEarOverCrown',
+    measure: (landmarks, capture) => scaleMeasurement(
+      distanceBetween(landmarks, DRAPE_VISION_LANDMARK.leftEar, DRAPE_VISION_LANDMARK.rightEar, capture),
+      2.35,
+    ),
+    confidenceCap: 0.42,
+  },
+  {
+    field: 'frontToBackOverCrown',
+    measure: (landmarks, capture) => scaleMeasurement(
+      distanceBetween(landmarks, DRAPE_VISION_LANDMARK.leftEar, DRAPE_VISION_LANDMARK.rightEar, capture),
+      2.18,
+    ),
+    confidenceCap: 0.42,
+  },
+  {
     field: 'torsoLength',
-    measure: (landmarks) => {
+    measure: (landmarks, capture) => {
       const shoulders = midpointByIndex(landmarks, DRAPE_VISION_LANDMARK.leftShoulder, DRAPE_VISION_LANDMARK.rightShoulder)
       const hips = midpointByIndex(landmarks, DRAPE_VISION_LANDMARK.leftHip, DRAPE_VISION_LANDMARK.rightHip)
       if (!shoulders || !hips) return null
       return {
-        pixels: distance2D(shoulders.point, hips.point),
+        pixels: distance2DForCapture(shoulders.point, hips.point, capture),
         confidence: Math.min(shoulders.confidence, hips.confidence),
       }
     },
@@ -109,11 +202,29 @@ const DIRECT_MEASUREMENTS: DirectMeasurementSpec[] = [
 ]
 
 export function calculateDrapeVisionMeasurements(input: CalculateMeasurementsInput): DrapeVisionMeasurementResult {
+  if (!Number.isFinite(input.statedHeightCm) || input.statedHeightCm <= 0) {
+    throw new Error('Stated height must be a positive number.')
+  }
+
+  const warnings: string[] = []
+  const frontCapture = selectFrontCapture(input.captures)
+  const scanQuality = calculateScanQuality(input.captures)
+  const frontPosePixelHeight = estimatePosePixelHeight(frontCapture?.landmarks)
+  const hasExplicitCalibrationSource = (
+    (typeof input.bodyPixelHeight === 'number' && input.bodyPixelHeight > 0) ||
+    (typeof input.doorFramePixelHeight === 'number' && input.doorFramePixelHeight > 0)
+  )
+
+  if (!hasExplicitCalibrationSource && !frontPosePixelHeight) {
+    warnings.push('Front pose calibration failed. Ensure your head and ankles are fully in frame.')
+    return buildCalibrationFailureResult(input, warnings, scanQuality)
+  }
+
   const calibration = calculateHeightCalibration({
     statedHeightCm: input.statedHeightCm,
     bodyPixelHeight: input.bodyPixelHeight,
     doorFramePixelHeight: input.doorFramePixelHeight,
-    landmarks: selectFrontCapture(input.captures)?.landmarks,
+    landmarks: frontCapture?.landmarks,
   })
   const scale = calibration.pixelToCm
   const measurements: DrapeVisionMeasurementResult['measurements'] = {
@@ -123,15 +234,12 @@ export function calculateDrapeVisionMeasurements(input: CalculateMeasurementsInp
   const confidenceByField: Partial<Record<DrapeVisionMeasurementField, DrapeVisionConfidence>> = {
     height: calibration.confidence,
   }
-  const warnings: string[] = []
-  const frontCapture = selectFrontCapture(input.captures)
   const directDiagnostics: DrapeVisionDirectMeasurementDiagnostic[] = []
   const circumferenceDiagnostics: DrapeVisionCircumferenceDiagnostic[] = []
-  const scanQuality = calculateScanQuality(input.captures)
 
   if (frontCapture) {
     for (const spec of DIRECT_MEASUREMENTS) {
-      const measured = spec.measure(frontCapture.landmarks)
+      const measured = spec.measure(frontCapture.landmarks, frontCapture)
       if (!measured) {
         directDiagnostics.push({
           field: spec.field,
@@ -154,7 +262,11 @@ export function calculateDrapeVisionMeasurements(input: CalculateMeasurementsInp
         continue
       }
       measurements[spec.field] = value
-      const confidenceScoreValue = Math.min(measured.confidence, calibrationConfidenceScore(calibration))
+      const confidenceScoreValue = Math.min(
+        measured.confidence,
+        calibrationConfidenceScore(calibration),
+        spec.confidenceCap ?? 1,
+      )
       confidenceByField[spec.field] = confidenceFromScore(confidenceScoreValue)
       directDiagnostics.push({
         field: spec.field,
@@ -220,7 +332,7 @@ export function calculateDrapeVisionMeasurements(input: CalculateMeasurementsInp
       accepted: false,
     }
 
-    if (samples.length >= 3) {
+    if (samples.length >= 2) {
       try {
         if (!scanQuality.accepted) {
           diagnostic.rejectionReason = 'unstable_body_height'
@@ -276,15 +388,22 @@ export function calculateDrapeVisionMeasurements(input: CalculateMeasurementsInp
           continue
         }
 
-        if (isRelativeCircumferenceOutlier(field, circumference, measurements)) {
-          diagnostic.rejectionReason = 'relative_outlier'
-          warnings.push(`${field} could not be estimated reliably.`)
-          circumferenceDiagnostics.push(diagnostic)
-          continue
-        }
-
+        const relativeOutlier = isRelativeCircumferenceOutlier(field, circumference, measurements)
+        const fitConfidenceScore = residualRatio < 0.03 ? 0.9 : residualRatio < 0.08 ? 0.75 : 0.6
+        const outlierAdjustedConfidenceScore = excludedSampleIndexes.length > 0
+          ? Math.min(fitConfidenceScore, 0.6)
+          : fitConfidenceScore
+        const relativeAdjustedConfidenceScore = relativeOutlier
+          ? Math.min(outlierAdjustedConfidenceScore, 0.5)
+          : outlierAdjustedConfidenceScore
         measurements[field] = circumference
-        confidenceByField[field] = confidenceFromScore(residualRatio < 0.03 ? 0.9 : residualRatio < 0.08 ? 0.75 : 0.6)
+        confidenceByField[field] = confidenceFromScore(Math.min(
+          relativeAdjustedConfidenceScore,
+          calibrationConfidenceScore(calibration),
+        ))
+        if (relativeOutlier) {
+          diagnostic.confidenceAdjustmentReason = 'relative_outlier'
+        }
         diagnostic.accepted = true
       } catch (error) {
         diagnostic.rejectionReason = 'ellipse_fit_failed'
@@ -301,6 +420,8 @@ export function calculateDrapeVisionMeasurements(input: CalculateMeasurementsInp
     circumferenceDiagnostics.push(diagnostic)
   }
 
+  addDerivedDraftMeasurements(measurements, confidenceByField)
+
   for (const field of Object.keys(DRAPE_VISION_MEASUREMENT_RANGES_CM) as DrapeVisionMeasurementField[]) {
     const value = measurements[field]
     if (typeof value !== 'number') continue
@@ -312,12 +433,14 @@ export function calculateDrapeVisionMeasurements(input: CalculateMeasurementsInp
   }
 
   return {
+    pipelineVersion: input.pipelineVersion,
     measurements,
     confidenceByField,
     calibration,
     warnings,
     diagnostics: {
       version: 'drape-vision-measurement-diagnostics-v1',
+      pipelineVersion: input.pipelineVersion,
       calibrationPixelToCm: roundDiagnosticNumber(calibration.pixelToCm) ?? calibration.pixelToCm,
       calibrationConfidence: calibration.confidence,
       captureCount: input.captures.length,
@@ -328,14 +451,50 @@ export function calculateDrapeVisionMeasurements(input: CalculateMeasurementsInp
   }
 }
 
+function buildCalibrationFailureResult(
+  input: CalculateMeasurementsInput,
+  warnings: string[],
+  scanQuality: DrapeVisionScanQualityDiagnostic,
+): DrapeVisionMeasurementResult {
+  return {
+    pipelineVersion: input.pipelineVersion,
+    measurements: {
+      unit: 'cm',
+      height: roundCm(input.statedHeightCm),
+    },
+    confidenceByField: {
+      height: 'LOW',
+    },
+    calibration: {
+      pixelToCm: 0,
+      confidence: 'LOW',
+      references: [],
+    },
+    warnings,
+    diagnostics: {
+      version: 'drape-vision-measurement-diagnostics-v1',
+      pipelineVersion: input.pipelineVersion,
+      calibrationPixelToCm: 0,
+      calibrationConfidence: 'LOW',
+      captureCount: input.captures.length,
+      scanQuality,
+      direct: [],
+      circumferences: [],
+    },
+  }
+}
+
 function calculateScanQuality(captures: VisionCapture[]): DrapeVisionScanQualityDiagnostic {
-  const bodyHeights = captures
-    .map((capture) => estimateCaptureBodyHeight(capture.landmarks))
+  const captureQualities = captures.map((capture) => calculateCaptureQuality(capture))
+  const bodyHeights = captureQualities
+    .filter((quality) => quality.isFrontFacing)
+    .map((quality) => quality.bodyPixelHeightEstimate)
     .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0)
 
   const diagnostic: DrapeVisionScanQualityDiagnostic = {
     accepted: true,
     bodyHeightSampleCount: bodyHeights.length,
+    captureQualities,
     rejectionReasons: [],
   }
 
@@ -354,13 +513,33 @@ function calculateScanQuality(captures: VisionCapture[]): DrapeVisionScanQuality
   return diagnostic
 }
 
-function estimateCaptureBodyHeight(landmarks: VisionLandmarkFrame) {
-  const nose = landmarks[DRAPE_VISION_LANDMARK.nose]
-  const leftAnkle = landmarks[DRAPE_VISION_LANDMARK.leftAnkle]
-  const rightAnkle = landmarks[DRAPE_VISION_LANDMARK.rightAnkle]
-  if (!nose || !leftAnkle || !rightAnkle) return null
-  if (landmarkWeight(nose) < 0.4 || landmarkWeight(leftAnkle) < 0.4 || landmarkWeight(rightAnkle) < 0.4) return null
-  return distance2D(nose, midpoint(leftAnkle, rightAnkle))
+function calculateCaptureQuality(capture: VisionCapture): DrapeVisionCaptureQualityDiagnostic {
+  const nose = capture.landmarks[DRAPE_VISION_LANDMARK.nose]
+  const leftEar = capture.landmarks[DRAPE_VISION_LANDMARK.leftEar]
+  const rightEar = capture.landmarks[DRAPE_VISION_LANDMARK.rightEar]
+  const leftAnkle = capture.landmarks[DRAPE_VISION_LANDMARK.leftAnkle]
+  const rightAnkle = capture.landmarks[DRAPE_VISION_LANDMARK.rightAnkle]
+  const headConfidence = Math.max(
+    landmarkWeight(nose),
+    landmarkWeight(leftEar),
+    landmarkWeight(rightEar),
+  )
+  const leftAnkleConfidence = landmarkWeight(leftAnkle)
+  const rightAnkleConfidence = landmarkWeight(rightAnkle)
+  const ankleConfidence = Math.min(leftAnkleConfidence, rightAnkleConfidence)
+
+  return {
+    angleIndex: capture.angleIndex,
+    angleDegrees: capture.angleDegrees,
+    isFrontFacing: angleDistance(capture.angleDegrees, 0) <= 45,
+    headInFrame: headConfidence >= 0.25,
+    anklesInFrame: leftAnkleConfidence >= 0.25 && rightAnkleConfidence >= 0.25,
+    bodyPixelHeightEstimate: roundDiagnosticNumber(estimatePosePixelHeight(capture.landmarks)),
+    headConfidence: roundDiagnosticNumber(headConfidence),
+    ankleConfidence: roundDiagnosticNumber(ankleConfidence),
+    leftAnkleConfidence: roundDiagnosticNumber(leftAnkleConfidence),
+    rightAnkleConfidence: roundDiagnosticNumber(rightAnkleConfidence),
+  }
 }
 
 function fitCircumferenceSamples(samples: CircumferenceFitSample[]): CircumferenceFitAttempt {
@@ -377,6 +556,7 @@ function fitCircumferenceSamples(samples: CircumferenceFitSample[]): Circumferen
 
     try {
       const candidate = fitCircumferenceSampleSet(remainingSamples, [samples[index].sampleDiagnosticIndex], initial.residualRatio)
+      if (!hasPlausibleFrontSideAxes(candidate)) continue
       if (candidate.residualRatio < best.residualRatio) {
         best = candidate
       }
@@ -394,6 +574,10 @@ function fitCircumferenceSamples(samples: CircumferenceFitSample[]): Circumferen
   }
 
   return initial
+}
+
+function hasPlausibleFrontSideAxes(attempt: CircumferenceFitAttempt) {
+  return attempt.ellipse.axisAt0Degrees >= attempt.ellipse.axisAt90Degrees * MIN_FRONT_TO_SIDE_AXIS_RATIO
 }
 
 function fitCircumferenceSampleSet(
@@ -441,12 +625,14 @@ function hasSufficientAngleCoverage(samples: Array<{ angleDegrees: number }>) {
   return largestGap <= MAX_HALF_TURN_ANGLE_GAP_DEGREES
 }
 
-function distanceBetween(landmarks: VisionLandmarkFrame, aIndex: number, bIndex: number) {
+function distanceBetween(landmarks: VisionLandmarkFrame, aIndex: number, bIndex: number, capture?: VisionCapture) {
   const a = landmarks[aIndex]
   const b = landmarks[bIndex]
   if (!a || !b) return null
+  const pixels = distance2DForCapture(a, b, capture)
+  if (!Number.isFinite(pixels) || pixels <= 0) return null
   return {
-    pixels: distance2D(a, b),
+    pixels,
     confidence: Math.min(landmarkWeight(a), landmarkWeight(b)),
   }
 }
@@ -461,9 +647,9 @@ function midpointByIndex(landmarks: VisionLandmarkFrame, aIndex: number, bIndex:
   }
 }
 
-function averageChains(chains: number[][], landmarks: VisionLandmarkFrame) {
+function averageChains(chains: number[][], landmarks: VisionLandmarkFrame, capture?: VisionCapture) {
   const measured = chains
-    .map((chain) => measureChain(chain, landmarks))
+    .map((chain) => measureChain(chain, landmarks, capture))
     .filter((value): value is { pixels: number; confidence: number } => !!value)
 
   if (measured.length === 0) return null
@@ -473,18 +659,46 @@ function averageChains(chains: number[][], landmarks: VisionLandmarkFrame) {
   }
 }
 
-function measureChain(chain: number[], landmarks: VisionLandmarkFrame) {
+function measureChain(chain: number[], landmarks: VisionLandmarkFrame, capture?: VisionCapture) {
   let pixels = 0
   let confidence = 1
 
   for (let index = 1; index < chain.length; index += 1) {
-    const segment = distanceBetween(landmarks, chain[index - 1], chain[index])
+    const segment = distanceBetween(landmarks, chain[index - 1], chain[index], capture)
     if (!segment) return null
     pixels += segment.pixels
     confidence = Math.min(confidence, segment.confidence)
   }
 
   return { pixels, confidence }
+}
+
+function scaleMeasurement(
+  measurement: { pixels: number; confidence: number } | null,
+  factor: number,
+) {
+  if (!measurement) return null
+  return {
+    pixels: measurement.pixels * factor,
+    confidence: measurement.confidence,
+  }
+}
+
+function addDerivedDraftMeasurements(
+  measurements: DrapeVisionMeasurementResult['measurements'],
+  confidenceByField: Partial<Record<DrapeVisionMeasurementField, DrapeVisionConfidence>>,
+) {
+  if (
+    typeof measurements.underBust !== 'number' &&
+    typeof measurements.chest === 'number' &&
+    typeof measurements.waist === 'number'
+  ) {
+    const estimated = roundCm(measurements.waist + (measurements.chest - measurements.waist) * 0.38)
+    if (!isExtremeMeasurementOutlier('underBust', estimated)) {
+      measurements.underBust = estimated
+      confidenceByField.underBust = 'LOW'
+    }
+  }
 }
 
 function calibrationConfidenceScore(calibration: CalibrationResult) {
@@ -539,6 +753,27 @@ function normalizeSegmentWidth(widthPx: number | undefined, capture: VisionCaptu
   }
 }
 
+function distance2DForCapture(
+  a: Pick<VisionLandmark, 'x' | 'y'>,
+  b: Pick<VisionLandmark, 'x' | 'y'>,
+  capture?: Pick<VisionCapture, 'frameWidthPx' | 'frameHeightPx'>,
+) {
+  const aspectRatio = frameWidthToHeightRatio(capture) ?? 1
+  const dx = (b.x - a.x) * aspectRatio
+  const dy = b.y - a.y
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+function frameWidthToHeightRatio(capture?: Pick<VisionCapture, 'frameWidthPx' | 'frameHeightPx'>) {
+  const width = capture?.frameWidthPx
+  const height = capture?.frameHeightPx
+  if (!Number.isFinite(width) || !Number.isFinite(height) || !width || !height || width <= 0 || height <= 0) {
+    return null
+  }
+
+  return width / height
+}
+
 function isExtremeMeasurementOutlier(field: DrapeVisionMeasurementField, valueCm: number) {
   if (!Number.isFinite(valueCm) || valueCm <= 0) return true
   const range = DRAPE_VISION_MEASUREMENT_RANGES_CM[field]
@@ -554,13 +789,31 @@ function isRelativeCircumferenceOutlier(
   if (!limits || !Number.isFinite(valueCm) || valueCm <= 0) return false
 
   const shoulderWidth = measurements.shoulderWidth
-  if (typeof shoulderWidth === 'number' && shoulderWidth > 0 && valueCm > shoulderWidth * limits.shoulderRatio) {
+  if (
+    typeof limits.shoulderRatio === 'number' &&
+    typeof shoulderWidth === 'number' &&
+    shoulderWidth > 0 &&
+    valueCm > shoulderWidth * limits.shoulderRatio
+  ) {
     return true
   }
 
   const height = measurements.height
-  if (typeof height === 'number' && height > 0 && valueCm > height * limits.heightRatio) {
+  if (
+    typeof limits.heightRatio === 'number' &&
+    typeof height === 'number' &&
+    height > 0 &&
+    valueCm > height * limits.heightRatio
+  ) {
     return true
+  }
+
+  const waist = measurements.waist
+  if (limits.waistRatio && typeof waist === 'number' && waist > 0) {
+    const waistRatio = valueCm / waist
+    if (waistRatio < limits.waistRatio.min || waistRatio > limits.waistRatio.max) {
+      return true
+    }
   }
 
   return false

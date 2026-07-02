@@ -1,4 +1,5 @@
--- HOLD_FEATURE: Do not apply to production until Drape Vision ships.
+-- Drapeon Vision TestFlight tape-comparison data.
+-- Stores tester-entered tape values and environment diagnostics, not camera frames.
 create table if not exists public.drape_vision_ground_truth (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,

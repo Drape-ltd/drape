@@ -20,6 +20,7 @@ import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { goBackOrReturnToIfNeeded } from '@/lib/navigation'
 import {
   isMeasurementSource,
+  isMeasurementMetadataKey,
   deriveMeasurementFitConfidence,
   MEASUREMENT_SOURCE_LABELS,
   type MeasurementSource,
@@ -74,6 +75,46 @@ interface CustomMeasurement {
   id: string
   name: string
   value: string
+}
+
+function isEditableCustomMeasurementEntry(key: string, value: unknown) {
+  if (isMeasurementMetadataKey(key)) return false
+  if (value == null) return false
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value === 'string') return value.trim().length > 0
+  return false
+}
+
+const MEASUREMENT_PROFILE_ALLOWED_METADATA_KEYS = new Set([
+  'unit',
+  'measurementProfileLabel',
+  'measurementProfileUpdatedAt',
+  'wearerContext',
+  'fitStyle',
+  'measurementSource',
+  'measurementSourceLabel',
+  'fitConfidence',
+  'garmentContext',
+  'bodyShape',
+  'fitFlags',
+  'bodyNote',
+  'bodyFlags',
+  'symmetryFlags',
+  'requiresTailorReview',
+])
+
+function buildMeasurementProfileStoragePayload(measurements: Record<string, unknown>) {
+  return Object.entries(measurements).reduce<Record<string, unknown>>((payload, [key, value]) => {
+    if (MEASUREMENT_PROFILE_ALLOWED_METADATA_KEYS.has(key)) {
+      payload[key] = value
+      return payload
+    }
+    if (isMeasurementMetadataKey(key)) return payload
+    if (value == null) return payload
+    if (typeof value === 'number' && Number.isFinite(value)) payload[key] = value
+    if (typeof value === 'string' && value.trim().length > 0) payload[key] = value
+    return payload
+  }, {})
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -556,7 +597,7 @@ export default function MeasurementsScreen() {
       symmetryFlags: Array.isArray(m.symmetryFlags) ? m.symmetryFlags : [],
       latestFitProfile: preservedLatestFitProfile,
     })
-    const extras = Object.entries(m).filter(([k]) => !standardKeys.has(k))
+    const extras = Object.entries(m).filter(([k, value]) => !standardKeys.has(k) && isEditableCustomMeasurementEntry(k, value))
     setCustomMeasurements(
       extras.map(([name, value]) => ({
         id: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`,
@@ -756,8 +797,9 @@ export default function MeasurementsScreen() {
 
     const customExtras: Record<string, number | null> = {}
     for (const m of customMeasurements) {
-      if (m.name.trim()) {
-        customExtras[m.name.trim()] = safeParse(m.value)
+      const name = m.name.trim()
+      if (name && !isMeasurementMetadataKey(name)) {
+        customExtras[name] = safeParse(m.value)
       }
     }
 
@@ -841,7 +883,7 @@ export default function MeasurementsScreen() {
           customer_id: user.id,
           label: measurementProfileLabel.trim() || 'Me',
           relationship: 'SELF',
-          measurements: payload,
+          measurements: buildMeasurementProfileStoragePayload(payload),
           unit_preference: unit,
           source: measurementSource === 'DRAPE_VISION'
             ? 'DRAPE_VISION'

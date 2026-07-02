@@ -78,7 +78,21 @@ export type DrapeVisionScanQualityDiagnostic = {
   accepted: boolean
   bodyHeightSampleCount: number
   bodyHeightSpreadRatio?: number
+  captureQualities?: DrapeVisionCaptureQualityDiagnostic[]
   rejectionReasons: Array<'unstable_body_height'>
+}
+
+export type DrapeVisionCaptureQualityDiagnostic = {
+  angleIndex: number
+  angleDegrees: number
+  isFrontFacing: boolean
+  headInFrame: boolean
+  anklesInFrame: boolean
+  bodyPixelHeightEstimate?: number
+  headConfidence?: number
+  ankleConfidence?: number
+  leftAnkleConfidence?: number
+  rightAnkleConfidence?: number
 }
 
 export type DrapeVisionCircumferenceDiagnostic = {
@@ -88,12 +102,14 @@ export type DrapeVisionCircumferenceDiagnostic = {
   rejectedSampleCount: number
   fit?: DrapeVisionCircumferenceFitDiagnostic
   accepted: boolean
+  confidenceAdjustmentReason?: 'relative_outlier'
   rejectionReason?: 'insufficient_samples' | 'insufficient_angle_coverage' | 'ellipse_fit_failed' | 'extreme_outlier' | 'poor_fit_residual' | 'relative_outlier' | 'unstable_body_height'
   error?: string
 }
 
 export type DrapeVisionMeasurementDiagnostics = {
   version: 'drape-vision-measurement-diagnostics-v1'
+  pipelineVersion?: string
   calibrationPixelToCm: number
   calibrationConfidence: DrapeVisionConfidence
   captureCount: number
@@ -131,6 +147,58 @@ export type VisionPoseDetectionResult = {
   model: VisionPoseModel
 }
 
+export type VisionHandedness = 'LEFT' | 'RIGHT' | 'UNKNOWN'
+export type VisionSpecialistModel = 'hand_landmarker' | 'face_landmarker' | 'image_segmenter'
+
+export type VisionHandDetection = {
+  landmarks: VisionLandmarkFrame
+  worldLandmarks?: VisionLandmarkFrame
+  handedness?: VisionHandedness
+  confidence?: number
+}
+
+export type VisionHandDetectionResult = {
+  hands: VisionHandDetection[]
+  timestampMs?: number
+  inferenceMs?: number
+  model: VisionSpecialistModel
+}
+
+export type VisionFaceBlendshape = {
+  categoryName: string
+  score: number
+}
+
+export type VisionFaceDetectionResult = {
+  landmarks: VisionLandmarkFrame
+  blendshapes?: VisionFaceBlendshape[]
+  faceCount: number
+  timestampMs?: number
+  inferenceMs?: number
+  model: VisionSpecialistModel
+}
+
+export type VisionBoundingBox = {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export type VisionSegmentationMaskSummary = {
+  width: number
+  height: number
+  foregroundRatio?: number
+  boundingBox?: VisionBoundingBox
+}
+
+export type VisionSegmentationResult = {
+  mask?: VisionSegmentationMaskSummary
+  timestampMs?: number
+  inferenceMs?: number
+  model: VisionSpecialistModel
+}
+
 export type VisionCapture = {
   angleIndex: number
   angleDegrees: number
@@ -148,6 +216,8 @@ export type CalibrationReference = {
   method: CalibrationMethod
   pixelToCm: number
   confidence: number
+  sampleCount?: number
+  spreadRatio?: number
 }
 
 export type CalibrationResult = {
@@ -157,6 +227,7 @@ export type CalibrationResult = {
 }
 
 export type DrapeVisionMeasurementResult = {
+  pipelineVersion?: string
   measurements: DrapeVisionMeasurements
   confidenceByField: Partial<Record<DrapeVisionMeasurementField, DrapeVisionConfidence>>
   calibration: CalibrationResult

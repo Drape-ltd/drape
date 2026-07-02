@@ -23,4 +23,40 @@ public final class DrapeVisionAutolinking {
   public static func isDrapePoseLandmarkerRecyclable() -> Bool {
     return HybridDrapePoseLandmarker.self is any RecyclableView.Type
   }
+
+  public static func createDrapeHandLandmarker() -> bridge.std__shared_ptr_HybridDrapeHandLandmarkerSpec_ {
+    let hybridObject = HybridDrapeHandLandmarker()
+    return { () -> bridge.std__shared_ptr_HybridDrapeHandLandmarkerSpec_ in
+      let __cxxWrapped = hybridObject.getCxxWrapper()
+      return __cxxWrapped.getCxxPart()
+    }()
+  }
+
+  public static func isDrapeHandLandmarkerRecyclable() -> Bool {
+    return HybridDrapeHandLandmarker.self is any RecyclableView.Type
+  }
+
+  public static func createDrapeFaceLandmarker() -> bridge.std__shared_ptr_HybridDrapeFaceLandmarkerSpec_ {
+    let hybridObject = HybridDrapeFaceLandmarker()
+    return { () -> bridge.std__shared_ptr_HybridDrapeFaceLandmarkerSpec_ in
+      let __cxxWrapped = hybridObject.getCxxWrapper()
+      return __cxxWrapped.getCxxPart()
+    }()
+  }
+
+  public static func isDrapeFaceLandmarkerRecyclable() -> Bool {
+    return HybridDrapeFaceLandmarker.self is any RecyclableView.Type
+  }
+
+  public static func createDrapeImageSegmenter() -> bridge.std__shared_ptr_HybridDrapeImageSegmenterSpec_ {
+    let hybridObject = HybridDrapeImageSegmenter()
+    return { () -> bridge.std__shared_ptr_HybridDrapeImageSegmenterSpec_ in
+      let __cxxWrapped = hybridObject.getCxxWrapper()
+      return __cxxWrapped.getCxxPart()
+    }()
+  }
+
+  public static func isDrapeImageSegmenterRecyclable() -> Bool {
+    return HybridDrapeImageSegmenter.self is any RecyclableView.Type
+  }
 }
