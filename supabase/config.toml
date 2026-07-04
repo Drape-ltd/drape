@@ -33,7 +33,6 @@ additional_redirect_urls = [
   "https://drapeon.co/auth/recover",
   "https://www.drapeon.co/auth/callback",
   "https://www.drapeon.co/auth/recover",
-  "drape://",
   "drape://callback",
   "drape:///callback",
   "http://localhost:3000/auth/callback",
@@ -114,7 +113,16 @@ verify_jwt = false
 [functions.account-security-notification]
 verify_jwt = false
 
+[functions.account-support-action]
+verify_jwt = false
+
+[functions.auth-sms-hook]
+verify_jwt = false
+
 [functions.ready-made-order-action]
+verify_jwt = false
+
+[functions.group-member-action]
 verify_jwt = false
 
 [functions.seller-item-action]
@@ -135,6 +143,12 @@ verify_jwt = false
 [functions.message-action]
 verify_jwt = false
 
+[functions.material-advance-action]
+verify_jwt = false
+
+[functions.order-call-action]
+verify_jwt = false
+
 [functions.handoff-support-action]
 verify_jwt = false
 
@@ -144,10 +158,16 @@ verify_jwt = false
 [functions.request-account-deletion]
 verify_jwt = false
 
+[functions.finalize-account-deletions]
+verify_jwt = false
+
 [functions.reauth-proof-action]
 verify_jwt = false
 
 [functions.request-data-access]
+verify_jwt = false
+
+[functions.referral-action]
 verify_jwt = false
 
 [functions.payment-action]

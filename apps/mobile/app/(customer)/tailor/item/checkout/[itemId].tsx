@@ -23,9 +23,9 @@ import {
   readFunctionErrorPayload,
 } from '@/lib/function-errors'
 import { composeStructuredAddress, parseNominatimSuggestion } from '@/lib/address'
-import { invokeFunction } from '@/lib/supabase'
+import { invokeFunction, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { Button, PaymentTrustCard } from '@/components/ui'
+import { Button, ChoiceSheet, DisclosureSection, PaymentTrustCard } from '@/components/ui'
 import { goBackOrReturnToIfNeeded } from '@/lib/navigation'
 import { normalizePhoneForStorage, validatePhoneForProfile } from '@drape/shared/phone'
 import {
@@ -44,6 +44,17 @@ import { formatAmount, useCurrency, type CurrencyCode } from '@/lib/currency'
 
 type FulfillmentOption = 'PICKUP' | 'DELIVERY' | 'SHIPPING'
 type RecipientMode = 'SELF' | 'OTHER'
+type MeasurementProfileRow = {
+  id: string
+  label: string
+  relationship: string | null
+  measurements: Record<string, unknown> | null
+  unit_preference: string | null
+  source: string | null
+  is_default: boolean | null
+  last_measured_at: string | null
+  updated_at: string | null
+}
 type CheckoutPricingPreview = {
   currency: CurrencyCode
   displayCurrency?: CurrencyCode
@@ -113,6 +124,9 @@ export default function ReadyMadeCheckoutScreen() {
   const [checkoutItemSnapshot, setCheckoutItemSnapshot] = useState<ItemDetail | null>(null)
   const [selectedSize, setSelectedSize] = useState('')
   const [sizeSheetOpen, setSizeSheetOpen] = useState(false)
+  const [measurementProfileSheetOpen, setMeasurementProfileSheetOpen] = useState(false)
+  const [measurementProfiles, setMeasurementProfiles] = useState<MeasurementProfileRow[]>([])
+  const [selectedMeasurementProfile, setSelectedMeasurementProfile] = useState<MeasurementProfileRow | null>(null)
   const [quantity, setQuantity] = useState(1)
   const [fulfillment, setFulfillment] = useState<FulfillmentOption | null>(null)
   const [addressSearch, setAddressSearch] = useState('')
@@ -135,6 +149,7 @@ export default function ReadyMadeCheckoutScreen() {
   const suppressNextAddressLookup = useRef(false)
   const { data: item, isLoading, refetch } = useSellerItem(itemId)
   const { data: measurements } = useCustomerMeasurements(user?.id)
+  const activeMeasurements = selectedMeasurementProfile?.measurements ?? measurements
   const { startOrderPayment } = useOrderPaymentFlow()
   const { currency: accountCurrency, rates } = useCurrency()
   const activeItem = item ?? (checkoutInFlight ? checkoutItemSnapshot : null)
@@ -153,7 +168,7 @@ export default function ReadyMadeCheckoutScreen() {
       const normalizedGuide = normalizeReadyMadeSizeGuide(item.sizeGuide, item.sizes)
       const recommendedSize = recommendReadyMadeSize({
         guide: normalizedGuide,
-        measurements,
+        measurements: activeMeasurements,
         sizes: item.sizes.filter(
           (size) => quantityForSize(item.sizeInventory, size, item.inventoryQuantity) > 0
         ),
@@ -177,7 +192,27 @@ export default function ReadyMadeCheckoutScreen() {
       setFulfillment((current) => current ?? defaultFulfillment(item))
     }, 0)
     return () => clearTimeout(timer)
-  }, [item, measurements])
+  }, [activeMeasurements, item])
+
+  useEffect(() => {
+    if (!user?.id) return
+    let cancelled = false
+    supabase
+      .from('customer_measurement_profiles')
+      .select('id, label, relationship, measurements, unit_preference, source, is_default, last_measured_at, updated_at')
+      .eq('customer_id', user.id)
+      .order('is_default', { ascending: false })
+      .order('updated_at', { ascending: false })
+      .then(({ data, error }) => {
+        if (cancelled || error) return
+        const rows = (data ?? []) as MeasurementProfileRow[]
+        setMeasurementProfiles(rows)
+        setSelectedMeasurementProfile((current) => current ?? rows.find((profile) => profile.is_default) ?? rows[0] ?? null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [user?.id])
 
   useEffect(() => {
     if (!user) return
@@ -344,14 +379,14 @@ export default function ReadyMadeCheckoutScreen() {
       activeItem
         ? recommendReadyMadeSize({
             guide: normalizeReadyMadeSizeGuide(activeItem.sizeGuide, activeItem.sizes),
-            measurements,
+            measurements: activeMeasurements,
             sizes: activeItem.sizes.filter(
               (size) =>
                 quantityForSize(activeItem.sizeInventory, size, activeItem.inventoryQuantity) > 0
             ),
           })
         : null,
-    [activeItem, measurements]
+    [activeItem, activeMeasurements]
   )
 
   useEffect(() => {
@@ -674,6 +709,22 @@ export default function ReadyMadeCheckoutScreen() {
               {activeItem.sizes.length > 0 ? (
                 <View style={styles.sectionCard}>
                   <Text style={styles.sectionTitle}>Choose size</Text>
+                  {measurementProfiles.length > 0 ? (
+                    <TouchableOpacity
+                      style={styles.profileSelectRow}
+                      onPress={() => setMeasurementProfileSheetOpen(true)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Choose measurement profile for size recommendation"
+                    >
+                      <View>
+                        <Text style={styles.profileSelectEyebrow}>Fit profile</Text>
+                        <Text style={styles.profileSelectTitle}>
+                          {selectedMeasurementProfile?.label ?? 'Me'}
+                        </Text>
+                      </View>
+                      <Feather name="chevron-down" size={18} color={Colors.midGrey} />
+                    </TouchableOpacity>
+                  ) : null}
                   {sizeRecommendation?.status === 'RECOMMENDED' ||
                   sizeRecommendation?.status === 'BETWEEN' ? (
                     <View style={styles.recommendationCard}>
@@ -1020,8 +1071,12 @@ export default function ReadyMadeCheckoutScreen() {
                 }}
               />
 
-              <View style={styles.bestUseCard}>
-                <Text style={styles.bestUseEyebrow}>Fulfillment note</Text>
+              <DisclosureSection
+                title="Fulfillment note"
+                summary={fulfillment === 'PICKUP' ? 'Pickup details stay private until ready.' : 'Delivery fees are collected here; extras need approval.'}
+                tone="info"
+                icon="truck"
+              >
                 <Text style={styles.bestUseText}>
                   {fulfillment === 'PICKUP'
                     ? 'Pickup has no delivery fee, but tax can still apply based on the order location. Pickup details stay private until the seller marks the order ready. Bring your collection code and inspect the item before closing the order.'
@@ -1032,10 +1087,14 @@ export default function ReadyMadeCheckoutScreen() {
                   damaged, wrong, missing, or materially different from the listing, raise it inside
                   Drapeon before closing the order.
                 </Text>
-              </View>
+              </DisclosureSection>
 
-              <View style={styles.policyCard}>
-                <Text style={styles.policyTitle}>Returns and remedies</Text>
+              <DisclosureSection
+                title="Returns and remedies"
+                summary="Review when refunds, fixes, or disputes are available."
+                tone="info"
+                icon="shield"
+              >
                 <View style={styles.policyList}>
                   {READY_MADE_POLICY_ROWS.map((row) => (
                     <View key={row.title} style={styles.policyRow}>
@@ -1044,10 +1103,14 @@ export default function ReadyMadeCheckoutScreen() {
                     </View>
                   ))}
                 </View>
-              </View>
+              </DisclosureSection>
 
-              <View style={styles.policyCard}>
-                <Text style={styles.policyTitle}>Cancellation policy</Text>
+              <DisclosureSection
+                title="Cancellation policy"
+                summary="Acknowledge before paying."
+                tone={cancellationPolicyAcknowledged ? 'success' : 'warning'}
+                icon="alert-circle"
+              >
                 <View style={styles.policyList}>
                   {ORDER_CANCELLATION_POLICY_ROWS.map((row) => (
                     <View key={row.title} style={styles.policyRow}>
@@ -1079,7 +1142,7 @@ export default function ReadyMadeCheckoutScreen() {
                   </View>
                   <Text style={styles.policyAckText}>{ORDER_CANCELLATION_ACK_COPY}</Text>
                 </TouchableOpacity>
-              </View>
+              </DisclosureSection>
             </>
           )}
         </ScrollView>
@@ -1118,6 +1181,25 @@ export default function ReadyMadeCheckoutScreen() {
             }}
           />
         ) : null}
+        <ChoiceSheet
+          visible={measurementProfileSheetOpen}
+          title="Choose fit profile"
+          subtitle="Use this profile for the size recommendation on this item."
+          options={measurementProfiles.map((profile) => ({
+            value: profile.id,
+            title: profile.is_default ? `${profile.label} · default` : profile.label,
+            body: profile.last_measured_at
+              ? `Updated ${new Date(profile.last_measured_at).toLocaleDateString()}`
+              : profile.source?.replace(/_/g, ' ').toLowerCase() ?? 'Saved profile',
+            icon: profile.relationship === 'SELF' ? 'user' : 'users',
+          }))}
+          selectedValue={selectedMeasurementProfile?.id}
+          onClose={() => setMeasurementProfileSheetOpen(false)}
+          onSelect={(value) => {
+            setSelectedMeasurementProfile(measurementProfiles.find((profile) => profile.id === value) ?? null)
+            setMeasurementProfileSheetOpen(false)
+          }}
+        />
       </KeyboardAvoidingView>
     </SafeAreaView>
   )
@@ -1333,6 +1415,31 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     padding: 12,
     gap: 4,
+  },
+  profileSelectRow: {
+    minHeight: 58,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: HOME_BG,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  profileSelectEyebrow: {
+    fontSize: 11,
+    color: Colors.midGrey,
+    fontWeight: FontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  profileSelectTitle: {
+    fontSize: FontSize.sm,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
   },
   recommendationLabel: { fontSize: 13, color: PRIMARY_GREEN, fontWeight: FontWeight.semibold },
   recommendationDetail: { fontSize: 12, color: Colors.inkLight, lineHeight: 16 },

@@ -32,6 +32,10 @@ function uniqueUrls(values: string[]) {
   return [...new Set(values.map(normalizeUrl).filter((value): value is string => !!value))]
 }
 
+function canonicalMediaUrl(value: string) {
+  return value.split(/[?#]/u)[0] ?? value
+}
+
 function inferMediaKind(url: string): MediaKind {
   const path = url.split('?')[0]?.toLowerCase() ?? ''
   if (/\.(jpg|jpeg|png|webp|heic|heif)$/u.test(path)) return 'IMAGE'
@@ -175,27 +179,39 @@ export async function findBlockedMediaUrls(
 ) {
   const normalized = uniqueUrls(urls)
   if (normalized.length === 0) return new Set<string>()
+  const lookupUrls = uniqueUrls([
+    ...normalized,
+    ...normalized.map(canonicalMediaUrl),
+  ])
 
   const { data, error } = await supabase
     .from('media_assets')
     .select('public_url, status, moderation_status')
-    .in('public_url', normalized)
+    .in('public_url', lookupUrls)
 
   if (error) {
     log('warn', 'media-safety', 'blocked_lookup_failed', { error: error.message })
     return new Set<string>()
   }
 
-  return new Set(
+  const unsafeLookup = new Set(
     ((data ?? []) as Array<{ public_url?: string | null; status?: string | null; moderation_status?: string | null }>)
       .filter((row) =>
-        row.status === 'BLOCKED' ||
-        row.moderation_status === 'BLOCKED' ||
-        row.moderation_status === 'AUTO_BLOCKED'
+        row.status !== 'ACTIVE' ||
+        (
+          row.moderation_status !== 'APPROVED' &&
+          row.moderation_status !== 'AUTO_ALLOWED'
+        )
       )
       .map((row) => normalizeUrl(row.public_url))
       .filter((value): value is string => !!value),
   )
+
+  for (const value of [...unsafeLookup]) {
+    unsafeLookup.add(canonicalMediaUrl(value))
+  }
+
+  return new Set(normalized.filter((url) => unsafeLookup.has(url) || unsafeLookup.has(canonicalMediaUrl(url))))
 }
 
 export async function filterBlockedMediaUrls(

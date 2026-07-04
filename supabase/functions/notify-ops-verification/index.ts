@@ -297,8 +297,10 @@ Deno.serve(async (req) => {
     })
 
     if (!resendRes.ok) {
-      const body = await resendRes.text()
-      console.error('[notify-ops-verification] Resend error:', body)
+      console.error('[notify-ops-verification] Resend error', {
+        status: resendRes.status,
+        contentType: resendRes.headers.get('content-type'),
+      })
       return jsonResponse({ error: 'We could not notify the review team right now. Please try again.' }, 502, corsHeaders)
     }
 

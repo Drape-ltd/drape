@@ -1,4 +1,4 @@
-import { Component, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react'
+import { Component, useCallback, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react'
 import { AppState, AppStateStatus, Modal, View, ActivityIndicator, StyleSheet, Alert, Text, ScrollView, useColorScheme } from 'react-native'
 import { Stack, useRouter, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
@@ -48,6 +48,21 @@ function hideNativeSplash(reason: string) {
 
 function hasUsablePhone(value: unknown): boolean {
   return typeof value === 'string' && validatePhoneForProfile(value) === null
+}
+
+function isAuthFailure(error: unknown): boolean {
+  const candidate = error as { status?: unknown; code?: unknown; message?: unknown } | null
+  const status = typeof candidate?.status === 'number' ? candidate.status : null
+  const code = typeof candidate?.code === 'string' ? candidate.code.toUpperCase() : ''
+  const message = typeof candidate?.message === 'string' ? candidate.message.toLowerCase() : ''
+
+  return (
+    status === 401 ||
+    code === 'PGRST301' ||
+    message.includes('jwt') ||
+    message.includes('invalid api key') ||
+    message.includes('unauthorized')
+  )
 }
 
 async function withRouteGuardTimeout<T>(promise: PromiseLike<T>, label: string): Promise<T> {
@@ -258,7 +273,7 @@ const startupErrorStyles = StyleSheet.create({
 })
 
 function RouteGuard({ appReady }: { appReady: boolean }) {
-  const { session, loading, user } = useAuth()
+  const { session, loading, user, signOut } = useAuth()
   const role = useUserRole()
   const userId = user?.id ?? null
   const userEmail = user?.email ?? null
@@ -271,6 +286,7 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
   const thirdSegment = segments[2] as string | undefined
   const router = useRouter()
   const splashHidden = useRef(false)
+  const authRecoveryInFlight = useRef(false)
   const [tailorProfileChecked, setTailorProfileChecked] = useState(false)
   const [tailorHasProfile, setTailorHasProfile] = useState(false)
   const [tailorProfileCompleted, setTailorProfileCompleted] = useState(false)
@@ -282,6 +298,19 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
   const [customerProfileChecking, setCustomerProfileChecking] = useState(false)
   const analyticsSharing =
     user?.user_metadata?.privacy_prefs?.analyticsSharing === true
+
+  const recoverFromAuthFailure = useCallback((context: string, error: unknown) => {
+    if (authRecoveryInFlight.current) return
+    authRecoveryInFlight.current = true
+    console.warn(`${context} returned an auth error; clearing the local session.`, error)
+    signOut()
+      .catch((signOutError) => {
+        console.warn('Unable to clear invalid auth session from route guard.', signOutError)
+      })
+      .finally(() => {
+        authRecoveryInFlight.current = false
+      })
+  }, [signOut])
 
   // Reset profile flags whenever the user changes (sign-out → sign-in as same or different user).
   // RouteGuard never unmounts, so stale `customerProfileComplete = true` from a previous session
@@ -352,6 +381,10 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
           if (cancelled) return
           setCustomerProfileChecking(false)
           if (error) {
+            if (isAuthFailure(error)) {
+              recoverFromAuthFailure('Customer profile guard lookup', error)
+              return
+            }
             // Network/DB error — don't update profile state; unblock so splash can hide.
             // The customer's profile screens have their own error handling.
             setCustomerProfileCheckFailed(true)
@@ -375,6 +408,11 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
           setCustomerProfileChecked(true)
         }, (error: unknown) => {
           if (cancelled) return
+          if (isAuthFailure(error)) {
+            setCustomerProfileChecking(false)
+            recoverFromAuthFailure('Customer profile guard lookup', error)
+            return
+          }
           console.warn('Customer profile guard lookup failed; keeping customer out of setup redirects.', error)
           setCustomerProfileChecking(false)
           setCustomerProfileCheckFailed(true)
@@ -385,7 +423,7 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [customerProfileComplete, role, rootSegment, userId, userPhone])
+  }, [customerProfileComplete, recoverFromAuthFailure, role, rootSegment, userId, userPhone])
 
   // When a tailor signs in or navigates within the tailor section, check whether they've completed setup.
   // segments[2] is included so the check re-fires when leaving the setup screen (segments[2] goes from
@@ -410,6 +448,10 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
           if (cancelled) return
           setTailorProfileChecking(false)
           if (error) {
+            if (isAuthFailure(error)) {
+              recoverFromAuthFailure('Tailor profile guard lookup', error)
+              return
+            }
             // Network/DB error — don't update profile state; unblock so splash can hide.
             setTailorProfileCheckFailed(true)
             setTailorProfileChecked(true)
@@ -421,6 +463,11 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
           setTailorProfileChecked(true)
         }, (error: unknown) => {
           if (cancelled) return
+          if (isAuthFailure(error)) {
+            setTailorProfileChecking(false)
+            recoverFromAuthFailure('Tailor profile guard lookup', error)
+            return
+          }
           console.warn('Tailor profile guard lookup failed; keeping tailor out of setup redirects.', error)
           setTailorProfileChecking(false)
           setTailorProfileCheckFailed(true)
@@ -433,6 +480,7 @@ function RouteGuard({ appReady }: { appReady: boolean }) {
     }
   }, [
     role,
+    recoverFromAuthFailure,
     rootSegment,
     secondSegment,
     tailorProfileChecked,

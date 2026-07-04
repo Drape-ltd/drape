@@ -17,7 +17,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
 import { isLikelyConnectivityIssue } from '@/lib/function-errors'
-import { goBackOrReturnToIfNeeded } from '@/lib/navigation'
+import { goBackOrReturnToIfNeeded, sanitizeReturnTo } from '@/lib/navigation'
 import {
   isMeasurementSource,
   isMeasurementMetadataKey,
@@ -25,7 +25,7 @@ import {
   MEASUREMENT_SOURCE_LABELS,
   type MeasurementSource,
 } from '@/lib/order-support'
-import { Button, Input } from '@/components/ui'
+import { Button, ChoiceSheet, DisclosureSection, Input, type ChoiceSheetOption } from '@/components/ui'
 import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { filterContactInfo } from '@drape/shared/contact-filter'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
@@ -76,6 +76,20 @@ interface CustomMeasurement {
   name: string
   value: string
 }
+
+type MeasurementProfileRow = {
+  id: string
+  label: string
+  relationship: string | null
+  measurements: Record<string, unknown> | null
+  unit_preference: Unit | null
+  source: string | null
+  is_default: boolean | null
+  last_measured_at: string | null
+  updated_at: string | null
+}
+
+type MeasurementModuleKey = 'lengths' | 'upper' | 'lower' | 'headwear' | 'custom'
 
 function isEditableCustomMeasurementEntry(key: string, value: unknown) {
   if (isMeasurementMetadataKey(key)) return false
@@ -343,6 +357,59 @@ const CUSTOM_MEASUREMENT_SUGGESTION_GROUPS = [
 
 const MEASUREMENTS_GUIDE_KEY = 'drape_customer_measurements_best_use_dismissed'
 
+const MEASUREMENT_MODULE_OPTIONS: Array<{
+  value: MeasurementModuleKey
+  title: string
+  body: string
+  icon: keyof typeof Feather.glyphMap
+}> = [
+  {
+    value: 'lengths',
+    title: 'Lengths',
+    body: 'Height, sleeve, inseam, outseam, torso, and back length.',
+    icon: 'maximize-2',
+  },
+  {
+    value: 'upper',
+    title: 'Upper body detail',
+    body: 'Neck, under bust, bicep, and wrist for shirts, cuffs, bodice, and corset work.',
+    icon: 'watch',
+  },
+  {
+    value: 'lower',
+    title: 'Lower body detail',
+    body: 'Thigh and knee for trousers, fitted skirts, and narrow hems.',
+    icon: 'align-justify',
+  },
+  {
+    value: 'headwear',
+    title: 'Headwear',
+    body: 'Head, hat band, crown, and fila details for caps, gele, and formal headwear.',
+    icon: 'circle',
+  },
+  {
+    value: 'custom',
+    title: 'Custom tape points',
+    body: 'Add garment-specific points your tailor asked for.',
+    icon: 'plus-circle',
+  },
+]
+
+const MODULE_FIELD_KEYS: Record<Exclude<MeasurementModuleKey, 'custom'>, string[]> = {
+  lengths: ['height', 'inseam', 'sleeveLength', 'backLength', 'outseam', 'torsoLength'],
+  upper: ['neckCircumference', 'underBust', 'bicepCircumference', 'wristCircumference'],
+  lower: ['thighCircumference', 'kneeCircumference'],
+  headwear: [
+    'headCircumference',
+    'hatBandLine',
+    'headLength',
+    'headWidth',
+    'earToEarOverCrown',
+    'frontToBackOverCrown',
+    'filaHeight',
+  ],
+}
+
 function normalizeGarmentContext(value: unknown): GarmentContext | null {
   if (value === 'PREFER_NOT') return 'PREFER_NOT_TO_SAY'
   if (
@@ -379,17 +446,21 @@ export default function MeasurementsScreen() {
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
   const { returnTo } = useLocalSearchParams<{ returnTo?: string }>()
-  const safeReturnTo =
-    typeof returnTo === 'string' &&
-    returnTo.trim().length > 0 &&
-    returnTo !== '/(customer)/profile/measurements'
-      ? returnTo
-      : undefined
+  const sanitizedReturnTo = sanitizeReturnTo(returnTo)
+  const safeReturnTo = sanitizedReturnTo && sanitizedReturnTo !== '/(customer)/profile/measurements'
+    ? sanitizedReturnTo
+    : undefined
   const { user } = useAuth()
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
   const [fetchError, setFetchError] = useState(false)
   const [showGuide, setShowGuide] = useState(true)
+  const [profileSheetOpen, setProfileSheetOpen] = useState(false)
+  const [measurementSourceSheetOpen, setMeasurementSourceSheetOpen] = useState(false)
+  const [measurementModuleSheetOpen, setMeasurementModuleSheetOpen] = useState(false)
+  const [customMeasurementSheetOpen, setCustomMeasurementSheetOpen] = useState(false)
+  const [measurementProfiles, setMeasurementProfiles] = useState<MeasurementProfileRow[]>([])
+  const [visibleMeasurementModules, setVisibleMeasurementModules] = useState<MeasurementModuleKey[]>([])
 
   // Layer 1
   const [measurementProfileLabel, setMeasurementProfileLabel] = useState('Me')
@@ -468,6 +539,7 @@ export default function MeasurementsScreen() {
     setBodyNoteError('')
     setCustomMeasurements([])
     setFitCaptureMeta({})
+    setVisibleMeasurementModules([])
     if (!m) return
     if (typeof m.measurementProfileLabel === 'string' && m.measurementProfileLabel.trim()) {
       setMeasurementProfileLabel(m.measurementProfileLabel.trim())
@@ -605,6 +677,13 @@ export default function MeasurementsScreen() {
         value: value != null ? String(value) : '',
       }))
     )
+    const modulesWithValues = MEASUREMENT_MODULE_OPTIONS
+      .filter((module) => {
+        if (module.value === 'custom') return extras.length > 0
+        return MODULE_FIELD_KEYS[module.value].some((key) => typeof m[key] === 'number')
+      })
+      .map((module) => module.value)
+    setVisibleMeasurementModules(modulesWithValues)
   }
 
   const loadMeasurements = useCallback(async () => {
@@ -627,13 +706,31 @@ export default function MeasurementsScreen() {
     applyMeasurements((data?.measurements as Record<string, unknown> | null) ?? null)
   }, [user?.id])
 
+  const loadMeasurementProfiles = useCallback(async () => {
+    if (!user?.id) {
+      setMeasurementProfiles([])
+      return
+    }
+    const { data, error } = await supabase
+      .from('customer_measurement_profiles')
+      .select('id, label, relationship, measurements, unit_preference, source, is_default, last_measured_at, updated_at')
+      .eq('customer_id', user.id)
+      .order('is_default', { ascending: false })
+      .order('updated_at', { ascending: false })
+
+    if (!error) {
+      setMeasurementProfiles((data ?? []) as MeasurementProfileRow[])
+    }
+  }, [user?.id])
+
   useEffect(() => {
     if (!user?.id) return
     const timer = setTimeout(() => {
       void loadMeasurements()
+      void loadMeasurementProfiles()
     }, 0)
     return () => clearTimeout(timer)
-  }, [loadMeasurements, user?.id])
+  }, [loadMeasurementProfiles, loadMeasurements, user?.id])
 
   useEffect(() => {
     AsyncStorage.getItem(`${MEASUREMENTS_GUIDE_KEY}:${user?.id ?? 'guest'}`)
@@ -703,6 +800,62 @@ export default function MeasurementsScreen() {
         },
       ]
     })
+  }
+
+  function toggleMeasurementModule(moduleKey: MeasurementModuleKey) {
+    setVisibleMeasurementModules((previous) =>
+      previous.includes(moduleKey)
+        ? previous.filter((key) => key !== moduleKey)
+        : [...previous, moduleKey]
+    )
+  }
+
+  function applyMeasurementProfile(profile: MeasurementProfileRow) {
+    const storedUnit = profile.measurements?.unit
+    const nextUnit =
+      profile.unit_preference === 'cm' || profile.unit_preference === 'in'
+        ? profile.unit_preference
+        : storedUnit === 'cm' || storedUnit === 'in'
+          ? storedUnit
+          : unit
+    applyMeasurements({
+      ...(profile.measurements ?? {}),
+      unit: nextUnit,
+      measurementProfileLabel: profile.label,
+      measurementSource: profile.measurements?.measurementSource ?? measurementSource,
+    })
+    setProfileSheetOpen(false)
+  }
+
+  function moduleHasValue(moduleKey: Exclude<MeasurementModuleKey, 'custom'>) {
+    const valuesByKey: Record<string, string> = {
+      height,
+      inseam,
+      sleeveLength,
+      backLength,
+      outseam,
+      torsoLength,
+      neckCircumference,
+      underBust,
+      bicepCircumference,
+      wristCircumference,
+      thighCircumference,
+      kneeCircumference,
+      headCircumference,
+      hatBandLine,
+      headLength,
+      headWidth,
+      earToEarOverCrown,
+      frontToBackOverCrown,
+      filaHeight,
+    }
+    return MODULE_FIELD_KEYS[moduleKey].some((key) => valuesByKey[key]?.trim())
+  }
+
+  function shouldShowModule(moduleKey: MeasurementModuleKey) {
+    if (visibleMeasurementModules.includes(moduleKey)) return true
+    if (moduleKey === 'custom') return customMeasurements.length > 0
+    return moduleHasValue(moduleKey)
   }
 
   function updateCustomMeasurement(id: string, field: 'name' | 'value', text: string) {
@@ -926,6 +1079,112 @@ export default function MeasurementsScreen() {
     else goBackOrReturnToIfNeeded(router, navigation, safeReturnTo, '/(customer)/profile')
   }
 
+  const sourceLabel = MEASUREMENT_SOURCE_OPTIONS.find((option) => option.value === measurementSource)?.label
+    ?? MEASUREMENT_SOURCE_LABELS[measurementSource]
+    ?? 'Choose source'
+  const selectedProfile = measurementProfiles.find((profile) => profile.label === measurementProfileLabel)
+  const profileOptions: ChoiceSheetOption[] = measurementProfiles.length > 0
+    ? measurementProfiles.map((profile) => ({
+        value: profile.id,
+        title: profile.is_default ? `${profile.label} · default` : profile.label,
+        body: profile.last_measured_at
+          ? `Updated ${new Date(profile.last_measured_at).toLocaleDateString()}`
+          : profile.source
+            ? `${profile.source.replace(/_/g, ' ').toLowerCase()} profile`
+            : 'Saved profile',
+        icon: profile.relationship === 'SELF' ? 'user' : 'users',
+      }))
+    : [{
+        value: 'current',
+        title: measurementProfileLabel.trim() || 'Me',
+        body: 'Current profile on this device',
+        icon: 'user' as keyof typeof Feather.glyphMap,
+      }]
+  const customMeasurementOptions = CUSTOM_MEASUREMENT_SUGGESTION_GROUPS.flatMap((group) =>
+    group.items.map((name) => ({
+      value: name,
+      title: name,
+      body: group.title,
+      icon: 'plus-circle' as keyof typeof Feather.glyphMap,
+    }))
+  )
+  const coreFields = [
+    { label: 'Chest', value: chest, set: setChest },
+    { label: 'Waist', value: waist, set: setWaist },
+    { label: 'Hips', value: hips, set: setHips },
+    { label: 'Shoulder width', value: shoulderWidth, set: setShoulderWidth },
+  ]
+  const optionalModules = [
+    {
+      key: 'lengths' as const,
+      title: 'Lengths',
+      subtitle: 'Useful for sleeves, trousers, torso balance, and overall garment length.',
+      fields: [
+        { label: 'Height', value: height, set: setHeight },
+        { label: 'Inseam', value: inseam, set: setInseam },
+        { label: 'Sleeve length', value: sleeveLength, set: setSleeveLength },
+        { label: 'Back length', value: backLength, set: setBackLength },
+        { label: 'Outseam', value: outseam, set: setOutseam },
+        { label: 'Torso length', value: torsoLength, set: setTorsoLength },
+      ],
+    },
+    {
+      key: 'upper' as const,
+      title: 'Upper body detail',
+      subtitle: 'Use for cuffs, sleeves, bodice, corset, shirts, and fitted tops.',
+      fields: [
+        { label: 'Neck', value: neckCircumference, set: setNeckCircumference },
+        { label: 'Under bust', value: underBust, set: setUnderBust },
+        { label: 'Bicep', value: bicepCircumference, set: setBicepCircumference },
+        { label: 'Wrist', value: wristCircumference, set: setWristCircumference },
+      ],
+    },
+    {
+      key: 'lower' as const,
+      title: 'Lower body detail',
+      subtitle: 'Use for trousers, fitted skirts, and narrow hems.',
+      fields: [
+        { label: 'Thigh', value: thighCircumference, set: setThighCircumference },
+        { label: 'Knee', value: kneeCircumference, set: setKneeCircumference },
+      ],
+    },
+    {
+      key: 'headwear' as const,
+      title: 'Headwear',
+      subtitle: 'Use for fila, caps, gele prep, hat bands, and formal headpieces.',
+      fields: [
+        { label: 'Head circumference', value: headCircumference, set: setHeadCircumference },
+        { label: 'Hat band line', value: hatBandLine, set: setHatBandLine },
+        { label: 'Head length', value: headLength, set: setHeadLength },
+        { label: 'Head width', value: headWidth, set: setHeadWidth },
+        { label: 'Ear to ear over crown', value: earToEarOverCrown, set: setEarToEarOverCrown },
+        { label: 'Front to back over crown', value: frontToBackOverCrown, set: setFrontToBackOverCrown },
+        { label: 'Fila height', value: filaHeight, set: setFilaHeight },
+      ],
+    },
+  ]
+
+  function renderMeasurementInputGrid(
+    fields: Array<{ label: string; value: string; set: (value: string) => void }>
+  ) {
+    return (
+      <View style={styles.measureGrid}>
+        {fields.map(({ label, value, set }) => (
+          <View key={label} style={styles.measureField}>
+            <Input
+              label={label}
+              placeholder={`0 ${unit}`}
+              value={value}
+              onChangeText={set}
+              keyboardType="decimal-pad"
+              containerStyle={styles.measureInput}
+            />
+          </View>
+        ))}
+      </View>
+    )
+  }
+
   if (fetchError) {
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
@@ -947,7 +1206,7 @@ export default function MeasurementsScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.errorSecondary}
-              onPress={() => router.replace('/(customer)/profile')}
+              onPress={() => goBackOrReturnToIfNeeded(router, navigation, safeReturnTo, '/(customer)/profile')}
             >
               <Text style={styles.errorSecondaryText}>Open profile</Text>
             </TouchableOpacity>
@@ -1033,78 +1292,79 @@ export default function MeasurementsScreen() {
                   <Feather name="chevron-right" size={18} color={Colors.midGrey} />
                 </TouchableOpacity>
 
-                <Input
-                  label="Profile name"
-                  placeholder="Me, Mum, Partner, Child"
-                  value={measurementProfileLabel}
-                  onChangeText={setMeasurementProfileLabel}
-                  hint="Use the name of the person these measurements belong to. Orders can then say clearly whose body the tailor is cutting for."
-                />
-
-                {/* Unit toggle */}
-                <View style={styles.unitToggle}>
-                  {(['in', 'cm'] as Unit[]).map((u) => (
-                    <TouchableOpacity
-                      key={u}
-                      style={[styles.unitBtn, unit === u && styles.unitBtnActive]}
-                      onPress={() => changeUnit(u)}
-                    >
-                      <Text style={[styles.unitLabel, unit === u && styles.unitLabelActive]}>
-                        {u}
+                <View style={styles.passportSummaryCard}>
+                  <View style={styles.passportSummaryHeader}>
+                    <View>
+                      <Text style={styles.summaryEyebrow}>Fit Passport</Text>
+                      <Text style={styles.summaryTitle}>
+                        {measurementProfileLabel.trim() || 'Me'}
                       </Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.smallAction}
+                      onPress={() => setProfileSheetOpen(true)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Choose measurement profile"
+                    >
+                      <Text style={styles.smallActionText}>Switch</Text>
                     </TouchableOpacity>
-                  ))}
+                  </View>
+                  <Input
+                    label="Profile name"
+                    placeholder="Me, Mum, Partner, Child"
+                    value={measurementProfileLabel}
+                    onChangeText={setMeasurementProfileLabel}
+                    hint="Name the person these measurements belong to."
+                  />
+                  {selectedProfile ? (
+                    <Text style={styles.profileMeta}>
+                      {selectedProfile.is_default ? 'Default profile' : 'Saved profile'} · {selectedProfile.source?.replace(/_/g, ' ').toLowerCase() ?? 'manual'}
+                    </Text>
+                  ) : null}
                 </View>
 
-                <View style={styles.measureGrid}>
-                  {[
-                    { label: 'Chest', value: chest, set: setChest },
-                    { label: 'Waist', value: waist, set: setWaist },
-                    { label: 'Hips', value: hips, set: setHips },
-                    { label: 'Shoulder width', value: shoulderWidth, set: setShoulderWidth },
-                    { label: 'Inseam', value: inseam, set: setInseam },
-                    { label: 'Sleeve length', value: sleeveLength, set: setSleeveLength },
-                    { label: 'Neck', value: neckCircumference, set: setNeckCircumference },
-                    { label: 'Under bust', value: underBust, set: setUnderBust },
-                    { label: 'Height', value: height, set: setHeight },
-                    { label: 'Back length', value: backLength, set: setBackLength },
-                    { label: 'Outseam', value: outseam, set: setOutseam },
-                    { label: 'Thigh', value: thighCircumference, set: setThighCircumference },
-                    { label: 'Knee', value: kneeCircumference, set: setKneeCircumference },
-                    { label: 'Bicep', value: bicepCircumference, set: setBicepCircumference },
-                    { label: 'Wrist', value: wristCircumference, set: setWristCircumference },
-                    {
-                      label: 'Head circumference',
-                      value: headCircumference,
-                      set: setHeadCircumference,
-                    },
-                    { label: 'Hat band line', value: hatBandLine, set: setHatBandLine },
-                    { label: 'Head length', value: headLength, set: setHeadLength },
-                    { label: 'Head width', value: headWidth, set: setHeadWidth },
-                    {
-                      label: 'Ear to ear over crown',
-                      value: earToEarOverCrown,
-                      set: setEarToEarOverCrown,
-                    },
-                    {
-                      label: 'Front to back over crown',
-                      value: frontToBackOverCrown,
-                      set: setFrontToBackOverCrown,
-                    },
-                    { label: 'Fila height', value: filaHeight, set: setFilaHeight },
-                    { label: 'Torso length', value: torsoLength, set: setTorsoLength },
-                  ].map(({ label, value, set }) => (
-                    <View key={label} style={styles.measureField}>
-                      <Input
-                        label={label}
-                        placeholder={`0 ${unit}`}
-                        value={value}
-                        onChangeText={set}
-                        keyboardType="decimal-pad"
-                        containerStyle={styles.measureInput}
-                      />
+                {/* Unit toggle */}
+                <View style={styles.controlsRow}>
+                  <View style={styles.unitToggle}>
+                    {(['in', 'cm'] as Unit[]).map((u) => (
+                      <TouchableOpacity
+                        key={u}
+                        style={[styles.unitBtn, unit === u && styles.unitBtnActive]}
+                        onPress={() => changeUnit(u)}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: unit === u }}
+                      >
+                        <Text style={[styles.unitLabel, unit === u && styles.unitLabelActive]}>
+                          {u}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <TouchableOpacity
+                    style={styles.sourceSelector}
+                    onPress={() => setMeasurementSourceSheetOpen(true)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Choose measurement source"
+                  >
+                    <Feather name="clipboard" size={15} color={Colors.needleGreen} />
+                    <Text style={styles.sourceSelectorText} numberOfLines={1}>{sourceLabel}</Text>
+                    <Feather name="chevron-down" size={15} color={Colors.midGrey} />
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.moduleCard}>
+                  <View style={styles.moduleHeader}>
+                    <View style={styles.moduleIcon}>
+                      <Feather name="target" size={17} color={Colors.needleGreen} />
                     </View>
-                  ))}
+                    <View style={styles.moduleCopy}>
+                      <Text style={styles.moduleTitle}>Core measurements</Text>
+                      <Text style={styles.moduleSubtitle}>
+                        Fit 360 and most orders start with these four.
+                      </Text>
+                    </View>
+                  </View>
+                  {renderMeasurementInputGrid(coreFields)}
                 </View>
 
                 <View style={styles.fitStyleSection}>
@@ -1129,65 +1389,59 @@ export default function MeasurementsScreen() {
                   </View>
                 </View>
 
-                <View style={styles.optionList}>
-                  <Text style={styles.fieldLabel}>How were these taken?</Text>
-                  {MEASUREMENT_SOURCE_OPTIONS.map((opt) => (
-                    <TouchableOpacity
-                      key={opt.value}
-                      style={[
-                        styles.optionCard,
-                        measurementSource === opt.value && styles.optionCardActive,
-                      ]}
-                      onPress={() => setMeasurementSource(opt.value)}
-                    >
-                      <View
-                        style={[
-                          styles.optionRadio,
-                          measurementSource === opt.value && styles.optionRadioActive,
-                        ]}
-                      />
-                      <View style={{ flex: 1 }}>
-                        <Text
-                          style={[
-                            styles.optionLabel,
-                            measurementSource === opt.value && styles.optionLabelActive,
-                          ]}
-                        >
-                          {opt.label}
-                        </Text>
-                        <Text style={styles.optionHint}>{opt.hint}</Text>
-                      </View>
-                    </TouchableOpacity>
-                  ))}
+                <View style={styles.addMoreCard}>
+                  <View style={styles.addMoreCopy}>
+                    <Text style={styles.addMoreTitle}>Add more measurements</Text>
+                    <Text style={styles.addMoreText}>
+                      Choose only the garment areas you need. Empty optional fields stay out of the way.
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.addMoreButton}
+                    onPress={() => setMeasurementModuleSheetOpen(true)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Add measurement module"
+                  >
+                    <Feather name="plus" size={15} color={Colors.textInverse} />
+                    <Text style={styles.addMoreButtonText}>Add</Text>
+                  </TouchableOpacity>
                 </View>
 
-                {/* Custom measurements */}
-                <View style={styles.customSection}>
-                  <Text style={styles.fieldLabel}>Additional measurements</Text>
-                  <Text style={styles.customHint}>
-                    Add garment-specific details your tailor may need, especially bust, balance,
-                    sleeve, and length points.
-                  </Text>
-                  {CUSTOM_MEASUREMENT_SUGGESTION_GROUPS.map((group) => (
-                    <View key={group.title} style={styles.customSuggestionGroup}>
-                      <Text style={styles.customSuggestionGroupTitle}>{group.title}</Text>
-                      <View style={styles.customSuggestionList}>
-                        {group.items.map((name) => (
-                          <TouchableOpacity
-                            key={name}
-                            style={styles.customSuggestionRow}
-                            onPress={() => addSuggestedMeasurement(name)}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Add ${name} measurement`}
-                          >
-                            <Text style={styles.customSuggestionText}>{name}</Text>
-                            <Feather name="plus" size={16} color={Colors.needleGreen} />
-                          </TouchableOpacity>
-                        ))}
+                {optionalModules
+                  .filter((module) => shouldShowModule(module.key))
+                  .map((module) => (
+                    <View key={module.key} style={styles.moduleCard}>
+                      <View style={styles.moduleHeader}>
+                        <View style={styles.moduleIcon}>
+                          <Feather
+                            name={MEASUREMENT_MODULE_OPTIONS.find((option) => option.value === module.key)?.icon ?? 'sliders'}
+                            size={17}
+                            color={Colors.needleGreen}
+                          />
+                        </View>
+                        <View style={styles.moduleCopy}>
+                          <Text style={styles.moduleTitle}>{module.title}</Text>
+                          <Text style={styles.moduleSubtitle}>{module.subtitle}</Text>
+                        </View>
                       </View>
+                      {renderMeasurementInputGrid(module.fields)}
                     </View>
                   ))}
 
+                {/* Custom measurements */}
+                {shouldShowModule('custom') ? (
+                  <View style={styles.moduleCard}>
+                    <View style={styles.moduleHeader}>
+                      <View style={styles.moduleIcon}>
+                        <Feather name="plus-circle" size={17} color={Colors.needleGreen} />
+                      </View>
+                      <View style={styles.moduleCopy}>
+                        <Text style={styles.moduleTitle}>Custom tape points</Text>
+                        <Text style={styles.moduleSubtitle}>
+                          Add any named point your tailor asked for.
+                        </Text>
+                      </View>
+                    </View>
                   {customMeasurements.map((m) => (
                     <View key={m.id} style={styles.customRow}>
                       <View style={styles.customNameField}>
@@ -1218,13 +1472,34 @@ export default function MeasurementsScreen() {
                     </View>
                   ))}
 
-                  <TouchableOpacity
-                    style={styles.addCustomBtn}
-                    onPress={() => addCustomMeasurement()}
-                  >
-                    <Text style={styles.addCustomText}>+ Add measurement</Text>
-                  </TouchableOpacity>
-                </View>
+                    <View style={styles.customActionsRow}>
+                      <TouchableOpacity
+                        style={styles.addCustomBtn}
+                        onPress={() => addCustomMeasurement()}
+                      >
+                        <Text style={styles.addCustomText}>+ Blank point</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.addCustomBtn}
+                        onPress={() => setCustomMeasurementSheetOpen(true)}
+                      >
+                        <Text style={styles.addCustomText}>Choose preset</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ) : null}
+
+                <DisclosureSection
+                  title="How Drapeon uses these"
+                  summary="Core values help quotes start faster. Specialist and custom points stay available when the garment needs them."
+                  tone="info"
+                  icon="shield"
+                >
+                  <Text style={styles.disclosureText}>
+                    Only reviewed measurements save to your Fit Passport. Tailors can still request
+                    tape checks before cutting high-risk garments.
+                  </Text>
+                </DisclosureSection>
               </View>
             )}
 
@@ -1324,8 +1599,9 @@ export default function MeasurementsScreen() {
                   }}
                   onBlur={() => validateBodyNote(bodyNote)}
                   error={bodyNoteError}
-                  hint="Max 280 characters. No contact details."
+                  hint="No contact details."
                   maxLength={280}
+                  showCharacterCount
                   multiline
                   numberOfLines={3}
                   filterContact
@@ -1346,6 +1622,64 @@ export default function MeasurementsScreen() {
           />
         </View>
       </KeyboardAvoidingView>
+      <ChoiceSheet
+        visible={profileSheetOpen}
+        title="Choose profile"
+        subtitle="Use a saved wearer profile, or keep editing the current one."
+        options={profileOptions}
+        selectedValue={selectedProfile?.id ?? 'current'}
+        onClose={() => setProfileSheetOpen(false)}
+        onSelect={(value) => {
+          if (value === 'current') {
+            setProfileSheetOpen(false)
+            return
+          }
+          const profile = measurementProfiles.find((item) => item.id === value)
+          if (profile) applyMeasurementProfile(profile)
+        }}
+      />
+      <ChoiceSheet
+        visible={measurementSourceSheetOpen}
+        title="How were these taken?"
+        subtitle="This helps Drapeon and tailors understand how much tape-checking the profile needs."
+        options={MEASUREMENT_SOURCE_OPTIONS.map((option) => ({
+          value: option.value,
+          title: option.label,
+          body: option.hint,
+          icon: (option.value.includes('VISION') ? 'aperture' : 'clipboard') as keyof typeof Feather.glyphMap,
+        }))}
+        selectedValue={measurementSource}
+        onClose={() => setMeasurementSourceSheetOpen(false)}
+        onSelect={(value) => {
+          if (isMeasurementSource(value)) setMeasurementSource(value)
+          setMeasurementSourceSheetOpen(false)
+        }}
+      />
+      <ChoiceSheet
+        visible={measurementModuleSheetOpen}
+        title="Add measurement area"
+        subtitle="Pick the extra detail this garment or wearer needs."
+        options={MEASUREMENT_MODULE_OPTIONS}
+        selectedValues={visibleMeasurementModules}
+        multiple
+        doneLabel="Use selected"
+        onClose={() => setMeasurementModuleSheetOpen(false)}
+        onDone={() => setMeasurementModuleSheetOpen(false)}
+        onSelect={(value) => toggleMeasurementModule(value as MeasurementModuleKey)}
+      />
+      <ChoiceSheet
+        visible={customMeasurementSheetOpen}
+        title="Add custom tape point"
+        subtitle="Common tailor-requested points. You can still add a blank one."
+        options={customMeasurementOptions}
+        onClose={() => setCustomMeasurementSheetOpen(false)}
+        onSelect={(value) => {
+          addSuggestedMeasurement(value)
+          setVisibleMeasurementModules((previous) =>
+            previous.includes('custom') ? previous : [...previous, 'custom']
+          )
+        }}
+      />
     </SafeAreaView>
   )
 }
@@ -1526,6 +1860,156 @@ const styles = StyleSheet.create({
   visionPassportText: {
     fontSize: 12,
     lineHeight: 17,
+    color: Colors.inkLight,
+  },
+  passportSummaryCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    padding: Spacing.md,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  passportSummaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  summaryEyebrow: {
+    fontSize: 11,
+    fontWeight: FontWeight.semibold,
+    color: Colors.midGrey,
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+  },
+  summaryTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: CHARCOAL,
+    fontFamily: Fonts.display,
+  },
+  smallAction: {
+    minHeight: 36,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  smallActionText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: PRIMARY_GREEN,
+  },
+  profileMeta: {
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    lineHeight: 17,
+  },
+  controlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    flexWrap: 'wrap',
+  },
+  sourceSelector: {
+    minHeight: 42,
+    flex: 1,
+    minWidth: 190,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    backgroundColor: Colors.white,
+    paddingHorizontal: Spacing.md,
+  },
+  sourceSelectorText: {
+    flexShrink: 1,
+    fontSize: FontSize.xs,
+    color: Colors.ink,
+    fontWeight: FontWeight.semibold,
+  },
+  moduleCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    padding: Spacing.md,
+    gap: Spacing.md,
+    ...Shadow.sm,
+  },
+  moduleHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  moduleIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  moduleCopy: { flex: 1, gap: 2 },
+  moduleTitle: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: CHARCOAL,
+    fontFamily: Fonts.display,
+  },
+  moduleSubtitle: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    lineHeight: 17,
+  },
+  addMoreCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    backgroundColor: Colors.boneDeep,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+  },
+  addMoreCopy: { flex: 1, gap: 3 },
+  addMoreTitle: {
+    fontSize: FontSize.md,
+    fontWeight: FontWeight.semibold,
+    color: CHARCOAL,
+    fontFamily: Fonts.display,
+  },
+  addMoreText: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    lineHeight: 17,
+  },
+  addMoreButton: {
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    borderRadius: Radius.full,
+    backgroundColor: PRIMARY_GREEN,
+    paddingHorizontal: Spacing.md,
+  },
+  addMoreButtonText: {
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textInverse,
+  },
+  customActionsRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  disclosureText: {
+    fontSize: FontSize.sm,
+    lineHeight: 20,
     color: Colors.inkLight,
   },
 

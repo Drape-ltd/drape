@@ -14,16 +14,11 @@ function shouldPersistQuery(queryKey: readonly unknown[]) {
   const [root] = queryKey
   if (typeof root !== 'string') return false
 
+  // Keep AsyncStorage persistence limited to public or low-risk data. Orders,
+  // customer profile data, wishlists, dashboards, and measurement-adjacent
+  // queries can contain PII and should be refetched after launch app resumes.
   return [
     'tailor-public',
-    'tailor-shop',
-    'seller-item',
-    'customer-orders',
-    'tailor-orders',
-    'wishlist-collections',
-    'customer-profile',
-    'customer-profile-overview',
-    'tailor-dashboard',
     'feature-flags',
   ].includes(root)
 }

@@ -5,6 +5,27 @@ type BackNavigation = {
   canGoBack: () => boolean
 }
 
+const SAFE_RETURN_PREFIXES = [
+  '/(customer)',
+  '/(tailor)',
+  '/(auth)',
+  '/passport',
+  '/referral',
+  '/group-invite',
+]
+
+export function sanitizeReturnTo(value: unknown) {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.startsWith('//')) return undefined
+  if (trimmed.includes('://')) return undefined
+  if (trimmed.startsWith('/vision')) return undefined
+  if (trimmed === '/') return undefined
+  return SAFE_RETURN_PREFIXES.some((prefix) => trimmed === prefix || trimmed.startsWith(`${prefix}/`))
+    ? trimmed
+    : undefined
+}
+
 export function goBackOrFallback(
   router: Router,
   navigation: BackNavigation,
@@ -23,12 +44,13 @@ export function goBackOrReturnTo(
   returnTo: unknown,
   fallback: ReplaceTarget,
 ) {
+  const safeReturnTo = sanitizeReturnTo(returnTo)
   if (navigation.canGoBack()) {
     router.back()
     return
   }
-  if (typeof returnTo === 'string' && returnTo.trim().length > 0) {
-    router.replace(returnTo as ReplaceTarget)
+  if (safeReturnTo) {
+    router.replace(safeReturnTo as ReplaceTarget)
     return
   }
   router.replace(fallback)
@@ -40,8 +62,9 @@ export function goBackOrReturnToIfNeeded(
   returnTo: unknown,
   fallback: ReplaceTarget,
 ) {
-  if (typeof returnTo === 'string' && returnTo.trim().length > 0) {
-    router.replace(returnTo as ReplaceTarget)
+  const safeReturnTo = sanitizeReturnTo(returnTo)
+  if (safeReturnTo) {
+    router.replace(safeReturnTo as ReplaceTarget)
     return
   }
   if (navigation.canGoBack()) {

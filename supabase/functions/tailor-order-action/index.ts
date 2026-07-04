@@ -17,7 +17,7 @@
  *   SUPABASE_SERVICE_ROLE_KEY
  */
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
 import {
   MAX_COLLECTION_CODE_ATTEMPTS,
@@ -39,6 +39,7 @@ import { normalizeStoredPhone, validateDispatchPhone, validateRecipientPhone } f
 import {
   buildTailorOrderDeclineTerminalRequest,
 } from '../../../packages/shared/src/order-terminal.ts'
+import { canTransition, type OrderStage } from '../../../packages/shared/src/order-machine.ts'
 import {
   buildCancellationReviewNote,
   buildDeliveryReviewNote,
@@ -338,7 +339,7 @@ function jsonResponse(body: Record<string, unknown>, status: number, cors: Heade
 }
 
 async function orderAlreadyScheduledForConsultation(
-  supabase: any,
+  supabase: SupabaseClient,
   orderId: string,
   scheduledStartAt: string,
 ) {
@@ -422,16 +423,14 @@ declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
 }
 
-// Valid source stages for each advance-stage target
-const ADVANCE_VALID_FROM: Record<string, string[]> = {
-  DESIGNING:            ['CONFIRMED'],
-  SOURCING:             ['DESIGNING'],
-  CUTTING:              ['DESIGNING', 'SOURCING'],
-  SEWING:               ['CUTTING'],
-  FINISHING:            ['SEWING'],
-  READY_FOR_COLLECTION: ['FINISHING'],
-  READY_FOR_DRAPE_DISPATCH: ['FINISHING'],
-}
+const CUSTOM_ADVANCE_SOURCE_STAGES: OrderStage[] = [
+  'CONFIRMED',
+  'DESIGNING',
+  'SOURCING',
+  'CUTTING',
+  'SEWING',
+  'FINISHING',
+]
 
 const PRE_CUTTING_STAGES = ['PENDING_QUOTE', 'CONSULTATION', 'QUOTE_SENT', 'PAYMENT_PENDING', 'CONFIRMED', 'DESIGNING', 'SOURCING']
 const SCOPE_CHANGE_STAGES = [
@@ -481,7 +480,7 @@ function isReadyMadeOrder(order: Pick<OrderRow, 'order_kind'>) {
 
 function validAdvanceStages(order: Pick<OrderRow, 'order_kind'>, targetStage: string) {
   if (!isReadyMadeOrder(order)) {
-    return ADVANCE_VALID_FROM[targetStage] ?? []
+    return CUSTOM_ADVANCE_SOURCE_STAGES.filter((stage) => canTransition(stage, targetStage as OrderStage, 'TAILOR'))
   }
 
   if (targetStage === 'FINISHING') return ['CONFIRMED']
@@ -502,7 +501,7 @@ function customerNotificationForStage(targetStage: string, order: Pick<OrderRow,
 }
 
 function queueCustomerOrderEmail(
-  supabase: any,
+  supabase: SupabaseClient,
   order: OrderRow,
   subject: string,
   body: string,
@@ -524,7 +523,7 @@ function queueCustomerOrderEmail(
 }
 
 async function sendPushToUser(
-  supabase: any,
+  supabase: SupabaseClient,
   userId: string,
   notification: {
     title: string
@@ -545,7 +544,7 @@ async function sendPushToUser(
 }
 
 async function sendSmsToUser(input: {
-  supabase: any
+  supabase: SupabaseClient
   userId: string | null | undefined
   audience: 'CUSTOMER' | 'TAILOR'
   orderId?: string | null
@@ -578,7 +577,7 @@ function formatMoneyForNote(amountMinorUnits: number, currency: string | null | 
 }
 
 async function auditFulfillmentHandoffBlocked(
-  supabase: any,
+  supabase: SupabaseClient,
   callerId: string,
   order: Pick<OrderRow, 'id' | 'stage' | 'delivery_method'>,
   reason: string,
@@ -613,7 +612,7 @@ function uniqueMediaFingerprints(values?: string[] | null) {
 }
 
 async function findReusedProductionMedia(
-  supabase: any,
+  supabase: SupabaseClient,
   orderId: string,
   mediaUrls: string[],
   mediaFingerprints: string[],
@@ -666,7 +665,7 @@ async function findReusedProductionMedia(
   return [...reused]
 }
 
-async function readCustomFabricApprovalForCutting(supabase: any, orderId: string) {
+async function readCustomFabricApprovalForCutting(supabase: SupabaseClient, orderId: string) {
   const { data, error } = await supabase
     .from('custom_order_details')
     .select('fabric_approval_required, fabric_approval_status')
@@ -692,7 +691,7 @@ function customProductionStageForTarget(targetStage: string, deliveryMethod?: st
 }
 
 async function insertCustomProductionEvidence(
-  supabase: any,
+  supabase: SupabaseClient,
   input: {
     orderId: string
     stageKey: CustomProductionStageKey
@@ -3232,19 +3231,41 @@ Deno.serve(async (req) => {
       }
 
       if (code !== order.collection_code) {
-        const nowIso = new Date().toISOString()
-        await supabase.from('orders')
-          .update({ collection_code_attempts: attempts + 1, collection_code_last_attempt_at: nowIso })
-          .eq('id', orderId)
+        const { data: incrementedAttempt, error: incrementError } = await supabase
+          .rpc('increment_collection_code_attempt', {
+            p_order_id: orderId,
+            p_max_attempts: MAX_COLLECTION_CODE_ATTEMPTS,
+          })
+          .maybeSingle()
+
+        if (incrementError) {
+          log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, action, error: incrementError.message })
+          return jsonResponse({ error: 'We could not update this order right now. Please try again.' }, 500, cors)
+        }
+
+        const failedAttempts = Math.max(
+          0,
+          Number((incrementedAttempt as { attempts?: number | null } | null)?.attempts ?? attempts + 1),
+        )
+        const locked = Boolean((incrementedAttempt as { locked?: boolean | null } | null)?.locked) ||
+          failedAttempts >= MAX_COLLECTION_CODE_ATTEMPTS
+
         await audit(supabase, {
           event: 'collection_code.wrong',
           actor_id: caller.id,
           actor_role: 'TAILOR',
           order_id: orderId,
           severity: 'warn',
-          payload: { attempts: attempts + 1 },
+          payload: { attempts: failedAttempts, locked },
         })
-        const remaining = MAX_COLLECTION_CODE_ATTEMPTS - attempts - 1
+        if (locked) {
+          return new Response(
+            JSON.stringify({ error: 'Too many incorrect attempts. Try again after the 24-hour reset window or contact support.', attemptsRemaining: 0 }),
+            { status: 423, headers: { ...cors, 'Content-Type': 'application/json' } },
+          )
+        }
+
+        const remaining = Math.max(0, MAX_COLLECTION_CODE_ATTEMPTS - failedAttempts)
         return new Response(
           JSON.stringify({ error: 'Incorrect code.', attemptsRemaining: remaining }),
           { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },

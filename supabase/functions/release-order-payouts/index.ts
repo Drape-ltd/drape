@@ -1,4 +1,4 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { authorizeCronRequest } from '../_shared/cron.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
@@ -45,7 +45,7 @@ type ExistingPayoutRow = {
 }
 
 async function notifyTailorPayoutFailure(
-  supabase: any,
+  supabase: SupabaseClient,
   order: PayoutCandidateOrder,
   error: string,
 ) {
@@ -83,7 +83,7 @@ function blockedPayoutIssueSeverity(reason: PayoutBlockedReason) {
 }
 
 async function refreshBlockedPayoutIssue(
-  supabase: any,
+  supabase: SupabaseClient,
   order: PayoutCandidateOrder,
   tailorProfile: TailorPayoutProfile | null,
   payment: SuccessfulOrderPayment | null,
@@ -122,7 +122,7 @@ async function refreshBlockedPayoutIssue(
 }
 
 async function refreshFailedPayoutIssue(
-  supabase: any,
+  supabase: SupabaseClient,
   order: PayoutCandidateOrder,
   tailorProfile: TailorPayoutProfile | null,
   error: string,
@@ -152,7 +152,7 @@ async function refreshFailedPayoutIssue(
 }
 
 async function recordPayoutProviderEvent(
-  supabase: any,
+  supabase: SupabaseClient,
   input: {
     provider: string
     succeeded: boolean
@@ -381,7 +381,7 @@ function payoutPreflightMessage(reason: PayoutBlockedReason) {
   return payoutBlockReasonMessage(reason)
 }
 
-async function fetchCandidateOrders(supabase: any, orderId?: string) {
+async function fetchCandidateOrders(supabase: SupabaseClient, orderId?: string) {
   const selectFields =
     'id, reference, stage, order_kind, tailor_id, customer_id, currency, source_currency, source_amount, subtotal_amount, tailor_payout_currency_locked, tailor_payout_provider_locked, tailor_paystack_recipient_code_locked, tailor_stripe_connect_account_id_locked, ops_payout_resolution_mode, ops_payout_override_currency, ops_payout_override_provider, ops_payout_override_amount, ops_payout_override_fx_rate, ops_payout_override_fx_rate_timestamp, ops_payout_override_note, platform_fee_amount, tax_amount, shipping_amount, total_amount, escrow_released, handoff_completed_at, customer_handoff_confirmed_at, handoff_confirmation_source'
 
@@ -408,7 +408,7 @@ async function fetchCandidateOrders(supabase: any, orderId?: string) {
   return (data ?? []) as PayoutCandidateOrder[]
 }
 
-async function fetchTailorProfile(supabase: any, tailorUserId: string) {
+async function fetchTailorProfile(supabase: SupabaseClient, tailorUserId: string) {
   const { data, error } = await supabase
     .from('tailor_profiles')
     .select('id, user_id, display_name, payout_currency, payout_provider, payout_reverification_required, payout_account_verified, payout_account_type, payout_destination_hold_until, paystack_recipient_code, stripe_connect_account_id')
@@ -419,7 +419,7 @@ async function fetchTailorProfile(supabase: any, tailorUserId: string) {
   return (data as TailorPayoutProfile | null) ?? null
 }
 
-async function fetchSettledOrderPayment(supabase: any, orderId: string) {
+async function fetchSettledOrderPayment(supabase: SupabaseClient, orderId: string) {
   const { data, error } = await supabase
     .from('order_payments')
     .select('id, order_id, phase, provider, currency, amount, status, provider_payment_id, refunded_amount')
@@ -434,7 +434,7 @@ async function fetchSettledOrderPayment(supabase: any, orderId: string) {
   return (data as SuccessfulOrderPayment | null) ?? null
 }
 
-async function hasOpenDispute(supabase: any, orderId: string) {
+async function hasOpenDispute(supabase: SupabaseClient, orderId: string) {
   const { data, error } = await supabase
     .from('disputes')
     .select('id, status')
@@ -447,7 +447,7 @@ async function hasOpenDispute(supabase: any, orderId: string) {
   return !!data?.id
 }
 
-async function findExistingPayout(supabase: any, orderId: string, statuses: string[]) {
+async function findExistingPayout(supabase: SupabaseClient, orderId: string, statuses: string[]) {
   const { data, error } = await supabase
     .from('payouts')
     .select('id, status, blocked_reason, provider_response')
@@ -462,7 +462,7 @@ async function findExistingPayout(supabase: any, orderId: string, statuses: stri
 }
 
 async function recordBlockedPayout(
-  supabase: any,
+  supabase: SupabaseClient,
   order: PayoutCandidateOrder,
   tailorProfile: TailorPayoutProfile | null,
   payment: SuccessfulOrderPayment | null,
@@ -519,7 +519,7 @@ async function recordBlockedPayout(
 }
 
 async function updatePayoutRow(
-  supabase: any,
+  supabase: SupabaseClient,
   payoutId: string,
   patch: Record<string, unknown>,
 ) {
@@ -539,7 +539,7 @@ Deno.serve(async (req) => {
     const unauthorized = await authorizeCronRequest(req, FN, cors)
     if (unauthorized) return unauthorized
 
-    const supabase: any = createClient(getSupabaseUrl(), getServiceRoleKey())
+    const supabase: SupabaseClient = createClient(getSupabaseUrl(), getServiceRoleKey())
     const clientIp = getClientIp(req)
     const limit = await rateLimit(
       supabase,

@@ -44,7 +44,7 @@ import { capture } from '@/lib/analytics'
 import { composeStructuredAddress, parseNominatimSuggestion } from '@/lib/address'
 import { stripExif } from '@/lib/stripExif'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
-import { Button, Input, RemoteImage } from '@/components/ui'
+import { Button, ChoiceSheet, Input, MeasurementModule, RemoteImage } from '@/components/ui'
 import {
   CUSTOM_ORDER_FABRIC_SOURCING_DEADLINE_DAYS,
   CUSTOM_ORDER_FABRIC_SOURCING_DEFAULT_BUSINESS_DAYS,
@@ -80,6 +80,17 @@ type WearerMode = 'SELF' | 'OTHER'
 type GenderPresentation = (typeof CUSTOM_ORDER_GENDER_PRESENTATIONS)[number]
 type ShippingPreference = (typeof CUSTOM_ORDER_SHIPPING_PREFERENCES)[number]
 type MeasurementRecord = Record<string, unknown>
+type MeasurementProfileRow = {
+  id: string
+  label: string
+  relationship: string | null
+  measurements: MeasurementRecord | null
+  unit_preference: string | null
+  source: string | null
+  is_default: boolean | null
+  last_measured_at: string | null
+  updated_at: string | null
+}
 type NominatimSuggestion = {
   place_id?: string | number
   display_name?: string
@@ -341,6 +352,9 @@ export default function OrderBriefScreen() {
 
   // Step 3 — measurement profile summary
   const [measurements, setMeasurements] = useState<MeasurementRecord | null>(null)
+  const [measurementProfiles, setMeasurementProfiles] = useState<MeasurementProfileRow[]>([])
+  const [measurementProfileSheetOpen, setMeasurementProfileSheetOpen] = useState(false)
+  const [measurementReviewOpen, setMeasurementReviewOpen] = useState(false)
   const [fitNote, setFitNote] = useState('')
   const [fitNoteError, setFitNoteError] = useState('')
 
@@ -414,6 +428,44 @@ export default function OrderBriefScreen() {
       : 'Me'
   const measurementAgeSummary = measurementAgeFromSnapshot(measurements)
   const deadlineNotice = deadlineContextNotice(deadline)
+  const measurementUnit = typeof measurements?.unit === 'string' ? measurements.unit : 'in'
+  const measurementProfileOptions = measurementProfiles.map((profile) => ({
+    value: profile.id,
+    title: profile.is_default ? `${profile.label} · default` : profile.label,
+    body: profile.last_measured_at
+      ? `Updated ${new Date(profile.last_measured_at).toLocaleDateString()}`
+      : profile.source
+        ? profile.source.replace(/_/g, ' ').toLowerCase()
+        : 'Saved profile',
+    icon: profile.relationship === 'SELF' ? 'user' as const : 'users' as const,
+  }))
+  const measurementReviewFields = [
+    { key: 'chest', label: 'Chest', value: measurements?.chest },
+    { key: 'waist', label: 'Waist', value: measurements?.waist },
+    { key: 'hips', label: 'Hips', value: measurements?.hips },
+    { key: 'shoulderWidth', label: 'Shoulders', value: measurements?.shoulderWidth },
+    { key: 'inseam', label: 'Inseam', value: measurements?.inseam },
+    { key: 'sleeveLength', label: 'Sleeve', value: measurements?.sleeveLength },
+    { key: 'neckCircumference', label: 'Neck', value: measurements?.neckCircumference },
+    { key: 'height', label: 'Height', value: measurements?.height },
+    { key: 'underBust', label: 'Under bust', value: measurements?.underBust },
+    { key: 'backLength', label: 'Back', value: measurements?.backLength },
+    { key: 'outseam', label: 'Outseam', value: measurements?.outseam },
+    { key: 'thighCircumference', label: 'Thigh', value: measurements?.thighCircumference },
+    { key: 'kneeCircumference', label: 'Knee', value: measurements?.kneeCircumference },
+    { key: 'bicepCircumference', label: 'Bicep', value: measurements?.bicepCircumference },
+    { key: 'wristCircumference', label: 'Wrist', value: measurements?.wristCircumference },
+    { key: 'headCircumference', label: 'Head', value: measurements?.headCircumference },
+    { key: 'hatBandLine', label: 'Hat band', value: measurements?.hatBandLine },
+    { key: 'headLength', label: 'Head length', value: measurements?.headLength },
+    { key: 'headWidth', label: 'Head width', value: measurements?.headWidth },
+    { key: 'earToEarOverCrown', label: 'Crown E-E', value: measurements?.earToEarOverCrown },
+    { key: 'frontToBackOverCrown', label: 'Crown F-B', value: measurements?.frontToBackOverCrown },
+    { key: 'filaHeight', label: 'Fila height', value: measurements?.filaHeight },
+    { key: 'torsoLength', label: 'Torso', value: measurements?.torsoLength },
+  ]
+  const coreMeasurementReviewFields = measurementReviewFields.slice(0, 4)
+  const filledMeasurementCount = measurementReviewFields.filter((field) => field.value != null).length
 
   function resetBriefState() {
     setStep(0)
@@ -542,9 +594,15 @@ export default function OrderBriefScreen() {
       }
     }
 
-    const [tailorRes, measRes, accountRes] = await Promise.allSettled([
+    const [tailorRes, measRes, profileRes, accountRes] = await Promise.allSettled([
       supabase.from('tailor_profiles').select('id').eq('id', tailorId).maybeSingle(),
       supabase.from('customer_profiles').select('measurements').eq('user_id', userId).maybeSingle(),
+      supabase
+        .from('customer_measurement_profiles')
+        .select('id, label, relationship, measurements, unit_preference, source, is_default, last_measured_at, updated_at')
+        .eq('customer_id', userId)
+        .order('is_default', { ascending: false })
+        .order('updated_at', { ascending: false }),
       supabase.from('users').select('default_currency').eq('id', userId).maybeSingle(),
     ])
 
@@ -552,6 +610,8 @@ export default function OrderBriefScreen() {
       tailorRes.status === 'fulfilled' && !tailorRes.value.error ? tailorRes.value.data : null
     const measurementData =
       measRes.status === 'fulfilled' && !measRes.value.error ? measRes.value.data : null
+    const profileData =
+      profileRes.status === 'fulfilled' && !profileRes.value.error ? profileRes.value.data : []
     const accountData =
       accountRes.status === 'fulfilled' && !accountRes.value.error ? accountRes.value.data : null
 
@@ -560,10 +620,19 @@ export default function OrderBriefScreen() {
     }
 
     setAccountCurrency(normalizeAccountCurrency(accountData?.default_currency) ?? 'USD')
+    setMeasurementProfiles((profileData ?? []) as MeasurementProfileRow[])
 
-    const hasMeasurements = hasCompleteMeasurementProfile(measurementData?.measurements)
+    const defaultProfile = (profileData ?? []).find((profile) => profile.is_default)
+    const defaultProfileMeasurements = defaultProfile?.measurements
+      ? {
+          ...defaultProfile.measurements,
+          unit: defaultProfile.measurements.unit ?? defaultProfile.unit_preference,
+          measurementProfileLabel: defaultProfile.label,
+        }
+      : null
+    const hasMeasurements = hasCompleteMeasurementProfile(defaultProfileMeasurements ?? measurementData?.measurements)
     if (hasMeasurements) {
-      setMeasurements(enrichMeasurementSnapshot(measurementData?.measurements ?? null))
+      setMeasurements(enrichMeasurementSnapshot(defaultProfileMeasurements ?? measurementData?.measurements ?? null))
       setInitialLoading(false)
       return
     }
@@ -780,6 +849,20 @@ export default function OrderBriefScreen() {
     }
     setFitNoteError('')
     return true
+  }
+
+  function selectMeasurementProfile(profileId: string) {
+    const profile = measurementProfiles.find((item) => item.id === profileId)
+    if (!profile?.measurements) {
+      setMeasurementProfileSheetOpen(false)
+      return
+    }
+    setMeasurements(enrichMeasurementSnapshot({
+      ...profile.measurements,
+      unit: profile.measurements.unit ?? profile.unit_preference ?? measurements?.unit ?? 'in',
+      measurementProfileLabel: profile.label,
+    }))
+    setMeasurementProfileSheetOpen(false)
   }
 
   async function pickPhoto() {
@@ -1456,7 +1539,8 @@ export default function OrderBriefScreen() {
                   maxLength={1200}
                   filterContact
                   required
-                  hint={`${description.length}/1200 · 3 short lines or one clear paragraph`}
+                  hint="3 short lines or one clear paragraph."
+                  showCharacterCount
                   testID="description-input"
                 />
 
@@ -1536,6 +1620,7 @@ export default function OrderBriefScreen() {
                       numberOfLines={4}
                       maxLength={500}
                       hint="This keeps the order legible for the tailor and ops. Each person still needs their own measurements before cutting."
+                      showCharacterCount
                     />
                     <Input
                       label="Group notes (optional)"
@@ -1545,6 +1630,7 @@ export default function OrderBriefScreen() {
                       multiline
                       numberOfLines={3}
                       maxLength={300}
+                      showCharacterCount
                     />
                     <Text style={styles.measureSubcardHint}>
                       Bulk custom orders stay inside Drapeon, but ops may help manage linked
@@ -1802,7 +1888,8 @@ export default function OrderBriefScreen() {
                   numberOfLines={4}
                   maxLength={1200}
                   filterContact
-                  hint={`${styleNotes.length}/1200`}
+                  hint="Reference style, finish, coverage, and comfort notes."
+                  showCharacterCount
                 />
               </View>
             )}
@@ -1898,105 +1985,41 @@ export default function OrderBriefScreen() {
                         </View>
                       </View>
                     ) : null}
-                    <View style={styles.measureSummaryGrid}>
-                      {[
-                        { key: 'chest', label: 'Chest', value: measurements.chest },
-                        { key: 'waist', label: 'Waist', value: measurements.waist },
-                        { key: 'hips', label: 'Hips', value: measurements.hips },
-                        {
-                          key: 'shoulderWidth',
-                          label: 'Shoulders',
-                          value: measurements.shoulderWidth,
+                    <MeasurementModule
+                      title="Core fit"
+                      subtitle={`${filledMeasurementCount}/${measurementReviewFields.length} saved values. Review the full profile only if this order needs extra detail.`}
+                      icon="target"
+                      fields={coreMeasurementReviewFields.map(({ key, label, value }) => ({
+                        key,
+                        label,
+                        value: value as string | number | null | undefined,
+                        unit: measurementUnit,
+                        onPress: () => {
+                          setEditingField({ key, label, value: value ? String(value) : '' })
+                          setEditValue(value ? String(value) : '')
                         },
-                        { key: 'inseam', label: 'Inseam', value: measurements.inseam },
-                        { key: 'sleeveLength', label: 'Sleeve', value: measurements.sleeveLength },
-                        {
-                          key: 'neckCircumference',
-                          label: 'Neck',
-                          value: measurements.neckCircumference,
-                        },
-                        { key: 'height', label: 'Height', value: measurements.height },
-                        { key: 'underBust', label: 'Under bust', value: measurements.underBust },
-                        { key: 'backLength', label: 'Back', value: measurements.backLength },
-                        { key: 'outseam', label: 'Outseam', value: measurements.outseam },
-                        {
-                          key: 'thighCircumference',
-                          label: 'Thigh',
-                          value: measurements.thighCircumference,
-                        },
-                        {
-                          key: 'kneeCircumference',
-                          label: 'Knee',
-                          value: measurements.kneeCircumference,
-                        },
-                        {
-                          key: 'bicepCircumference',
-                          label: 'Bicep',
-                          value: measurements.bicepCircumference,
-                        },
-                        {
-                          key: 'wristCircumference',
-                          label: 'Wrist',
-                          value: measurements.wristCircumference,
-                        },
-                        {
-                          key: 'headCircumference',
-                          label: 'Head',
-                          value: measurements.headCircumference,
-                        },
-                        { key: 'hatBandLine', label: 'Hat band', value: measurements.hatBandLine },
-                        { key: 'headLength', label: 'Head length', value: measurements.headLength },
-                        { key: 'headWidth', label: 'Head width', value: measurements.headWidth },
-                        {
-                          key: 'earToEarOverCrown',
-                          label: 'Crown E-E',
-                          value: measurements.earToEarOverCrown,
-                        },
-                        {
-                          key: 'frontToBackOverCrown',
-                          label: 'Crown F-B',
-                          value: measurements.frontToBackOverCrown,
-                        },
-                        { key: 'filaHeight', label: 'Fila height', value: measurements.filaHeight },
-                        { key: 'torsoLength', label: 'Torso', value: measurements.torsoLength },
-                      ].map(({ key, label, value }) => (
+                      }))}
+                    />
+                    <View style={styles.measureActionsRow}>
+                      {measurementProfileOptions.length > 0 ? (
                         <TouchableOpacity
-                          key={key}
-                          style={styles.measureSummaryItem}
-                          onPress={() => {
-                            setEditingField({ key, label, value: value ? String(value) : '' })
-                            setEditValue(value ? String(value) : '')
-                          }}
+                          style={styles.measureActionBtn}
+                          onPress={() => setMeasurementProfileSheetOpen(true)}
+                          accessibilityRole="button"
+                          accessibilityLabel="Change measurement profile"
                         >
-                          <Text style={styles.measureSummaryLabel}>{label}</Text>
-                          <Text
-                            style={[
-                              styles.measureSummaryValue,
-                              !value && { color: Colors.lightGrey },
-                            ]}
-                          >
-                            {value ? `${value} ${measurements.unit}` : 'Not added'}
-                          </Text>
+                          <Text style={styles.measureActionBtnText}>Change profile</Text>
                         </TouchableOpacity>
-                      ))}
+                      ) : null}
+                      <TouchableOpacity
+                        style={styles.measureActionBtn}
+                        onPress={() => setMeasurementReviewOpen(true)}
+                        accessibilityRole="button"
+                        accessibilityLabel="Review all measurements"
+                      >
+                        <Text style={styles.measureActionBtnText}>Review measurements</Text>
+                      </TouchableOpacity>
                     </View>
-                    {getAdditionalMeasurementRows(measurements).length > 0 && (
-                      <View style={styles.additionalMeasurePreview}>
-                        <Text style={styles.additionalMeasurePreviewTitle}>
-                          Garment-specific measurements
-                        </Text>
-                        <View style={styles.measureSummaryGrid}>
-                          {getAdditionalMeasurementRows(measurements).map(({ label, value }) => (
-                            <View key={label} style={styles.measureSummaryItem}>
-                              <Text style={styles.measureSummaryLabel}>{label}</Text>
-                              <Text style={styles.measureSummaryValue}>
-                                {String(value)} {String(measurements.unit ?? '')}
-                              </Text>
-                            </View>
-                          ))}
-                        </View>
-                      </View>
-                    )}
                     {asStringList(measurements.fitFlags).length > 0 && (
                       <View style={styles.flagsRow}>
                         {asStringList(measurements.fitFlags).map((f) => (
@@ -2141,7 +2164,8 @@ export default function OrderBriefScreen() {
                   maxLength={500}
                   filterContact
                   required
-                  hint={`${fitNote.length}/500 · min 20 characters`}
+                  hint="Min 20 characters. No contact details."
+                  showCharacterCount
                 />
                 <View style={styles.quickAddList}>
                   {FIT_NOTE_PRESETS.map((value) => (
@@ -2222,7 +2246,8 @@ export default function OrderBriefScreen() {
                       maxLength={1000}
                       filterContact
                       required
-                      hint={`${fabricDescription.length}/1000`}
+                      hint="Describe enough for sourcing approval."
+                      showCharacterCount
                     />
                     <Input
                       label={`Fabric budget (optional, ${accountCurrency})`}
@@ -2528,6 +2553,7 @@ export default function OrderBriefScreen() {
                   numberOfLines={3}
                   maxLength={500}
                   filterContact
+                  showCharacterCount
                 />
               </View>
             )}
@@ -2905,6 +2931,80 @@ export default function OrderBriefScreen() {
               </ScrollView>
             </View>
           </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      <ChoiceSheet
+        visible={measurementProfileSheetOpen}
+        title="Choose measurements"
+        subtitle="Pick the wearer profile this tailor should quote against."
+        options={measurementProfileOptions}
+        selectedValue={measurementProfiles.find((profile) => profile.label === savedMeasurementProfileLabel)?.id}
+        onClose={() => setMeasurementProfileSheetOpen(false)}
+        onSelect={selectMeasurementProfile}
+      />
+
+      <Modal
+        visible={measurementReviewOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setMeasurementReviewOpen(false)}
+      >
+        <View style={styles.editModalWrap} accessibilityViewIsModal>
+          <TouchableOpacity
+            style={styles.editOverlay}
+            activeOpacity={1}
+            onPress={() => setMeasurementReviewOpen(false)}
+          />
+          <View style={[styles.reviewSheet, { paddingBottom: Math.max(insets.bottom + Spacing.lg, 32) }]}>
+            <View style={styles.reviewSheetHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.editSheetTitle}>Review measurements</Text>
+                <Text style={styles.reviewSheetSubtitle}>
+                  Tap any value to adjust it for this order.
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.reviewClose}
+                onPress={() => setMeasurementReviewOpen(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Close measurement review"
+              >
+                <Feather name="x" size={18} color={Colors.ink} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.reviewSheetContent}>
+              <MeasurementModule
+                title="All saved values"
+                subtitle="Empty optional fields stay muted. Add missing values only when the garment needs them."
+                icon="sliders"
+                fields={measurementReviewFields.map(({ key, label, value }) => ({
+                  key,
+                  label,
+                  value: value as string | number | null | undefined,
+                  unit: measurementUnit,
+                  onPress: () => {
+                    setMeasurementReviewOpen(false)
+                    setEditingField({ key, label, value: value ? String(value) : '' })
+                    setEditValue(value ? String(value) : '')
+                  },
+                }))}
+              />
+              {measurements && getAdditionalMeasurementRows(measurements).length > 0 ? (
+                <MeasurementModule
+                  title="Garment-specific"
+                  subtitle="Extra points carried with this profile."
+                  icon="plus-circle"
+                  fields={getAdditionalMeasurementRows(measurements).map(({ label, value }) => ({
+                    key: label,
+                    label,
+                    value: value as string | number | null | undefined,
+                    unit: measurementUnit,
+                  }))}
+                />
+              ) : null}
+            </ScrollView>
+          </View>
         </View>
       </Modal>
 
@@ -3677,6 +3777,11 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,
   },
+  measureActionsRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    flexWrap: 'wrap',
+  },
   measureEditNote: { fontSize: FontSize.xs, color: Colors.midGrey },
   measureEditHint: {
     fontSize: FontSize.xs,
@@ -3685,7 +3790,36 @@ const styles = StyleSheet.create({
   },
 
   // Inline edit sheet
+  editModalWrap: { flex: 1, justifyContent: 'flex-end' },
   editOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
+  reviewSheet: {
+    maxHeight: '86%',
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    padding: Spacing.lg,
+    gap: Spacing.md,
+  },
+  reviewSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.md,
+  },
+  reviewSheetSubtitle: {
+    fontSize: FontSize.sm,
+    lineHeight: 20,
+    color: Colors.inkLight,
+    marginTop: 3,
+  },
+  reviewClose: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.bone,
+  },
+  reviewSheetContent: { gap: Spacing.md, paddingBottom: Spacing.md },
   editSheet: {
     backgroundColor: Colors.white,
     borderTopLeftRadius: Radius.xl,

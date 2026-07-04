@@ -97,6 +97,6 @@ export function capture(event: string, properties?: Record<string, unknown>) {
 }
 
 export function reset() {
-  if (!analyticsEnabled) return
+  analyticsEnabled = false
   client?.reset()
 }

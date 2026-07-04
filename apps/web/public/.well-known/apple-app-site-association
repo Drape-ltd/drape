@@ -1,0 +1,20 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appIDs": [
+          "W84Q46T4XF.co.drapeon.app"
+        ],
+        "components": [
+          {
+            "/": "/auth/*"
+          },
+          {
+            "/": "/payments/*"
+          }
+        ]
+      }
+    ]
+  }
+}

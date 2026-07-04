@@ -3,13 +3,23 @@ import {
   getOpsAccessMode,
   OPS_SESSION_COOKIE,
   getOpsDashboardToken,
+  getOpsDashboardTokenStatus,
   hashOpsToken,
   matchesOpsDashboardToken,
 } from '../../../lib/ops-auth'
+import { createServiceRoleClient } from '../../../lib/server-supabase'
+import { checkPublicRateLimit, getClientIp } from '../../../lib/request-security'
 
 function sanitizeRedirect(value: FormDataEntryValue | null) {
-  if (typeof value !== 'string' || !value.startsWith('/ops')) return '/ops'
-  return value
+  if (typeof value !== 'string') return '/ops'
+
+  try {
+    const url = new URL(value, 'https://drapeon.co')
+    if (url.origin !== 'https://drapeon.co' || url.pathname !== '/ops') return '/ops'
+    return `${url.pathname}${url.search}${url.hash}`
+  } catch {
+    return '/ops'
+  }
 }
 
 function buildRedirect(request: Request, redirectTo: string, key: 'notice' | 'error', value: string) {
@@ -23,6 +33,7 @@ export async function POST(request: Request) {
   const redirectTo = sanitizeRedirect(formData.get('redirectTo'))
   const submitted = typeof formData.get('token') === 'string' ? formData.get('token')?.toString().trim() ?? '' : ''
   const expected = getOpsDashboardToken()
+  const tokenStatus = getOpsDashboardTokenStatus()
   const mode = getOpsAccessMode()
 
   if (mode === 'cloudflare-access') {
@@ -30,7 +41,18 @@ export async function POST(request: Request) {
   }
 
   if (!expected) {
-    return NextResponse.redirect(buildRedirect(request, redirectTo, 'error', 'setup-needed'))
+    return NextResponse.redirect(buildRedirect(request, redirectTo, 'error', tokenStatus === 'weak' ? 'weak-token' : 'setup-needed'))
+  }
+
+  const client = createServiceRoleClient()
+  if (!client) {
+    return NextResponse.redirect(buildRedirect(request, redirectTo, 'error', 'service-role-missing'))
+  }
+
+  const ip = getClientIp(request)
+  const limit = await checkPublicRateLimit(client, `ops-login:${ip}`, 15 * 60, 5)
+  if (!limit.ok || !limit.allowed) {
+    return NextResponse.redirect(buildRedirect(request, redirectTo, 'error', 'too-many-attempts'))
   }
 
   if (!submitted || !matchesOpsDashboardToken(submitted)) {

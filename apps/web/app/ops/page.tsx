@@ -10,6 +10,7 @@ import type { JSX, ReactNode } from 'react'
 import {
   getOpsAccessMode,
   getOpsBootstrapRole,
+  getOpsDashboardTokenStatus,
   getOpsSession,
   hasOpsWorkforceAccessConfig,
   type OpsSession,
@@ -68,7 +69,7 @@ type OpsQueueItem = {
 
 export const metadata: Metadata = {
   title: 'Ops | Drapeon',
-  description: 'Internal Drapeon ops dashboard for disputes, review moderation, abuse review, verification, privacy and trust requests, workflow issues, account deletion follow-up, and payout visibility.',
+  description: 'Protected Drapeon operations surface.',
   robots: {
     index: false,
     follow: false,
@@ -107,7 +108,9 @@ const ERROR_COPY: Record<string, string> = {
   locked: 'Unlock the ops dashboard to continue.',
   forbidden: 'This bootstrap role does not have access to that control-plane surface.',
   'setup-needed': 'Add OPS_DASHBOARD_TOKEN before using the ops surface.',
+  'weak-token': 'OPS_DASHBOARD_TOKEN must be at least 32 characters and must not use a placeholder value.',
   'invalid-token': 'That token did not match the configured ops access token.',
+  'too-many-attempts': 'Too many unlock attempts. Wait a few minutes, then try again.',
   'workforce-login-required': 'This control plane is protected by workforce access. Sign in through the Drapeon Access gate with your @drapeon.co account.',
   'workforce-unassigned': 'Your workforce identity is valid, but no control-plane role is assigned to it yet.',
   'service-role-missing': 'Add the server-side Supabase service role env vars to load ops data.',
@@ -2482,15 +2485,32 @@ function WorkforceAccessView({
 function SetupView(): JSX.Element {
   const bootstrapRole = getOpsBootstrapRole()
   const workforceConfigured = hasOpsWorkforceAccessConfig()
+  const tokenStatus = getOpsDashboardTokenStatus()
+  const hasWeakToken = tokenStatus === 'weak'
+  const productionBootstrapBlocked =
+    process.env.NODE_ENV === 'production' &&
+    !workforceConfigured &&
+    tokenStatus === 'ready' &&
+    process.env.OPS_ALLOW_BOOTSTRAP_IN_PRODUCTION !== '1'
 
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#f7f1e8_0%,#efe7da_100%)]">
       <div className="mx-auto flex min-h-screen max-w-4xl items-center px-5 py-12 sm:px-8">
         <section className="w-full rounded-[2.2rem] border border-ink/8 bg-white/86 p-8 shadow-[0_24px_80px_rgba(22,28,24,0.08)]">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Internal ops</p>
-          <h1 className="mt-4 text-4xl text-ink sm:text-5xl">Set one token to bring the ops surface online.</h1>
+          <h1 className="mt-4 text-4xl text-ink sm:text-5xl">
+            {productionBootstrapBlocked
+              ? 'Connect workforce access before this surface opens.'
+              : hasWeakToken
+                ? 'Strengthen the ops token before this surface opens.'
+                : 'Set one token to bring the ops surface online.'}
+          </h1>
           <p className="mt-5 max-w-2xl text-lg leading-8 text-ink/68">
-            This route is intentionally locked until the shared ops token is configured in the web environment.
+            {productionBootstrapBlocked
+              ? 'Production ops requires Cloudflare Access by default. Use OPS_ALLOW_BOOTSTRAP_IN_PRODUCTION=1 only for a documented emergency window.'
+              : hasWeakToken
+                ? 'The configured bootstrap token is too short or uses a placeholder value. Use Cloudflare Access for production, or set a 32+ character emergency token.'
+                : 'This route is intentionally locked until the shared ops token is configured in the web environment.'}
           </p>
           <div className="mt-8 rounded-[1.5rem] border border-ink/8 bg-bone/70 p-5">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/46">Required env</p>

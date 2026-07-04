@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { headers } from 'next/headers'
 import Script from 'next/script'
 import * as React from 'react'
 import { AuthLandingRedirect } from '../components/auth-landing-redirect'
@@ -47,7 +48,8 @@ export const metadata: Metadata = {
   },
 }
 
-export default function RootLayout({ children }: { children: React.ReactNode }): React.JSX.Element {
+export default async function RootLayout({ children }: { children: React.ReactNode }): Promise<React.JSX.Element> {
+  const nonce = (await headers()).get('x-nonce') ?? undefined
   const publicSupabaseEnv = {
     supabaseUrl: getSupabaseUrl(),
     supabasePublishableKey: getSupabasePublishableKey(),
@@ -79,16 +81,19 @@ export default function RootLayout({ children }: { children: React.ReactNode }):
     <html lang="en">
       <body className="bg-bone text-ink antialiased">
         <script
+          nonce={nonce}
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationJsonLd) }}
         />
         <script
+          nonce={nonce}
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteJsonLd) }}
         />
-        <Script src="/api/public-env.js" strategy="beforeInteractive" />
+        <Script nonce={nonce} src="/api/public-env.js" strategy="beforeInteractive" />
         {hasPublicSupabaseEnv ? (
           <script
+            nonce={nonce}
             id="drapeon-public-env"
             dangerouslySetInnerHTML={{
               __html: `window.__DRAPEON_PUBLIC_ENV__=${JSON.stringify(publicSupabaseEnv).replace(/</g, '\\u003c')};`,

@@ -6,7 +6,7 @@
  * - Day 14 after the final delivery handoff starts: marks the order DELIVERED if no dispute/confirmation happened.
  */
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { authorizeCronRequest } from '../_shared/cron.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
@@ -49,7 +49,7 @@ type OrderRow = {
   stage_updated_at: string | null
 }
 
-async function markOrderDelivered(supabase: any, order: OrderRow) {
+async function markOrderDelivered(supabase: SupabaseClient, order: OrderRow) {
   const { data: updatedOrder, error: updateError } = await supabase
     .from('orders')
     .update({
@@ -117,7 +117,7 @@ async function markOrderDelivered(supabase: any, order: OrderRow) {
   return true
 }
 
-async function warnedOrderIds(supabase: any, orderIds: string[], sinceIso: string) {
+async function warnedOrderIds(supabase: SupabaseClient, orderIds: string[], sinceIso: string) {
   if (orderIds.length === 0) return new Set<string>()
 
   const { data, error } = await supabase
@@ -138,7 +138,7 @@ async function warnedOrderIds(supabase: any, orderIds: string[], sinceIso: strin
   )
 }
 
-async function sendAutoReleaseWarning(supabase: any, order: OrderRow) {
+async function sendAutoReleaseWarning(supabase: SupabaseClient, order: OrderRow) {
   if (!order.customer_id) return false
 
   const orderLabel = order.garment_type ?? 'order'
@@ -174,7 +174,7 @@ Deno.serve(async (req) => {
     const unauthorized = await authorizeCronRequest(req, FN, cors)
     if (unauthorized) return unauthorized
 
-    const supabase: any = createClient(getSupabaseUrl(), getServiceRoleKey())
+    const supabase: SupabaseClient = createClient(getSupabaseUrl(), getServiceRoleKey())
     const clientIp = getClientIp(req)
     const limit = await rateLimit(
       supabase,

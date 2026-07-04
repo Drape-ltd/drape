@@ -160,7 +160,7 @@ export async function rateLimit(
   identifier: string,
   endpoint: string,
   limit: number,
-  windowMs = RATE_LIMITS.authenticated.windowMs,
+  windowMs: number = RATE_LIMITS.authenticated.windowMs,
   context: RateLimitContext = {},
 ): Promise<RateLimitResult> {
   const retryAfter = getRateLimitRetryAfter(windowMs)

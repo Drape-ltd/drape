@@ -66,6 +66,10 @@ Bootstrap fallback remains available only when workforce mode is not configured:
 - `OPS_DASHBOARD_TOKEN`
 - `OPS_DASHBOARD_BOOTSTRAP_ROLE`
 
+Production defaults to fail-closed for `/ops` unless Cloudflare Access is
+configured. `OPS_ALLOW_BOOTSTRAP_IN_PRODUCTION=1` is a break-glass override only
+and must be paired with a short operational window and immediate token rotation.
+
 ### App-Level RBAC
 
 Suggested roles:

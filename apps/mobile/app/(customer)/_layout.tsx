@@ -80,7 +80,7 @@ export default function CustomerTabLayout() {
               testID="tab-home"
               accessibilityRole="button"
               accessibilityLabel="Explore tab"
-              onPress={() => router.replace('/(customer)')}
+              onPress={() => router.navigate('/(customer)')}
             />
           ),
         }}
@@ -97,7 +97,7 @@ export default function CustomerTabLayout() {
               testID="tab-saved"
               accessibilityRole="button"
               accessibilityLabel="Wishlists tab"
-              onPress={() => router.replace('/(customer)/saved')}
+              onPress={() => router.navigate('/(customer)/saved')}
             />
           ),
         }}
@@ -114,7 +114,7 @@ export default function CustomerTabLayout() {
               testID="tab-orders"
               accessibilityRole="button"
               accessibilityLabel="Orders tab"
-              onPress={() => router.replace({ pathname: '/(customer)/orders', params: { tab: 'active' } })}
+              onPress={() => router.navigate({ pathname: '/(customer)/orders', params: { tab: 'active' } })}
             />
           ),
         }}
@@ -133,7 +133,7 @@ export default function CustomerTabLayout() {
               testID="tab-messages"
               accessibilityRole="button"
               accessibilityLabel={unreadMessages > 0 ? `Messages tab, ${unreadMessages} unread` : 'Messages tab'}
-              onPress={() => router.replace('/(customer)/messages')}
+              onPress={() => router.navigate('/(customer)/messages')}
             />
           ),
         }}
@@ -150,7 +150,7 @@ export default function CustomerTabLayout() {
               testID="tab-profile"
               accessibilityRole="button"
               accessibilityLabel="Profile tab"
-              onPress={() => router.replace('/(customer)/profile')}
+              onPress={() => router.navigate('/(customer)/profile')}
             />
           ),
         }}

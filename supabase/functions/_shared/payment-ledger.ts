@@ -1,3 +1,5 @@
+import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
 type PaymentProvider = 'STRIPE' | 'PAYSTACK'
 type PaymentPhase = 'INITIAL_ORDER' | 'CONSULTATION' | 'FULFILLMENT' | 'MATERIAL_ADVANCE'
 type PaymentStatus = 'INITIATED' | 'PENDING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED' | 'REFUNDED'
@@ -26,7 +28,7 @@ function isUniqueViolation(error: { code?: string | null } | null | undefined) {
 }
 
 export async function findPaymentAttemptByProviderPaymentId(
-  supabase: any,
+  supabase: SupabaseClient,
   provider: PaymentProvider,
   providerPaymentId: string,
 ) {
@@ -42,7 +44,7 @@ export async function findPaymentAttemptByProviderPaymentId(
 }
 
 export async function findLatestPaymentAttemptForOrderPhase(
-  supabase: any,
+  supabase: SupabaseClient,
   input: {
     orderId: string
     phase: PaymentPhase
@@ -73,7 +75,7 @@ export async function findLatestPaymentAttemptForOrderPhase(
 }
 
 export async function upsertPreparedPaymentAttempt(
-  supabase: any,
+  supabase: SupabaseClient,
   input: {
     orderId: string
     phase: PaymentPhase
@@ -143,7 +145,7 @@ export async function upsertPreparedPaymentAttempt(
 }
 
 export async function markPaymentAttemptStatus(
-  supabase: any,
+  supabase: SupabaseClient,
   input: {
     provider: PaymentProvider
     providerPaymentId: string
@@ -173,7 +175,7 @@ export async function markPaymentAttemptStatus(
 }
 
 export async function createWebhookEvent(
-  supabase: any,
+  supabase: SupabaseClient,
   input: {
     provider: PaymentProvider
     providerEventId: string
@@ -236,7 +238,7 @@ export async function createWebhookEvent(
 }
 
 export async function markWebhookEventProcessed(
-  supabase: any,
+  supabase: SupabaseClient,
   webhookEventId: string,
   input: {
     orderId?: string | null

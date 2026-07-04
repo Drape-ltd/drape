@@ -15,6 +15,7 @@ import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.
 import { parseBody, uuid, z } from '../_shared/validate.ts'
 
 const FN = 'group-member-action'
+const INVITE_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 const inviteCode = z.string().trim().min(16).max(80)
 
@@ -39,6 +40,12 @@ function jsonResponse(body: Record<string, unknown>, status: number, headers: He
 function displayNameFromProfile(row: unknown, fallback: string) {
   const value = (row as { display_name?: string | null } | null)?.display_name
   return typeof value === 'string' && value.trim() ? value.trim() : fallback
+}
+
+function inviteExpired(expiresAt: string | null) {
+  if (!expiresAt) return false
+  const expiry = Date.parse(expiresAt)
+  return Number.isFinite(expiry) && expiry <= Date.now()
 }
 
 Deno.serve(async (req) => {
@@ -133,6 +140,7 @@ Deno.serve(async (req) => {
         .update({
           status: (member as { status?: string }).status === 'ACCEPTED' ? 'ACCEPTED' : 'INVITED',
           invited_at: new Date().toISOString(),
+          invite_expires_at: new Date(Date.now() + INVITE_TTL_MS).toISOString(),
         })
         .eq('id', parsed.data.memberId)
 
@@ -146,7 +154,7 @@ Deno.serve(async (req) => {
 
     const { data: invite, error: inviteError } = await supabase
       .from('order_group_members')
-      .select('id, order_id, owner_customer_id, invited_user_id, display_name, role, status, invite_code, measurement_profile_id, accepted_at, orders(reference, garment_type, stage)')
+      .select('id, order_id, owner_customer_id, invited_user_id, display_name, role, status, invite_code, measurement_profile_id, accepted_at, invite_expires_at, orders(reference, garment_type, stage)')
       .eq('invite_code', parsed.data.inviteCode)
       .maybeSingle()
 
@@ -165,6 +173,7 @@ Deno.serve(async (req) => {
       invite_code: string
       measurement_profile_id: string | null
       accepted_at: string | null
+      invite_expires_at: string | null
       orders?: { reference?: string | null; garment_type?: string | null; stage?: string | null } | Array<{ reference?: string | null; garment_type?: string | null; stage?: string | null }> | null
     }
 
@@ -177,6 +186,7 @@ Deno.serve(async (req) => {
       .maybeSingle()
 
     const ownerName = displayNameFromProfile(ownerProfile, 'The order owner')
+    const isExpired = inviteRow.status !== 'ACCEPTED' && inviteExpired(inviteRow.invite_expires_at)
 
     if (parsed.data.action === 'preview') {
       return jsonResponse({
@@ -186,9 +196,14 @@ Deno.serve(async (req) => {
         orderReference: order?.reference ?? inviteRow.order_id,
         garmentType: order?.garment_type ?? 'Group order',
         status: inviteRow.status,
+        expired: isExpired,
         alreadyAcceptedByYou: inviteRow.status === 'ACCEPTED' && inviteRow.invited_user_id === caller.id,
         acceptedBySomeoneElse: inviteRow.status === 'ACCEPTED' && inviteRow.invited_user_id !== caller.id,
       }, 200, cors)
+    }
+
+    if (isExpired) {
+      return jsonResponse({ error: 'This group invite expired. Ask the order owner to resend it.', code: 'INVITE_EXPIRED' }, 410, cors)
     }
 
     if (inviteRow.status === 'REMOVED') {

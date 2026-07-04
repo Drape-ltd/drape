@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import * as SecureStore from 'expo-secure-store'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 
-const VALID_APP_VARIANTS = new Set(['development', 'preview', 'production'])
+const VALID_APP_VARIANTS = new Set(['development', 'preview', 'testflight', 'production'])
 const VALID_SUPABASE_ENVS = new Set(['development', 'preview', 'staging', 'test', 'production'])
 
 function getSupabaseProjectRef(url: string) {
@@ -22,8 +22,8 @@ function assertMobileSupabaseConfig() {
     .toLowerCase()
   const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL?.trim() ?? ''
   const supabasePublishableKey =
-    process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim() ??
     process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY?.trim() ??
+    process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim() ??
     ''
   const supabaseEnv = process.env.EXPO_PUBLIC_SUPABASE_ENV?.trim().toLowerCase() ?? ''
   const declaredProjectRef = process.env.EXPO_PUBLIC_SUPABASE_PROJECT_REF?.trim() ?? ''
@@ -31,7 +31,7 @@ function assertMobileSupabaseConfig() {
 
   if (!VALID_APP_VARIANTS.has(appVariant)) {
     throw new Error(
-      `Invalid EXPO_PUBLIC_APP_VARIANT "${appVariant}". Expected one of development, preview, production.`
+      `Invalid EXPO_PUBLIC_APP_VARIANT "${appVariant}". Expected one of development, preview, testflight, production.`
     )
   }
 
@@ -86,47 +86,136 @@ function assertMobileSupabaseConfig() {
 
 const { supabaseUrl, supabasePublishableKey } = assertMobileSupabaseConfig()
 const supabaseHost = new URL(supabaseUrl).host
-const supabaseStorageKey = `drape.auth.${supabaseHost}`
+const AUTH_STORAGE_VERSION = 'v2'
+const legacySupabaseStorageKey = `drape.auth.${supabaseHost}`
+const supabaseStorageKey = `drape.auth.${AUTH_STORAGE_VERSION}.${supabaseHost}`
 const AUTH_NETWORK_TIMEOUT_MS = 12_000
 const DEFAULT_EDGE_FUNCTION_TIMEOUT_MS = 25_000
 const LEGACY_AUTH_STORAGE_KEYS = [
+  legacySupabaseStorageKey,
   'supabase.auth.token',
   'supabase.auth.token-user',
   'supabase.auth.token-code-verifier',
 ]
 
-// SecureStore has a 2048-byte limit. Auth tokens exceed this, so we use
-// AsyncStorage as the primary store and SecureStore only for small values.
 const SECURE_STORE_MAX = 2000
+const SECURE_STORE_CHUNK_SIZE = 1800
+
+if (__DEV__) {
+  const keyKind = supabasePublishableKey.startsWith('eyJ')
+    ? 'anon-jwt'
+    : supabasePublishableKey.startsWith('sb_publishable_')
+      ? 'publishable'
+      : 'unknown'
+  console.log('[Drape auth] Supabase client ready', {
+    host: supabaseHost,
+    keyKind,
+    storageVersion: AUTH_STORAGE_VERSION,
+  })
+}
+
+function chunkMetaKey(key: string) {
+  return `${key}.chunks`
+}
+
+function chunkKey(key: string, index: number) {
+  return `${key}.chunk.${index}`
+}
+
+async function readChunkCount(key: string) {
+  try {
+    const raw = await SecureStore.getItemAsync(chunkMetaKey(key))
+    if (!raw) return 0
+
+    const parsed = JSON.parse(raw) as { count?: unknown }
+    return typeof parsed.count === 'number' && parsed.count > 0 && Number.isInteger(parsed.count)
+      ? parsed.count
+      : 0
+  } catch {
+    return 0
+  }
+}
+
+async function deleteSecureStoreChunks(key: string) {
+  const count = await readChunkCount(key)
+  await Promise.all([
+    SecureStore.deleteItemAsync(chunkMetaKey(key)).catch(() => {}),
+    ...Array.from({ length: count }, (_, index) =>
+      SecureStore.deleteItemAsync(chunkKey(key, index)).catch(() => {})
+    ),
+  ])
+}
+
+async function readSecureStoreValue(key: string) {
+  const count = await readChunkCount(key)
+  if (count > 0) {
+    const chunks = await Promise.all(
+      Array.from({ length: count }, (_, index) => SecureStore.getItemAsync(chunkKey(key, index))),
+    )
+
+    if (chunks.every((chunk): chunk is string => typeof chunk === 'string')) {
+      return chunks.join('')
+    }
+
+    await deleteSecureStoreChunks(key)
+    return null
+  }
+
+  return SecureStore.getItemAsync(key)
+}
+
+async function writeSecureStoreValue(key: string, value: string) {
+  await deleteSecureStoreChunks(key)
+
+  if (value.length <= SECURE_STORE_MAX) {
+    await SecureStore.setItemAsync(key, value)
+    return
+  }
+
+  const chunks = value.match(new RegExp(`.{1,${SECURE_STORE_CHUNK_SIZE}}`, 'gs')) ?? []
+  await Promise.all(
+    chunks.map((chunk, index) => SecureStore.setItemAsync(chunkKey(key, index), chunk)),
+  )
+  await SecureStore.setItemAsync(chunkMetaKey(key), JSON.stringify({ count: chunks.length }))
+  await SecureStore.deleteItemAsync(key).catch(() => {})
+}
 
 const ExpoSecureStoreAdapter = {
   getItem: async (key: string) => {
     try {
-      // Try AsyncStorage first (handles large tokens)
-      const value = await AsyncStorage.getItem(key)
-      if (value !== null) return value
-      // Fall back to SecureStore for values written before this change
-      return await SecureStore.getItemAsync(key)
+      const secureValue = await readSecureStoreValue(key)
+      if (secureValue !== null) return secureValue
+
+      const legacyValue = await AsyncStorage.getItem(key)
+      if (legacyValue !== null) {
+        await writeSecureStoreValue(key, legacyValue)
+        await AsyncStorage.removeItem(key).catch(() => {})
+        return legacyValue
+      }
+
+      return null
     } catch {
       return null
     }
   },
   setItem: async (key: string, value: string) => {
     try {
-      // Always write to AsyncStorage (no size limit for auth tokens)
-      await AsyncStorage.setItem(key, value)
-      // Also write to SecureStore only if small enough
-      if (value.length <= SECURE_STORE_MAX) {
-        await SecureStore.setItemAsync(key, value)
+      await writeSecureStoreValue(key, value)
+      await AsyncStorage.removeItem(key).catch(() => {})
+    } catch (error) {
+      if (__DEV__) {
+        console.warn('[Drape auth] SecureStore auth write failed; falling back to AsyncStorage.', error)
+        await AsyncStorage.setItem(key, value).catch(() => {})
+        return
       }
-    } catch {
-      // AsyncStorage write failure is non-fatal for auth flow
+      throw error
     }
   },
   removeItem: async (key: string) => {
     await Promise.all([
       AsyncStorage.removeItem(key).catch(() => {}),
       SecureStore.deleteItemAsync(key).catch(() => {}),
+      deleteSecureStoreChunks(key),
     ])
   },
 }
@@ -136,6 +225,7 @@ async function clearLegacyAuthStorage() {
     LEGACY_AUTH_STORAGE_KEYS.flatMap((key) => [
       AsyncStorage.removeItem(key).catch(() => {}),
       SecureStore.deleteItemAsync(key).catch(() => {}),
+      deleteSecureStoreChunks(key),
     ]),
   )
 }
@@ -149,6 +239,7 @@ export const supabase = createClient(supabaseUrl, supabasePublishableKey, {
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: false,
+    flowType: 'pkce',
   },
 })
 

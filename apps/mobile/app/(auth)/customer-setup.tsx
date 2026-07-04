@@ -29,7 +29,7 @@ import {
   fetchCurrencyPreferenceContext,
   type CurrencyCode,
 } from '@/lib/currency'
-import { Button, Input } from '@/components/ui'
+import { Button, ChoiceSheet, Input } from '@/components/ui'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { validateDisplayName } from '@drape/shared/contact-filter'
 import {
@@ -111,6 +111,8 @@ export default function CustomerSetupScreen() {
   const [defaultCurrency, setDefaultCurrency] = useState<CurrencyCode>(detectedCurrency.currency)
   const [currencySource, setCurrencySource] = useState(detectedCurrency.source)
   const [regionCode, setRegionCode] = useState(detectedCurrency.regionCode)
+  const [currencySheetOpen, setCurrencySheetOpen] = useState(false)
+  const [garmentSheetOpen, setGarmentSheetOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
@@ -482,32 +484,25 @@ export default function CustomerSetupScreen() {
                     </Text>
                   </View>
                 )}
-                <View style={styles.currencyList}>
-                  {SUPPORTED_CURRENCIES.map((option) => (
-                    <TouchableOpacity
-                      key={option.code}
-                      style={styles.currencyOptionRow}
-                      onPress={() => {
-                        setDefaultCurrency(option.code)
-                        setCurrencySource('USER_SELECTED')
-                        setRegionCode(regionCode || detectedCurrency.regionCode)
-                      }}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: defaultCurrency === option.code }}
-                    >
-                      <View style={styles.currencySymbolBadge}>
-                        <Text style={styles.currencySymbolText}>{option.symbol}</Text>
-                      </View>
-                      <View style={styles.currencyOptionCopy}>
-                        <Text style={styles.currencyOptionTitle}>{option.code}</Text>
-                        <Text style={styles.currencyOptionHint}>{option.name}</Text>
-                      </View>
-                      <View style={[styles.currencyRadio, defaultCurrency === option.code && styles.currencyRadioActive]}>
-                        {defaultCurrency === option.code ? <Feather name="check" size={14} color={Colors.textInverse} /> : null}
-                      </View>
-                    </TouchableOpacity>
-                  ))}
-                </View>
+                <TouchableOpacity
+                  style={styles.sheetSelectRow}
+                  onPress={() => setCurrencySheetOpen(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Choose account currency"
+                >
+                  <View style={styles.currencySymbolBadge}>
+                    <Text style={styles.currencySymbolText}>
+                      {SUPPORTED_CURRENCIES.find((option) => option.code === defaultCurrency)?.symbol ?? '$'}
+                    </Text>
+                  </View>
+                  <View style={styles.currencyOptionCopy}>
+                    <Text style={styles.currencyOptionTitle}>{defaultCurrency}</Text>
+                    <Text style={styles.currencyOptionHint}>
+                      {SUPPORTED_CURRENCIES.find((option) => option.code === defaultCurrency)?.name ?? 'Account currency'}
+                    </Text>
+                  </View>
+                  <Feather name="chevron-down" size={18} color={Colors.midGrey} />
+                </TouchableOpacity>
               </View>
 
               <View>
@@ -542,33 +537,25 @@ export default function CustomerSetupScreen() {
                 What do you typically order? <Text style={styles.required}>*</Text>
               </Text>
               <Text style={styles.fieldHint}>Helps tailors understand your fitting needs.</Text>
-              <View style={styles.optionList}>
-                {GARMENT_OPTIONS.map((opt) => (
-                  <TouchableOpacity
-                    key={opt.value}
-                    style={[
-                      styles.optionCard,
-                      garmentContext === opt.value && styles.optionCardActive,
-                    ]}
-                    onPress={() => setGarmentContext(opt.value)}
-                  >
-                    <View
-                      style={[styles.radio, garmentContext === opt.value && styles.radioActive]}
-                    />
-                    <View style={styles.optionTextWrap}>
-                      <Text
-                        style={[
-                          styles.optionLabel,
-                          garmentContext === opt.value && styles.optionLabelActive,
-                        ]}
-                      >
-                        {opt.label}
-                      </Text>
-                      <Text style={styles.optionHint}>{opt.hint}</Text>
-                    </View>
-                  </TouchableOpacity>
-                ))}
-              </View>
+              <TouchableOpacity
+                style={styles.sheetSelectRow}
+                onPress={() => setGarmentSheetOpen(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Choose garment context"
+              >
+                <View style={[styles.radio, garmentContext && styles.radioActive]}>
+                  {garmentContext ? <Feather name="check" size={13} color={Colors.textInverse} /> : null}
+                </View>
+                <View style={styles.optionTextWrap}>
+                  <Text style={[styles.optionLabel, garmentContext && styles.optionLabelActive]}>
+                    {GARMENT_OPTIONS.find((option) => option.value === garmentContext)?.label ?? 'Choose what you order'}
+                  </Text>
+                  <Text style={styles.optionHint}>
+                    {GARMENT_OPTIONS.find((option) => option.value === garmentContext)?.hint ?? 'Menswear, womenswear, both, or skip.'}
+                  </Text>
+                </View>
+                <Feather name="chevron-down" size={18} color={Colors.midGrey} />
+              </TouchableOpacity>
             </View>
           </View>
         </ScrollView>
@@ -594,6 +581,42 @@ export default function CustomerSetupScreen() {
             }
           />
         </View>
+        <ChoiceSheet
+          visible={currencySheetOpen}
+          title="Choose currency"
+          subtitle="This is the currency you see and pay in for new orders."
+          options={SUPPORTED_CURRENCIES.map((option) => ({
+            value: option.code,
+            title: option.code,
+            body: option.name,
+            meta: option.symbol,
+          }))}
+          selectedValue={defaultCurrency}
+          onClose={() => setCurrencySheetOpen(false)}
+          onSelect={(value) => {
+            setDefaultCurrency(value as CurrencyCode)
+            setCurrencySource('USER_SELECTED')
+            setRegionCode(regionCode || detectedCurrency.regionCode)
+            setCurrencySheetOpen(false)
+          }}
+        />
+        <ChoiceSheet
+          visible={garmentSheetOpen}
+          title="What do you usually order?"
+          subtitle="This helps tailors understand the fit context you are likely to need."
+          options={GARMENT_OPTIONS.map((option) => ({
+            value: option.value,
+            title: option.label,
+            body: option.hint,
+            icon: option.value === 'BOTH' ? 'layers' : 'scissors',
+          }))}
+          selectedValue={garmentContext}
+          onClose={() => setGarmentSheetOpen(false)}
+          onSelect={(value) => {
+            setGarmentContext(value as GarmentContext)
+            setGarmentSheetOpen(false)
+          }}
+        />
       </KeyboardAvoidingView>
     </SafeAreaView>
   )
@@ -738,6 +761,19 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Colors.lightGrey,
+  },
+  sheetSelectRow: {
+    minHeight: 62,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    borderRadius: Radius.lg,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    ...Shadow.sm,
   },
   currencySymbolBadge: {
     width: 42,

@@ -1,4 +1,4 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
@@ -71,7 +71,7 @@ type OrderRow = {
 
 type PaymentPhase = 'INITIAL_ORDER' | 'FULFILLMENT' | 'CONSULTATION' | 'MATERIAL_ADVANCE'
 
-async function findPayoutForReference(supabase: any, reference: string) {
+async function findPayoutForReference(supabase: SupabaseClient, reference: string) {
   const { data, error } = await supabase
     .from('payouts')
     .select('id, order_id, status, provider_payout_id')
@@ -84,7 +84,7 @@ async function findPayoutForReference(supabase: any, reference: string) {
 }
 
 async function recordProviderPayoutFailure(
-  supabase: any,
+  supabase: SupabaseClient,
   input: {
     payoutId: string
     orderId: string | null
@@ -158,7 +158,7 @@ function metadataOrderId(transaction: PaystackTransaction | null | undefined) {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : ''
 }
 
-async function findOrderForReference(supabase: any, reference: string) {
+async function findOrderForReference(supabase: SupabaseClient, reference: string) {
   const { data, error } = await supabase
     .from('orders')
     .select('id, reference, stage, order_kind, tailor_id, customer_id, seller_item_id, item_title, item_size, garment_type, quoted_amount, quoted_currency, currency, fulfillment_fee, consultation_fee, special_note, payment_intent_id, delivery_method, fulfillment_payment_paid_at, fulfillment_payment_intent_id')
@@ -184,7 +184,7 @@ async function findOrderForReference(supabase: any, reference: string) {
   return fulfillmentData as OrderRow | null
 }
 
-async function findOrderForTransaction(supabase: any, transaction: PaystackTransaction) {
+async function findOrderForTransaction(supabase: SupabaseClient, transaction: PaystackTransaction) {
   const orderId = metadataOrderId(transaction)
   if (orderId) {
     const { data, error } = await supabase
@@ -222,7 +222,7 @@ function paymentPhaseForTransaction(order: OrderRow, transaction: PaystackTransa
 }
 
 async function markMaterialAdvancePayment(
-  supabase: any,
+  supabase: SupabaseClient,
   order: OrderRow,
   transaction: PaystackTransaction,
   status: 'SUCCEEDED' | 'FAILED' | 'CANCELED',
@@ -316,7 +316,7 @@ async function markMaterialAdvancePayment(
 
 type OrderPaymentPhase = Exclude<PaymentPhase, 'MATERIAL_ADVANCE'>
 
-async function markOrderConfirmed(supabase: any, order: OrderRow, transaction: PaystackTransaction, phase: OrderPaymentPhase) {
+async function markOrderConfirmed(supabase: SupabaseClient, order: OrderRow, transaction: PaystackTransaction, phase: OrderPaymentPhase) {
   if (phase === 'INITIAL_ORDER' && order.stage === 'CONFIRMED') return false
   if (phase === 'FULFILLMENT' && order.fulfillment_payment_paid_at) return false
 
@@ -569,7 +569,7 @@ Deno.serve(async (req) => {
     return new Response('Method not allowed', { status: 405, headers: cors })
   }
 
-  const supabase: any = createClient(getSupabaseUrl(), getServiceRoleKey())
+  const supabase: SupabaseClient = createClient(getSupabaseUrl(), getServiceRoleKey())
   const clientIp = getClientIp(req)
   const limit = await rateLimit(
     supabase,

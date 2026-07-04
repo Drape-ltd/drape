@@ -26,6 +26,7 @@
     "supabase:functions:deploy:prod": "node scripts/supabase-target-guard.mjs functions:deploy production",
     "supabase:functions:deploy:all:dev": "node scripts/supabase-target-guard.mjs functions:deploy-all development",
     "supabase:functions:deploy:all:prod": "node scripts/supabase-target-guard.mjs functions:deploy-all production",
+    "security:edge-auth": "node scripts/check-edge-auth.mjs",
     "launch:contracts": "node scripts/launch-contract-check.mjs",
     "launch:contracts:linked": "node scripts/launch-contract-check.mjs --with-supabase",
     "load:smoke": "node scripts/load-smoke.mjs",

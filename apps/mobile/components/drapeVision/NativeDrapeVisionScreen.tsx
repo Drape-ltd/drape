@@ -13,7 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import * as ImagePicker from 'expo-image-picker'
 import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from 'expo-audio'
 import type * as ExpoSpeech from 'expo-speech'
@@ -74,6 +74,8 @@ import type {
 import { capture } from '@/lib/analytics'
 import { useAuth } from '@/lib/auth'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
+import { goBackOrReturnToIfNeeded, sanitizeReturnTo } from '@/lib/navigation'
+import { promptProductFeedback } from '@/lib/productFeedback'
 import { Sentry } from '@/lib/sentry'
 import {
   MEASUREMENT_SCAN_CAPTURE_METHOD_LABELS,
@@ -447,15 +449,13 @@ const SCAN_NOISY_WARNING_CONFIRM_COUNT = Platform.OS === 'ios' ? 2 : 1
 const SCAN_REUSE_LITE_DETECTION_FOR_CAPTURE = Platform.OS === 'android'
 const SCAN_ANDROID_TORSO_TO_BODY_HEIGHT_RATIO = 0.46
 const SCAN_ANDROID_SHOULDER_TO_HIP_BODY_HEIGHT_RATIO = 0.28
-const DRAPE_VISION_APP_VARIANT = process.env.EXPO_PUBLIC_APP_VARIANT?.trim().toLowerCase()
 const DRAPE_VISION_TESTER_MODE =
   __DEV__ ||
-  process.env.EXPO_PUBLIC_DRAPE_VISION_TESTER_MODE === '1' ||
-  DRAPE_VISION_APP_VARIANT === 'preview'
+  process.env.EXPO_PUBLIC_DRAPE_VISION_TESTER_MODE === '1'
 const DRAPE_VISION_VALIDATION_ENABLED = DRAPE_VISION_TESTER_MODE
 const DRAPE_VISION_LAB_ENABLED = __DEV__
 const DRAPE_VISION_DEBUG_UI_ENABLED =
-  process.env.EXPO_PUBLIC_DRAPE_VISION_DEBUG_UI === '1'
+  __DEV__ && process.env.EXPO_PUBLIC_DRAPE_VISION_DEBUG_UI === '1'
 const DRAPE_VISION_CAMERA_DEBUG_UI_ENABLED = false
 const FRACTIONAL_TAPE_KEYBOARD_TYPE = Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'default'
 const DRAPE_VISION_LAB_MAX_FRAME_SAMPLES = Platform.OS === 'android' ? 48 : 180
@@ -951,7 +951,8 @@ function defaultReturnForMode(mode: DrapeVisionMode) {
 }
 
 function returnTargetForVisionParams(mode: DrapeVisionMode, params: VisionParams) {
-  if (params.returnTo?.trim()) return params.returnTo
+  const safeReturnTo = sanitizeReturnTo(params.returnTo)
+  if (safeReturnTo) return safeReturnTo
   if (mode === 'customer_scan' && params.orderId?.trim()) return `/(customer)/orders/${params.orderId}`
   if (mode === 'garment_qc' && params.orderId?.trim()) return `/(tailor)/orders/${params.orderId}`
   if (mode === 'tailor_client_scan' && params.diaryId?.trim() && params.diaryId !== 'new') {
@@ -963,7 +964,7 @@ function returnTargetForVisionParams(mode: DrapeVisionMode, params: VisionParams
 function primaryLabelForVisionParams(mode: DrapeVisionMode, params: VisionParams) {
   if (mode !== 'garment_qc') return DRAPE_VISION_MODE_META[mode].primaryLabel
   if (params.orderId?.trim()) return 'Return to order'
-  if (params.returnTo?.includes('(tailor)')) return 'Back to dashboard'
+  if (sanitizeReturnTo(params.returnTo)?.includes('(tailor)')) return 'Back to dashboard'
   return 'Open orders'
 }
 
@@ -2984,6 +2985,7 @@ function emptyPoseDebug(status = 'Waiting for camera frames'): PoseDebugState {
 
 export default function DrapeVisionScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { user } = useAuth()
   const cameraPermission = useCameraPermission()
   const frontCamera = useCameraDevice('front')
@@ -3055,6 +3057,7 @@ export default function DrapeVisionScreen() {
   const [calculationStep, setCalculationStep] = useState(1)
   const [savingResult, setSavingResult] = useState(false)
   const [resultSaveConfirmation, setResultSaveConfirmation] = useState<string | null>(null)
+  const feedbackPromptedRef = useRef(new Set<string>())
   const [reduceMotion, setReduceMotion] = useState(false)
   const [visionLabSampleCount, setVisionLabSampleCount] = useState(0)
   const [visionLabUploading, setVisionLabUploading] = useState(false)
@@ -4095,6 +4098,10 @@ export default function DrapeVisionScreen() {
     workflowSaving,
   ])
 
+  const leaveVision = useCallback(() => {
+    goBackOrReturnToIfNeeded(router, navigation, returnTarget, DRAPE_VISION_MODE_META[mode].fallbackRoute as never)
+  }, [mode, navigation, returnTarget, router])
+
   const closeVision = useCallback(() => {
     if (savingResult || workflowSaving) {
       Alert.alert('Still saving', 'Wait for this save to finish before leaving Drapeon Vision.')
@@ -4110,15 +4117,15 @@ export default function DrapeVisionScreen() {
           {
             text: 'Leave',
             style: 'destructive',
-            onPress: () => router.replace(returnTarget as never),
+            onPress: leaveVision,
           },
         ],
       )
       return
     }
 
-    router.replace(returnTarget as never)
-  }, [returnTarget, router, savingResult, shouldConfirmClose, workflowSaving])
+    leaveVision()
+  }, [leaveVision, savingResult, shouldConfirmClose, workflowSaving])
 
   useEffect(() => {
     if (phase !== 'calculating') {
@@ -4221,6 +4228,33 @@ export default function DrapeVisionScreen() {
       .insert(payload)
     return error ?? null
   }, [user?.id])
+
+  const promptVisionFeedbackOnce = useCallback((
+    key: string,
+    options: {
+      context: 'vision_scan_saved' | 'vision_scan_failed'
+      title: string
+      message: string
+      measurementScanId?: string | null
+      metadata?: Record<string, unknown>
+    },
+  ) => {
+    if (!user?.id || feedbackPromptedRef.current.has(key)) return
+    feedbackPromptedRef.current.add(key)
+    setTimeout(() => {
+      promptProductFeedback({
+        userId: user.id,
+        context: options.context,
+        title: options.title,
+        message: options.message,
+        measurementScanId: options.measurementScanId,
+        metadata: {
+          mode,
+          ...options.metadata,
+        },
+      })
+    }, 650)
+  }, [mode, user?.id])
 
   const updateGarmentQcDraft = useCallback((field: DrapeVisionMeasurementField, value: string) => {
     setGarmentQcDraft((current) => ({ ...current, [field]: value.replace(/[^0-9./\s]/g, '') }))
@@ -5070,7 +5104,18 @@ export default function DrapeVisionScreen() {
     saveConfirmationTimerRef.current = setTimeout(() => {
       setResultSaveConfirmation(null)
     }, 1100)
-  }, [buildVisionLabPayload, heightInputConfidence, loadVisionLabRepeatability, markSessionScanSaved, mode, persistVisionLabScorecardRow, resultUnit, savedMeasurementScanId, upsertDefaultCustomerMeasurementProfile, user?.id])
+    promptVisionFeedbackOnce(`fit_360_saved:${measurementScanId}`, {
+      context: 'vision_scan_saved',
+      title: 'How was this scan?',
+      message: 'Quick TestFlight check: did this Vision scan feel easy enough to trust?',
+      measurementScanId,
+      metadata: {
+        scan_mode: 'fit_360',
+        confidence_overall: confidenceOverall,
+        requires_tailor_review: requiresTailorReview,
+      },
+    })
+  }, [buildVisionLabPayload, heightInputConfidence, loadVisionLabRepeatability, markSessionScanSaved, mode, persistVisionLabScorecardRow, promptVisionFeedbackOnce, resultUnit, savedMeasurementScanId, upsertDefaultCustomerMeasurementProfile, user?.id])
 
   const saveSpecialistVisionResult = useCallback(async () => {
     if (savingResult) return
@@ -5362,6 +5407,17 @@ export default function DrapeVisionScreen() {
       saveConfirmationTimerRef.current = setTimeout(() => {
         setResultSaveConfirmation(null)
       }, 1100)
+      promptVisionFeedbackOnce(`${selectedMode}_saved:${inserted.id}`, {
+        context: 'vision_scan_saved',
+        title: 'How was this scan?',
+        message: `Quick TestFlight check: did the ${specialistMeta.title.toLowerCase()} feel easy enough to use?`,
+        measurementScanId: inserted.id,
+        metadata: {
+          scan_mode: selectedMode,
+          scan_flow: scanFlow,
+          tape_value_count: Object.keys(tapeInputsIn).length,
+        },
+      })
       return
     }
 
@@ -5423,6 +5479,7 @@ export default function DrapeVisionScreen() {
     mode,
     openPrimary,
     params.diaryId,
+    promptVisionFeedbackOnce,
     resultUnit,
     savingResult,
     selectedSpecialistMode,
@@ -11038,6 +11095,21 @@ export default function DrapeVisionScreen() {
               <Text style={styles.secondaryText}>Retake scan</Text>
             </TouchableOpacity>
           ) : null}
+          <TouchableOpacity
+            accessibilityRole="button"
+            onPress={() => promptVisionFeedbackOnce(`vision_failed:${message}`, {
+              context: 'vision_scan_failed',
+              title: 'Report this scan issue?',
+              message: 'Quick TestFlight check: did this failure message explain what went wrong?',
+              metadata: {
+                error_message: friendlyMessage,
+                phase,
+              },
+            })}
+            style={styles.secondaryButton}
+          >
+            <Text style={styles.secondaryText}>Report scan issue</Text>
+          </TouchableOpacity>
           <TouchableOpacity accessibilityRole="button" onPress={() => setPhase('suite')} style={styles.secondaryButton}>
             <Text style={styles.secondaryText}>Back to scan picker</Text>
           </TouchableOpacity>

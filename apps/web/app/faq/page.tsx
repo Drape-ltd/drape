@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { headers } from 'next/headers'
 import type { JSX } from 'react'
 import { MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
@@ -52,7 +53,8 @@ export const metadata: Metadata = buildMetadata({
   path: '/faq',
 })
 
-export default function FaqPage(): JSX.Element {
+export default async function FaqPage(): Promise<JSX.Element> {
+  const nonce = (await headers()).get('x-nonce') ?? undefined
   const faqJsonLd = {
     '@context': 'https://schema.org',
     '@type': 'FAQPage',
@@ -69,6 +71,7 @@ export default function FaqPage(): JSX.Element {
   return (
     <>
       <script
+        nonce={nonce}
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(faqJsonLd) }}
       />

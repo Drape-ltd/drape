@@ -25,6 +25,10 @@
       "supportsTablet": false,
       "appleTeamId": "W84Q46T4XF",
       "bundleIdentifier": "co.drapeon.app",
+      "associatedDomains": [
+        "applinks:drapeon.co",
+        "applinks:www.drapeon.co"
+      ],
       "privacyManifests": {
         "NSPrivacyAccessedAPITypes": [
           {
@@ -62,6 +66,38 @@
         "backgroundColor": "#2D6A4F"
       },
       "package": "com.drape.app",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "drapeon.co",
+              "pathPrefix": "/auth"
+            },
+            {
+              "scheme": "https",
+              "host": "drapeon.co",
+              "pathPrefix": "/payments"
+            },
+            {
+              "scheme": "https",
+              "host": "www.drapeon.co",
+              "pathPrefix": "/auth"
+            },
+            {
+              "scheme": "https",
+              "host": "www.drapeon.co",
+              "pathPrefix": "/payments"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ],
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.POST_NOTIFICATIONS",

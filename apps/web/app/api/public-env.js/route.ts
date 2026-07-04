@@ -19,6 +19,7 @@ export function GET() {
       headers: {
         'Cache-Control': 'no-store, max-age=0',
         'Content-Type': 'application/javascript; charset=utf-8',
+        'Cross-Origin-Resource-Policy': 'same-origin',
         'X-Content-Type-Options': 'nosniff',
       },
     }

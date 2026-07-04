@@ -677,23 +677,28 @@ export function MessageThread({
               accessibilityRole="button"
               accessibilityLabel="Attach photo"
             >
-              <Text style={styles.iconBtnText}>📎</Text>
+              <Feather name="paperclip" size={20} color={Colors.needleGreen} />
             </TouchableOpacity>
 
-            <TextInput
-              style={styles.textInput}
-              placeholder="Message…"
-              placeholderTextColor={Colors.midGrey}
-              value={text}
-              onChangeText={(v) => {
-                setText(v)
-                if (textError) validateText(v)
-              }}
-              multiline
-              maxLength={2000}
-              returnKeyType="default"
-              testID="message-input"
-            />
+            <View style={styles.textInputWrap}>
+              <TextInput
+                style={styles.textInput}
+                placeholder="Message…"
+                placeholderTextColor={Colors.midGrey}
+                value={text}
+                onChangeText={(v) => {
+                  setText(v)
+                  if (textError) validateText(v)
+                }}
+                multiline
+                maxLength={2000}
+                returnKeyType="default"
+                testID="message-input"
+              />
+              {text.length > 1200 ? (
+                <Text style={styles.composerCounter}>{text.length}/2000</Text>
+              ) : null}
+            </View>
 
             <View style={styles.composerActions}>
               {callAvailable && onPressCall ? (
@@ -733,7 +738,11 @@ export function MessageThread({
                   accessibilityRole="button"
                   accessibilityLabel={isRecording ? 'Recording voice note' : 'Hold to record voice note'}
                 >
-                  <Text style={styles.iconBtnText}>🎤</Text>
+                  <Feather
+                    name="mic"
+                    size={20}
+                    color={isRecording ? Colors.textInverse : Colors.needleGreen}
+                  />
                 </TouchableOpacity>
               )}
             </View>
@@ -952,11 +961,17 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, borderTopWidth: 1, borderTopColor: Colors.lightGrey,
   },
   iconBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  iconBtnText: { fontSize: 20 },
+  textInputWrap: { flex: 1, gap: 3 },
   textInput: {
-    flex: 1, backgroundColor: Colors.bone, borderRadius: Radius.xl,
+    backgroundColor: Colors.bone, borderRadius: Radius.xl,
     paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
     fontSize: FontSize.md, color: Colors.ink, maxHeight: 120,
+  },
+  composerCounter: {
+    alignSelf: 'flex-end',
+    fontSize: FontSize.xs,
+    color: Colors.midGrey,
+    marginRight: Spacing.sm,
   },
   sendBtn: {
     width: 44, height: 44, borderRadius: 22,
@@ -978,8 +993,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.needleGreen + '24',
   },
-  voiceBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22 },
-  voiceBtnActive: { backgroundColor: Colors.needleGreenLight },
+  voiceBtn: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 22,
+    backgroundColor: Colors.needleGreenLight,
+  },
+  voiceBtnActive: { backgroundColor: Colors.needleGreen },
 
   bubbleRow: { flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'flex-end', gap: Spacing.xs },
   bubbleRowOwn: { justifyContent: 'flex-end' },

@@ -6,7 +6,7 @@
  * the "initiate deletion in-app" requirement without forcing immediate hard delete.
  */
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
@@ -123,12 +123,14 @@ async function sendDeletionReceiptEmail(input: {
   })
 
   if (!response.ok) {
-    const body = await response.text()
-    log('warn', FN, 'resend.send_failed', { to, status: response.status, body })
+    log('warn', FN, 'resend.send_failed', {
+      status: response.status,
+      contentType: response.headers.get('content-type'),
+    })
   }
 }
 
-async function countActiveOrders(supabase: any, userId: string) {
+async function countActiveOrders(supabase: SupabaseClient, userId: string) {
   const [customerOrders, tailorOrders] = await Promise.all([
     supabase
       .from('orders')

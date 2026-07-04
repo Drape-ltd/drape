@@ -11,6 +11,7 @@ import { clearRecentReauth } from './recent-reauth'
 import { queryClient } from './queryClient'
 import { clearPersistedQueryCache } from './queryPersistence'
 import { syncUserRow } from './syncUserRow'
+import { reset as resetAnalytics } from './analytics'
 
 // Required for expo-web-browser OAuth redirect handling on Android
 WebBrowser.maybeCompleteAuthSession()
@@ -240,25 +241,7 @@ function sha256Hex(input: string) {
 
 async function signInWithPasswordResilient(email: string, password: string) {
   const normalizedEmail = normalizeEmail(email)
-  const firstAttempt = await withAuthBootstrapTimeout(
-    supabase.auth.signInWithPassword({
-      email: normalizedEmail,
-      password,
-    }),
-    'Password sign in'
-  )
-
   const trimmedPassword = password.trim()
-  const shouldRetryWithTrimmedPassword =
-    !!firstAttempt.error &&
-    isInvalidCredentialError(firstAttempt.error.message) &&
-    trimmedPassword.length > 0 &&
-    trimmedPassword !== password
-
-  if (!shouldRetryWithTrimmedPassword) {
-    return firstAttempt
-  }
-
   return withAuthBootstrapTimeout(
     supabase.auth.signInWithPassword({
       email: normalizedEmail,
@@ -266,6 +249,47 @@ async function signInWithPasswordResilient(email: string, password: string) {
     }),
     'Password sign in'
   )
+}
+
+async function logAuthDebugSnapshot(label: string, knownSession?: Session | null) {
+  if (!__DEV__) return
+
+  try {
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+    const session = knownSession ?? sessionData.session
+    console.log('[Drape auth]', label, {
+      hasSession: !!session,
+      sessionUserId: session?.user?.id ?? null,
+      sessionRole: session?.user?.user_metadata?.role ?? null,
+      expiresAt: session?.expires_at ?? null,
+      sessionError: sessionError?.message ?? null,
+    })
+
+    const { data: userData, error: userError } = await supabase.auth.getUser()
+    console.log('[Drape auth]', `${label} getUser`, {
+      hasUser: !!userData.user,
+      userId: userData.user?.id ?? null,
+      errorStatus: userError?.status ?? null,
+      errorMessage: userError?.message ?? null,
+    })
+
+    const userId = session?.user?.id ?? userData.user?.id ?? null
+    if (userId) {
+      const { data, error, status } = await supabase
+        .from('customer_profiles')
+        .select('id')
+        .eq('user_id', userId)
+        .maybeSingle()
+      console.log('[Drape auth]', `${label} customer profile probe`, {
+        status,
+        hasRow: !!data,
+        errorCode: error?.code ?? null,
+        errorMessage: error?.message ?? null,
+      })
+    }
+  } catch (error) {
+    console.warn('[Drape auth] debug snapshot failed', label, error)
+  }
 }
 
 const AUTH_BOOTSTRAP_TIMEOUT_MS = 8000
@@ -358,6 +382,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         setSession(session)
         setLoading(false)
+        void logAuthDebugSnapshot('bootstrap restored session', session)
       } catch (error) {
         console.warn('Auth bootstrap failed; continuing signed out.', error)
         await clearStoredAuthSession()
@@ -369,9 +394,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     void bootstrap()
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return
+      if (__DEV__) {
+        console.log('[Drape auth] auth state change', {
+          event,
+          hasSession: !!session,
+          userId: session?.user?.id ?? null,
+          role: session?.user?.user_metadata?.role ?? null,
+        })
+      }
       setSession(session)
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+        void logAuthDebugSnapshot(`auth event ${event}`, session)
+      }
     })
 
     return () => {
@@ -535,8 +571,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { error: 'Enter a valid email address.' }
     }
     try {
-      const { error } = await signInWithPasswordResilient(normalizedEmail, password)
+      const { data, error } = await signInWithPasswordResilient(normalizedEmail, password)
       if (!error) {
+        if (data.session) {
+          setSession(data.session)
+          void logAuthDebugSnapshot('password sign-in success', data.session)
+        }
         const roleError = await applyRoleIntent(roleIntent)
         if (roleError) return { error: roleError }
       }
@@ -578,6 +618,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
+      const { data: sessionData } = await supabase.auth.getSession()
+      if (sessionData.session) {
+        setSession(sessionData.session)
+      }
+
       const roleError = await applyRoleIntent(roleIntent)
       if (roleError) return { error: roleError }
 
@@ -610,6 +655,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       })
       if (error) {
         return { error: mapAuthErrorMessage(error.message, 'Apple sign-in completed, but Drapeon could not open your session. Please try again.') }
+      }
+
+      const { data: sessionData } = await supabase.auth.getSession()
+      if (sessionData.session) {
+        setSession(sessionData.session)
       }
 
       const fullNameParts = [
@@ -680,6 +730,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function signOut() {
     const currentUserId = session?.user?.id ?? null
+    if (currentUserId) {
+      try {
+        await supabase.from('push_tokens').delete().eq('user_id', currentUserId)
+      } catch {
+        // Sign-out should still clear local state if push-token cleanup cannot reach Supabase.
+      }
+    }
     const { error } = await supabase.auth.signOut({ scope: 'global' })
     if (error) {
       console.warn('Global sign-out failed; clearing local session on this device.', error.message)
@@ -688,6 +745,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     queryClient.clear()
     await clearPersistedQueryCache()
     await clearUserScopedLocalState(currentUserId)
+    resetAnalytics()
     setSession(null)
   }
 

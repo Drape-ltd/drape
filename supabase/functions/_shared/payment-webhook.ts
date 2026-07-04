@@ -1,3 +1,4 @@
+import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { audit } from './logger.ts'
 import { createWebhookEvent, markWebhookEventProcessed } from './payment-ledger.ts'
 import { createOrRefreshOpsIssue } from './ops-issues.ts'
@@ -72,7 +73,7 @@ export function shouldAlertOnSignatureFailureCount(count: number) {
 }
 
 export async function recordRejectedWebhook(
-  supabase: any,
+  supabase: SupabaseClient,
   input: {
     provider: PaymentProvider
     functionName: string
@@ -188,7 +189,7 @@ function signatureFailureWindowStart() {
 }
 
 async function recordSignatureFailureForSource(
-  supabase: any,
+  supabase: SupabaseClient,
   provider: PaymentProvider,
   functionName: string,
   sourceKey: string,

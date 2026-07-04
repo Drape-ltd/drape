@@ -6,9 +6,12 @@
  * and verification while Drapeon controls the carrier/provider.
  */
 
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getCorsHeaders } from '../_shared/cors.ts'
+import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log } from '../_shared/logger.ts'
 import { normalizeStoredPhone } from '../_shared/phone.ts'
+import { getClientIp, rateLimit } from '../_shared/rateLimit.ts'
 import { sendSmsDirect } from '../_shared/sms.ts'
 
 const FN = 'auth-sms-hook'
@@ -117,6 +120,22 @@ Deno.serve(async (req) => {
   if (!otp) {
     log('warn', FN, 'validation.missing_otp')
     return jsonResponse({ error: 'MISSING_OTP', message: 'Auth SMS payload is missing an OTP.' }, 400, cors)
+  }
+
+  const supabase = createClient(getSupabaseUrl(), getServiceRoleKey())
+  const [phoneLimit, ipLimit] = await Promise.all([
+    rateLimit(supabase, phone, FN, 5, 60 * 60_000),
+    rateLimit(supabase, getClientIp(req), 'auth-sms-hook-ip', 20, 60 * 60_000),
+  ])
+  if (!phoneLimit.allowed || !ipLimit.allowed) {
+    log('warn', FN, 'rate_limit.exceeded', {
+      phoneLimited: !phoneLimit.allowed,
+      ipLimited: !ipLimit.allowed,
+    })
+    return jsonResponse({
+      error: 'RATE_LIMITED',
+      message: 'Too many verification SMS requests. Wait a bit, then try again.',
+    }, 429, cors)
   }
 
   try {

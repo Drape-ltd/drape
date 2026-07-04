@@ -8,7 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import {
@@ -19,6 +19,7 @@ import {
 } from '@/constants/drapeVision'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme'
 import { useFeatureFlags } from '@/lib/feature-flags'
+import { goBackOrReturnToIfNeeded, sanitizeReturnTo } from '@/lib/navigation'
 import { Sentry } from '@/lib/sentry'
 
 type VisionParams = {
@@ -77,7 +78,8 @@ function fallbackRouteForMode(mode: DrapeVisionMode) {
 }
 
 function returnRouteForParams(mode: DrapeVisionMode, params: VisionParams) {
-  if (params.returnTo?.trim()) return params.returnTo
+  const safeReturnTo = sanitizeReturnTo(params.returnTo)
+  if (safeReturnTo) return safeReturnTo
   if (mode === 'customer_scan' && params.orderId?.trim()) return `/(customer)/orders/${params.orderId}`
   if (mode === 'garment_qc' && params.orderId?.trim()) return `/(tailor)/orders/${params.orderId}`
   if (mode === 'tailor_client_scan' && params.diaryId?.trim() && params.diaryId !== 'new') {
@@ -88,7 +90,7 @@ function returnRouteForParams(mode: DrapeVisionMode, params: VisionParams) {
 
 function primaryFallbackTargetForParams(mode: DrapeVisionMode, params: VisionParams) {
   if (mode === 'customer_scan') {
-    const returnTo = params.returnTo?.trim()
+    const returnTo = sanitizeReturnTo(params.returnTo)
     return {
       pathname: '/(customer)/profile/measurements',
       params: returnTo && returnTo !== '/(customer)/profile/measurements' ? { returnTo } : {},
@@ -104,7 +106,8 @@ function primaryFallbackTargetForParams(mode: DrapeVisionMode, params: VisionPar
 
   if (mode === 'garment_qc') {
     if (params.orderId?.trim()) return `/(tailor)/orders/${params.orderId}`
-    if (params.returnTo?.trim()) return params.returnTo
+    const returnTo = sanitizeReturnTo(params.returnTo)
+    if (returnTo) return returnTo
     return '/(tailor)/orders'
   }
 
@@ -114,12 +117,13 @@ function primaryFallbackTargetForParams(mode: DrapeVisionMode, params: VisionPar
 function primaryFallbackLabelForParams(mode: DrapeVisionMode, params: VisionParams) {
   if (mode !== 'garment_qc') return DRAPE_VISION_MODE_META[mode].primaryLabel
   if (params.orderId?.trim()) return 'Return to order'
-  if (params.returnTo?.includes('(tailor)')) return 'Back to dashboard'
+  if (sanitizeReturnTo(params.returnTo)?.includes('(tailor)')) return 'Back to dashboard'
   return 'Open orders'
 }
 
 export default function DrapeVisionRoute() {
   const router = useRouter()
+  const navigation = useNavigation()
   const rawParams = useLocalSearchParams<VisionParams>()
   const params = useMemo(() => ({
     mode: firstParam(rawParams.mode),
@@ -172,7 +176,7 @@ export default function DrapeVisionRoute() {
   }
 
   function openReturnRoute() {
-    router.replace(returnRoute as never)
+    goBackOrReturnToIfNeeded(router, navigation, returnRoute, fallbackRouteForMode(mode) as never)
   }
 
   return (
@@ -209,7 +213,7 @@ export default function DrapeVisionRoute() {
           <Text style={styles.primaryText}>{primaryFallbackLabel}</Text>
           <Feather name="arrow-right" size={18} color={Colors.textInverse} />
         </TouchableOpacity>
-        {params.returnTo?.trim() ? (
+        {sanitizeReturnTo(params.returnTo) ? (
           <TouchableOpacity accessibilityRole="button" onPress={openReturnRoute} style={styles.secondaryButton}>
             <Text style={styles.secondaryText}>Back to previous screen</Text>
           </TouchableOpacity>

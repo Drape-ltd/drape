@@ -19,7 +19,7 @@
  *                                (SHIPBUBBLE_SECRET_KEY is also accepted)
  */
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
@@ -150,7 +150,7 @@ function parseShipbubble(body: any): { trackingNumber: string | null; carrier: s
 }
 
 async function auditDeliveryWebhookEvent(
-  supabase: any,
+  supabase: SupabaseClient,
   event: string,
   severity: 'info' | 'warn' | 'error',
   payload: Record<string, unknown>,

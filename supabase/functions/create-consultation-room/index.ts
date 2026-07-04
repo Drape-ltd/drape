@@ -285,8 +285,10 @@ Deno.serve(async (req) => {
     })
 
     if (!dailyRes.ok) {
-      const errBody = await dailyRes.text()
-      console.error('[create-consultation-room] Daily.co error:', errBody)
+      console.error('[create-consultation-room] Daily.co error', {
+        status: dailyRes.status,
+        contentType: dailyRes.headers.get('content-type'),
+      })
       return returnMessageFallback('DAILY_UNAVAILABLE')
     }
 

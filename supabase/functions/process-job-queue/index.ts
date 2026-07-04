@@ -1,4 +1,4 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { authorizeCronRequest } from '../_shared/cron.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
@@ -22,6 +22,13 @@ import { sendSmsToUser } from '../_shared/sms.ts'
 const FN = 'process-job-queue'
 const DEFAULT_LIMIT = 25
 const PAUSE_VALUES = new Set(['1', 'true', 'yes', 'on'])
+const ALLOWED_JOB_TYPES = new Set<JobType>([
+  'SEND_PUSH',
+  'SEND_SMS',
+  'SEND_ORDER_EVENT_EMAIL',
+  'SEND_ORDER_CONFIRMATION_EMAILS',
+  'CREATE_OPS_ISSUE',
+])
 
 function jsonResponse(body: unknown, status: number, cors: Record<string, string>) {
   return new Response(JSON.stringify(body), {
@@ -33,6 +40,10 @@ function jsonResponse(body: unknown, status: number, cors: Record<string, string
 function backgroundWorkersPaused() {
   const value = Deno.env.get('DRAPE_BACKGROUND_WORKERS_PAUSED')?.trim().toLowerCase()
   return value ? PAUSE_VALUES.has(value) : false
+}
+
+function isAllowedJobType(value: string | null): value is JobType {
+  return !!value && ALLOWED_JOB_TYPES.has(value as JobType)
 }
 
 async function readProcessingOptions(req: Request) {
@@ -49,7 +60,7 @@ async function readProcessingOptions(req: Request) {
     const jobTypes = Array.isArray(payload.jobTypes)
       ? payload.jobTypes
           .map((item) => asString(item))
-          .filter((item): item is JobType => !!item)
+          .filter(isAllowedJobType)
       : null
 
     return { limit, jobTypes: jobTypes && jobTypes.length > 0 ? jobTypes : null }
@@ -84,7 +95,7 @@ function ensurePaymentPhase(value: string | null) {
   throw new Error('Job payload phase must be INITIAL_ORDER, FULFILLMENT, or CONSULTATION')
 }
 
-async function processJob(supabase: any, job: JobRow) {
+async function processJob(supabase: SupabaseClient, job: JobRow) {
   const payload = asRecord(job.payload)
 
   switch (job.job_type) {
@@ -175,7 +186,7 @@ async function processJob(supabase: any, job: JobRow) {
 }
 
 async function reportDeadJob(
-  supabase: any,
+  supabase: SupabaseClient,
   job: JobRow,
   errorMessage: string,
 ) {
@@ -217,7 +228,7 @@ async function reportDeadJob(
   ])
 }
 
-async function runPayoutWatchdog(supabase: any) {
+async function runPayoutWatchdog(supabase: SupabaseClient) {
   try {
     const overdue = await createOverduePayoutIssues(supabase)
     if (overdue.length > 0) {

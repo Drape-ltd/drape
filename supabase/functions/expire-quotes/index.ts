@@ -6,7 +6,7 @@
  * change the same way the rest of the active order system does.
  */
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { authorizeCronRequest } from '../_shared/cron.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl } from '../_shared/env.ts'
@@ -47,7 +47,7 @@ type OrderRow = {
   quote_expires_at: string | null
 }
 
-async function expireQuote(supabase: any, order: OrderRow) {
+async function expireQuote(supabase: SupabaseClient, order: OrderRow) {
   const result = await finalizeOrderTerminal(
     supabase,
     order.id,
@@ -96,7 +96,7 @@ Deno.serve(async (req) => {
     const unauthorized = await authorizeCronRequest(req, FN, cors)
     if (unauthorized) return unauthorized
 
-    const supabase: any = createClient(getSupabaseUrl(), getServiceRoleKey())
+    const supabase: SupabaseClient = createClient(getSupabaseUrl(), getServiceRoleKey())
     const clientIp = getClientIp(req)
     const limit = await rateLimit(
       supabase,

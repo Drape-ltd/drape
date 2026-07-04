@@ -158,7 +158,16 @@ export default function CustomerProfileScreen() {
     ? MEASUREMENT_KEYS.filter((k) => measurements[k] !== null && measurements[k] !== undefined)
         .length
     : 0
-  const measurementProgressLabel = filledCount > 0 ? `${filledCount} fields` : 'Set up'
+  const coreFitReady = measurements
+    ? ['chest', 'waist', 'hips', 'shoulderWidth'].every(
+        (key) => measurements[key as keyof MeasurementProfile] !== null && measurements[key as keyof MeasurementProfile] !== undefined
+      )
+    : false
+  const measurementProgressLabel = coreFitReady
+    ? 'Core ready'
+    : filledCount > 0
+      ? 'In progress'
+      : 'Set up'
   const guidedFitStatus =
     measurementMeta?.latestMeasurementScanStatus === 'TAILOR_REVIEW_REQUIRED'
       ? 'Tailor review pending'

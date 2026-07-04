@@ -95,7 +95,7 @@ export default function TailorTabLayout() {
               testID="tab-dashboard"
               accessibilityRole="button"
               accessibilityLabel="Dashboard tab"
-              onPress={() => router.replace('/(tailor)')}
+              onPress={() => router.navigate('/(tailor)')}
             />
           ),
         }}
@@ -112,7 +112,7 @@ export default function TailorTabLayout() {
               testID="tab-clients"
               accessibilityRole="button"
               accessibilityLabel="Clients tab"
-              onPress={() => router.replace('/(tailor)/clients')}
+              onPress={() => router.navigate('/(tailor)/clients')}
             />
           ),
         }}
@@ -121,6 +121,7 @@ export default function TailorTabLayout() {
         name="orders"
         options={{
           title: 'Orders',
+          popToTopOnBlur: true,
           tabBarIcon: ({ color }) => <Feather name="package" size={25} color={color} />,
           tabBarBadge: pendingCount > 0 ? pendingCount : undefined,
           tabBarBadgeStyle: { backgroundColor: Colors.kanteRust, fontSize: 10, minWidth: 16, height: 16 },
@@ -130,7 +131,7 @@ export default function TailorTabLayout() {
               testID="tab-tailor-orders"
               accessibilityRole="button"
               accessibilityLabel={pendingCount > 0 ? `Orders tab, ${pendingCount} active` : 'Orders tab'}
-              onPress={() => router.replace('/(tailor)/orders')}
+              onPress={() => router.navigate('/(tailor)/orders')}
             />
           ),
         }}
@@ -147,7 +148,7 @@ export default function TailorTabLayout() {
               testID="tab-shop"
               accessibilityRole="button"
               accessibilityLabel="Shop tab"
-              onPress={() => router.replace('/(tailor)/shop')}
+              onPress={() => router.navigate('/(tailor)/shop')}
             />
           ),
         }}
@@ -164,7 +165,7 @@ export default function TailorTabLayout() {
               testID="tab-profile"
               accessibilityRole="button"
               accessibilityLabel="Profile tab"
-              onPress={() => router.replace('/(tailor)/profile')}
+              onPress={() => router.navigate('/(tailor)/profile')}
             />
           ),
         }}

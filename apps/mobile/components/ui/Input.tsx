@@ -20,6 +20,8 @@ interface InputProps extends TextInputProps {
   filterContact?: boolean  // enable real-time contact leakage detection
   rightElement?: React.ReactNode
   required?: boolean
+  showCharacterCount?: boolean
+  characterCountMax?: number
 }
 
 export function Input({
@@ -30,6 +32,8 @@ export function Input({
   filterContact = false,
   rightElement,
   required,
+  showCharacterCount,
+  characterCountMax,
   onChangeText,
   onFocus,
   onBlur,
@@ -54,6 +58,9 @@ export function Input({
   const hasError = !!displayError
   const isPasswordField = secureTextEntry === true
   const resolvedSecureTextEntry = isPasswordField ? !passwordVisible : secureTextEntry
+  const valueLength = typeof props.value === 'string' ? props.value.length : 0
+  const resolvedCharacterMax = characterCountMax ?? props.maxLength
+  const shouldShowCharacterCount = !!showCharacterCount && typeof resolvedCharacterMax === 'number'
 
   return (
     <View style={[styles.container, containerStyle]}>
@@ -103,12 +110,23 @@ export function Input({
           </TouchableOpacity>
         ) : null}
       </View>
-      {displayError ? (
-        <Text style={styles.errorText} accessibilityRole="alert">
-          {displayError}
-        </Text>
-      ) : hint ? (
-        <Text style={styles.hint}>{hint}</Text>
+      {displayError || hint || shouldShowCharacterCount ? (
+        <View style={styles.supportRow}>
+          {displayError ? (
+            <Text style={styles.errorText} accessibilityRole="alert">
+              {displayError}
+            </Text>
+          ) : hint ? (
+            <Text style={styles.hint}>{hint}</Text>
+          ) : (
+            <View />
+          )}
+          {shouldShowCharacterCount ? (
+            <Text style={[styles.counter, hasError && styles.counterError]}>
+              {valueLength}/{resolvedCharacterMax}
+            </Text>
+          ) : null}
+        </View>
       ) : null}
     </View>
   )
@@ -153,15 +171,29 @@ const styles = StyleSheet.create({
     marginRight: -Spacing.sm,
   },
   errorText: {
+    flex: 1,
     fontFamily: Fonts.body,
     fontSize: 13,
     color: Colors.error,
     lineHeight: 18,
   },
   hint: {
+    flex: 1,
     fontFamily: Fonts.body,
     fontSize: 13,
     color: Colors.midGrey,
     lineHeight: 18,
   },
+  supportRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+  },
+  counter: {
+    fontFamily: Fonts.body,
+    fontSize: 12,
+    color: Colors.midGrey,
+    lineHeight: 18,
+  },
+  counterError: { color: Colors.error },
 })

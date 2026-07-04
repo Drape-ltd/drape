@@ -1,4 +1,4 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getSupabaseUrl, isTrustedServiceRoleToken } from '../_shared/env.ts'
 import { audit, log } from '../_shared/logger.ts'
@@ -51,7 +51,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const supabase: any = createClient(getSupabaseUrl(), getServiceRoleKey())
+    const supabase: SupabaseClient = createClient(getSupabaseUrl(), getServiceRoleKey())
     const clientIp = getClientIp(req)
     const limit = await rateLimit(
       supabase,

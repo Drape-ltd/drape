@@ -124,6 +124,11 @@ Important guardrail: never run `supabase db push` directly against production. R
 | `20260509000003_sync_public_user_email_after_auth_change.sql` | PENDING_PROD | Launch-critical account settings guard. Syncs `public.users.email` only after confirmed Supabase Auth email changes. |
 | `20260509000004_schedule_production_stall_escalation.sql` | PENDING_PROD | Launch-critical fulfillment safety guard. Schedules `escalate-production-stalls` hourly once the function is deployed and Vault cron secrets exist. |
 | `20260509000008_service_health_rpc.sql` | PENDING_PROD | Service observability helper. Lets protected readiness checks inspect required cron jobs without exposing cron schema. |
-| `20260502000003_drape_vision_measurement_scan_methods.sql` | HOLD_FEATURE | Drape Vision is not shipping at launch. File is marked with `HOLD_FEATURE`. |
-| `20260503000001_drape_vision_scan_logs.sql` | HOLD_FEATURE | Drape Vision is not shipping at launch. File is marked with `HOLD_FEATURE`. |
-| `20260503000002_drape_vision_ground_truth.sql` | HOLD_FEATURE | Drape Vision is not shipping at launch. File is marked with `HOLD_FEATURE`. |
+| `20260702000001_testflight_feedback_and_cascade_hardening.sql` | APPLIED_PROD | TestFlight security hardening applied on 2026-07-02. Adds product feedback RLS, bounded JSON/profile fields, safer deletion FKs, measurement scan audit logging, invite expiry, and atomic collection-code attempts. |
+| `20260702000002_schedule_account_deletion_finalizer.sql` | APPLIED_PROD | Account deletion finalizer schedule applied on 2026-07-02. Requires Vault cron secrets to invoke `finalize-account-deletions`. |
+| `20260702000003_public_media_review_gate.sql` | APPLIED_PROD | Applied on 2026-07-02. Re-queued public media now resets to pending moderation so same-path overwrites cannot inherit previous approval. |
+| `20260502000003_drape_vision_measurement_scan_methods.sql` | APPLIED_PROD | Existing Drape Vision capture-method support is present in production. |
+| `20260503000001_drape_vision_scan_logs.sql` | APPLIED_PROD | Existing Drape Vision scan-log support is present in production. |
+| `20260503000002_drape_vision_ground_truth.sql` | APPLIED_PROD | Existing Drape Vision ground-truth support is present in production. |
+| `20260627000001_drape_vision_scorecard_rows.sql` | APPLIED_PROD | Applied on 2026-07-02 with the TestFlight security push. Adds RLS-protected Vision QA scorecard rows. |
+| `20260701000001_drape_vision_specialist_scan_method.sql` | APPLIED_PROD | Applied on 2026-07-02 with the TestFlight security push. Adds specialist scan capture method support. |

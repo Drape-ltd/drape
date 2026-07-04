@@ -1,3 +1,5 @@
+import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
 type PaymentProvider = 'STRIPE' | 'PAYSTACK'
 
 type PaymentFailurePhase = 'INITIAL_ORDER' | 'CONSULTATION' | 'FULFILLMENT'
@@ -18,7 +20,7 @@ function paymentFailedStageNote(orderKind: string | null | undefined) {
 }
 
 export async function markInitialOrderPaymentFailed(
-  supabase: any,
+  supabase: SupabaseClient,
   order: OrderForPaymentFailure,
   input: {
     provider: PaymentProvider

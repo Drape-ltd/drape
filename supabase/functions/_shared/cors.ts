@@ -26,6 +26,10 @@ const DEV_ALLOWED_ORIGINS = new Set([
 ])
 
 const ALLOW_HEADERS = 'authorization, x-client-info, apikey, content-type'
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+}
 
 function isDevProject() {
   try {
@@ -50,7 +54,10 @@ export function getCorsHeaders(req: Request): Record<string, string> {
 
   // Native mobile: no Origin header — return minimal headers (no ACAO needed)
   if (!origin) {
-    return { 'Access-Control-Allow-Headers': ALLOW_HEADERS }
+    return {
+      ...SECURITY_HEADERS,
+      'Access-Control-Allow-Headers': ALLOW_HEADERS,
+    }
   }
 
   // Browser: return the actual origin back only if it is allowlisted
@@ -59,6 +66,7 @@ export function getCorsHeaders(req: Request): Record<string, string> {
       ? origin
       : 'https://drapeon.co'
   return {
+    ...SECURITY_HEADERS,
     'Access-Control-Allow-Origin': allowedOrigin,
     'Access-Control-Allow-Headers': ALLOW_HEADERS,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',

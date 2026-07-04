@@ -322,8 +322,12 @@ function makeStyles(palette: WelcomePalette) {
   },
   signInButton: {
     alignItems: 'center',
+    backgroundColor: palette.surface,
+    borderColor: palette.line,
+    borderRadius: Radius.xl,
+    borderWidth: 1,
     justifyContent: 'center',
-    minHeight: 42,
+    minHeight: 56,
   },
   signInLabel: {
     color: palette.greenDark,

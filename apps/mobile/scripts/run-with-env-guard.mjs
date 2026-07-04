@@ -86,7 +86,7 @@ const env = {
 
 const supabaseUrl = env.EXPO_PUBLIC_SUPABASE_URL?.trim() ?? ''
 const supabaseKey =
-  env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim() ?? env.EXPO_PUBLIC_SUPABASE_ANON_KEY?.trim() ?? ''
+  env.EXPO_PUBLIC_SUPABASE_ANON_KEY?.trim() ?? env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim() ?? ''
 const supabaseEnv = env.EXPO_PUBLIC_SUPABASE_ENV?.trim().toLowerCase() ?? ''
 const declaredProjectRef = env.EXPO_PUBLIC_SUPABASE_PROJECT_REF?.trim() ?? ''
 const actualProjectRef = getSupabaseProjectRef(supabaseUrl)

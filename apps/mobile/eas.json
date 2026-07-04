@@ -31,6 +31,22 @@
       "ios": { "simulator": false },
       "android": { "buildType": "apk" }
     },
+    "testflight": {
+      "distribution": "store",
+      "channel": "testflight",
+      "node": "20.19.6",
+      "env": {
+        "EXPO_PUBLIC_APP_VARIANT": "testflight",
+        "EXPO_PUBLIC_SUPABASE_ENV": "preview",
+        "EXPO_PUBLIC_SUPABASE_PROJECT_REF": "pqptfuqogvrajozfsqzi",
+        "EXPO_PUBLIC_SITE_URL": "https://drapeon.co",
+        "EXPO_PUBLIC_PROJECT_ID": "4729d6f8-273a-43a9-abdf-6e4ca31ce83d",
+        "SENTRY_DISABLE_AUTO_UPLOAD": "true"
+      },
+      "ios": { "simulator": false },
+      "android": { "buildType": "app-bundle" },
+      "autoIncrement": true
+    },
     "production": {
       "channel": "production",
       "node": "20.19.6",
@@ -46,6 +62,11 @@
     }
   },
   "submit": {
+    "testflight": {
+      "ios": {
+        "ascAppId": "6784264202"
+      }
+    },
     "production": {
       "ios": {
         "ascAppId": "6784264202"

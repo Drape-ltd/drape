@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useAuth } from '@/lib/auth'
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
+import { ChoiceSheet } from '@/components/ui'
 import { Colors, Fonts, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme'
 
 type PreviewState =
@@ -46,6 +47,7 @@ export default function GroupInviteScreen() {
   const [preview, setPreview] = useState<PreviewState>({ status: 'loading' })
   const [profiles, setProfiles] = useState<MeasurementProfile[]>([])
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null)
+  const [profileSheetOpen, setProfileSheetOpen] = useState(false)
   const [loadingProfiles, setLoadingProfiles] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
@@ -271,28 +273,20 @@ export default function GroupInviteScreen() {
           {loadingProfiles ? (
             <ActivityIndicator color={Colors.needleGreen} />
           ) : hasProfiles ? (
-            <View style={styles.profileList}>
-              {profiles.map((profile) => (
-                <TouchableOpacity
-                  key={profile.id}
-                  style={[
-                    styles.profileOption,
-                    selectedProfileId === profile.id && styles.profileOptionSelected,
-                  ]}
-                  onPress={() => setSelectedProfileId(profile.id)}
-                >
-                  <View>
-                    <Text style={styles.profileTitle}>{profile.label}</Text>
-                    <Text style={styles.profileSub}>
-                      {profile.relationship ?? 'Profile'}{profile.is_default ? ' · default' : ''}
-                    </Text>
-                  </View>
-                  {selectedProfileId === profile.id ? (
-                    <Feather name="check-circle" size={20} color={Colors.needleGreen} />
-                  ) : null}
-                </TouchableOpacity>
-              ))}
-            </View>
+            <TouchableOpacity
+              style={styles.profileOption}
+              onPress={() => setProfileSheetOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Choose measurement profile"
+            >
+              <View>
+                <Text style={styles.profileTitle}>{selectedProfile?.label ?? 'Choose profile'}</Text>
+                <Text style={styles.profileSub}>
+                  {selectedProfile?.relationship ?? 'Profile'}{selectedProfile?.is_default ? ' · default' : ''}
+                </Text>
+              </View>
+              <Feather name="chevron-down" size={20} color={Colors.midGrey} />
+            </TouchableOpacity>
           ) : (
             <View style={styles.emptyBox}>
               <Text style={styles.copy}>
@@ -336,6 +330,25 @@ export default function GroupInviteScreen() {
           </View>
         )}
       </ScrollView>
+      <ChoiceSheet
+        visible={profileSheetOpen}
+        title="Choose measurements"
+        subtitle="Attach the profile that belongs to this group order member."
+        options={profiles.map((profile) => ({
+          value: profile.id,
+          title: profile.is_default ? `${profile.label} · default` : profile.label,
+          body: profile.updated_at
+            ? `Updated ${new Date(profile.updated_at).toLocaleDateString()}`
+            : profile.relationship ?? 'Saved profile',
+          icon: profile.relationship === 'SELF' ? 'user' : 'users',
+        }))}
+        selectedValue={selectedProfileId}
+        onClose={() => setProfileSheetOpen(false)}
+        onSelect={(value) => {
+          setSelectedProfileId(value)
+          setProfileSheetOpen(false)
+        }}
+      />
     </SafeAreaView>
   )
 }

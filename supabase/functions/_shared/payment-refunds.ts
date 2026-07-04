@@ -1,3 +1,4 @@
+import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { audit } from './logger.ts'
 import { markPaymentAttemptStatus } from './payment-ledger.ts'
 import { createOrRefreshOpsIssue } from './ops-issues.ts'
@@ -105,7 +106,7 @@ function appendRefundProviderResponse(input: {
 }
 
 async function recordRefundOnAttempt(
-  supabase: any,
+  supabase: SupabaseClient,
   input: {
     attempt: RefundablePaymentAttemptRow
     refundAmount: number
@@ -160,7 +161,7 @@ async function recordRefundOnAttempt(
 }
 
 async function loadRefundableAttempts(
-  supabase: any,
+  supabase: SupabaseClient,
   input: {
     orderId: string
     allowedPhases: PaymentPhase[]
@@ -181,7 +182,7 @@ async function loadRefundableAttempts(
 }
 
 export async function refundSettledOrderPayments(
-  supabase: any,
+  supabase: SupabaseClient,
   input: {
     orderId: string
     reason?: string | null
@@ -329,7 +330,7 @@ export async function refundSettledOrderPayments(
 }
 
 export async function partiallyRefundOrderPayments(
-  supabase: any,
+  supabase: SupabaseClient,
   input: {
     orderId: string
     amount: number

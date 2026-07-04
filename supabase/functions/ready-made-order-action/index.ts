@@ -1,4 +1,4 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
@@ -89,7 +89,7 @@ function jsonError(cors: HeadersInit, status: number, message: string, extra: Re
 }
 
 async function resolveCheckoutPricing(input: {
-  supabase: any
+  supabase: SupabaseClient
   callerId: string
   sellerItemId: string
   quantity: number

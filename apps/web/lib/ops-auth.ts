@@ -12,8 +12,10 @@ import { cookies, headers } from 'next/headers'
 import type { OpsRole } from './ops-console'
 
 export const OPS_SESSION_COOKIE = 'drape_ops_session'
+export const OPS_DASHBOARD_TOKEN_MIN_LENGTH = 32
 
 type OpsAccessMode = 'bootstrap-token' | 'cloudflare-access'
+type OpsDashboardTokenStatus = 'missing' | 'weak' | 'ready'
 
 export type OpsSession = {
   allowed: boolean
@@ -61,7 +63,25 @@ let cachedAccessCerts:
 
 export function getOpsDashboardToken() {
   const token = process.env.OPS_DASHBOARD_TOKEN?.trim()
-  return token && token.length > 0 ? token : null
+  return token && token.length > 0 && getOpsDashboardTokenStatus() === 'ready' ? token : null
+}
+
+export function getOpsDashboardTokenStatus(): OpsDashboardTokenStatus {
+  const token = process.env.OPS_DASHBOARD_TOKEN?.trim()
+  if (!token) return 'missing'
+
+  const normalized = token.toLowerCase()
+  if (
+    token.length < OPS_DASHBOARD_TOKEN_MIN_LENGTH ||
+    normalized === 'your_internal_ops_token_here' ||
+    normalized.includes('change_me') ||
+    normalized.includes('changeme') ||
+    normalized.includes('password')
+  ) {
+    return 'weak'
+  }
+
+  return 'ready'
 }
 
 export function hasOpsDashboardToken() {
@@ -119,9 +139,12 @@ export function getOpsBootstrapRole(): OpsRole {
 export function getOpsAccessMode(): OpsAccessMode | 'unconfigured' {
   const teamDomain = normalizeHost(process.env.CF_ACCESS_TEAM_DOMAIN)
   const audiences = parseCsv(process.env.CF_ACCESS_AUD)
+  const bootstrapAllowed =
+    process.env.NODE_ENV !== 'production' ||
+    process.env.OPS_ALLOW_BOOTSTRAP_IN_PRODUCTION === '1'
 
   if (teamDomain && audiences.size > 0) return 'cloudflare-access'
-  if (hasOpsDashboardToken()) return 'bootstrap-token'
+  if (bootstrapAllowed && hasOpsDashboardToken()) return 'bootstrap-token'
   return 'unconfigured'
 }
 

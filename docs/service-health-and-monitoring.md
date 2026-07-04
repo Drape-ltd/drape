@@ -82,6 +82,7 @@ The app maintenance cron jobs are expected to call:
 - `escalate-production-stalls` hourly
 - `release-order-payouts` hourly at `:15`
 - `auto-release` daily at 09:00
+- `finalize-account-deletions` daily at 03:30
 - `process-notification-jobs` every minute for push/SMS/email delivery
 - `process-ops-jobs` every 5 minutes for internal issue creation
 

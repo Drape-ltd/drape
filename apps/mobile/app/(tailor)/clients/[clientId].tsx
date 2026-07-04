@@ -632,18 +632,31 @@ export default function ClientDetailScreen() {
                   </View>
                 )}
 
-                {/* Grid of body measurements */}
-                <View style={styles.measGrid}>
-                  {MEAS_LABELS.map(({ key, label }) => {
+                {/* Grid of present body measurements */}
+                {MEAS_LABELS.some(({ key }) => m[key] != null) ? (
+                  <View style={styles.measGrid}>
+                  {MEAS_LABELS.filter(({ key }) => m[key] != null).map(({ key, label }) => {
                     const val = m[key] as number | undefined
                     return (
                       <View key={key} style={styles.measItem}>
-                        <Text style={styles.measValue}>{val ? `${val}${unit}` : 'Not added'}</Text>
+                        <Text style={styles.measValue}>{val ? `${val}${unit}` : 'Added'}</Text>
                         <Text style={styles.measLabel}>{label}</Text>
                       </View>
                     )
                   })}
-                </View>
+                  </View>
+                ) : (
+                  <View style={styles.emptyMeasureRow}>
+                    <Text style={styles.emptyMeasureText}>No saved measurements yet.</Text>
+                    <TouchableOpacity
+                      onPress={() => router.push(`/(tailor)/clients/diary/new`)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Open client diary"
+                    >
+                      <Text style={styles.emptyMeasureAction}>Open diary</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
 
                 {/* Fit flags */}
                 {fitFlags.length > 0 && (
@@ -909,6 +922,18 @@ const styles = StyleSheet.create({
   },
   measValue: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.ink },
   measLabel: { fontSize: FontSize.xs, color: Colors.midGrey, marginTop: 2 },
+  emptyMeasureRow: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.lightGrey,
+    paddingTop: Spacing.md,
+    gap: Spacing.xs,
+  },
+  emptyMeasureText: { fontSize: FontSize.sm, color: Colors.inkLight },
+  emptyMeasureAction: {
+    fontSize: FontSize.sm,
+    color: Colors.needleGreen,
+    fontWeight: FontWeight.semibold,
+  },
   fitFlagWrap: { gap: Spacing.xs, borderTopWidth: 1, borderTopColor: Colors.lightGrey, paddingTop: Spacing.md },
   fitFlagsHeader: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.midGrey, textTransform: 'uppercase', letterSpacing: 0.5 },
   fitFlagChip: {

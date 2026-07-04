@@ -1,4 +1,4 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getCorsHeaders } from '../_shared/cors.ts'
 import { getServiceRoleKey, getStripeWebhookSecrets, getSupabaseUrl } from '../_shared/env.ts'
 import { log, audit } from '../_shared/logger.ts'
@@ -88,7 +88,7 @@ function isStripeTransferObject(value: unknown): value is StripeTransferObject {
   return !!value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string'
 }
 
-async function findPayoutForStripeTransfer(supabase: any, transfer: StripeTransferObject) {
+async function findPayoutForStripeTransfer(supabase: SupabaseClient, transfer: StripeTransferObject) {
   const payoutId =
     typeof transfer.metadata?.payout_id === 'string' && transfer.metadata.payout_id.trim().length > 0
       ? transfer.metadata.payout_id.trim()
@@ -119,7 +119,7 @@ async function findPayoutForStripeTransfer(supabase: any, transfer: StripeTransf
 }
 
 async function recordProviderPayoutFailure(
-  supabase: any,
+  supabase: SupabaseClient,
   input: {
     payoutId: string
     orderId: string | null
@@ -170,7 +170,7 @@ async function recordProviderPayoutFailure(
   }
 }
 
-async function findOrderForPaymentIntent(supabase: any, paymentIntent: StripePaymentIntent) {
+async function findOrderForPaymentIntent(supabase: SupabaseClient, paymentIntent: StripePaymentIntent) {
   const metadataOrderId =
     typeof paymentIntent.metadata?.order_id === 'string' && paymentIntent.metadata.order_id.trim().length > 0
       ? paymentIntent.metadata.order_id.trim()
@@ -234,7 +234,7 @@ function paymentPhaseForIntent(order: OrderRow, paymentIntent: StripePaymentInte
 }
 
 async function markMaterialAdvancePayment(
-  supabase: any,
+  supabase: SupabaseClient,
   order: OrderRow,
   paymentIntent: StripePaymentIntent,
   status: 'SUCCEEDED' | 'FAILED' | 'CANCELED',
@@ -328,7 +328,7 @@ async function markMaterialAdvancePayment(
 
 type OrderPaymentPhase = Exclude<PaymentPhase, 'MATERIAL_ADVANCE'>
 
-async function markOrderConfirmed(supabase: any, order: OrderRow, paymentIntent: StripePaymentIntent, phase: OrderPaymentPhase) {
+async function markOrderConfirmed(supabase: SupabaseClient, order: OrderRow, paymentIntent: StripePaymentIntent, phase: OrderPaymentPhase) {
   if (phase === 'INITIAL_ORDER' && order.stage === 'CONFIRMED') return false
   if (phase === 'FULFILLMENT' && order.fulfillment_payment_paid_at) return false
 
@@ -581,7 +581,7 @@ Deno.serve(async (req) => {
     return new Response('Method not allowed', { status: 405, headers: cors })
   }
 
-  const supabase: any = createClient(getSupabaseUrl(), getServiceRoleKey())
+  const supabase: SupabaseClient = createClient(getSupabaseUrl(), getServiceRoleKey())
   const clientIp = getClientIp(req)
   const limit = await rateLimit(
     supabase,

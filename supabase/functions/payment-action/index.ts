@@ -1,4 +1,4 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { getAuthUser } from '../_shared/auth.ts'
 import { checkRateLimit, rateLimitExceededResponse } from '../_shared/rateLimit.ts'
 import { getCorsHeaders } from '../_shared/cors.ts'
@@ -126,7 +126,7 @@ function buildPaystackReference(order: OrderRow, phase: PaymentPhase) {
 }
 
 async function buildPaystackReferenceForNewAttempt(
-  supabase: any,
+  supabase: SupabaseClient,
   order: OrderRow,
   phase: PaymentPhase,
 ) {
@@ -229,7 +229,7 @@ function providerFailureMessage(provider: PaymentProvider, _currency: OrderCurre
 }
 
 async function recordPaymentProviderEvent(
-  supabase: any,
+  supabase: SupabaseClient,
   input: {
     provider: PaymentProvider
     action: 'prepare-payment' | 'confirm-payment'
@@ -258,7 +258,7 @@ async function recordPaymentProviderEvent(
 }
 
 async function auditPaymentBlocked(
-  supabase: any,
+  supabase: SupabaseClient,
   callerId: string,
   order: Pick<OrderRow, 'id' | 'stage' | 'order_kind' | 'delivery_method' | 'payment_provider'>,
   reason: string,
@@ -433,7 +433,7 @@ function resolveConfirmPhase(order: OrderRow, paymentIntentId?: string) {
 }
 
 async function finalizeSuccessfulPayment(
-  supabase: any,
+  supabase: SupabaseClient,
   order: OrderRow,
   callerId: string,
   provider: PaymentProvider,
@@ -846,7 +846,7 @@ Deno.serve(async (req) => {
       return jsonError(cors, 400, 'Check the payment details and try again.')
     }
 
-    const supabase: any = createClient(getSupabaseUrl(), getServiceRoleKey())
+    const supabase: SupabaseClient = createClient(getSupabaseUrl(), getServiceRoleKey())
 
     const allowed = await checkRateLimit(supabase, `${FN}:${caller.id}`, 3600, 20)
     if (!allowed) {

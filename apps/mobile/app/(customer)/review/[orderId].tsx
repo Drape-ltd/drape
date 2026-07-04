@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert,
   KeyboardAvoidingView, Platform,
@@ -8,6 +8,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { capture } from '@/lib/analytics'
+import { promptProductFeedback } from '@/lib/productFeedback'
 import { Sentry } from '@/lib/sentry'
 import { referToTailor } from '@/lib/invite'
 import { isLikelyConnectivityIssue, isMachineErrorCodeMessage, readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
@@ -74,8 +75,33 @@ export default function ReviewScreen() {
   const [submitting, setSubmitting] = useState(false)
   const [skipping, setSkipping] = useState(false)
   const [submitError, setSubmitError] = useState('')
+  const feedbackPromptedRef = useRef(false)
 
-  function goToCompletedOrders() {
+  function promptOrderCompletionFeedbackOnce(reason: 'review_submitted' | 'review_skipped') {
+    if (userId && !feedbackPromptedRef.current) {
+      feedbackPromptedRef.current = true
+      setTimeout(() => {
+        promptProductFeedback({
+          userId,
+          context: 'order_completed',
+          title: 'How was Drapeon?',
+          message: 'Quick TestFlight check: did completing this order feel clear?',
+          orderId,
+          metadata: {
+            reason,
+            tailor_review_rating: rating || null,
+            skipped_tailor_review: reason === 'review_skipped',
+            tag_count: tags.length,
+          },
+        })
+      }, 450)
+    }
+  }
+
+  function goToCompletedOrders(reason?: 'review_submitted' | 'review_skipped') {
+    if (reason) {
+      promptOrderCompletionFeedbackOnce(reason)
+    }
     router.replace({ pathname: '/(customer)/orders', params: { tab: 'completed' } })
   }
 
@@ -319,7 +345,7 @@ export default function ReviewScreen() {
         'Review received',
         'Your review was saved. It may take a little longer to appear publicly while Drapeon checks the order context.',
       )
-      goToCompletedOrders()
+      goToCompletedOrders('review_submitted')
     } else if (rating >= 4 && tailorProfileId) {
       Alert.alert(
         'Glad it went well!',
@@ -329,14 +355,14 @@ export default function ReviewScreen() {
             text: 'Share',
             onPress: () => {
               referToTailor(tailorProfileId, tailorName, user?.id ?? '')
-              goToCompletedOrders()
+              goToCompletedOrders('review_submitted')
             },
           },
-          { text: 'Maybe later', onPress: goToCompletedOrders },
+          { text: 'Maybe later', onPress: () => goToCompletedOrders('review_submitted') },
         ]
       )
     } else {
-      goToCompletedOrders()
+      goToCompletedOrders('review_submitted')
     }
   }
 
@@ -372,7 +398,7 @@ export default function ReviewScreen() {
       return
     }
     setSkipping(false)
-    goToCompletedOrders()
+    goToCompletedOrders('review_skipped')
   }
 
   const displayRating = hovered || rating
@@ -406,7 +432,7 @@ export default function ReviewScreen() {
             <TouchableOpacity style={styles.retryBtn} onPress={() => void loadOrderSummary()}>
               <Text style={styles.retryBtnText}>Try again</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.secondaryBtn} onPress={goToCompletedOrders}>
+            <TouchableOpacity style={styles.secondaryBtn} onPress={() => goToCompletedOrders()}>
               <Text style={styles.secondaryBtnText}>Open completed orders</Text>
             </TouchableOpacity>
           </View>

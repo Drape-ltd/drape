@@ -22,6 +22,7 @@ import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { isLikelyConnectivityIssue, readFunctionErrorMessage } from '@/lib/function-errors'
 import { Sentry } from '@/lib/sentry'
+import { ChoiceSheet } from '@/components/ui'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -29,6 +30,7 @@ type MeasurementUnit = 'cm' | 'in'
 type Gender = 'MALE' | 'FEMALE' | 'PREFER_NOT_TO_SAY' | ''
 type EventType = 'WEDDING' | 'CASUAL' | 'ASOEBI' | 'FORMAL' | 'OTHER' | ''
 type MeasuredLocation = 'SHOP' | 'CUSTOMER_HOME' | 'EVENT'
+type DiaryMeasurementModuleKey = 'lengths' | 'upper' | 'lower'
 
 interface DiaryForm {
   fullName: string
@@ -133,6 +135,32 @@ const EMPTY_FORM: DiaryForm = {
   measuredAt: new Date(), measuredLocation: 'SHOP',
 }
 
+const DIARY_MEASUREMENT_MODULES: Array<{
+  value: DiaryMeasurementModuleKey
+  title: string
+  body: string
+  icon: keyof typeof Feather.glyphMap
+}> = [
+  {
+    value: 'lengths',
+    title: 'Lengths',
+    body: 'Sleeve, trouser length, inseam, and back length.',
+    icon: 'maximize-2',
+  },
+  {
+    value: 'upper',
+    title: 'Upper body detail',
+    body: 'Neck, bicep, wrist, and under bust.',
+    icon: 'watch',
+  },
+  {
+    value: 'lower',
+    title: 'Lower body detail',
+    body: 'Thigh and ankle or cuff measurements.',
+    icon: 'align-justify',
+  },
+]
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function DiaryEntryScreen() {
@@ -159,6 +187,8 @@ export default function DiaryEntryScreen() {
   const [loading, setLoading] = useState(!isNew)
   const [showDatePicker, setShowDatePicker] = useState(false)
   const [fetchError, setFetchError] = useState(false)
+  const [measurementModuleSheetOpen, setMeasurementModuleSheetOpen] = useState(false)
+  const [visibleMeasurementModules, setVisibleMeasurementModules] = useState<DiaryMeasurementModuleKey[]>([])
 
   function goBack() {
     goBackOrFallback(router, navigation, '/(tailor)/clients')
@@ -179,6 +209,28 @@ export default function DiaryEntryScreen() {
         returnTo: `/(tailor)/clients/diary/${diaryId}`,
       },
     } as never)
+  }
+
+  function toggleMeasurementModule(moduleKey: DiaryMeasurementModuleKey) {
+    setVisibleMeasurementModules((previous) =>
+      previous.includes(moduleKey)
+        ? previous.filter((key) => key !== moduleKey)
+        : [...previous, moduleKey]
+    )
+  }
+
+  function hasModuleValue(moduleKey: DiaryMeasurementModuleKey) {
+    if (moduleKey === 'lengths') {
+      return !!(form.sleeve || form.trouserLength || form.inseam || form.backLength)
+    }
+    if (moduleKey === 'upper') {
+      return !!(form.neck || form.bicep || form.wrist || form.underBust)
+    }
+    return !!(form.thigh || form.ankle)
+  }
+
+  function showMeasurementModule(moduleKey: DiaryMeasurementModuleKey) {
+    return visibleMeasurementModules.includes(moduleKey) || hasModuleValue(moduleKey)
   }
 
   const loadEntry = useCallback(async () => {
@@ -609,22 +661,66 @@ export default function DiaryEntryScreen() {
                 onChange={(v) => set('unit', v as MeasurementUnit)}
               />
             </Field>
-            <View style={styles.measureGrid}>
+            <View style={styles.measureModuleCard}>
+              <View style={styles.measureModuleHeader}>
+                <View style={styles.measureModuleIcon}>
+                  <Feather name="target" size={16} color={Colors.needleGreen} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.measureModuleTitle}>Core body measurements</Text>
+                  <Text style={styles.measureModuleSub}>Start here for most garments.</Text>
+                </View>
+              </View>
+              <View style={styles.measureGrid}>
               <MeasureField label="Chest" value={form.chest} unit={form.unit} onChange={(v) => set('chest', v)} />
               <MeasureField label="Shoulder" value={form.shoulder} unit={form.unit} onChange={(v) => set('shoulder', v)} />
-              <MeasureField label="Sleeve" value={form.sleeve} unit={form.unit} onChange={(v) => set('sleeve', v)} />
               <MeasureField label="Waist" value={form.waist} unit={form.unit} onChange={(v) => set('waist', v)} />
               <MeasureField label="Hip" value={form.hip} unit={form.unit} onChange={(v) => set('hip', v)} />
-              <MeasureField label="Trouser length" value={form.trouserLength} unit={form.unit} onChange={(v) => set('trouserLength', v)} />
-              <MeasureField label="Neck" value={form.neck} unit={form.unit} onChange={(v) => set('neck', v)} />
-              <MeasureField label="Thigh" value={form.thigh} unit={form.unit} onChange={(v) => set('thigh', v)} />
-              <MeasureField label="Inseam" value={form.inseam} unit={form.unit} onChange={(v) => set('inseam', v)} />
-              <MeasureField label="Ankle / cuff" value={form.ankle} unit={form.unit} onChange={(v) => set('ankle', v)} />
-              <MeasureField label="Bicep" value={form.bicep} unit={form.unit} onChange={(v) => set('bicep', v)} />
-              <MeasureField label="Wrist" value={form.wrist} unit={form.unit} onChange={(v) => set('wrist', v)} />
-              <MeasureField label="Back length" value={form.backLength} unit={form.unit} onChange={(v) => set('backLength', v)} />
-              <MeasureField label="Under bust" value={form.underBust} unit={form.unit} onChange={(v) => set('underBust', v)} />
+              </View>
             </View>
+            <TouchableOpacity
+              style={styles.addModuleRow}
+              onPress={() => setMeasurementModuleSheetOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Add measurement module"
+            >
+              <View>
+                <Text style={styles.addModuleTitle}>Add garment detail</Text>
+                <Text style={styles.addModuleSub}>Choose lengths, upper body, or lower body fields.</Text>
+              </View>
+              <Feather name="plus-circle" size={20} color={Colors.needleGreen} />
+            </TouchableOpacity>
+            {showMeasurementModule('lengths') ? (
+              <View style={styles.measureModuleCard}>
+                <Text style={styles.measureModuleTitle}>Lengths</Text>
+                <View style={styles.measureGrid}>
+                  <MeasureField label="Sleeve" value={form.sleeve} unit={form.unit} onChange={(v) => set('sleeve', v)} />
+                  <MeasureField label="Trouser length" value={form.trouserLength} unit={form.unit} onChange={(v) => set('trouserLength', v)} />
+                  <MeasureField label="Inseam" value={form.inseam} unit={form.unit} onChange={(v) => set('inseam', v)} />
+                  <MeasureField label="Back length" value={form.backLength} unit={form.unit} onChange={(v) => set('backLength', v)} />
+                </View>
+              </View>
+            ) : null}
+            {showMeasurementModule('upper') ? (
+              <View style={styles.measureModuleCard}>
+                <Text style={styles.measureModuleTitle}>Upper body detail</Text>
+                <View style={styles.measureGrid}>
+                  <MeasureField label="Neck" value={form.neck} unit={form.unit} onChange={(v) => set('neck', v)} />
+                  <MeasureField label="Bicep" value={form.bicep} unit={form.unit} onChange={(v) => set('bicep', v)} />
+                  <MeasureField label="Wrist" value={form.wrist} unit={form.unit} onChange={(v) => set('wrist', v)} />
+                  <MeasureField label="Under bust" value={form.underBust} unit={form.unit} onChange={(v) => set('underBust', v)} />
+                </View>
+              </View>
+            ) : null}
+            {showMeasurementModule('lower') ? (
+              <View style={styles.measureModuleCard}>
+                <Text style={styles.measureModuleTitle}>Lower body detail</Text>
+                <View style={styles.measureGrid}>
+                  <MeasureField label="Thigh" value={form.thigh} unit={form.unit} onChange={(v) => set('thigh', v)} />
+                  <MeasureField label="Ankle / cuff" value={form.ankle} unit={form.unit} onChange={(v) => set('ankle', v)} />
+                </View>
+              </View>
+            ) : null}
             {errors.measurements && <Text style={styles.errorText}>{errors.measurements}</Text>}
           </Section>
           </View>
@@ -763,6 +859,18 @@ export default function DiaryEntryScreen() {
           onChange={onDateChange}
         />
       )}
+      <ChoiceSheet
+        visible={measurementModuleSheetOpen}
+        title="Add measurement detail"
+        subtitle="Choose the fields this garment or fitting session needs."
+        options={DIARY_MEASUREMENT_MODULES}
+        selectedValues={visibleMeasurementModules}
+        multiple
+        doneLabel="Use selected"
+        onClose={() => setMeasurementModuleSheetOpen(false)}
+        onDone={() => setMeasurementModuleSheetOpen(false)}
+        onSelect={(value) => toggleMeasurementModule(value as DiaryMeasurementModuleKey)}
+      />
       {showDatePicker && Platform.OS === 'ios' && (
         <Modal transparent animationType="slide" visible={showDatePicker} onRequestClose={() => setShowDatePicker(false)}>
           <View style={styles.dateModalOverlay}>
@@ -955,6 +1063,58 @@ const styles = StyleSheet.create({
   topErrorText: { flex: 1, fontSize: FontSize.sm, color: Colors.error },
 
   measureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  measureModuleCard: {
+    backgroundColor: Colors.white,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    gap: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.lightGrey,
+    ...Shadow.sm,
+  },
+  measureModuleHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  measureModuleIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.needleGreenLight,
+  },
+  measureModuleTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  measureModuleSub: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    lineHeight: 17,
+  },
+  addModuleRow: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+    backgroundColor: Colors.boneDeep,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+  },
+  addModuleTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.ink,
+  },
+  addModuleSub: {
+    fontSize: FontSize.xs,
+    color: Colors.inkLight,
+    lineHeight: 17,
+  },
   visionDiaryCard: {
     flexDirection: 'row',
     alignItems: 'center',
