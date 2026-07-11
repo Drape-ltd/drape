@@ -12,6 +12,8 @@ const password = process.env.WEB_QA_PASSWORD ?? 'DrapeonWebQA2026!'
 const fastAuth = process.env.WEB_QA_FAST_AUTH === '1'
 const enableMutations = process.env.WEB_QA_ENABLE_MUTATIONS === '1'
 const enableEmailSmoke = process.env.WEB_QA_ENABLE_EMAILS === '1'
+const publicOnly = process.env.WEB_QA_PUBLIC_ONLY === '1'
+const allowProdWaitlistMutation = process.env.WEB_QA_ALLOW_PROD_WAITLIST_MUTATION === '1'
 const enableOpsQa = process.env.WEB_QA_ENABLE_OPS_QA !== '0'
 const enableOpsProviderMutations = process.env.WEB_QA_ENABLE_OPS_PROVIDER_MUTATIONS === '1'
 const enableOpsRbacMatrix = process.env.WEB_QA_ENABLE_OPS_RBAC_MATRIX !== '0'
@@ -20,6 +22,7 @@ const stamp = Date.now()
 const uiEmail = `web.qa.${stamp}@drapeon.co`
 const fallbackEmail = `web.qa.auth.${stamp}@drapeon.co`
 const tailorEmail = `web.qa.tailor.${stamp}@drapeon.co`
+const publicWaitlistEmail = process.env.WEB_QA_WAITLIST_EMAIL ?? `prod.waitlist.qa.runner.${stamp}@drapeon.co`
 const phone = `+1555${String(stamp).slice(-7)}`
 
 const accountPaths = [
@@ -1295,8 +1298,144 @@ async function browserAuthState(page) {
   }))
 }
 
+async function fetchPublicQaJson(response) {
+  const text = await response.text().catch(() => '')
+  try {
+    return text ? JSON.parse(text) : null
+  } catch {
+    return text.slice(0, 1000)
+  }
+}
+
+async function runPublicOnlyQa() {
+  const normalizedBaseUrl = baseUrl.replace(/\/+$/u, '')
+  const checks = []
+  const publicPaths = [
+    { pathname: '/', expectedText: 'Drapeon' },
+    { pathname: '/join', expectedText: 'waitlist' },
+    { pathname: '/sign-in', expectedText: 'Sign in' },
+    { pathname: '/sign-up', expectedText: 'Create' },
+    { pathname: '/apply', expectedText: 'tailor' },
+    { pathname: '/tailors', expectedText: 'tailor' },
+  ]
+
+  for (const { pathname, expectedText } of publicPaths) {
+    const response = await fetch(`${normalizedBaseUrl}${pathname}`, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: AbortSignal.timeout(20_000),
+    })
+    const body = await response.text().catch(() => '')
+    const includesExpectedText = body.toLowerCase().includes(expectedText.toLowerCase())
+    checks.push({
+      type: 'public-page',
+      pathname,
+      status: response.status,
+      ok: response.ok && includesExpectedText,
+      includesExpectedText,
+      expectedText,
+      finalUrl: response.url,
+    })
+  }
+
+  const webPushResponse = await fetch(`${normalizedBaseUrl}/api/web-push`, {
+    headers: { accept: 'application/json' },
+    signal: AbortSignal.timeout(20_000),
+  })
+  const webPushBody = await fetchPublicQaJson(webPushResponse)
+  checks.push({
+    type: 'web-push-config',
+    status: webPushResponse.status,
+    ok: webPushResponse.ok && Boolean(webPushBody?.enabled && webPushBody?.publicKey),
+    enabled: Boolean(webPushBody?.enabled),
+    publicKeyLength: typeof webPushBody?.publicKey === 'string' ? webPushBody.publicKey.length : 0,
+  })
+
+  const invalidWaitlistResponse = await fetch(`${normalizedBaseUrl}/api/waitlist`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ role: 'CUSTOMER', name: 'No Email' }),
+    signal: AbortSignal.timeout(20_000),
+  })
+  const invalidWaitlistBody = await fetchPublicQaJson(invalidWaitlistResponse)
+  checks.push({
+    type: 'waitlist-invalid-payload',
+    status: invalidWaitlistResponse.status,
+    ok: invalidWaitlistResponse.status === 400,
+    body: invalidWaitlistBody,
+  })
+
+  const honeypotWaitlistResponse = await fetch(`${normalizedBaseUrl}/api/waitlist`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      role: 'CUSTOMER',
+      name: 'Bot Field',
+      email: `bot.${stamp}@drapeon.co`,
+      website: 'https://spam.example',
+    }),
+    signal: AbortSignal.timeout(20_000),
+  })
+  const honeypotWaitlistBody = await fetchPublicQaJson(honeypotWaitlistResponse)
+  checks.push({
+    type: 'waitlist-honeypot',
+    status: honeypotWaitlistResponse.status,
+    ok: honeypotWaitlistResponse.ok && honeypotWaitlistBody?.ok === true,
+    body: honeypotWaitlistBody,
+  })
+
+  if (allowProdWaitlistMutation) {
+    const waitlistResponse = await fetch(`${normalizedBaseUrl}/api/waitlist`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        role: 'CUSTOMER',
+        name: 'Drapeon Prod QA Runner',
+        email: publicWaitlistEmail,
+        location: 'Launch QA',
+        notes: 'Disposable production waitlist smoke test from the web QA runner.',
+      }),
+      signal: AbortSignal.timeout(20_000),
+    })
+    const waitlistBody = await fetchPublicQaJson(waitlistResponse)
+    checks.push({
+      type: 'waitlist-submit',
+      skipped: false,
+      email: publicWaitlistEmail,
+      status: waitlistResponse.status,
+      ok: waitlistResponse.ok && waitlistBody?.ok === true,
+      body: waitlistBody,
+    })
+  } else {
+    checks.push({
+      type: 'waitlist-submit',
+      skipped: true,
+      ok: true,
+      reason: 'Set WEB_QA_ALLOW_PROD_WAITLIST_MUTATION=1 to create a real disposable waitlist smoke row.',
+    })
+  }
+
+  const report = {
+    mode: 'public-only',
+    baseUrl: normalizedBaseUrl,
+    allowProdWaitlistMutation,
+    waitlistEmail: allowProdWaitlistMutation ? publicWaitlistEmail : null,
+    checks,
+    passed: checks.every((check) => check.ok || check.skipped),
+  }
+
+  await writeFile(path.join(outDir, 'public-prod-report.json'), JSON.stringify(report, null, 2))
+  console.log(JSON.stringify(report, null, 2))
+  if (!report.passed) process.exit(1)
+}
+
 async function main() {
   await mkdir(outDir, { recursive: true })
+  if (publicOnly) {
+    await runPublicOnlyQa()
+    return
+  }
+
   const browser = await chromium.launch({ headless: true })
   const context = await browser.newContext({ viewport: { width: 1440, height: 1200 } })
   const page = await context.newPage()
