@@ -302,6 +302,107 @@ Relevant files:
 
 ## Deploy Notes
 
+## Release And Data Environment Policy
+
+Use production for real people, even during a private beta, TestFlight round, or soft launch. Use development only for disposable fixtures, QA accounts, destructive runner flows, and experiments that can be deleted.
+
+Practical rules:
+
+- `Drape-PROD` is the source of truth for waitlist leads, real auth users, real orders, real messages, payment state, Ops issues, and production support history.
+- `Drape- DEV` is for fake customers/tailors, automated QA, negative cases, and payment/provider dry-runs.
+- Do not invite waitlist people into dev for normal testing. Invite them into prod behind whatever access gate or limited rollout policy is active.
+- If a real person accidentally tests in dev, treat that data as non-production. Recreate or invite the person in prod; do not bulk-copy dev auth rows, payment rows, order state, or messages into prod.
+- Waitlist leads collected on production stay in production. When they start using the service, the normal prod account/order records become their live history.
+- If a beta tester already has a prod waitlist row and later creates a prod account with the same email, preserve both records or link them with an explicit, audited migration. Do not delete the waitlist row just because an account now exists.
+
+### Production release checklist
+
+1. Commit and push the intended release to `main`.
+2. Verify locally before release:
+
+```bash
+pnpm typecheck
+pnpm lint
+pnpm --filter @drape/web build
+git diff --check
+```
+
+3. Link Supabase to production and inspect pending migrations:
+
+```bash
+pnpm supabase:link:prod
+pnpm supabase:status
+supabase migration list
+supabase db push --dry-run
+```
+
+4. Apply migrations and deploy Edge Functions:
+
+```bash
+supabase db push --yes
+supabase functions deploy --debug tailor-order-action customer-order-action custom-order-action payment-action --project-ref <prod-ref>
+```
+
+If shared files under `supabase/functions/_shared` changed, deploy every function that imports those shared files. A full function sweep is safer before launch.
+
+5. Build and deploy web to Cloudflare with production public env values. Wrangler currently needs Node 22+:
+
+```bash
+PATH="$HOME/.nvm/versions/node/v22.22.3/bin:$PATH" \
+DRAPEON_PUBLIC_SUPABASE_URL=https://<prod-ref>.supabase.co \
+NEXT_PUBLIC_SUPABASE_URL=https://<prod-ref>.supabase.co \
+DRAPEON_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<prod-publishable-key> \
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<prod-publishable-key> \
+NEXT_PUBLIC_SITE_URL=https://drapeon.co \
+ALLOW_LOCAL_WEB_ENV_DEPLOY=1 \
+pnpm --filter @drape/web cf:build
+
+PATH="$HOME/.nvm/versions/node/v22.22.3/bin:$PATH" \
+DRAPEON_PUBLIC_SUPABASE_URL=https://<prod-ref>.supabase.co \
+NEXT_PUBLIC_SUPABASE_URL=https://<prod-ref>.supabase.co \
+DRAPEON_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<prod-publishable-key> \
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<prod-publishable-key> \
+NEXT_PUBLIC_SITE_URL=https://drapeon.co \
+ALLOW_LOCAL_WEB_ENV_DEPLOY=1 \
+pnpm --filter @drape/web cf:deploy
+```
+
+Run `cf:build` before `cf:deploy`; deploying an old `.open-next` bundle can leave production on a stale build.
+
+6. Confirm production:
+
+```bash
+curl -I https://drapeon.co
+curl -I https://drapeon.co/join
+curl -I https://drapeon.co/pricing
+curl https://drapeon.co/manifest.webmanifest
+curl https://drapeon.co/api/web-push
+```
+
+### Web push secrets
+
+Ops browser alerts need VAPID envs in both Cloudflare and Supabase if both web routes and Edge Functions should send closed-browser alerts.
+
+Cloudflare Worker secrets:
+
+```bash
+wrangler secret put WEB_PUSH_VAPID_PUBLIC_KEY --name drape
+wrangler secret put WEB_PUSH_VAPID_PRIVATE_KEY --name drape
+wrangler secret put WEB_PUSH_VAPID_SUBJECT --name drape
+```
+
+Supabase Edge Function secrets:
+
+```bash
+SUPABASE_ACCESS_TOKEN=<personal-access-token> \
+supabase secrets set --project-ref <prod-ref> \
+  WEB_PUSH_VAPID_PUBLIC_KEY=<public-key> \
+  WEB_PUSH_VAPID_PRIVATE_KEY=<private-key> \
+  WEB_PUSH_VAPID_SUBJECT=mailto:ops@drapeon.co
+```
+
+The Supabase CLI can read and deploy using a logged-in profile, but `secrets set` may still require `SUPABASE_ACCESS_TOKEN`. Generate a short-lived personal access token from the Supabase dashboard when setting production secrets from a local machine.
+
 ### Web
 
 The web app is built for Cloudflare via OpenNext.
