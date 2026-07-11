@@ -5,7 +5,7 @@ import { buildMetadata } from '../../../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'Ready-made item',
-  description: 'Review a Drapeon ready-made item, size guidance, stock, fulfillment, and checkout handoff.',
+  description: 'Review a Drapeon ready-made item, size guidance, stock, fulfillment, and payment state.',
   path: '/account/items',
 })
 

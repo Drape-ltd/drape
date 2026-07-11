@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server'
 import { createServiceRoleClient } from '../../../lib/server-supabase'
 import { getSupabaseServiceRoleKey, getSupabaseUrl } from '../../../lib/supabase-config'
-import { getOpsSession } from '../../../lib/ops-auth'
-import { canPerformOpsAction, type OpsActionKind } from '../../../lib/ops-console'
+import { getOpsSession, type OpsSession } from '../../../lib/ops-auth'
+import { canAccessOpsSection, canPerformOpsAction, type OpsActionKind } from '../../../lib/ops-console'
 import { sendOpsCustomerRefundEmail } from '../../../lib/ops-customer-email'
 import { sendSmsToUser } from '../../../lib/sms'
+import { checkPublicRateLimit, getClientIp } from '../../../lib/request-security'
+import { invalidateOpsDashboardDataCache } from '../../../lib/ops-data'
 import { buildOrderReviewRefundTerminalRequest } from '@drape/shared'
 import { OPS_ISSUE_SEVERITIES, OPS_ISSUE_TYPES } from '@drape/shared'
 import { normalizeAccountCurrency, resolvePaymentProviderForCurrency } from '@drape/shared'
@@ -31,6 +33,25 @@ const MANUAL_OPS_ISSUE_TYPES = new Set<string>(OPS_ISSUE_TYPES)
 const MANUAL_OPS_ISSUE_SEVERITIES = new Set<string>(OPS_ISSUE_SEVERITIES)
 const PAYOUT_RESOLUTION_MODES = new Set(['ORIGINAL_CURRENCY', 'CONVERT_TO_CURRENT', 'REFUND_CUSTOMER'])
 const SELLER_ITEM_VISIBILITY_ACTIONS = new Set(['HIDE', 'RESTORE'])
+const OPS_PULSE_CACHE_TTL_MS = 10_000
+const OPS_ACTION_RATE_LIMITS: Partial<Record<OpsActionKind, { windowSeconds: number; maxRequests: number }>> = {
+  'dispatch-stage': { windowSeconds: 5 * 60, maxRequests: 24 },
+  'dispute-resolution': { windowSeconds: 5 * 60, maxRequests: 12 },
+  'order-review-resolution': { windowSeconds: 5 * 60, maxRequests: 12 },
+  'order-partial-refund': { windowSeconds: 5 * 60, maxRequests: 8 },
+  'payout-release': { windowSeconds: 5 * 60, maxRequests: 10 },
+  'payout-bulk-release': { windowSeconds: 5 * 60, maxRequests: 3 },
+  'material-advance-release': { windowSeconds: 5 * 60, maxRequests: 10 },
+  'payout-block-resolution': { windowSeconds: 5 * 60, maxRequests: 10 },
+  'ops-issue-status': { windowSeconds: 60, maxRequests: 40 },
+  'manual-issue-create': { windowSeconds: 5 * 60, maxRequests: 20 },
+  'ops-issue-bulk-resolve': { windowSeconds: 5 * 60, maxRequests: 12 },
+}
+
+let opsPulseCache: {
+  body: Record<string, unknown>
+  expiresAt: number
+} | null = null
 
 type OrderReviewMeta = {
   status?: 'OPEN' | 'RESOLVED' | null
@@ -129,6 +150,18 @@ function restoreStageForReview(reviewType: 'CANCELLATION' | 'DELIVERY', requeste
   return reviewType === 'CANCELLATION' ? 'CONFIRMED' : 'READY_FOR_DRAPE_DISPATCH'
 }
 
+function invalidateOpsActionCaches() {
+  opsPulseCache = null
+  invalidateOpsDashboardDataCache()
+}
+
+function requestOrigin(request: Request) {
+  const host = request.headers.get('host')?.trim()
+  const forwardedProto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim()
+  const protocol = forwardedProto || (process.env.NODE_ENV === 'production' ? 'https' : 'http')
+  return host ? `${protocol}://${host}` : request.url
+}
+
 function redirectWithMessage(
   request: Request,
   redirectTo: string,
@@ -136,12 +169,160 @@ function redirectWithMessage(
   value: string,
   detail?: string | null,
 ) {
-  const url = new URL(redirectTo, request.url)
+  invalidateOpsActionCaches()
+  const url = new URL(redirectTo, requestOrigin(request))
   url.searchParams.set(key, value)
   if (detail?.trim()) {
     url.searchParams.set(`${key}Detail`, detail.trim().slice(0, 300))
   }
   return NextResponse.redirect(url, { status: 303 })
+}
+
+function opsJson(body: Record<string, unknown>, status = 200) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      'Cache-Control': 'no-store, max-age=0',
+    },
+  })
+}
+
+async function loadCachedOpsPulse(client: NonNullable<ReturnType<typeof createServiceRoleClient>>) {
+  const now = Date.now()
+  if (opsPulseCache && opsPulseCache.expiresAt > now) {
+    return { status: 200, body: opsPulseCache.body }
+  }
+
+  const activeStatuses = ['OPEN', 'IN_REVIEW', 'ESCALATED']
+  const [openCountResult, criticalCountResult, latestCriticalResult] = await Promise.all([
+    client
+      .from('ops_issues')
+      .select('id', { count: 'exact', head: true })
+      .in('status', activeStatuses),
+    client
+      .from('ops_issues')
+      .select('id', { count: 'exact', head: true })
+      .eq('severity', 'CRITICAL')
+      .in('status', activeStatuses),
+    client
+      .from('ops_issues')
+      .select('id, issue_number, issue_type, severity, status, source, order_id, provider, stage, title, updated_at, created_at')
+      .eq('severity', 'CRITICAL')
+      .in('status', activeStatuses)
+      .order('updated_at', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ])
+
+  if (openCountResult.error || criticalCountResult.error || latestCriticalResult.error) {
+    return {
+      status: 500,
+      body: {
+        ok: false,
+        error: 'pulse-load-failed',
+        detail:
+          openCountResult.error?.message ||
+          criticalCountResult.error?.message ||
+          latestCriticalResult.error?.message ||
+          null,
+      },
+    }
+  }
+
+  const latest = latestCriticalResult.data
+  const latestKey = latest
+    ? `${latest.id}:${latest.updated_at ?? latest.created_at ?? ''}`
+    : ''
+  const fingerprint = [
+    openCountResult.count ?? 0,
+    criticalCountResult.count ?? 0,
+    latestKey,
+  ].join(':')
+  const body = {
+    ok: true,
+    enabled: true,
+    serverTime: new Date().toISOString(),
+    openCount: openCountResult.count ?? 0,
+    criticalCount: criticalCountResult.count ?? 0,
+    fingerprint,
+    latest: latest
+      ? {
+          key: latestKey,
+          issueNumber: latest.issue_number,
+          issueType: latest.issue_type,
+          severity: latest.severity,
+          status: latest.status,
+          source: latest.source,
+          orderId: latest.order_id,
+          provider: latest.provider,
+          stage: latest.stage,
+          title: latest.title,
+          updatedAt: latest.updated_at,
+          createdAt: latest.created_at,
+        }
+      : null,
+  }
+
+  opsPulseCache = {
+    body,
+    expiresAt: now + OPS_PULSE_CACHE_TTL_MS,
+  }
+
+  return { status: 200, body }
+}
+
+async function checkOpsActionRateLimit(
+  client: NonNullable<ReturnType<typeof createServiceRoleClient>>,
+  request: Request,
+  session: OpsSession,
+  actionKind: OpsActionKind,
+) {
+  const policy = OPS_ACTION_RATE_LIMITS[actionKind]
+  if (!policy) return { ok: true, allowed: true }
+
+  const identifier = session.email
+    ? `email:${session.email}`
+    : `${session.mode}:${session.role}:${getClientIp(request)}`
+
+  return checkPublicRateLimit(
+    client,
+    `ops-action:${actionKind}:${identifier}`,
+    policy.windowSeconds,
+    policy.maxRequests,
+  )
+}
+
+export async function GET(request: Request) {
+  const url = new URL(request.url)
+  if (url.searchParams.get('kind') !== 'pulse') {
+    return opsJson({ ok: false, error: 'not-found' }, 404)
+  }
+
+  const session = await getOpsSession()
+  if (!session) {
+    return opsJson({ ok: false, error: 'locked' }, 401)
+  }
+
+  const canSeeIssuePulse =
+    canAccessOpsSection(session.role, 'workflow-issues') ||
+    canAccessOpsSection(session.role, 'incidents')
+
+  if (!canSeeIssuePulse) {
+    return opsJson({
+      ok: true,
+      enabled: false,
+      serverTime: new Date().toISOString(),
+    })
+  }
+
+  const client = createServiceRoleClient()
+  if (!client) {
+    return opsJson({ ok: false, error: 'service-role-missing' }, 503)
+  }
+
+  const pulse = await loadCachedOpsPulse(client)
+  return opsJson(pulse.body, pulse.status)
 }
 
 async function recordRefundApprovalFailure(
@@ -676,8 +857,13 @@ function ensureAuthorizedAction(kind: string): OpsActionKind | null {
     case 'order-partial-refund':
     case 'payout-release':
     case 'payout-block-resolution':
+    case 'material-advance-release':
     case 'ops-issue-status':
     case 'manual-issue-create':
+    case 'ops-issue-bulk-resolve':
+    case 'support-thread-mark-read':
+    case 'payout-bulk-release':
+    case 'bypass-bulk-review':
       return kind
     default:
       return null
@@ -703,6 +889,14 @@ export async function POST(request: Request) {
 
   if (!actionKind || !canPerformOpsAction(session.role, actionKind)) {
     return redirectWithMessage(request, redirectTo, 'error', 'forbidden')
+  }
+
+  const rateLimit = await checkOpsActionRateLimit(client, request, session, actionKind)
+  if (!rateLimit.ok) {
+    return redirectWithMessage(request, redirectTo, 'error', 'rate-limit-unavailable')
+  }
+  if (!rateLimit.allowed) {
+    return redirectWithMessage(request, redirectTo, 'error', 'rate-limited')
   }
 
   try {
@@ -1652,6 +1846,20 @@ export async function POST(request: Request) {
 
       const release = await triggerOrderPayoutRelease(orderId)
       if (!release.ok) {
+        await client.from('audit_logs').insert({
+          actor_role: 'OPS',
+          order_id: orderId,
+          event: 'ops.payout_block_resolution_failed',
+          severity: 'warn',
+          payload: {
+            issue_id: issueId || null,
+            resolution_mode: resolutionMode,
+            note,
+            locked_currency: lockedCurrency,
+            locked_amount: lockedAmount,
+            error: release.error,
+          },
+        })
         return redirectWithMessage(request, redirectTo, 'error', 'payout-release-failed', release.error)
       }
 
@@ -1693,6 +1901,17 @@ export async function POST(request: Request) {
 
       const release = await triggerOrderPayoutRelease(orderId)
       if (!release.ok) {
+        await client.from('audit_logs').insert({
+          actor_role: 'OPS',
+          order_id: orderId,
+          event: 'ops.payout_release_failed',
+          severity: 'warn',
+          payload: {
+            source: 'ops-dashboard',
+            order_id: orderId,
+            error: release.error,
+          },
+        })
         return redirectWithMessage(request, redirectTo, 'error', 'payout-release-failed', release.error)
       }
 
@@ -1720,6 +1939,17 @@ export async function POST(request: Request) {
 
       const release = await triggerMaterialAdvanceRelease(advanceId, note || null)
       if (!release.ok) {
+        await client.from('audit_logs').insert({
+          actor_role: 'OPS',
+          event: 'ops.material_advance_release_failed',
+          severity: 'warn',
+          payload: {
+            source: 'ops-dashboard',
+            material_advance_id: advanceId,
+            note: note || null,
+            error: release.error,
+          },
+        })
         return redirectWithMessage(request, redirectTo, 'error', 'material-advance-release-failed', release.error)
       }
 
@@ -1908,6 +2138,218 @@ export async function POST(request: Request) {
       }
 
       return redirectWithMessage(request, redirectTo, 'notice', 'manual-issue-created')
+    }
+
+    if (kind === 'ops-issue-bulk-resolve') {
+      const rawIds = readString(formData, 'issueIds')
+      if (!rawIds) return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+
+      const issueIds = rawIds.split(',').map(s => s.trim()).filter(Boolean)
+      if (issueIds.length === 0 || issueIds.length > 200) {
+        return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+      }
+
+      const note = readString(formData, 'note')
+      const now = new Date().toISOString()
+
+      const { data: openIssues, error: fetchError } = await client
+        .from('ops_issues')
+        .select('id, status, issue_type, source, assigned_to, resolved_at')
+        .in('id', issueIds)
+        .neq('status', 'RESOLVED')
+
+      if (fetchError) return redirectWithMessage(request, redirectTo, 'error', 'workflow-issue-save-failed')
+
+      const toResolve = openIssues ?? []
+      if (toResolve.length === 0) {
+        return redirectWithMessage(request, redirectTo, 'notice', 'workflow-issue-saved')
+      }
+
+      const resolvedIds = toResolve.map(i => i.id)
+      const { error: updateError } = await client
+        .from('ops_issues')
+        .update({
+          status: 'RESOLVED',
+          assigned_to: session.email ?? session.role,
+          resolved_at: now,
+        })
+        .in('id', resolvedIds)
+
+      if (updateError) return redirectWithMessage(request, redirectTo, 'error', 'workflow-issue-save-failed')
+
+      await client.from('ops_audit_logs').insert(
+        toResolve.map(issue => ({
+          issue_id: issue.id,
+          action_taken: 'ISSUE_BULK_RESOLVED',
+          performed_by: session.email ?? 'ops-session',
+          performed_role: session.role.toUpperCase(),
+          reason: note.length > 0 ? note : 'Bulk resolved from ops dashboard',
+          before_state: {
+            status: issue.status,
+            assigned_to: issue.assigned_to ?? null,
+            resolved_at: issue.resolved_at ?? null,
+          },
+          after_state: {
+            status: 'RESOLVED',
+            assigned_to: session.email ?? session.role,
+            resolved_at: now,
+          },
+        }))
+      )
+
+      await client.from('audit_logs').insert({
+        actor_role: 'OPS',
+        severity: 'info',
+        event: 'ops.workflow_issues_bulk_resolved',
+        payload: {
+          resolved_count: resolvedIds.length,
+          issue_ids: resolvedIds,
+          note: note.length > 0 ? note : null,
+        },
+      })
+
+      return redirectWithMessage(request, redirectTo, 'notice', 'workflow-issues-bulk-resolved')
+    }
+
+    if (kind === 'support-thread-mark-read') {
+      const rawIds = readString(formData, 'orderIds')
+      if (!rawIds) return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+
+      const orderIds = rawIds.split(',').map(s => s.trim()).filter(Boolean)
+      if (orderIds.length === 0 || orderIds.length > 200) {
+        return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+      }
+
+      const now = new Date().toISOString()
+      const { error } = await client
+        .from('messages')
+        .update({ read_at: now })
+        .in('order_id', orderIds)
+        .is('read_at', null)
+
+      if (error) return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+
+      await client.from('audit_logs').insert({
+        actor_role: 'OPS',
+        severity: 'info',
+        event: 'ops.support_threads_marked_read',
+        payload: {
+          order_ids: orderIds,
+          count: orderIds.length,
+        },
+      })
+
+      return redirectWithMessage(request, redirectTo, 'notice', 'support-threads-read')
+    }
+
+    if (kind === 'payout-bulk-release') {
+      const rawIds = readString(formData, 'orderIds')
+      if (!rawIds) return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+
+      const orderIds = rawIds.split(',').map(s => s.trim()).filter(Boolean)
+      if (orderIds.length === 0 || orderIds.length > 100) {
+        return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+      }
+
+      let successCount = 0
+      let failCount = 0
+      const releaseErrors: string[] = []
+
+      for (const orderId of orderIds) {
+        const release = await triggerOrderPayoutRelease(orderId)
+        if (release.ok) {
+          successCount++
+        } else {
+          failCount++
+          releaseErrors.push(`${orderId}: ${release.error}`)
+        }
+      }
+
+      await client.from('audit_logs').insert({
+        actor_role: 'OPS',
+        severity: failCount > 0 ? 'warn' : 'info',
+        event: 'ops.payouts_bulk_released',
+        payload: {
+          order_ids: orderIds,
+          success_count: successCount,
+          fail_count: failCount,
+          errors: releaseErrors.length > 0 ? releaseErrors : null,
+        },
+      })
+
+      if (failCount > 0 && successCount === 0) {
+        return redirectWithMessage(request, redirectTo, 'error', 'payout-release-failed')
+      }
+
+      return redirectWithMessage(request, redirectTo, 'notice', 'payouts-bulk-released')
+    }
+
+    if (kind === 'bypass-bulk-review') {
+      const rawIds = readString(formData, 'logIds')
+      if (!rawIds) return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+
+      const logIds = rawIds.split(',').map(s => s.trim()).filter(Boolean)
+      if (logIds.length === 0 || logIds.length > 200) {
+        return redirectWithMessage(request, redirectTo, 'error', 'invalid-action')
+      }
+
+      const now = new Date().toISOString()
+      const { error: reviewError } = await client
+        .from('contact_bypass_logs')
+        .update({
+          reviewed: true,
+          reviewed_at: now,
+          reviewed_by: null,
+        })
+        .in('id', logIds)
+        .eq('reviewed', false)
+
+      if (reviewError) return redirectWithMessage(request, redirectTo, 'error', 'save-failed')
+
+      const { data: linkedIssues } = await client
+        .from('ops_issues')
+        .select('id')
+        .eq('issue_type', 'CONTACT_BYPASS')
+        .eq('related_entity_type', 'contact_bypass_log')
+        .in('related_entity_id', logIds)
+        .neq('status', 'RESOLVED')
+
+      if (linkedIssues && linkedIssues.length > 0) {
+        const issueIds = linkedIssues.map(i => i.id)
+        await client
+          .from('ops_issues')
+          .update({
+            status: 'RESOLVED',
+            assigned_to: session.email ?? session.role,
+            resolved_at: now,
+          })
+          .in('id', issueIds)
+
+        await client.from('ops_audit_logs').insert(
+          issueIds.map(issueId => ({
+            issue_id: issueId,
+            action_taken: 'CONTACT_BYPASS_BULK_REVIEWED',
+            performed_by: session.email ?? 'ops-session',
+            performed_role: session.role.toUpperCase(),
+            reason: 'Bulk reviewed from ops dashboard',
+            before_state: { status: 'OPEN' },
+            after_state: { status: 'RESOLVED', resolved_at: now },
+          }))
+        )
+      }
+
+      await client.from('audit_logs').insert({
+        actor_role: 'OPS',
+        severity: 'info',
+        event: 'ops.contact_bypass_bulk_reviewed',
+        payload: {
+          log_ids: logIds,
+          count: logIds.length,
+          linked_issues_resolved: linkedIssues?.length ?? 0,
+        },
+      })
+
+      return redirectWithMessage(request, redirectTo, 'notice', 'bypass-bulk-reviewed')
     }
 
     if (kind === 'dispatch-stage') {

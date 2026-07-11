@@ -28,6 +28,7 @@ import {
 import { Button, ChoiceSheet, DisclosureSection, Input, type ChoiceSheetOption } from '@/components/ui'
 import { DRAPE_VISION_ROUTE } from '@/constants/drapeVision'
 import { filterContactInfo } from '@drape/shared/contact-filter'
+import { buildMeasurementProfileStoragePayload } from '@drape/shared/measurement-profile'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 
 const HOME_BG = Colors.bone
@@ -97,38 +98,6 @@ function isEditableCustomMeasurementEntry(key: string, value: unknown) {
   if (typeof value === 'number') return Number.isFinite(value)
   if (typeof value === 'string') return value.trim().length > 0
   return false
-}
-
-const MEASUREMENT_PROFILE_ALLOWED_METADATA_KEYS = new Set([
-  'unit',
-  'measurementProfileLabel',
-  'measurementProfileUpdatedAt',
-  'wearerContext',
-  'fitStyle',
-  'measurementSource',
-  'measurementSourceLabel',
-  'fitConfidence',
-  'garmentContext',
-  'bodyShape',
-  'fitFlags',
-  'bodyNote',
-  'bodyFlags',
-  'symmetryFlags',
-  'requiresTailorReview',
-])
-
-function buildMeasurementProfileStoragePayload(measurements: Record<string, unknown>) {
-  return Object.entries(measurements).reduce<Record<string, unknown>>((payload, [key, value]) => {
-    if (MEASUREMENT_PROFILE_ALLOWED_METADATA_KEYS.has(key)) {
-      payload[key] = value
-      return payload
-    }
-    if (isMeasurementMetadataKey(key)) return payload
-    if (value == null) return payload
-    if (typeof value === 'number' && Number.isFinite(value)) payload[key] = value
-    if (typeof value === 'string' && value.trim().length > 0) payload[key] = value
-    return payload
-  }, {})
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────

@@ -270,6 +270,7 @@ export default function TailorPayoutSetupScreen() {
   const payoutChangeLocked = isFutureTime(status?.payoutAccountChangeLockedUntil)
   const payoutDestinationHoldActive = isFutureTime(status?.payoutDestinationHoldUntil)
   const environmentUnavailable = isUnavailableEnvironmentError(loadError)
+  const manualBankEntryEnabled = status?.manualBankEntryEnabled === true
   const successIsManualPending =
     status?.manualBankEntry === true
     && status.payoutAccountVerified !== true
@@ -443,6 +444,10 @@ export default function TailorPayoutSetupScreen() {
   }
 
   function handleSelectManualBank() {
+    if (!manualBankEntryEnabled) {
+      setFieldError('Manual bank entry is paused for beta. Use a listed Paystack bank or contact payouts if your bank is missing.')
+      return
+    }
     setManualBankMode(true)
     setManualCountryOpen(false)
     setSelectedBank(null)
@@ -452,6 +457,11 @@ export default function TailorPayoutSetupScreen() {
   }
 
   async function handleSubmitManualBank() {
+    if (!manualBankEntryEnabled) {
+      setFieldError('Manual bank entry is paused for beta. Use a listed Paystack bank or contact payouts if your bank is missing.')
+      return
+    }
+
     const validation = validateManualBankEntry({
       payoutCurrency: selectedCurrency,
       bankName: manualBankName,
@@ -907,12 +917,21 @@ export default function TailorPayoutSetupScreen() {
                       />
                     )}
 
-                    {banks.length === 0 && !banksLoading ? (
+                    {banks.length === 0 && !banksLoading && manualBankEntryEnabled ? (
                       <Button
                         label={MANUAL_BANK_ENTRY_OPTION_LABEL}
                         variant="secondary"
                         onPress={handleSelectManualBank}
                       />
+                    ) : null}
+
+                    {banks.length === 0 && !banksLoading && !manualBankEntryEnabled ? (
+                      <View style={styles.inlineInfoCard}>
+                        <Feather name="lock" size={16} color={Colors.warning} />
+                        <Text style={styles.inlineInfoText}>
+                          Manual bank entry is paused for beta while ops payout review tooling is finished. Contact payouts if your bank is missing.
+                        </Text>
+                      </View>
                     ) : null}
 
                     {selectedBank && !manualBankMode ? (
@@ -967,27 +986,41 @@ export default function TailorPayoutSetupScreen() {
                           ) : (
                             <Text style={styles.emptyBankText}>No listed banks match your search.</Text>
                           )}
-                          <TouchableOpacity
-                            style={[styles.bankRow, styles.manualBankRow, manualBankMode && styles.bankRowActive]}
-                            onPress={handleSelectManualBank}
-                          >
-                            <View style={styles.manualBankRowContent}>
-                              <View style={styles.manualBankIcon}>
-                                <Feather name="edit-3" size={14} color={Colors.needleGreen} />
+                          {manualBankEntryEnabled ? (
+                            <TouchableOpacity
+                              style={[styles.bankRow, styles.manualBankRow, manualBankMode && styles.bankRowActive]}
+                              onPress={handleSelectManualBank}
+                            >
+                              <View style={styles.manualBankRowContent}>
+                                <View style={styles.manualBankIcon}>
+                                  <Feather name="edit-3" size={14} color={Colors.needleGreen} />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                  <Text style={[styles.bankRowText, manualBankMode && styles.bankRowTextActive]}>
+                                    {MANUAL_BANK_ENTRY_OPTION_LABEL}
+                                  </Text>
+                                  <Text style={styles.bankRowMeta}>Enter SWIFT / BIC and account details manually</Text>
+                                </View>
                               </View>
-                              <View style={{ flex: 1 }}>
-                                <Text style={[styles.bankRowText, manualBankMode && styles.bankRowTextActive]}>
-                                  {MANUAL_BANK_ENTRY_OPTION_LABEL}
-                                </Text>
-                                <Text style={styles.bankRowMeta}>Enter SWIFT / BIC and account details manually</Text>
+                            </TouchableOpacity>
+                          ) : (
+                            <View style={[styles.bankRow, styles.manualBankRow]}>
+                              <View style={styles.manualBankRowContent}>
+                                <View style={styles.manualBankIcon}>
+                                  <Feather name="lock" size={14} color={Colors.warning} />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                  <Text style={styles.bankRowText}>Manual bank entry paused</Text>
+                                  <Text style={styles.bankRowMeta}>Use a listed bank during beta or contact payouts.</Text>
+                                </View>
                               </View>
                             </View>
-                          </TouchableOpacity>
+                          )}
                         </ScrollView>
                       </View>
                     ) : null}
 
-                    {manualBankMode ? (
+                    {manualBankMode && manualBankEntryEnabled ? (
                       <View style={styles.manualForm}>
                         <View style={styles.inlineInfoCard}>
                           <Feather name="info" size={16} color={Colors.needleGreen} />

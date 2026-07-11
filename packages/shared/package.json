@@ -21,7 +21,9 @@
     "./preflight": "./src/preflight.ts",
     "./media-policy": "./src/media-policy.ts",
     "./exception-os": "./src/exception-os.ts",
-    "./deadline-context": "./src/deadline-context.ts"
+    "./deadline-context": "./src/deadline-context.ts",
+    "./display-text": "./src/display-text.ts",
+    "./measurement-profile": "./src/measurement-profile.ts"
   },
   "scripts": {
     "test": "jest --watchman=false"

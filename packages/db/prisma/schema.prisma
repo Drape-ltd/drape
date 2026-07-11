@@ -936,6 +936,28 @@ model PushToken {
   @@map("push_tokens")
 }
 
+model WebPushSubscription {
+  id            String    @id @default(uuid())
+  audience      String
+  userId        String?   @map("user_id")
+  opsRole       String?   @map("ops_role")
+  opsEmail      String?   @map("ops_email")
+  endpoint      String    @unique
+  p256dh        String?
+  auth          String?
+  userAgent     String?   @map("user_agent")
+  enabled       Boolean   @default(true)
+  lastSeenAt    DateTime  @default(now()) @map("last_seen_at")
+  failedAt      DateTime? @map("failed_at")
+  failureReason String?   @map("failure_reason")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([userId, enabled, lastSeenAt])
+  @@index([enabled, lastSeenAt])
+  @@map("web_push_subscriptions")
+}
+
 // ─────────────────────────────────────────────
 // CONTACT BYPASS LOG
 // ─────────────────────────────────────────────

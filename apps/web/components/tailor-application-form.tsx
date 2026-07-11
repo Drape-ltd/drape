@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { type JSX, useState } from 'react'
 import { LocationAutocomplete } from './location-autocomplete'
+import { trackWebEvent } from './web-analytics'
 
 export function TailorApplicationForm(): JSX.Element {
   const [businessName, setBusinessName] = useState('')
@@ -24,11 +25,13 @@ export function TailorApplicationForm(): JSX.Element {
     if (!portfolioUrl.trim() && !instagramUrl.trim()) {
       setStatus('error')
       setMessage('Please include at least one portfolio or social proof link.')
+      trackWebEvent('tailor_application_submit_failure', { reason: 'missing_proof_link' })
       return
     }
 
     setStatus('submitting')
     setMessage('')
+    trackWebEvent('tailor_application_submit_attempt')
 
     try {
       const response = await fetch('/api/tailor-application', {
@@ -55,6 +58,7 @@ export function TailorApplicationForm(): JSX.Element {
 
       setStatus('success')
       setMessage("Application received. We'll review it and reach out when the next step is ready.")
+      trackWebEvent('tailor_application_submit_success')
       setBusinessName('')
       setDisplayName('')
       setEmail('')
@@ -66,7 +70,9 @@ export function TailorApplicationForm(): JSX.Element {
       setNotes('')
     } catch (error) {
       setStatus('error')
-      setMessage(error instanceof Error ? error.message : 'Unable to submit your application right now.')
+      const errorMessage = error instanceof Error ? error.message : 'Unable to submit your application right now.'
+      setMessage(errorMessage)
+      trackWebEvent('tailor_application_submit_failure', { message: errorMessage })
     }
   }
 
@@ -224,6 +230,8 @@ export function TailorApplicationForm(): JSX.Element {
             type="submit"
             disabled={status === 'submitting'}
             className="inline-flex w-full items-center justify-center rounded-full bg-needle px-6 py-4 text-sm font-semibold text-white shadow-[0_16px_35px_rgba(45,106,79,0.16)] transition hover:bg-needle-600 disabled:cursor-not-allowed disabled:opacity-60 lg:w-auto"
+            data-analytics-event="form_cta_click"
+            data-analytics-label="Tailor application"
           >
             {status === 'submitting' ? 'Submitting…' : 'Submit application'}
           </button>

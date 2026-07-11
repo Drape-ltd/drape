@@ -85,6 +85,7 @@ function notFoundResponse() {
 }
 
 function contentSecurityPolicy(nonce: string) {
+  const isDevelopment = process.env.NODE_ENV !== 'production'
   const imgSrc = ["'self'", 'data:', 'blob:', getSupabaseStorageOrigin(), 'https://*.stripe.com']
     .filter(Boolean)
     .join(' ')
@@ -93,6 +94,7 @@ function contentSecurityPolicy(nonce: string) {
   const connectSrc = [
     "'self'",
     'https://*.supabase.co',
+    'wss://*.supabase.co',
     'https://*.sentry.io',
     'https://*.posthog.com',
     'https://us.i.posthog.com',
@@ -101,7 +103,16 @@ function contentSecurityPolicy(nonce: string) {
     'https://r.stripe.com',
     'https://m.stripe.network',
     'https://cloudflareinsights.com',
-  ].join(' ')
+    isDevelopment ? 'ws://localhost:*' : '',
+    isDevelopment ? 'ws://127.0.0.1:*' : '',
+  ].filter(Boolean).join(' ')
+  const scriptSrc = [
+    "'self'",
+    `'nonce-${nonce}'`,
+    isDevelopment ? "'unsafe-eval'" : '',
+    'https://js.stripe.com',
+    'https://static.cloudflareinsights.com',
+  ].filter(Boolean).join(' ')
 
   return [
     "default-src 'self'",
@@ -109,7 +120,7 @@ function contentSecurityPolicy(nonce: string) {
     "frame-ancestors 'none'",
     "object-src 'none'",
     `img-src ${imgSrc}`,
-    `script-src 'self' 'nonce-${nonce}' https://js.stripe.com https://static.cloudflareinsights.com`,
+    `script-src ${scriptSrc}`,
     "script-src-attr 'none'",
     "style-src 'self' 'unsafe-inline'",
     `connect-src ${connectSrc}`,

@@ -6,9 +6,10 @@ import type { Route } from 'next'
 import type { JSX } from 'react'
 import { useEffect, useState } from 'react'
 import { createClient } from '../lib/supabase'
+import { clearWebSessionScope } from '../lib/web-session-scope'
 
 const navItems: Array<{ href: Route; label: string }> = [
-  { href: '/vision', label: 'Drape Vision' },
+  { href: '/vision', label: 'Drapeon Vision' },
   { href: '/how-it-works', label: 'How it works' },
   { href: '/customers', label: 'Customers' },
   { href: '/tailors', label: 'Tailors' },
@@ -23,42 +24,46 @@ export function SiteHeader(): JSX.Element {
   const pathname = usePathname()
   const router = useRouter()
   const [signedIn, setSignedIn] = useState(false)
-  const [checkingSession, setCheckingSession] = useState(false)
+  const [checkingSession, setCheckingSession] = useState(true)
   const [signingOut, setSigningOut] = useState(false)
   const isActive = (href: string): boolean => pathname === href || pathname?.startsWith(`${href}/`) === true
 
   useEffect(() => {
-    let supabase: ReturnType<typeof createClient>
-
-    try {
-      supabase = createClient()
-    } catch (error) {
-      console.warn('[site-header] Auth session check unavailable.', error)
-      return
-    }
-
     let active = true
+    let unsubscribe: (() => void) | null = null
 
-    supabase.auth.getSession().then(({ data }) => {
-      if (!active) return
-      setSignedIn(Boolean(data.session?.user.id))
-      setCheckingSession(false)
-    }).catch((error: unknown) => {
-      console.warn('[site-header] Auth session check failed.', error)
-      if (!active) return
-      setSignedIn(false)
-      setCheckingSession(false)
-    })
+    Promise.resolve()
+      .then(() => {
+        const supabase = createClient()
 
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      if (!active) return
-      setSignedIn(Boolean(nextSession?.user.id))
-      setCheckingSession(false)
-    })
+        supabase.auth.getSession().then(({ data }) => {
+          if (!active) return
+          setSignedIn(Boolean(data.session?.user.id))
+          setCheckingSession(false)
+        }).catch((error: unknown) => {
+          console.warn('[site-header] Auth session check failed.', error)
+          if (!active) return
+          setSignedIn(false)
+          setCheckingSession(false)
+        })
+
+        const { data: subscription } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+          if (!active) return
+          setSignedIn(Boolean(nextSession?.user.id))
+          setCheckingSession(false)
+        })
+        unsubscribe = () => subscription.subscription.unsubscribe()
+      })
+      .catch((error: unknown) => {
+        console.warn('[site-header] Auth session check unavailable.', error)
+        if (!active) return
+        setSignedIn(false)
+        setCheckingSession(false)
+      })
 
     return () => {
       active = false
-      subscription.subscription.unsubscribe()
+      unsubscribe?.()
     }
   }, [])
 
@@ -71,6 +76,7 @@ export function SiteHeader(): JSX.Element {
     } catch (error) {
       console.warn('[site-header] Sign out failed.', error)
     }
+    clearWebSessionScope()
     setSignedIn(false)
     setSigningOut(false)
     router.replace('/sign-in')
@@ -78,16 +84,16 @@ export function SiteHeader(): JSX.Element {
   }
 
   return (
-    <header className="flex flex-col gap-3 rounded-[1.25rem] border border-ink/8 bg-white/88 px-4 py-3 shadow-[0_18px_60px_rgba(22,28,24,0.06)] backdrop-blur lg:flex-row lg:items-center lg:justify-between">
-      <Link href="/" className="shrink-0 text-2xl font-semibold tracking-[-0.04em] text-needle sm:text-3xl">
+    <header className="flex flex-col gap-3 rounded-[1rem] border border-ink/8 bg-white/90 px-4 py-3 shadow-[0_10px_34px_rgba(22,28,24,0.05)] backdrop-blur lg:flex-row lg:items-center lg:justify-between">
+      <Link href="/" className="shrink-0 text-2xl font-semibold text-needle">
         Drapeon
       </Link>
       <nav className="flex flex-wrap items-center gap-1.5 text-sm font-medium text-ink/72 lg:justify-end">
         {navItems.map((item) => {
           const active = isActive(item.href)
           const className = active
-            ? 'whitespace-nowrap rounded-full border border-transparent bg-bone px-3 py-2 text-ink'
-            : 'whitespace-nowrap rounded-full border border-transparent px-3 py-2 transition hover:bg-bone hover:text-ink'
+            ? 'whitespace-nowrap rounded-full border border-transparent bg-bone px-3 py-1.5 text-ink'
+            : 'whitespace-nowrap rounded-full border border-transparent px-3 py-1.5 transition hover:bg-bone hover:text-ink'
 
           return (
             <Link key={item.href} href={item.href} className={className}>
@@ -99,7 +105,7 @@ export function SiteHeader(): JSX.Element {
         {signedIn ? (
           <>
             <Link
-              href="/account/dashboard"
+              href="/account/orders"
               className={
                 isActive('/account')
                   ? 'whitespace-nowrap rounded-full border border-ink/8 bg-bone px-4 py-2 text-ink'

@@ -330,6 +330,28 @@ CREATE POLICY "users: manage own push token"
   USING (auth.uid()::text = user_id);
 
 -- ─────────────────────────────────────────────
+-- WEB PUSH SUBSCRIPTIONS
+-- ─────────────────────────────────────────────
+ALTER TABLE web_push_subscriptions ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "users: read own account web push subscriptions"
+  ON web_push_subscriptions FOR SELECT
+  USING (audience = 'ACCOUNT' AND user_id = auth.uid());
+
+CREATE POLICY "users: insert own account web push subscriptions"
+  ON web_push_subscriptions FOR INSERT
+  WITH CHECK (audience = 'ACCOUNT' AND user_id = auth.uid());
+
+CREATE POLICY "users: update own account web push subscriptions"
+  ON web_push_subscriptions FOR UPDATE
+  USING (audience = 'ACCOUNT' AND user_id = auth.uid())
+  WITH CHECK (audience = 'ACCOUNT' AND user_id = auth.uid());
+
+CREATE POLICY "users: delete own account web push subscriptions"
+  ON web_push_subscriptions FOR DELETE
+  USING (audience = 'ACCOUNT' AND user_id = auth.uid());
+
+-- ─────────────────────────────────────────────
 -- CONTACT BYPASS LOGS (service role only — no user access)
 -- ─────────────────────────────────────────────
 ALTER TABLE contact_bypass_logs ENABLE ROW LEVEL SECURITY;

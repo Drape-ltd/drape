@@ -2,11 +2,10 @@ import type { Metadata, Route } from 'next'
 import { CONTACTS } from '@drape/shared'
 import Link from 'next/link'
 import type { JSX } from 'react'
-import { AppSurfacePreview } from '../../components/product-visuals'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
-const lastUpdated = 'June 5, 2026'
+const lastUpdated = 'July 11, 2026'
 const accountDeletionRoute = '/account-deletion' as Route
 
 const collectedData = [
@@ -16,7 +15,7 @@ const collectedData = [
   },
   {
     title: 'Fit and measurement data',
-    body: 'Manual measurements, fit preferences, Drape Vision scan results, measurement history, and order-specific fit context.',
+    body: 'Manual measurements, fit preferences, Drapeon Vision scan results, measurement history, and order-specific fit context.',
   },
   {
     title: 'Shopping and order data',
@@ -32,14 +31,14 @@ const collectedData = [
   },
   {
     title: 'Camera and media',
-    body: 'Photos, reference images, production media, proof photos, and camera-derived measurement data when users choose to use Drape Vision or upload media.',
+    body: 'Photos, reference images, production media, proof photos, and camera-derived measurement data when users choose to use Drapeon Vision or upload media.',
   },
 ]
 
 const uses = [
   'Create and secure accounts.',
   'Provide fashion discovery, tailor profiles, ready-made shopping, and custom ordering.',
-  'Power Drape Vision measurement review and fit guidance.',
+  'Power Drapeon Vision measurement review and fit guidance.',
   'Process orders, payments, refunds, payouts, delivery, disputes, and support requests.',
   'Send order, account, security, email, SMS, and push notifications.',
   'Detect fraud, abuse, off-platform bypass attempts, unsafe content, and payment risk.',
@@ -55,9 +54,36 @@ const providers = [
   'Ops and support tools for safety, privacy, verification, disputes, refunds, and payout review.',
 ]
 
+const cookieStorage = [
+  {
+    title: 'Essential session cookies',
+    body: 'When a user signs in, Drapeon and Supabase use authentication cookies to keep the account session active, protect signed-in routes, and support secure sign-out.',
+  },
+  {
+    title: 'Remember-device choices',
+    body: 'If a user chooses not to remember the device, Drapeon uses local and session storage flags to clear the web session when that browser session ends.',
+  },
+  {
+    title: 'Temporary sign-up storage',
+    body: 'During web sign-up or email confirmation, Drapeon may temporarily store role intent and onboarding details in local storage so the account can be finished after the user returns from email.',
+  },
+  {
+    title: 'Ops access cookie',
+    body: 'The internal ops dashboard uses a separate HTTP-only cookie scoped to /ops. It is used only for protected internal access and expires after a short session window.',
+  },
+  {
+    title: 'Analytics and diagnostics',
+    body: 'Drapeon may use privacy-conscious analytics, diagnostics, crash reporting, and performance tools to understand reliability and product quality. We do not use these to sell personal data.',
+  },
+  {
+    title: 'Advertising cookies',
+    body: 'Drapeon does not currently set advertising cookies on first page load. If that changes, optional marketing cookies should be handled with a consent choice before they load.',
+  },
+]
+
 export const metadata: Metadata = buildMetadata({
   title: 'Privacy Policy',
-  description: 'How Drapeon, operated by O4 Group LLC, handles measurements, Drape Vision data, shopping data, payments, and support records.',
+  description: 'How Drapeon, operated by O4 Group LLC, handles measurements, Drapeon Vision data, shopping data, payments, and support records.',
   path: '/privacy',
 })
 
@@ -65,9 +91,8 @@ export default function PrivacyPage(): JSX.Element {
   return (
     <MarketingShell
       eyebrow="Privacy Policy"
-      title="Privacy for measurements, orders, and Drape Vision."
+      title="Privacy for measurements, orders, and Drapeon Vision."
       description="Drapeon is operated by O4 Group LLC. This policy explains how we collect, use, share, retain, and protect personal data across Drapeon services."
-      visual={<AppSurfacePreview variant="privacy" />}
       cta={
         <Link
           href={accountDeletionRoute}
@@ -81,7 +106,7 @@ export default function PrivacyPage(): JSX.Element {
         <div className="rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
           <p className="font-semibold text-ink">Last updated: {lastUpdated}</p>
           <p className="mt-3">
-            This Privacy Policy applies to Drapeon mobile apps, drapeon.co, support channels, marketplace features, Drape Vision, and related services operated by O4 Group LLC.
+            This Privacy Policy applies to Drapeon mobile apps, drapeon.co, support channels, marketplace features, Drapeon Vision, and related services operated by O4 Group LLC.
           </p>
         </div>
       </section>
@@ -101,12 +126,28 @@ export default function PrivacyPage(): JSX.Element {
 
       <section className="border-t border-ink/6 py-16">
         <SectionTitle
-          eyebrow="Drape Vision"
+          eyebrow="Drapeon Vision"
           title="Camera-assisted measurement stays user controlled."
-          description="Drape Vision uses computer vision built on Google MediaPipe to help estimate clothing measurements from a phone camera."
+          description="Drapeon Vision uses computer vision built on Google MediaPipe to help estimate clothing measurements from a phone camera."
         />
         <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
-          Drape Vision does not save raw video by default. Users can retake scans, review measurement results, choose manual entry instead, and decide when measurements or proof photos should be saved or attached to an order. Measurement results may be stored in the user&apos;s measurement profile and used for fit guidance, order briefs, tailor-assisted scans, size guidance, and support review when needed.
+          Drapeon Vision does not save raw video by default. Users can retake scans, review measurement results, choose manual entry instead, and decide when measurements or proof photos should be saved or attached to an order. Measurement results may be stored in the user&apos;s measurement profile and used for fit guidance, order briefs, tailor-assisted scans, size guidance, and support review when needed.
+        </div>
+      </section>
+
+      <section className="border-t border-ink/6 py-16">
+        <SectionTitle
+          eyebrow="Cookies and local storage"
+          title="We use only the storage needed to run accounts, security, and product quality."
+          description="A fresh visit to the public website does not need a Drapeon account cookie. Cookies and browser storage become relevant when users sign in, start sign-up, use protected account features, or access internal ops tools."
+        />
+        <div className="mt-10 grid gap-5 lg:grid-cols-3">
+          {cookieStorage.map((item) => (
+            <MarketingCard key={item.title} title={item.title} body={item.body} />
+          ))}
+        </div>
+        <div className="mt-8 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
+          You can manage cookies and local storage in your browser settings. Public pages should still load, but signed-in features need session storage so Drapeon can keep you logged in and protect account or ops pages.
         </div>
       </section>
 

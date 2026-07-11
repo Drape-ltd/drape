@@ -15,7 +15,7 @@ export const metadata: Metadata = buildMetadata({
 const customerSurfaces = [
   ['Explore', 'Find verified tailors, ready-made pieces, portfolios, reviews, location, availability, and fit context.'],
   ['Wishlist', 'Save tailors and outfits for weddings, gifts, family events, and repeat orders.'],
-  ['Drape Vision', 'Capture AI-assisted measurements, review results, retake, or switch to manual entry before using them.'],
+  ['Drapeon Vision', 'Capture camera-assisted measurements, review results, retake, or switch to manual entry before using them.'],
   ['Custom brief', 'Send garment details, references, fit preference, deadline, measurements, and delivery context in one order.'],
   ['Ready-made checkout', 'Choose size, stock, pickup, delivery, or shipping without custom-order noise.'],
   ['Messages and calls', 'Keep consultation scheduling, voice, media, clarifications, and support context inside Drapeon.'],
@@ -40,6 +40,8 @@ export default function CustomersPage(): JSX.Element {
         <Link
           href="/join"
           className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
+          data-analytics-event="primary_cta_click"
+          data-analytics-label="Customers join"
         >
           Join as customer
         </Link>
@@ -58,7 +60,7 @@ export default function CustomersPage(): JSX.Element {
           />
           <MarketingCard
             title="Fit before checkout"
-            body="Use Drape Vision or manual measurements before sending a brief, choosing a size, or asking a tailor for guidance."
+            body="Use Drapeon Vision or manual measurements before sending a brief, choosing a size, or asking a tailor for guidance."
           />
           <MarketingCard
             title="Protected order history"
@@ -101,7 +103,7 @@ export default function CustomersPage(): JSX.Element {
         <div className="mt-10 grid gap-4">
           {[
             ['1. Find the right tailor', 'Choose the right fit for the garment and the level of trust you want.'],
-            ['2. Confirm fit context', 'Review Drape Vision results, manual measurements, wearer details, or size guide choices before ordering.'],
+            ['2. Confirm fit context', 'Review Drapeon Vision results, manual measurements, wearer details, or size guide choices before ordering.'],
             ['3. Submit one strong brief', 'References, fit preference, fabric source, deadline, delivery, and cancellation context start cleanly.'],
             ['4. Review quote and payment state', 'Commercial clarity happens before production starts, with provider checkout and human payment copy.'],
             ['5. Track the work', 'Follow consultation, sourcing, approval, production media, delivery, pickup, or shipping without guesswork.'],
@@ -143,14 +145,18 @@ export default function CustomersPage(): JSX.Element {
             <Link
               href="/join"
               className="inline-flex items-center justify-center rounded-full bg-white px-6 py-4 text-sm font-semibold text-ink"
+              data-analytics-event="primary_cta_click"
+              data-analytics-label="Customer CTA join"
             >
-              Join customer queue
+              Join as a customer
             </Link>
             <Link
-              href="/join"
+              href="/how-it-works"
               className="inline-flex items-center justify-center rounded-full border border-white/18 px-6 py-4 text-sm font-semibold text-white"
+              data-analytics-event="secondary_cta_click"
+              data-analytics-label="Customer CTA how it works"
             >
-              View both sides
+              See how it works
             </Link>
           </div>
         </div>

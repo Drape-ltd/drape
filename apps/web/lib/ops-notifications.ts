@@ -1,6 +1,8 @@
 import 'server-only'
 
 import { CONTACTS } from '@drape/shared'
+import { createServiceRoleClient } from './server-supabase'
+import { sendOpsWebPush } from './web-push-server'
 
 const RESEND_API = 'https://api.resend.com/emails'
 
@@ -55,12 +57,26 @@ type CriticalOpsIssueEmailInput = {
 }
 
 export async function sendCriticalOpsIssueEmail(input: CriticalOpsIssueEmailInput) {
+  const webPushPromise = (async () => {
+    const client = createServiceRoleClient()
+    if (!client) return null
+    return sendOpsWebPush(client)
+  })().catch((error: unknown) => {
+    console.warn('[ops notification] Critical issue web push skipped.', {
+      issueType: input.issueType,
+      issueNumber: input.issueNumber,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return null
+  })
+
   const apiKey = process.env.RESEND_API_KEY ?? null
   if (!apiKey) {
     console.warn('[ops notification] Missing RESEND_API_KEY; skipping critical issue email.', {
       issueType: input.issueType,
       issueNumber: input.issueNumber,
     })
+    await webPushPromise
     return { ok: false as const, skipped: true as const }
   }
 
@@ -70,6 +86,7 @@ export async function sendCriticalOpsIssueEmail(input: CriticalOpsIssueEmailInpu
       issueType: input.issueType,
       issueNumber: input.issueNumber,
     })
+    await webPushPromise
     return { ok: false as const, skipped: true as const }
   }
 
@@ -134,8 +151,10 @@ export async function sendCriticalOpsIssueEmail(input: CriticalOpsIssueEmailInpu
       status: response.status,
       body,
     })
+    await webPushPromise
     return { ok: false as const, skipped: false as const }
   }
 
+  await webPushPromise
   return { ok: true as const, skipped: false as const }
 }

@@ -4,7 +4,7 @@ import { useEffect } from 'react'
 
 const AUTH_CALLBACK_PATH = '/auth/callback'
 const RECOVERY_CALLBACK_PATH = '/auth/recover'
-const DASHBOARD_PATH = '/account/dashboard'
+const WORKSPACE_PATH = '/account/orders'
 
 function hasAuthSignal(searchParams: URLSearchParams, hashParams: URLSearchParams) {
   return (
@@ -42,7 +42,7 @@ export function AuthLandingRedirect(): null {
     })
 
     if (targetPath === AUTH_CALLBACK_PATH && !targetUrl.searchParams.has('next')) {
-      targetUrl.searchParams.set('next', DASHBOARD_PATH)
+      targetUrl.searchParams.set('next', WORKSPACE_PATH)
     }
 
     window.location.replace(`${targetUrl.pathname}${targetUrl.search}${currentUrl.hash}`)

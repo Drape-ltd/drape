@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { Route } from 'next'
 import { createClient } from '../lib/supabase'
@@ -9,6 +10,7 @@ import {
   webOnboardingFromUser,
   type WebOnboardingPayload,
 } from '../lib/account-bootstrap'
+import { markWebSessionScope } from '../lib/web-session-scope'
 
 type EmailOtpType = 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email_change' | 'email'
 
@@ -22,7 +24,7 @@ const emailOtpTypes = new Set<EmailOtpType>([
 ])
 
 function sanitizeNext(value: string | null) {
-  return value?.startsWith('/') === true && !value.startsWith('//') ? value : '/account/dashboard'
+  return value?.startsWith('/') === true && !value.startsWith('//') ? value : '/account/orders'
 }
 
 function normalizeEmailOtpType(value: string | null): EmailOtpType | null {
@@ -106,6 +108,7 @@ export function AuthCallbackClient(): React.JSX.Element {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [message, setMessage] = useState('Finishing sign in...')
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -117,13 +120,18 @@ export function AuthCallbackClient(): React.JSX.Element {
       try {
         await applySessionFromUrl(supabase, searchParams)
       } catch (error) {
-        if (active) setMessage(mapCallbackError(error instanceof Error ? error.message : undefined))
+        if (active) {
+          setFailed(true)
+          setMessage(mapCallbackError(error instanceof Error ? error.message : undefined))
+        }
         return
       }
 
       if (active) {
-        setMessage('Email confirmed. Opening your Drapeon dashboard...')
+        setFailed(false)
+        setMessage('Account link confirmed. Opening your Drapeon workspace...')
       }
+      markWebSessionScope(true)
 
       const roleIntent = window.localStorage.getItem('drapeon.web.auth.roleIntent')
       const { data } = await supabase.auth.getUser()
@@ -174,6 +182,11 @@ export function AuthCallbackClient(): React.JSX.Element {
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Drapeon</p>
           <h1 className="mt-3 text-4xl text-ink">Opening your account</h1>
           <p className="mt-4 text-sm leading-7 text-ink/66">{message}</p>
+          {failed ? (
+            <Link href="/sign-in" className="mt-5 inline-flex min-h-11 items-center justify-center rounded-full bg-needle px-5 py-2.5 text-sm font-semibold text-white">
+              Return to sign in
+            </Link>
+          ) : null}
         </div>
       </section>
     </main>

@@ -1,30 +1,53 @@
 -- TestFlight readiness: structured product feedback and deletion integrity.
 
-create table if not exists public.product_feedback (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade,
-  context text not null check (
-    context in (
-      'vision_scan_saved',
-      'vision_scan_failed',
-      'order_completed',
-      'general'
+do $$
+declare
+  v_order_id_type text;
+begin
+  select format_type(a.atttypid, a.atttypmod)
+    into v_order_id_type
+  from pg_attribute a
+  join pg_class c on c.oid = a.attrelid
+  join pg_namespace n on n.oid = c.relnamespace
+  where n.nspname = 'public'
+    and c.relname = 'orders'
+    and a.attname = 'id'
+    and a.attnum > 0
+    and not a.attisdropped;
+
+  if v_order_id_type is null then
+    raise exception 'Could not resolve public.orders.id type for product_feedback migration.';
+  end if;
+
+  execute format($sql$
+    create table if not exists public.product_feedback (
+      id uuid primary key default gen_random_uuid(),
+      user_id uuid not null references auth.users(id) on delete cascade,
+      context text not null check (
+        context in (
+          'vision_scan_saved',
+          'vision_scan_failed',
+          'order_completed',
+          'general'
+        )
+      ),
+      rating integer check (rating between 1 and 5),
+      comment text check (comment is null or char_length(comment) <= 2000),
+      measurement_scan_id uuid references public.measurement_scans(id) on delete set null,
+      order_id %s references public.orders(id) on delete set null,
+      app_variant text,
+      platform text,
+      app_version text,
+      metadata jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      constraint product_feedback_metadata_object_check
+        check (jsonb_typeof(metadata) = 'object'),
+      constraint product_feedback_metadata_size_check
+        check (pg_column_size(metadata) < 16384)
     )
-  ),
-  rating integer check (rating between 1 and 5),
-  comment text check (comment is null or char_length(comment) <= 2000),
-  measurement_scan_id uuid references public.measurement_scans(id) on delete set null,
-  order_id uuid references public.orders(id) on delete set null,
-  app_variant text,
-  platform text,
-  app_version text,
-  metadata jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now(),
-  constraint product_feedback_metadata_object_check
-    check (jsonb_typeof(metadata) = 'object'),
-  constraint product_feedback_metadata_size_check
-    check (pg_column_size(metadata) < 16384)
-);
+  $sql$, v_order_id_type);
+end;
+$$;
 
 create index if not exists product_feedback_user_created_idx
   on public.product_feedback (user_id, created_at desc);
@@ -70,15 +93,15 @@ create policy "Users insert own product feedback"
       or exists (
         select 1
         from public.orders feedback_order
-        where feedback_order.id = order_id
+        where feedback_order.id::text = order_id::text
           and (
-            feedback_order.customer_id = auth.uid()
-            or feedback_order.tailor_id = auth.uid()
+            feedback_order.customer_id::text = auth.uid()::text
+            or feedback_order.tailor_id::text = auth.uid()::text
             or exists (
               select 1
               from public.tailor_profiles feedback_tailor
-              where feedback_tailor.id = feedback_order.tailor_profile_id
-                and feedback_tailor.user_id = auth.uid()
+              where feedback_tailor.id::text = feedback_order.tailor_profile_id::text
+                and feedback_tailor.user_id::text = auth.uid()::text
             )
           )
       )
@@ -95,47 +118,159 @@ grant select, insert, delete on table public.product_feedback to authenticated;
 -- Keep account deletion from leaving orphaned customer, tailor, review, payout, or client-link rows.
 -- Orders are shared marketplace history, so they must be retained explicitly
 -- instead of cascading away when one participant requests account deletion.
+create or replace function pg_temp.add_fk_if_type_compatible(
+  p_source_schema text,
+  p_source_table text,
+  p_source_column text,
+  p_constraint_name text,
+  p_target_schema text,
+  p_target_table text,
+  p_target_column text,
+  p_on_delete text
+)
+returns void
+language plpgsql
+as $$
+declare
+  v_source_type text;
+  v_target_type text;
+begin
+  select format_type(a.atttypid, a.atttypmod)
+    into v_source_type
+  from pg_attribute a
+  join pg_class c on c.oid = a.attrelid
+  join pg_namespace n on n.oid = c.relnamespace
+  where n.nspname = p_source_schema
+    and c.relname = p_source_table
+    and a.attname = p_source_column
+    and a.attnum > 0
+    and not a.attisdropped;
+
+  select format_type(a.atttypid, a.atttypmod)
+    into v_target_type
+  from pg_attribute a
+  join pg_class c on c.oid = a.attrelid
+  join pg_namespace n on n.oid = c.relnamespace
+  where n.nspname = p_target_schema
+    and c.relname = p_target_table
+    and a.attname = p_target_column
+    and a.attnum > 0
+    and not a.attisdropped;
+
+  if v_source_type is null or v_target_type is null then
+    raise notice 'Skipping %, source or target column is missing.', p_constraint_name;
+    return;
+  end if;
+
+  if v_source_type <> v_target_type then
+    raise notice 'Skipping %, incompatible types % and %.', p_constraint_name, v_source_type, v_target_type;
+    return;
+  end if;
+
+  execute format(
+    'alter table %I.%I add constraint %I foreign key (%I) references %I.%I(%I) on delete %s',
+    p_source_schema,
+    p_source_table,
+    p_constraint_name,
+    p_source_column,
+    p_target_schema,
+    p_target_table,
+    p_target_column,
+    p_on_delete
+  );
+end;
+$$;
+
 alter table if exists public.orders
   drop constraint if exists orders_customer_id_fkey;
-alter table if exists public.orders
-  add constraint orders_customer_id_fkey
-  foreign key (customer_id) references public.users(id) on delete restrict;
+select pg_temp.add_fk_if_type_compatible(
+  'public',
+  'orders',
+  'customer_id',
+  'orders_customer_id_fkey',
+  'public',
+  'users',
+  'id',
+  'restrict'
+);
 
 alter table if exists public.orders
   drop constraint if exists orders_tailor_profile_id_fkey;
-alter table if exists public.orders
-  add constraint orders_tailor_profile_id_fkey
-  foreign key (tailor_profile_id) references public.tailor_profiles(id) on delete restrict;
+select pg_temp.add_fk_if_type_compatible(
+  'public',
+  'orders',
+  'tailor_profile_id',
+  'orders_tailor_profile_id_fkey',
+  'public',
+  'tailor_profiles',
+  'id',
+  'restrict'
+);
 
 alter table if exists public.reviews
   drop constraint if exists reviews_order_id_fkey;
-alter table if exists public.reviews
-  add constraint reviews_order_id_fkey
-  foreign key (order_id) references public.orders(id) on delete cascade;
+select pg_temp.add_fk_if_type_compatible(
+  'public',
+  'reviews',
+  'order_id',
+  'reviews_order_id_fkey',
+  'public',
+  'orders',
+  'id',
+  'cascade'
+);
 
 alter table if exists public.reviews
   drop constraint if exists reviews_tailor_profile_id_fkey;
-alter table if exists public.reviews
-  add constraint reviews_tailor_profile_id_fkey
-  foreign key (tailor_profile_id) references public.tailor_profiles(id) on delete cascade;
+select pg_temp.add_fk_if_type_compatible(
+  'public',
+  'reviews',
+  'tailor_profile_id',
+  'reviews_tailor_profile_id_fkey',
+  'public',
+  'tailor_profiles',
+  'id',
+  'cascade'
+);
 
 alter table if exists public.disputes
   drop constraint if exists disputes_order_id_fkey;
-alter table if exists public.disputes
-  add constraint disputes_order_id_fkey
-  foreign key (order_id) references public.orders(id) on delete cascade;
+select pg_temp.add_fk_if_type_compatible(
+  'public',
+  'disputes',
+  'order_id',
+  'disputes_order_id_fkey',
+  'public',
+  'orders',
+  'id',
+  'cascade'
+);
 
 alter table if exists public.payouts
   drop constraint if exists payouts_tailor_profile_id_fkey;
-alter table if exists public.payouts
-  add constraint payouts_tailor_profile_id_fkey
-  foreign key (tailor_profile_id) references public.tailor_profiles(id) on delete cascade;
+select pg_temp.add_fk_if_type_compatible(
+  'public',
+  'payouts',
+  'tailor_profile_id',
+  'payouts_tailor_profile_id_fkey',
+  'public',
+  'tailor_profiles',
+  'id',
+  'cascade'
+);
 
 alter table if exists public.tailor_clients
   drop constraint if exists tailor_clients_linked_user_id_fkey;
-alter table if exists public.tailor_clients
-  add constraint tailor_clients_linked_user_id_fkey
-  foreign key (linked_user_id) references public.users(id) on delete set null;
+select pg_temp.add_fk_if_type_compatible(
+  'public',
+  'tailor_clients',
+  'linked_user_id',
+  'tailor_clients_linked_user_id_fkey',
+  'public',
+  'users',
+  'id',
+  'set null'
+);
 
 -- Bound high-churn / externally supplied fields so authenticated clients cannot
 -- bloat hot tables with oversized JSON or profile text.

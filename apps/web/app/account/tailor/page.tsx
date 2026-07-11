@@ -4,6 +4,7 @@ import Link from 'next/link'
 import type { JSX } from 'react'
 import { AppSurfacePreview } from '../../../components/product-visuals'
 import { MarketingShell, SectionTitle } from '../../../components/marketing-shell'
+import { AccountSignedInRedirect } from '../../../components/account-signed-in-redirect'
 import { buildMetadata } from '../../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
@@ -17,7 +18,7 @@ export default function TailorAccountPage(): JSX.Element {
     <MarketingShell
       eyebrow="Tailor access"
       title="Open the tailor workspace."
-      description="Tailors can sign in on web to review work, shop state, customer context, payout readiness, messages, and account state from the same Drapeon profile used in the app."
+      description="Tailors can sign in on web to review work, shop state, customer context, payout readiness, messages, and account state."
       visual={<AppSurfacePreview variant="tailor" />}
       cta={
         <div className="flex flex-col gap-3 sm:flex-row">
@@ -36,11 +37,12 @@ export default function TailorAccountPage(): JSX.Element {
         </div>
       }
     >
+      <AccountSignedInRedirect />
       <section className="py-8">
         <SectionTitle
           eyebrow="What tailor access controls"
           title="Your craft, orders, clients, proof, and payout state live in one workspace."
-          description="Web shows the same tailor records. The mobile app remains the place for proof capture, production media, calls, checkout-adjacent flows, and sensitive account changes."
+          description="Use tailor access for incoming work, shop items, production proof, client context, earnings, payouts, and account readiness."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           {[
@@ -67,7 +69,7 @@ export default function TailorAccountPage(): JSX.Element {
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Recovery</p>
             <h3 className="mt-4 text-2xl text-ink">Password and login help</h3>
           </Link>
-          <Link href="/payouts" className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]">
+          <Link href="/account/payout" className="rounded-[1.5rem] border border-ink/6 bg-white/82 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(22,28,24,0.10)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Payouts</p>
             <h3 className="mt-4 text-2xl text-ink">Payout readiness</h3>
           </Link>

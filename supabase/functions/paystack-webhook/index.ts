@@ -70,6 +70,7 @@ type OrderRow = {
 }
 
 type PaymentPhase = 'INITIAL_ORDER' | 'FULFILLMENT' | 'CONSULTATION' | 'MATERIAL_ADVANCE'
+const PAYMENT_REVERSAL_TERMINAL_STAGES = new Set(['COMPLETE', 'CANCELLED', 'REFUNDED', 'DECLINED', 'EXPIRED'])
 
 async function findPayoutForReference(supabase: SupabaseClient, reference: string) {
   const { data, error } = await supabase
@@ -562,6 +563,168 @@ function isFulfillmentPaymentStage(order: OrderRow) {
   return order.stage === 'FINISHING' || !!order.fulfillment_payment_paid_at
 }
 
+async function markPaystackChargeReversed(
+  supabase: SupabaseClient,
+  input: {
+    event: PaystackEvent
+    order: OrderRow
+    transaction: PaystackTransaction
+    phase: PaymentPhase
+    paymentAttemptId: string | null
+  },
+) {
+  const nowIso = new Date().toISOString()
+  const matchedAttempt = await markPaymentAttemptStatus(supabase, {
+    provider: 'PAYSTACK',
+    providerPaymentId: input.transaction.reference,
+    status: 'REFUNDED',
+    providerResponse: input.event as Record<string, unknown>,
+  }).catch(() => null)
+
+  const paymentId = matchedAttempt?.id ?? input.paymentAttemptId
+  const reversedAmount = Math.max(
+    typeof matchedAttempt?.amount === 'number'
+      ? matchedAttempt.amount
+      : typeof input.transaction.amount === 'number'
+        ? input.transaction.amount
+        : 0,
+    0,
+  )
+
+  if (paymentId && reversedAmount > 0) {
+    const { error: paymentPatchError } = await supabase
+      .from('order_payments')
+      .update({
+        status: 'REFUNDED',
+        refunded_amount: reversedAmount,
+        last_refund_amount: reversedAmount,
+        last_refund_at: nowIso,
+        refunded_at: nowIso,
+        provider_response: input.event as Record<string, unknown>,
+      })
+      .eq('id', paymentId)
+
+    if (paymentPatchError) throw new Error(paymentPatchError.message)
+  }
+
+  let orderStageChanged = false
+  if (input.phase === 'INITIAL_ORDER' && !PAYMENT_REVERSAL_TERMINAL_STAGES.has(input.order.stage)) {
+    const { data: updatedOrder, error: orderUpdateError } = await supabase
+      .from('orders')
+      .update({
+        stage: 'PAYMENT_FAILED',
+        stage_updated_at: nowIso,
+        payment_provider: 'PAYSTACK',
+        payment_intent_id: input.transaction.reference,
+        payment_checkout_url: null,
+        escrow_released: false,
+        escrow_released_at: null,
+      })
+      .eq('id', input.order.id)
+      .select('id')
+      .maybeSingle()
+
+    if (orderUpdateError) throw new Error(orderUpdateError.message)
+    orderStageChanged = !!updatedOrder?.id
+  } else if (input.phase === 'FULFILLMENT') {
+    const { error: fulfillmentUpdateError } = await supabase
+      .from('orders')
+      .update({
+        fulfillment_payment_paid_at: null,
+        fulfillment_payment_checkout_url: null,
+        escrow_released: false,
+        escrow_released_at: null,
+      })
+      .eq('id', input.order.id)
+
+    if (fulfillmentUpdateError) throw new Error(fulfillmentUpdateError.message)
+  } else {
+    const { error: escrowUpdateError } = await supabase
+      .from('orders')
+      .update({
+        escrow_released: false,
+        escrow_released_at: null,
+      })
+      .eq('id', input.order.id)
+
+    if (escrowUpdateError) throw new Error(escrowUpdateError.message)
+  }
+
+  await supabase.from('order_stage_updates').insert({
+    order_id: input.order.id,
+    stage: orderStageChanged ? 'PAYMENT_FAILED' : input.order.stage,
+    note: `Paystack reversed payment ${input.transaction.reference}. Drape ops must review the order before work, handoff, or payout continues.`,
+  })
+
+  await createOrRefreshOpsIssue(supabase, {
+    issueType: 'PAYMENT_BLOCKED',
+    severity: 'CRITICAL',
+    source: FN,
+    actorRole: 'SYSTEM',
+    orderId: input.order.id,
+    userId: input.order.customer_id ?? null,
+    provider: 'PAYSTACK',
+    stage: orderStageChanged ? 'PAYMENT_FAILED' : input.order.stage,
+    title: 'Paystack payment reversed',
+    description: `Paystack reversed payment ${input.transaction.reference} for order ${input.order.reference ?? input.order.id}.`,
+    recommendedAction: 'Freeze payout and fulfillment until finance confirms whether money is recoverable. Contact both parties and decide whether to retry payment, pause production, or cancel/refund.',
+    dedupeKey: `paystack-charge-reversed:${input.transaction.reference}`,
+    metadata: {
+      provider: 'PAYSTACK',
+      paystack_event_type: input.event.event,
+      provider_payment_id: input.transaction.reference,
+      order_stage_before: input.order.stage,
+      payment_phase: input.phase,
+      reversed_amount: reversedAmount,
+      currency: input.transaction.currency ?? null,
+      payment_id: paymentId,
+    },
+  })
+
+  if (input.order.customer_id) {
+    EdgeRuntime.waitUntil(
+      sendPushToUser(supabase, input.order.customer_id.toString(), {
+        title: 'Payment needs review',
+        body: 'Your payment provider reversed a payment on this order. Drapeon support is reviewing it now.',
+        preferenceKey: 'orderUpdates',
+        data: { orderId: input.order.id },
+      }),
+    )
+  }
+
+  if (input.order.tailor_id) {
+    EdgeRuntime.waitUntil(
+      sendPushToUser(supabase, input.order.tailor_id.toString(), {
+        title: 'Order payment needs review',
+        body: 'A Paystack payment for this order was reversed. Pause fulfillment until Drapeon support clears the order.',
+        preferenceKey: 'newOrders',
+        data: { orderId: input.order.id },
+      }),
+    )
+  }
+
+  await audit(supabase, {
+    event: 'payment.reversed',
+    actor_role: 'SYSTEM',
+    order_id: input.order.id,
+    severity: 'error',
+    payload: {
+      function: FN,
+      provider: 'PAYSTACK',
+      paystack_event_type: input.event.event,
+      payment_intent_id: input.transaction.reference,
+      payment_phase: input.phase,
+      order_stage_before: input.order.stage,
+      order_stage_after: orderStageChanged ? 'PAYMENT_FAILED' : input.order.stage,
+      reversed_amount: reversedAmount,
+      currency: input.transaction.currency ?? null,
+      payment_id: paymentId,
+    },
+  })
+
+  return { paymentId, reversedAmount, orderStageChanged }
+}
+
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
@@ -758,6 +921,84 @@ Deno.serve(async (req) => {
       }
 
       return new Response(JSON.stringify({ ok: true, recorded: true, type: event.event }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (event.event === 'charge.reversed') {
+      if (!transaction?.reference) {
+        await markWebhookEventProcessed(supabase, webhookEvent.id, {
+          orderId: paymentAttempt?.order_id ?? null,
+          paymentId: paymentAttempt?.id ?? null,
+          processingResult: 'invalid_payload:missing_reference',
+        })
+        return new Response('Missing transaction payload', { status: 400, headers: cors })
+      }
+
+      const order = await findOrderForTransaction(supabase, transaction)
+      if (!order?.id) {
+        const matchedAttempt = await markPaymentAttemptStatus(supabase, {
+          provider: 'PAYSTACK',
+          providerPaymentId: transaction.reference,
+          status: 'REFUNDED',
+          providerResponse: event as Record<string, unknown>,
+        }).catch(() => null)
+
+        if (matchedAttempt?.id && matchedAttempt.amount > 0) {
+          await supabase
+            .from('order_payments')
+            .update({
+              refunded_amount: matchedAttempt.amount,
+              last_refund_amount: matchedAttempt.amount,
+              last_refund_at: new Date().toISOString(),
+            })
+            .eq('id', matchedAttempt.id)
+        }
+
+        await markWebhookEventProcessed(supabase, webhookEvent.id, {
+          orderId: paymentAttempt?.order_id ?? null,
+          paymentId: matchedAttempt?.id ?? paymentAttempt?.id ?? null,
+          processingResult: 'charge_reversed_missing_order',
+        })
+
+        await audit(supabase, {
+          event: 'payment.webhook_order_missing',
+          actor_role: 'SYSTEM',
+          severity: 'error',
+          payload: {
+            function: FN,
+            provider: 'PAYSTACK',
+            paystack_event_type: event.event,
+            payment_intent_id: transaction.reference,
+          },
+        })
+
+        return new Response(JSON.stringify({ ok: true, reversed: true, missingOrder: true }), {
+          headers: { ...cors, 'Content-Type': 'application/json' },
+        })
+      }
+
+      const phase = paymentPhaseForTransaction(order, transaction)
+      const reversal = await markPaystackChargeReversed(supabase, {
+        event,
+        order,
+        transaction,
+        phase,
+        paymentAttemptId: paymentAttempt?.id ?? null,
+      })
+
+      await markWebhookEventProcessed(supabase, webhookEvent.id, {
+        orderId: order.id,
+        paymentId: reversal.paymentId,
+        processingResult: reversal.orderStageChanged ? 'charge_reversed_order_payment_failed' : 'charge_reversed_recorded',
+      })
+
+      return new Response(JSON.stringify({
+        ok: true,
+        reversed: true,
+        phase,
+        orderStageChanged: reversal.orderStageChanged,
+      }), {
         headers: { ...cors, 'Content-Type': 'application/json' },
       })
     }
@@ -961,6 +1202,9 @@ Deno.serve(async (req) => {
     })
   } catch (error) {
     log('error', FN, 'webhook.failed', { error: error instanceof Error ? error.message : String(error) })
-    return new Response('Webhook error', { status: 400, headers: cors })
+    if (error instanceof SyntaxError) {
+      return new Response('Invalid JSON payload', { status: 400, headers: cors })
+    }
+    return new Response('Webhook error', { status: 500, headers: cors })
   }
 })

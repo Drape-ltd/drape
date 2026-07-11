@@ -4,6 +4,7 @@ import Link from 'next/link'
 import type { JSX } from 'react'
 import { AppSurfacePreview } from '../../../components/product-visuals'
 import { MarketingShell, SectionTitle } from '../../../components/marketing-shell'
+import { AccountSignedInRedirect } from '../../../components/account-signed-in-redirect'
 import { buildMetadata } from '../../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
@@ -17,7 +18,7 @@ export default function CustomerAccountPage(): JSX.Element {
     <MarketingShell
       eyebrow="Customer access"
       title="Open the customer side of Drapeon."
-      description="Customers can sign in on web to review orders, measurements, wishlist, messages, payment history, and support context from the same account used in the app."
+      description="Customers can sign in on web to review orders, measurements, wishlist, messages, payment history, and support."
       visual={<AppSurfacePreview variant="explore" />}
       cta={
         <div className="flex flex-col gap-3 sm:flex-row">
@@ -36,11 +37,12 @@ export default function CustomerAccountPage(): JSX.Element {
         </div>
       }
     >
+      <AccountSignedInRedirect />
       <section className="py-8">
         <SectionTitle
           eyebrow="What customer access controls"
           title="Orders, fit, payment, messages, and delivery stay together."
-          description="Web shows the same customer records. The mobile app remains the place for camera capture, push notifications, checkout, proof media, and handoff confirmation."
+          description="Review order state, quotes, payment attempts, messages, saved choices, measurements, delivery, reviews, and support from the customer side of your account."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           {[

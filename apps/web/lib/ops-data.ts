@@ -11,6 +11,17 @@ import {
 
 import { createServiceRoleClient } from './server-supabase'
 
+const OPS_DASHBOARD_CACHE_TTL_MS = 15_000
+
+let opsDashboardDataCache: {
+  data: OpsDashboardData
+  expiresAt: number
+} | null = null
+
+export function invalidateOpsDashboardDataCache() {
+  opsDashboardDataCache = null
+}
+
 type DisputeRow = {
   id: string
   order_id: string
@@ -1126,7 +1137,7 @@ function messageMediaCount(messages: MessageRow[]) {
   }).length
 }
 
-export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
+async function loadOpsDashboardDataFresh(): Promise<OpsDashboardData | null> {
   const client = createServiceRoleClient()
   if (!client) return null
 
@@ -2222,4 +2233,21 @@ export async function loadOpsDashboardData(): Promise<OpsDashboardData | null> {
     }),
     issues,
   }
+}
+
+export async function loadOpsDashboardData(options: { bypassCache?: boolean } = {}): Promise<OpsDashboardData | null> {
+  const now = Date.now()
+  if (!options.bypassCache && opsDashboardDataCache && opsDashboardDataCache.expiresAt > now) {
+    return opsDashboardDataCache.data
+  }
+
+  const data = await loadOpsDashboardDataFresh()
+  if (data) {
+    opsDashboardDataCache = {
+      data,
+      expiresAt: now + OPS_DASHBOARD_CACHE_TTL_MS,
+    }
+  }
+
+  return data
 }

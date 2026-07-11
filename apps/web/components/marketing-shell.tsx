@@ -1,5 +1,4 @@
 import type { JSX, ReactNode } from 'react'
-import { AppSurfacePreview } from './product-visuals'
 import { PublicSiteHeader } from './public-site-header'
 import { SiteFooter } from './site-footer'
 
@@ -25,18 +24,16 @@ export function MarketingShell({
       <div className="viewport-safe-shell mx-auto py-6 sm:px-8 lg:px-12">
         <PublicSiteHeader />
 
-        <section className="grid min-w-0 gap-8 py-8 lg:grid-cols-[1.08fr_0.92fr] lg:items-center lg:py-12">
-          <div className="min-w-0">
-            <div className="inline-flex max-w-full items-center rounded-full border border-needle/10 bg-white/70 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-needle shadow-sm sm:tracking-[0.18em]">
+        <section className={`min-w-0 py-10 lg:py-16 ${visual ? 'grid gap-10 lg:grid-cols-[1.1fr_0.9fr] lg:items-start' : ''}`}>
+          <div className={visual ? 'min-w-0' : 'max-w-3xl'}>
+            <div className="inline-flex max-w-full items-center rounded-full border border-needle/12 bg-white/90 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-needle shadow-sm">
               {eyebrow}
             </div>
-            <h1 className="mt-5 max-w-[22rem] break-words text-[2.35rem] leading-[1.02] text-ink sm:max-w-4xl sm:text-6xl lg:text-7xl">{title}</h1>
-            <p className="mt-6 max-w-[22rem] text-lg leading-8 text-ink/68 sm:max-w-2xl sm:text-xl">{description}</p>
+            <h1 className="mt-6 text-[2.4rem] leading-[1.02] text-ink sm:text-5xl lg:text-6xl">{title}</h1>
+            <p className="mt-5 max-w-xl text-lg leading-8 text-ink/68">{description}</p>
+            {cta ? <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">{cta}</div> : null}
           </div>
-          <div className="min-w-0">
-            {visual ?? <AppSurfacePreview variant="explore" />}
-            {cta ? <div className="mt-4">{cta}</div> : null}
-          </div>
+          {visual ? <div className="min-w-0">{visual}</div> : null}
         </section>
 
         {children}

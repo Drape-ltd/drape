@@ -20,6 +20,7 @@
  */
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { sendWebPushToUser } from './web-push.ts'
 
 export interface PushPayload {
   title: string
@@ -153,6 +154,8 @@ export async function sendPushToUser(
     const allowed = await userAllowsPush(supabase, userId, preferenceKey)
     if (!allowed) return { status: 'SKIPPED', reason: 'PREFERENCE_DISABLED' }
 
+    const webPushResult = await sendWebPushToUser(supabase, userId)
+
     const { data: row, error } = await supabase
       .from('push_tokens')
       .select('token')
@@ -160,7 +163,11 @@ export async function sendPushToUser(
       .maybeSingle()
 
     if (error) return { status: 'ERROR', reason: `push-token-lookup-failed:${error.message}` }
-    if (!row?.token) return { status: 'SKIPPED', reason: 'NO_TOKEN' }
+    if (!row?.token) {
+      if (webPushResult.sent > 0) return { status: 'SENT' }
+      if (webPushResult.failed > 0) return { status: 'ERROR', reason: 'web-push-failed' }
+      return { status: 'SKIPPED', reason: 'NO_TOKEN' }
+    }
 
     const res = await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
@@ -179,7 +186,10 @@ export async function sendPushToUser(
       }),
     })
 
-    if (!res.ok) return { status: 'ERROR', reason: `expo-push-http-${res.status}` }
+    if (!res.ok) {
+      if (webPushResult.sent > 0) return { status: 'SENT' }
+      return { status: 'ERROR', reason: `expo-push-http-${res.status}` }
+    }
 
     const json = await res.json()
     const result = json?.data
@@ -188,9 +198,11 @@ export async function sendPushToUser(
     // keep sending to dead tokens and wasting API quota.
     if (result?.status === 'error' && result?.details?.error === 'DeviceNotRegistered') {
       await supabase.from('push_tokens').delete().eq('user_id', userId)
+      if (webPushResult.sent > 0) return { status: 'SENT' }
       return { status: 'SKIPPED', reason: 'DEVICE_NOT_REGISTERED' }
     }
     if (result?.status === 'error') {
+      if (webPushResult.sent > 0) return { status: 'SENT' }
       return {
         status: 'ERROR',
         reason: String(result?.message ?? result?.details?.error ?? 'expo-push-error'),

@@ -14,19 +14,22 @@ function mapRecoveryError(message: string | undefined) {
   return 'We could not send a reset link right now. Please try again.'
 }
 
+function getBrowserRecoveryOrigin() {
+  if (typeof window === 'undefined') return null
+  if (window.location.hostname === '127.0.0.1') {
+    return `${window.location.protocol}//localhost${window.location.port ? `:${window.location.port}` : ''}`
+  }
+  return window.location.origin
+}
+
 function getHostedRecoveryUrl() {
   const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/+$/, '')
   if (configured && !configured.includes('localhost') && !configured.includes('127.0.0.1')) {
     return `${configured}/auth/recover`
   }
 
-  if (
-    typeof window !== 'undefined' &&
-    !window.location.hostname.includes('localhost') &&
-    window.location.hostname !== '127.0.0.1'
-  ) {
-    return `${window.location.origin}/auth/recover`
-  }
+  const browserOrigin = getBrowserRecoveryOrigin()
+  if (browserOrigin) return `${browserOrigin}/auth/recover`
 
   return 'https://drapeon.co/auth/recover'
 }
@@ -98,7 +101,7 @@ export function AccountRecoveryRequestForm(): React.JSX.Element {
         />
       </label>
       {error ? (
-        <div className="rounded-[1rem] border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
+        <div role="alert" aria-live="polite" className="rounded-[1rem] border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
           {error}
         </div>
       ) : null}

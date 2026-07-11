@@ -32,7 +32,7 @@ import {
   markWebhookEventProcessed,
 } from '../_shared/payment-ledger.ts'
 import { recordRejectedWebhook } from '../_shared/payment-webhook.ts'
-import { verifyStripeWebhookSignature, type StripePaymentIntent } from '../_shared/stripe.ts'
+import { verifyStripeWebhookSignature, type StripeConnectAccount, type StripePaymentIntent } from '../_shared/stripe.ts'
 
 const FN = 'stripe-webhook'
 
@@ -80,12 +80,143 @@ type StripeTransferObject = {
   metadata?: Record<string, string> | null
 }
 
+type TailorStripePayoutProfile = {
+  id: string
+  user_id: string | null
+  payout_account_verified: boolean | null
+  payout_reverification_required: boolean | null
+}
+
 function isStripePaymentIntent(value: unknown): value is StripePaymentIntent {
   return !!value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string'
 }
 
 function isStripeTransferObject(value: unknown): value is StripeTransferObject {
   return !!value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string'
+}
+
+function isStripeConnectAccount(value: unknown): value is StripeConnectAccount {
+  return !!value
+    && typeof value === 'object'
+    && typeof (value as { id?: unknown }).id === 'string'
+    && typeof (value as { charges_enabled?: unknown }).charges_enabled === 'boolean'
+    && typeof (value as { payouts_enabled?: unknown }).payouts_enabled === 'boolean'
+}
+
+async function findTailorProfileForStripeAccount(
+  supabase: SupabaseClient,
+  accountId: string,
+): Promise<TailorStripePayoutProfile | null> {
+  const select = 'id, user_id, payout_account_verified, payout_reverification_required'
+  const byConnect = await supabase
+    .from('tailor_profiles')
+    .select(select)
+    .eq('stripe_connect_account_id', accountId)
+    .maybeSingle()
+
+  if (byConnect.error) throw new Error(byConnect.error.message)
+  if (byConnect.data?.id) return byConnect.data as TailorStripePayoutProfile
+
+  const byLegacy = await supabase
+    .from('tailor_profiles')
+    .select(select)
+    .eq('stripe_account_id', accountId)
+    .maybeSingle()
+
+  if (byLegacy.error) throw new Error(byLegacy.error.message)
+  return (byLegacy.data as TailorStripePayoutProfile | null) ?? null
+}
+
+async function handleStripeConnectAccountUpdated(
+  supabase: SupabaseClient,
+  input: {
+    event: StripeEvent
+    account: StripeConnectAccount
+    webhookEventId: string
+  },
+) {
+  const profile = await findTailorProfileForStripeAccount(supabase, input.account.id)
+  if (!profile?.id) {
+    await markWebhookEventProcessed(supabase, input.webhookEventId, {
+      orderId: null,
+      paymentId: null,
+      processingResult: 'missing_tailor_profile',
+    })
+    await audit(supabase, {
+      event: 'seller.payout_account_webhook_missing',
+      actor_role: 'SYSTEM',
+      severity: 'warn',
+      payload: {
+        function: FN,
+        provider: 'STRIPE',
+        stripe_event_id: input.event.id,
+        stripe_event_type: input.event.type,
+        stripe_connect_account_id: input.account.id,
+      },
+    })
+    return { profile: null, verified: false, notified: false }
+  }
+
+  const verified = input.account.charges_enabled === true && input.account.payouts_enabled === true
+  const shouldNotify = verified && (
+    profile.payout_account_verified !== true || profile.payout_reverification_required === true
+  )
+  const nowIso = new Date().toISOString()
+  const patch: Record<string, unknown> = {
+    payout_account_type: 'STRIPE_CONNECT',
+    payout_account_verified: verified,
+    payout_reverification_required: verified ? false : true,
+    payout_account_verified_at: verified ? nowIso : null,
+    stripe_connect_account_id: input.account.id,
+    stripe_account_id: input.account.id,
+  }
+
+  if (typeof input.account.country === 'string' && input.account.country.trim()) {
+    patch.payout_country_code = input.account.country.trim().toUpperCase()
+  }
+
+  const { error: updateError } = await supabase
+    .from('tailor_profiles')
+    .update(patch)
+    .eq('id', profile.id)
+
+  if (updateError) throw new Error(updateError.message)
+
+  await markWebhookEventProcessed(supabase, input.webhookEventId, {
+    orderId: null,
+    paymentId: null,
+    processingResult: verified ? 'connect_account_verified' : 'connect_account_pending',
+  })
+
+  await audit(supabase, {
+    event: verified ? 'seller.payout_account_verified' : 'seller.payout_account_update',
+    actor_role: 'SYSTEM',
+    severity: verified ? 'info' : 'warn',
+    payload: {
+      function: FN,
+      provider: 'STRIPE',
+      stripe_event_id: input.event.id,
+      stripe_event_type: input.event.type,
+      stripe_connect_account_id: input.account.id,
+      tailor_profile_id: profile.id,
+      charges_enabled: input.account.charges_enabled,
+      payouts_enabled: input.account.payouts_enabled,
+      details_submitted: input.account.details_submitted ?? null,
+    },
+  })
+
+  if (shouldNotify && profile.user_id) {
+    EdgeRuntime.waitUntil(
+      sendPushToUser(supabase, profile.user_id, {
+        title: 'Stripe payouts are ready',
+        body: 'Your Stripe Connect account is verified. Drapeon can now release eligible payouts to you.',
+        preferenceKey: 'orderUpdates',
+        data: { tailorProfileId: profile.id },
+      }),
+    )
+  }
+
+  return { profile, verified, notified: shouldNotify }
 }
 
 async function findPayoutForStripeTransfer(supabase: SupabaseClient, transfer: StripeTransferObject) {
@@ -676,6 +807,35 @@ Deno.serve(async (req) => {
       })
     }
 
+    if (event.type === 'account.updated') {
+      const account = isStripeConnectAccount(event.data?.object) ? event.data.object : null
+      if (!account?.id) {
+        await markWebhookEventProcessed(supabase, webhookEvent.id, {
+          orderId: null,
+          paymentId: null,
+          processingResult: 'invalid_payload:missing_account_id',
+        })
+        return new Response('Missing account payload', { status: 400, headers: cors })
+      }
+
+      const result = await handleStripeConnectAccountUpdated(supabase, {
+        event,
+        account,
+        webhookEventId: webhookEvent.id,
+      })
+
+      return new Response(JSON.stringify({
+        ok: true,
+        recorded: true,
+        type: event.type,
+        verified: result.verified,
+        profileMatched: !!result.profile,
+        notified: result.notified,
+      }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      })
+    }
+
     if (event.type === 'transfer.created' || event.type === 'transfer.reversed') {
       const transfer = isStripeTransferObject(event.data?.object) ? event.data?.object : null
       if (!transfer?.id) {
@@ -983,6 +1143,9 @@ Deno.serve(async (req) => {
     })
   } catch (error) {
     log('error', FN, 'webhook.failed', { error: error instanceof Error ? error.message : String(error) })
-    return new Response('Webhook error', { status: 400, headers: cors })
+    if (error instanceof SyntaxError) {
+      return new Response('Invalid JSON payload', { status: 400, headers: cors })
+    }
+    return new Response('Webhook error', { status: 500, headers: cors })
   }
 })

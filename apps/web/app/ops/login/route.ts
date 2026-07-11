@@ -22,8 +22,15 @@ function sanitizeRedirect(value: FormDataEntryValue | null) {
   }
 }
 
+function requestOrigin(request: Request) {
+  const host = request.headers.get('host')?.trim()
+  const forwardedProto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim()
+  const protocol = forwardedProto || (process.env.NODE_ENV === 'production' ? 'https' : 'http')
+  return host ? `${protocol}://${host}` : request.url
+}
+
 function buildRedirect(request: Request, redirectTo: string, key: 'notice' | 'error', value: string) {
-  const url = new URL(redirectTo, request.url)
+  const url = new URL(redirectTo, requestOrigin(request))
   url.searchParams.set(key, value)
   return url
 }

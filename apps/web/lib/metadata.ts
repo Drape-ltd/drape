@@ -1,22 +1,31 @@
 import type { Metadata } from 'next'
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://drapeon.co'
-const defaultTitle = 'Drapeon | AI-powered fashion discovery and fit'
+const defaultTitle = 'Drapeon | Custom fashion orders, fit, and trusted tailors'
 
 export function buildMetadata({
   title,
   description,
   path,
+  noindex = false,
 }: {
   title: string
   description: string
   path: string
+  noindex?: boolean
 }): Metadata {
   const url = `${siteUrl}${path}`
+  const shouldNoindex = noindex || path === '/account' || path.startsWith('/account/')
 
   return {
     title,
     description,
+    robots: shouldNoindex
+      ? {
+          index: false,
+          follow: false,
+        }
+      : undefined,
     alternates: {
       canonical: path,
     },

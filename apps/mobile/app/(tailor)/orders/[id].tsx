@@ -87,6 +87,7 @@ import { Button, HandoffSupportModal, Input, RemoteImage } from '@/components/ui
 import { DRAPE_VISION_ROUTE, type DrapeVisionMode } from '@/constants/drapeVision'
 import { currencySymbol } from '@drape/shared'
 import { filterContactInfo, rejectPlaceholder } from '@drape/shared/contact-filter'
+import { decodeDisplayText } from '@drape/shared/display-text'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { STAGE_LABELS, type OrderStage } from '@drape/shared/order-machine'
 import {
@@ -657,6 +658,16 @@ function formatTimelineDate(value: string | null | undefined) {
   return `${day} at ${time}`
 }
 
+function displayText(value: string | null | undefined, fallback = '') {
+  const decoded = decodeDisplayText(value ?? '').trim()
+  return decoded || fallback
+}
+
+function displayNullableText(value: string | null | undefined) {
+  const decoded = displayText(value)
+  return decoded || null
+}
+
 function hasSuccessfulPaymentEvent(updates: StageUpdate[]) {
   return updates.some((update) => {
     const note = update.note?.toLowerCase() ?? ''
@@ -935,24 +946,24 @@ export default function TailorOrderDetailScreen() {
             created_at: string | null
           }>).map((advance) => ({
             id: advance.id,
-            title: advance.title ?? 'Material advance',
-            description: advance.description ?? '',
+            title: displayText(advance.title, 'Material advance'),
+            description: displayText(advance.description),
             amount: advance.amount ?? 0,
             currency: (advance.currency ?? d.currency ?? d.quoted_currency ?? 'USD') as CurrencyCode,
             status: (advance.status ?? 'REQUESTED') as MaterialAdvanceStatus,
             releaseStatus: advance.release_status ?? null,
             receiptUrl: advance.receipt_url ?? null,
-            receiptNote: advance.receipt_note ?? null,
+            receiptNote: displayNullableText(advance.receipt_note),
             createdAt: advance.created_at ?? new Date().toISOString(),
           }))
         )
         setOrder({
-          id: d.id, reference: d.reference, garmentType: d.garment_type ?? 'Order',
+          id: d.id, reference: d.reference, garmentType: displayText(d.garment_type, 'Order'),
           orderKind: d.order_kind ?? 'CUSTOM', fulfillmentOption: d.fulfillment_option ?? null,
-          itemTitle: d.item_title ?? null, itemSize: d.item_size ?? null, itemQuantity: d.item_quantity ?? 1, itemSubtotal: d.item_subtotal ?? null, fulfillmentFee: d.fulfillment_fee ?? 0,
-          garmentDescription: d.garment_description, stage: d.stage,
+          itemTitle: displayNullableText(d.item_title), itemSize: displayNullableText(d.item_size), itemQuantity: d.item_quantity ?? 1, itemSubtotal: d.item_subtotal ?? null, fulfillmentFee: d.fulfillment_fee ?? 0,
+          garmentDescription: displayNullableText(d.garment_description), stage: d.stage,
           customerId: d.customer_id,
-          customerName: customerProfile?.display_name ?? 'Customer',
+          customerName: displayText(customerProfile?.display_name, 'Customer'),
           quotedAmount: d.quoted_amount, quotedCurrency: d.currency ?? d.quoted_currency ?? 'USD', quotedCompletionDate: d.quoted_completion_date,
           sourceAmount: d.source_amount ?? null,
           subtotalAmount: d.subtotal_amount ?? d.item_subtotal ?? 0,
@@ -964,40 +975,40 @@ export default function TailorOrderDetailScreen() {
           fulfillmentPaymentProvider: d.fulfillment_payment_provider ?? null,
           fulfillmentPaymentIntentId: d.fulfillment_payment_intent_id ?? null,
           fulfillmentPaymentCheckoutUrl: d.fulfillment_payment_checkout_url ?? null,
-          fabricSource: d.fabric_source ?? '', deliveryMethod: d.delivery_method ?? '', deliveryAddress: d.delivery_address ?? null,
-          recipientName: d.recipient_name ?? null, recipientPhone: d.recipient_phone ?? null,
+          fabricSource: d.fabric_source ?? '', deliveryMethod: d.delivery_method ?? '', deliveryAddress: displayNullableText(d.delivery_address),
+          recipientName: displayNullableText(d.recipient_name), recipientPhone: d.recipient_phone ?? null,
           trackingNumber: d.tracking_number ?? null, carrier: d.carrier ?? null,
-          fulfillmentProvider: d.fulfillment_provider ?? null,
-          fulfillmentReference: d.fulfillment_reference ?? null,
-          fulfillmentContactName: d.fulfillment_contact_name ?? null,
+          fulfillmentProvider: displayNullableText(d.fulfillment_provider),
+          fulfillmentReference: displayNullableText(d.fulfillment_reference),
+          fulfillmentContactName: displayNullableText(d.fulfillment_contact_name),
           fulfillmentContactPhone: d.fulfillment_contact_phone ?? null,
           referencePhotos: asStringList(d.reference_photos),
           fitNote: d.fit_note, measurements: enrichMeasurementSnapshot(measurementSnapshot) as Measurement | null,
-          supportMeta: parseOrderSupportMeta(d.special_note),
+          supportMeta: parseOrderSupportMeta(displayText(d.special_note)),
           customDetail: customDetail
             ? {
-                garmentTypeOther: customDetail.garment_type_other ?? null,
-                genderPresentation: customDetail.gender_presentation ?? null,
+                garmentTypeOther: displayNullableText(customDetail.garment_type_other),
+                genderPresentation: displayNullableText(customDetail.gender_presentation),
                 socialReferenceLinks: asStringList(customDetail.social_reference_links),
-                styleNotes: customDetail.style_notes ?? null,
-                bodyNote: customDetail.body_note ?? null,
-                fabricDescription: customDetail.fabric_description ?? null,
+                styleNotes: displayNullableText(customDetail.style_notes),
+                bodyNote: displayNullableText(customDetail.body_note),
+                fabricDescription: displayNullableText(customDetail.fabric_description),
                 fabricBudgetAmount: customDetail.fabric_budget_amount ?? null,
                 fabricBudgetCurrency: customDetail.fabric_budget_currency ?? null,
                 fabricSourcingDeadlineDays: customDetail.fabric_sourcing_deadline_days ?? null,
                 fabricSourcingDeadlineAt: customDetail.fabric_sourcing_deadline_at ?? null,
                 fabricApprovalStatus: customDetail.fabric_approval_status ?? null,
-                shippingPreference: customDetail.shipping_preference ?? null,
-                deliveryInstructions: customDetail.delivery_instructions ?? null,
+                shippingPreference: displayNullableText(customDetail.shipping_preference),
+                deliveryInstructions: displayNullableText(customDetail.delivery_instructions),
                 targetDeliveryDate: customDetail.target_delivery_date ?? null,
               }
             : null,
           collectionCode: d.collection_code, videoCallUrl: d.video_call_url ?? null,
-          occasion: d.occasion, deadline: d.deadline, createdAt: d.created_at,
+          occasion: displayNullableText(d.occasion), deadline: d.deadline, createdAt: d.created_at,
           stageUpdates: (d.order_stage_updates ?? []).map((update) => ({
             id: update.id,
             stage: update.stage,
-            note: update.note ?? null,
+            note: displayNullableText(update.note),
             photoUrl: update.photo_url ?? null,
             createdAt: update.created_at,
           })),
@@ -3384,7 +3395,7 @@ function BodyRow({ label, value }: { label: string; value: string }) {
   return (
     <View style={{ flexDirection: 'row', justifyContent: 'space-between', flex: 1 }}>
       <Text style={{ fontSize: FontSize.xs, color: Colors.midGrey }}>{label}</Text>
-      <Text style={{ fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.ink }}>{value}</Text>
+      <Text style={{ fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.ink }}>{decodeDisplayText(value)}</Text>
     </View>
   )
 }
@@ -5697,7 +5708,7 @@ function BriefRow({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.briefRow}>
       <Text style={styles.briefRowLabel}>{label}</Text>
-      <Text style={styles.briefRowValue}>{value}</Text>
+      <Text style={styles.briefRowValue}>{decodeDisplayText(value)}</Text>
     </View>
   )
 }

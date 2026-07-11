@@ -11,9 +11,9 @@ function splitSecretList(value: string | null | undefined): string[] {
 
 export function getTrustedServiceRoleKeys(): string[] {
   return [
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'),
     Deno.env.get('DRAPE_SERVICE_ROLE_JWT'),
     Deno.env.get('DRAPE_SERVICE_ROLE_KEY'),
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'),
     ...splitSecretList(Deno.env.get('SUPABASE_SECRET_KEYS')),
   ]
     .map((entry) => entry?.trim() ?? '')

@@ -140,6 +140,10 @@ alter table public.orders
     or ops_payout_resolution_mode in ('ORIGINAL_CURRENCY', 'CONVERT_TO_CURRENT', 'REFUND_CUSTOMER')
   );
 
+-- Historical rows may already be terminal; keep runtime immutability intact while
+-- allowing this schema-contract backfill to fill newly added accounting columns.
+alter table if exists public.orders disable trigger orders_terminal_guard;
+
 update public.orders
 set currency = coalesce(currency, 'USD'::currency),
     source_currency = coalesce(source_currency, currency, 'USD'::currency),
@@ -162,6 +166,8 @@ set currency = coalesce(currency, 'USD'::currency),
       when stage in ('DELIVERED', 'COLLECTED', 'COMPLETE') then coalesce(handoff_confirmation_source, 'HISTORICAL_BACKFILL')
       else handoff_confirmation_source
     end;
+
+alter table if exists public.orders enable trigger orders_terminal_guard;
 
 alter table public.orders
   alter column subtotal_amount set default 0,

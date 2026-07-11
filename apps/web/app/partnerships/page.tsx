@@ -8,6 +8,7 @@ export const metadata: Metadata = buildMetadata({
   title: 'Partnerships',
   description: 'Explore partnership routes that fit the trust-first Drapeon product ecosystem.',
   path: '/partnerships',
+  noindex: true,
 })
 
 export default function PartnershipsPage(): JSX.Element {
@@ -35,6 +36,22 @@ export default function PartnershipsPage(): JSX.Element {
           <MarketingCard title="Tailor ecosystem" body="Partnerships that help strong makers grow on Drapeon without weakening trust or clarity." />
           <MarketingCard title="Operational tools" body="Verification, logistics, and workflow partnerships that make the order loop cleaner." />
           <MarketingCard title="Brand alignment" body="The best partnerships feel additive to the product vision, not like random distribution grabs." />
+        </div>
+      </section>
+
+      <section className="border-t border-ink/6 py-14">
+        <div className="overflow-hidden rounded-[1.6rem] bg-ink px-8 py-10 text-white">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">Start a conversation</p>
+          <h2 className="mt-3 text-3xl text-white sm:text-4xl">Tell us what you&apos;re building and why it fits.</h2>
+          <p className="mt-3 text-sm leading-7 text-white/62">
+            We&apos;re selective. The right partnerships make both sides stronger — not just more distributed.
+          </p>
+          <a
+            href={`mailto:${CONTACTS.partnerships}?subject=Drapeon%20partnership%20inquiry`}
+            className="mt-7 inline-flex items-center justify-center rounded-full bg-white px-6 py-3.5 text-sm font-semibold text-ink"
+          >
+            {CONTACTS.partnerships}
+          </a>
         </div>
       </section>
     </MarketingShell>

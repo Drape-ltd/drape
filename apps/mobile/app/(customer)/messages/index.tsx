@@ -22,6 +22,7 @@ import { isLikelyConnectivityIssue } from '@/lib/function-errors'
 import { AvatarImage, SkeletonBlock, StateCard } from '@/components/ui'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import type { OrderStage } from '@drape/shared/order-machine'
+import { decodeDisplayText } from '@drape/shared/display-text'
 import { CUSTOMER_ACTIVE_ORDER_STAGES } from '@/lib/order-flow'
 
 type ConversationItem = {
@@ -71,6 +72,16 @@ function firstJoinedRow<T>(value: T | T[] | null | undefined): T | null {
 function firstMediaUrl(value: unknown): string | null {
   if (!Array.isArray(value)) return null
   return value.find((item): item is string => typeof item === 'string' && item.trim().length > 0) ?? null
+}
+
+function displayText(value: string | null | undefined, fallback = '') {
+  const decoded = decodeDisplayText(value ?? '').trim()
+  return decoded || fallback
+}
+
+function displayNullableText(value: string | null | undefined) {
+  const decoded = displayText(value)
+  return decoded || null
 }
 
 function orderPreview(
@@ -157,7 +168,7 @@ export default function MessagesInboxScreen() {
         const unread = sorted.filter((m) => m.sender_role === 'TAILOR' && m.read_at == null).length
 
         const tailorProfile = firstJoinedRow(o.tailor_profiles)
-        const name = tailorProfile?.display_name ?? 'Tailor'
+        const name = displayText(tailorProfile?.display_name, 'Tailor')
         const parts = name.trim().split(' ')
         const initials =
           parts.length > 1 ? `${parts[0][0]}${parts[parts.length - 1][0]}` : name.slice(0, 2)
@@ -169,10 +180,10 @@ export default function MessagesInboxScreen() {
           tailorInitials: initials.toUpperCase(),
           tailorAvatarUrl:
             tailorProfile?.avatar_url ?? firstMediaUrl(tailorProfile?.portfolio_photo_urls) ?? null,
-          garmentType: o.garment_type ?? 'Order',
+          garmentType: displayText(o.garment_type, 'Order'),
           stage: o.stage,
           createdAt: o.created_at,
-          lastMessage: last?.body ?? null,
+          lastMessage: displayNullableText(last?.body),
           lastMessageAt: last?.created_at ?? null,
           unreadCount: unread,
         }

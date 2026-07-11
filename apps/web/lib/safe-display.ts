@@ -1,9 +1,10 @@
 import { sanitiseText } from '@drape/shared/contact-filter'
+import { decodeDisplayText } from '@drape/shared/display-text'
 
 const CONTACT_REMOVED_LABEL = 'contact detail removed'
 
 export function safeUserText(value: string | null | undefined, fallback = ''): string {
-  const trimmed = value?.trim()
+  const trimmed = decodeDisplayText(value?.trim() ?? '')
   if (!trimmed) return fallback
 
   const { sanitised } = sanitiseText(trimmed)
@@ -16,7 +17,7 @@ export function safeUserText(value: string | null | undefined, fallback = ''): s
 }
 
 export function safeEntityName(value: string | null | undefined, fallback: string): string {
-  const trimmed = value?.trim()
+  const trimmed = decodeDisplayText(value?.trim() ?? '')
   if (!trimmed) return fallback
 
   const { sanitised, hadViolation } = sanitiseText(trimmed)

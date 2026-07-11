@@ -5,7 +5,7 @@ import { buildMetadata } from '../../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'Measurements',
-  description: 'Review Drapeon measurement profiles, Drape Vision scans, and fit records.',
+  description: 'Review Drapeon measurement profiles, Drapeon Vision scans, and fit records.',
   path: '/account/measurements',
 })
 

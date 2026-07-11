@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
+import { useId, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { filterContactInfo, validateDisplayName } from '@drape/shared/contact-filter'
 import {
@@ -27,8 +27,11 @@ import {
   type TailorFulfillment,
   type WebOnboardingPayload,
 } from '../lib/account-bootstrap'
+import { markWebSessionScope } from '../lib/web-session-scope'
 
 type AuthMode = 'sign-in' | 'sign-up'
+
+const AUTH_REQUEST_TIMEOUT_MS = 8000
 
 const GARMENT_OPTIONS: Array<{ value: CustomerGarmentContext; label: string; hint: string }> = [
   { value: 'MENSWEAR', label: 'Menswear', hint: 'Agbada, kaftans, suits, shirts, trousers' },
@@ -57,6 +60,10 @@ function roleLabel(role: DrapeRole) {
   return role === 'TAILOR' ? 'tailor' : 'customer'
 }
 
+function accountHomeForRole(role: DrapeRole) {
+  return role === 'TAILOR' ? '/account/work' : '/account/orders'
+}
+
 function mapAuthError(message: string | undefined) {
   const normalized = (message ?? '').toLowerCase()
   if (normalized.includes('invalid login credentials') || normalized.includes('invalid credentials')) {
@@ -81,6 +88,9 @@ function mapAuthError(message: string | undefined) {
   if (normalized.includes('rate limit') || normalized.includes('too many')) {
     return 'Please wait a minute before trying again.'
   }
+  if (normalized.includes('timed out') || normalized.includes('timeout')) {
+    return 'Sign-in is taking too long. Check the connection and try again.'
+  }
   if (normalized.includes('network') || normalized.includes('fetch')) {
     return 'Connection looks weak. Try again when the signal improves.'
   }
@@ -91,39 +101,49 @@ function isEmailNotConfirmedError(message: string | undefined) {
   return (message ?? '').toLowerCase().includes('email not confirmed')
 }
 
+function getBrowserAuthOrigin() {
+  if (typeof window === 'undefined') return null
+  if (window.location.hostname === '127.0.0.1') {
+    return `${window.location.protocol}//localhost${window.location.port ? `:${window.location.port}` : ''}`
+  }
+  return window.location.origin
+}
+
 function getPublicSiteOrigin() {
   const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/+$/, '')
   if (configured && !configured.includes('localhost') && !configured.includes('127.0.0.1')) {
     return configured
   }
 
-  if (
-    typeof window !== 'undefined' &&
-    !window.location.hostname.includes('localhost') &&
-    window.location.hostname !== '127.0.0.1'
-  ) {
-    return window.location.origin
-  }
+  const browserOrigin = getBrowserAuthOrigin()
+  if (browserOrigin) return browserOrigin
 
   return 'https://drapeon.co'
 }
 
-function buildAuthCallbackUrl(nextPath = '/account/dashboard') {
+function buildAuthCallbackUrl(nextPath = '/account/orders') {
   const url = new URL('/auth/callback', getPublicSiteOrigin())
   url.searchParams.set('next', nextPath)
   return url.toString()
 }
 
+function withAuthTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      timeout = setTimeout(() => {
+        reject(new Error(`${label} timed out`))
+      }, AUTH_REQUEST_TIMEOUT_MS)
+    }),
+  ]).finally(() => {
+    if (timeout) clearTimeout(timeout)
+  })
+}
+
 function browserLocale() {
   if (typeof navigator === 'undefined') return null
   return navigator.language || navigator.languages?.[0] || null
-}
-
-function parseList(value: string) {
-  return value
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter(Boolean)
 }
 
 function parseMajorAmountToMinor(value: string) {
@@ -141,25 +161,102 @@ function fieldHasContactLeak(value: string, label: string): string | null {
   return `${label} can't include phone numbers, emails, links, social handles, or off-platform contact instructions.`
 }
 
+// ─── Chip input component ───────────────────────────────────────────────────
+
+function ChipInput({
+  label,
+  hint,
+  values,
+  onChange,
+  placeholder,
+}: {
+  label: string
+  hint?: string
+  values: string[]
+  onChange: (next: string[]) => void
+  placeholder?: string
+}) {
+  const [draft, setDraft] = useState('')
+
+  function addChip() {
+    const trimmed = draft.trim()
+    if (!trimmed || values.includes(trimmed)) {
+      setDraft('')
+      return
+    }
+    onChange([...values, trimmed])
+    setDraft('')
+  }
+
+  return (
+    <div className="grid gap-2 text-sm font-semibold text-ink">
+      <span>{label}</span>
+      <div className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-3 py-2 transition focus-within:border-needle">
+        <div className="flex flex-wrap gap-1.5">
+          {values.map((v) => (
+            <span
+              key={v}
+              className="flex items-center gap-1 rounded-full bg-needle/10 px-2.5 py-1 text-xs font-semibold text-needle"
+            >
+              {v}
+              <button
+                type="button"
+                onClick={() => onChange(values.filter((x) => x !== v))}
+                className="leading-none text-needle/60 hover:text-needle"
+                aria-label={`Remove ${v}`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ',') {
+                e.preventDefault()
+                addChip()
+              }
+            }}
+            onBlur={addChip}
+            placeholder={values.length === 0 ? placeholder : 'Add more...'}
+            className="min-w-[120px] flex-1 bg-transparent text-sm font-normal text-ink outline-none placeholder:text-ink/36"
+          />
+        </div>
+      </div>
+      {hint ? (
+        <span className="text-xs font-normal leading-5 text-ink/52">{hint}</span>
+      ) : null}
+    </div>
+  )
+}
+
+// ─── Main component ─────────────────────────────────────────────────────────
+
 export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element {
   const router = useRouter()
   const searchParams = useSearchParams()
   const initialRole = useMemo(() => normalizeRole(searchParams.get('role')), [searchParams])
   const detectedCurrency = useMemo(() => detectCurrencyPreference({ locale: browserLocale() }), [])
+  const isSignUp = mode === 'sign-up'
+
+  // Step state (sign-up only)
+  const [step, setStep] = useState<1 | 2 | 3>(1)
+
+  // Auth state
   const [role, setRole] = useState<DrapeRole>(initialRole)
   const [displayName, setDisplayName] = useState('')
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
   const [defaultCurrency, setDefaultCurrency] = useState<AccountCurrencyCode>(detectedCurrency.currency)
   const [currencySource, setCurrencySource] = useState<CurrencySource>(detectedCurrency.source)
   const [regionCode, setRegionCode] = useState(detectedCurrency.regionCode)
   const [unitPreference, setUnitPreference] = useState<MeasurementUnit>('in')
   const [garmentContext, setGarmentContext] = useState<CustomerGarmentContext | ''>('')
   const [tailorLocation, setTailorLocation] = useState('')
-  const [tailorLanguages, setTailorLanguages] = useState('English')
-  const [tailorSpecialties, setTailorSpecialties] = useState('')
+  const [tailorLanguagesList, setTailorLanguagesList] = useState<string[]>(['English'])
+  const [tailorSpecialtiesList, setTailorSpecialtiesList] = useState<string[]>([])
   const [priceMin, setPriceMin] = useState('')
   const [priceMax, setPriceMax] = useState('')
   const [supportsCustomOrders, setSupportsCustomOrders] = useState(true)
@@ -170,7 +267,34 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
   const [loading, setLoading] = useState(false)
   const [resendLoading, setResendLoading] = useState(false)
   const [pendingConfirmationEmail, setPendingConfirmationEmail] = useState<string | null>(null)
-  const isSignUp = mode === 'sign-up'
+  const [rememberDevice, setRememberDevice] = useState(true)
+  const [showPassword, setShowPassword] = useState(false)
+  const [skipProfileSetup, setSkipProfileSetup] = useState(false)
+
+
+  const passwordInputId = useId()
+  const priceCurrencyLabel = `${currencySymbol(defaultCurrency)} ${defaultCurrency}`
+
+  const hasTailorDraft =
+    tailorLocation.trim().length > 0 ||
+    tailorSpecialtiesList.length > 0 ||
+    priceMin.trim().length > 0 ||
+    priceMax.trim().length > 0 ||
+    supportsReadyMade ||
+    !supportsCustomOrders ||
+    fulfillment.length !== 1 ||
+    fulfillment[0] !== 'PICKUP' ||
+    tailorLanguagesList.join(',') !== 'English'
+
+  // Suppress unused variable warning — hasTailorDraft is used for reference tracking
+  void hasTailorDraft
+
+  const passwordStrengthError = useMemo(() => {
+    if (!isSignUp || password.length === 0) return null
+    return validatePasswordStrength(password, {
+      forbiddenValues: [email.trim().toLowerCase(), displayName],
+    })
+  }, [displayName, email, isSignUp, password])
 
   function getSupabase() {
     try {
@@ -181,7 +305,20 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     }
   }
 
-  function buildOnboardingPayload(): WebOnboardingPayload | null {
+  async function fetchStoredAccountRole(userId: string): Promise<DrapeRole | null> {
+    const supabase = getSupabase()
+    if (!supabase) return null
+
+    const { data } = await supabase
+      .from('users')
+      .select('role')
+      .eq('id', userId)
+      .maybeSingle()
+
+    return data?.role === 'TAILOR' || data?.role === 'CUSTOMER' ? data.role : null
+  }
+
+  function buildOnboardingPayload(skipOverride?: boolean): WebOnboardingPayload | null {
     const normalizedPhone = normalizePhoneForStorage(phone)
     const phoneError = validatePhoneForProfile(normalizedPhone)
     if (phoneError) {
@@ -199,6 +336,32 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       regionCode: regionCode || detectedCurrency.regionCode || 'ZZ',
     }
 
+    if (skipOverride ?? skipProfileSetup) {
+      if (role === 'CUSTOMER') {
+        return {
+          ...base,
+          customer: {
+            unitPreference,
+            garmentContext: 'BOTH',
+          },
+        }
+      }
+      // Tailor minimal defaults
+      return {
+        ...base,
+        tailor: {
+          location: 'Not set',
+          languages: ['English'],
+          specialties: [],
+          priceRangeMin: null,
+          priceRangeMax: null,
+          supportsCustomOrders: true,
+          supportsReadyMade: false,
+          fulfillment: ['PICKUP'],
+        },
+      }
+    }
+
     if (role === 'CUSTOMER') {
       if (!garmentContext) {
         setError('Choose what you typically order so tailors get the right fit context.')
@@ -213,8 +376,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       }
     }
 
-    const languages = parseList(tailorLanguages)
-    const specialties = parseList(tailorSpecialties)
+    const languages = tailorLanguagesList
+    const specialties = tailorSpecialtiesList
     const priceRangeMin = parseMajorAmountToMinor(priceMin)
     const priceRangeMax = parseMajorAmountToMinor(priceMax)
     if (tailorLocation.trim().length < 2) {
@@ -223,8 +386,8 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     }
     const contactLeakError =
       fieldHasContactLeak(tailorLocation, 'Location') ||
-      fieldHasContactLeak(tailorLanguages, 'Languages') ||
-      fieldHasContactLeak(tailorSpecialties, 'Specialties')
+      fieldHasContactLeak(tailorLanguagesList.join(', '), 'Languages') ||
+      fieldHasContactLeak(tailorSpecialtiesList.join(', '), 'Specialties')
     if (contactLeakError) {
       setError(contactLeakError)
       return null
@@ -282,13 +445,29 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
         forbiddenValues: [normalizedEmail, displayName],
       })
       if (passwordError) return passwordError
-      if (password !== confirmPassword) return 'Passwords do not match.'
     }
     if (options?.credentials !== false && !password) return 'Enter your password.'
     return null
   }
 
-  async function submit() {
+  function validateStep1() {
+    const nameError = validateDisplayName(displayName)
+    if (nameError) return nameError
+    if (!phone.trim()) return 'Enter a phone number for order updates and account recovery.'
+    const normalizedPhone = normalizePhoneForStorage(phone)
+    const phoneError = validatePhoneForProfile(normalizedPhone)
+    if (phoneError) return phoneError
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim().toLowerCase())) {
+      return 'Enter a valid email address.'
+    }
+    const pwError = validatePasswordStrength(password, {
+      forbiddenValues: [email.trim().toLowerCase(), displayName],
+    })
+    if (pwError) return pwError
+    return null
+  }
+
+  async function submit(skipOverride?: boolean) {
     if (loading) return
     setError(null)
     setMessage(null)
@@ -305,10 +484,10 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
 
     setLoading(true)
     const normalizedEmail = email.trim().toLowerCase()
-    const redirectTo = buildAuthCallbackUrl('/account/dashboard')
+    const redirectTo = buildAuthCallbackUrl('/account/orders')
 
     if (isSignUp) {
-      const onboarding = buildOnboardingPayload()
+      const onboarding = buildOnboardingPayload(skipOverride)
       if (!onboarding) {
         setLoading(false)
         return
@@ -340,37 +519,56 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       }
       if (!data.session) {
         setPendingConfirmationEmail(normalizedEmail)
-        setMessage('Check your email to confirm your Drapeon account. The link opens your dashboard after confirmation.')
+        setMessage('Check your email to confirm your Drapeon account. The link opens your workspace after confirmation.')
         return
       }
       await bootstrapWebOnboarding(supabase, {
         userId: data.session.user.id,
         onboarding,
       })
+      markWebSessionScope(true)
       window.localStorage.removeItem('drapeon.web.auth.roleIntent')
       window.localStorage.removeItem('drapeon.web.auth.onboarding')
-      router.replace('/account/dashboard')
+      router.replace(accountHomeForRole(role))
       return
     }
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email: normalizedEmail,
-      password,
-    })
-    if (error) {
+    let signInError: string | undefined
+    let signedInRole: DrapeRole | null = null
+    try {
+      const { data, error } = await withAuthTimeout(
+        supabase.auth.signInWithPassword({
+          email: normalizedEmail,
+          password: password.trim(),
+        }),
+        'Password sign-in',
+      )
+      signInError = error?.message
+      const metadataRole = data?.user?.user_metadata?.role
+      signedInRole = metadataRole === 'TAILOR' || metadataRole === 'CUSTOMER' ? metadataRole : null
+      if (!signedInRole && data?.user?.id) {
+        signedInRole = await fetchStoredAccountRole(data.user.id)
+      }
+    } catch (signInFailure) {
+      signInError = signInFailure instanceof Error ? signInFailure.message : String(signInFailure)
+    }
+
+    if (signInError) {
+      console.warn('[web auth] Password sign-in failed', signInError)
       setLoading(false)
-      if (isEmailNotConfirmedError(error.message)) {
+      if (isEmailNotConfirmedError(signInError)) {
         setPendingConfirmationEmail(normalizedEmail)
       }
-      setError(mapAuthError(error.message))
+      setError(mapAuthError(signInError))
       return
     }
 
     setPendingConfirmationEmail(null)
+    markWebSessionScope(rememberDevice)
     window.localStorage.removeItem('drapeon.web.auth.roleIntent')
     window.localStorage.removeItem('drapeon.web.auth.onboarding')
     setLoading(false)
-    router.replace('/account/dashboard')
+    router.replace(accountHomeForRole(signedInRole ?? role))
   }
 
   async function resendConfirmation() {
@@ -386,7 +584,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
       type: 'signup',
       email: pendingConfirmationEmail,
       options: {
-        emailRedirectTo: buildAuthCallbackUrl('/account/dashboard'),
+        emailRedirectTo: buildAuthCallbackUrl(accountHomeForRole(role)),
       },
     })
     setResendLoading(false)
@@ -399,131 +597,457 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
     setMessage('Confirmation email sent again. Open the latest Drapeon email and use that link.')
   }
 
-  return (
-    <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.06)] sm:p-7">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
-          {isSignUp ? 'Create account' : 'Sign in'}
-        </p>
-        <h1 className="mt-3 text-4xl leading-tight text-ink sm:text-5xl">
-          {isSignUp ? `Start as a ${roleLabel(role)}.` : 'Sign in to Drapeon.'}
-        </h1>
-        <p className="mt-4 text-sm leading-7 text-ink/66">
-          {isSignUp
-            ? 'Choose a starting side. You can add the other later.'
-            : 'Use the same account from the app.'}
-        </p>
-      </div>
-
-      {isSignUp ? (
-        <div className="mt-6 grid grid-cols-2 gap-2 rounded-[1.1rem] border border-ink/8 bg-bone/70 p-1.5">
-          {(['CUSTOMER', 'TAILOR'] as const).map((entry) => (
-            <button
-              key={entry}
-              type="button"
-              onClick={() => setRole(entry)}
-              className={
-                role === entry
-                  ? 'rounded-[0.9rem] bg-white px-4 py-3 text-sm font-semibold text-ink shadow-sm'
-                  : 'rounded-[0.9rem] px-4 py-3 text-sm font-semibold text-ink/58 transition hover:text-ink'
-              }
-            >
-              {entry === 'CUSTOMER' ? 'Customer' : 'Tailor'}
-            </button>
-          ))}
+  // ─── Post-signup confirmation screen ───────────────────────────────────────
+  if (isSignUp && pendingConfirmationEmail) {
+    return (
+      <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-7 shadow-[0_18px_60px_rgba(22,28,24,0.06)] text-center">
+        <div className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-full bg-needle/10">
+          <svg
+            viewBox="0 0 24 24"
+            className="size-8 text-needle"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M4 4h16v16H4V4zm0 0 8 9 8-9" />
+          </svg>
         </div>
-      ) : null}
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Almost there</p>
+        <h2 className="mt-3 text-3xl text-ink">Check your inbox</h2>
+        <p className="mt-3 text-sm leading-7 text-ink/66">
+          We sent a confirmation link to{' '}
+          <span className="font-semibold text-ink">{pendingConfirmationEmail}</span>. Open it to
+          activate your Drapeon account.
+        </p>
+        <p className="mt-2 text-xs text-ink/44">
+          Check spam if it hasn&apos;t arrived in a few minutes.
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            void resendConfirmation()
+          }}
+          disabled={resendLoading}
+          className="mt-6 min-h-11 w-full rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-needle transition hover:bg-bone disabled:cursor-not-allowed disabled:text-ink/36"
+        >
+          {resendLoading ? 'Sending...' : 'Resend confirmation email'}
+        </button>
+        <button
+          type="button"
+          onClick={() => setPendingConfirmationEmail(null)}
+          className="mt-3 text-xs text-ink/44 hover:text-ink"
+        >
+          Use a different email
+        </button>
+        {error ? (
+          <p className="mt-4 rounded-[1rem] border border-rust/20 bg-rust/8 px-4 py-3 text-sm text-ink">
+            {error}
+          </p>
+        ) : null}
+      </div>
+    )
+  }
 
-      <form
-        className="mt-6 grid gap-4"
-        onSubmit={(event) => {
-          event.preventDefault()
-          void submit()
-        }}
-      >
-        {isSignUp ? (
+  // ─── Sign-in form ──────────────────────────────────────────────────────────
+  if (!isSignUp) {
+    return (
+      <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.06)] sm:p-7">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Sign in</p>
+          <h1 className="mt-3 text-4xl leading-tight text-ink sm:text-5xl">
+            Sign in to Drapeon.
+          </h1>
+          <p className="mt-4 text-sm leading-7 text-ink/66">Use your Drapeon account.</p>
+        </div>
+
+        <form
+          className="mt-6 grid gap-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void submit()
+          }}
+        >
           <label className="grid gap-2 text-sm font-semibold text-ink">
-            Display name
+            Email
             <input
-              value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
-              placeholder="Your name"
-              autoComplete="name"
+              value={email}
+              onChange={(event) => {
+                setEmail(event.target.value)
+                setPendingConfirmationEmail(null)
+              }}
+              placeholder="you@example.com"
+              type="email"
+              autoComplete="email"
               className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
             />
           </label>
-        ) : null}
-        {isSignUp ? (
-          <label className="grid gap-2 text-sm font-semibold text-ink">
-            Phone number
+
+          <div className="grid gap-2 text-sm font-semibold text-ink">
+            {/* 2a: Forgot password inline with label */}
+            <div className="flex items-center justify-between">
+              <label htmlFor={passwordInputId}>Password</label>
+              <a
+                href="/account/recovery"
+                className="text-xs font-semibold text-needle hover:underline"
+              >
+                Forgot password?
+              </a>
+            </div>
+            <span className="relative block">
+              <input
+                id={passwordInputId}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="Your password"
+                type={showPassword ? 'text' : 'password'}
+                autoComplete="current-password"
+                maxLength={MAX_PASSWORD_LENGTH}
+                className="min-h-12 w-full rounded-[1rem] border border-ink/10 bg-white px-4 pr-20 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((current) => !current)}
+                className="absolute inset-y-1.5 right-1.5 rounded-[0.8rem] px-3 text-xs font-semibold text-needle transition hover:bg-bone"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? 'Hide' : 'Show'}
+              </button>
+            </span>
+          </div>
+
+          {error ? (
+            <div role="alert" aria-live="polite" className="rounded-[1rem] border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
+              {error}
+            </div>
+          ) : null}
+
+          {pendingConfirmationEmail ? (
+            <div className="grid gap-3 rounded-[1rem] border border-ink/8 bg-white/72 px-4 py-3 text-sm leading-6 text-ink">
+              <p className="text-ink/66">
+                Need a fresh link for{' '}
+                <span className="font-semibold text-ink">{pendingConfirmationEmail}</span>?
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  void resendConfirmation()
+                }}
+                disabled={loading || resendLoading}
+                className="min-h-11 rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-needle transition hover:bg-bone disabled:cursor-not-allowed disabled:text-ink/36"
+              >
+                {resendLoading ? 'Sending...' : 'Resend confirmation email'}
+              </button>
+            </div>
+          ) : null}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="min-h-[52px] rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(45,106,79,0.18)] transition hover:bg-needle-600 disabled:cursor-not-allowed disabled:bg-ink/18 disabled:text-ink/42"
+          >
+            {loading ? 'Working...' : 'Sign in'}
+          </button>
+
+          {/* 2b: Remember device below submit */}
+          <label className="flex cursor-pointer items-start gap-3 pt-1 text-sm text-ink/62">
             <input
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-              placeholder="+2348012345678"
-              type="tel"
-              autoComplete="tel"
-              className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
+              type="checkbox"
+              checked={rememberDevice}
+              onChange={(event) => setRememberDevice(event.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-ink/20 text-needle focus:ring-needle/40"
             />
-            <span className="text-xs font-normal leading-5 text-ink/52">
-              Used for order updates, account recovery, and critical trust-chain alerts.
+            <span>
+              <span className="block font-semibold text-ink">Remember this device</span>
+              <span className="mt-1 block text-xs leading-5 text-ink/56">
+                Uncheck this on shared or public computers. Your session will end when you close this tab.
+              </span>
             </span>
           </label>
-        ) : null}
-        <label className="grid gap-2 text-sm font-semibold text-ink">
-          Email
-          <input
-            value={email}
-            onChange={(event) => {
-              setEmail(event.target.value)
-              setPendingConfirmationEmail(null)
-            }}
-            placeholder="you@example.com"
-            type="email"
-            autoComplete="email"
-            className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
-          />
-        </label>
-        <label className="grid gap-2 text-sm font-semibold text-ink">
-          Password
-          <input
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            placeholder={isSignUp ? '8+ characters' : 'Your password'}
-            type="password"
-            autoComplete={isSignUp ? 'new-password' : 'current-password'}
-            maxLength={MAX_PASSWORD_LENGTH}
-            className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
-          />
-          {isSignUp ? <span className="text-xs font-normal leading-5 text-ink/52">{PASSWORD_POLICY_HINT}</span> : null}
-        </label>
-        {isSignUp ? (
-          <label className="grid gap-2 text-sm font-semibold text-ink">
-            Confirm password
-            <input
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-              placeholder="Re-enter password"
-              type="password"
-              autoComplete="new-password"
-              maxLength={MAX_PASSWORD_LENGTH}
-              className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
-            />
-          </label>
-        ) : null}
+        </form>
 
-        {isSignUp ? (
-          <div className="grid gap-5 rounded-[1.2rem] border border-ink/8 bg-bone/45 p-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
-                {role === 'TAILOR' ? 'Tailor setup' : 'Customer setup'}
-              </p>
-              <p className="mt-2 text-sm leading-6 text-ink/62">
-                {role === 'TAILOR'
-                  ? 'Save the same first setup details the app asks for. Photos, ID, portfolio, and payout setup continue in the app.'
-                  : 'Save the same first fit details the app asks for. Measurements and Drape Vision continue in the app.'}
-              </p>
+        {/* 2c: Footer — only "Don't have an account?" */}
+        <div className="mt-6 flex flex-col gap-3 border-t border-ink/6 pt-5 text-sm text-ink/62 sm:flex-row sm:items-center sm:justify-between">
+          <span>Don&apos;t have an account?</span>
+          <a href="/sign-up" className="font-semibold text-needle">
+            Create account →
+          </a>
+        </div>
+      </div>
+    )
+  }
+
+  // ─── Sign-up multi-step form ───────────────────────────────────────────────
+
+  return (
+    <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-5 shadow-[0_18px_60px_rgba(22,28,24,0.06)] sm:p-7">
+      {/* Step indicator */}
+      <div className="mb-6 flex items-center gap-2">
+        {([1, 2, 3] as const).map((n) => (
+          <div
+            key={n}
+            className={`h-1.5 flex-1 rounded-full transition-all ${step >= n ? 'bg-needle' : 'bg-ink/12'}`}
+          />
+        ))}
+      </div>
+
+      {/* ── Step 1: Credentials ── */}
+      {step === 1 ? (
+        <>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
+              Create account
+            </p>
+            <h1 className="mt-3 text-4xl leading-tight text-ink sm:text-5xl">
+              Start your Drapeon account.
+            </h1>
+            <p className="mt-4 text-sm leading-7 text-ink/66">
+              One account for ordering and tailoring.
+            </p>
+          </div>
+
+          <div className="mt-6 grid gap-4">
+            <label className="grid gap-2 text-sm font-semibold text-ink">
+              Display name
+              <input
+                value={displayName}
+                onChange={(event) => setDisplayName(event.target.value)}
+                placeholder="Your name"
+                autoComplete="name"
+                className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
+              />
+            </label>
+
+            <label className="grid gap-2 text-sm font-semibold text-ink">
+              Phone number
+              <input
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+                placeholder="+2348012345678"
+                type="tel"
+                autoComplete="tel"
+                className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
+              />
+              <span className="text-xs font-normal leading-5 text-ink/52">
+                Used for order updates, account recovery, and critical trust-chain alerts.
+              </span>
+            </label>
+
+            <label className="grid gap-2 text-sm font-semibold text-ink">
+              Email
+              <input
+                value={email}
+                onChange={(event) => {
+                  setEmail(event.target.value)
+                  setPendingConfirmationEmail(null)
+                }}
+                placeholder="you@example.com"
+                type="email"
+                autoComplete="email"
+                className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
+              />
+            </label>
+
+            <div className="grid gap-2 text-sm font-semibold text-ink">
+              <label htmlFor={passwordInputId}>Password</label>
+              <span className="relative block">
+                <input
+                  id={passwordInputId}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="8+ characters"
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  maxLength={MAX_PASSWORD_LENGTH}
+                  className="min-h-12 w-full rounded-[1rem] border border-ink/10 bg-white px-4 pr-20 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((current) => !current)}
+                  className="absolute inset-y-1.5 right-1.5 rounded-[0.8rem] px-3 text-xs font-semibold text-needle transition hover:bg-bone"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? 'Hide' : 'Show'}
+                </button>
+              </span>
+              <span
+                className={`text-xs font-normal leading-5 ${
+                  password.length > 0 && !passwordStrengthError
+                    ? 'text-needle'
+                    : passwordStrengthError
+                      ? 'text-rust'
+                      : 'text-ink/52'
+                }`}
+              >
+                {password.length > 0 && !passwordStrengthError
+                  ? 'Password meets the Drapeon policy.'
+                  : (passwordStrengthError ?? PASSWORD_POLICY_HINT)}
+              </span>
             </div>
 
+            {error ? (
+              <div role="alert" aria-live="polite" className="rounded-[1rem] border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
+                {error}
+              </div>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => {
+                const e = validateStep1()
+                if (e) {
+                  setError(e)
+                  return
+                }
+                setError(null)
+                setStep(2)
+              }}
+              className="min-h-[52px] rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(45,106,79,0.18)] transition hover:bg-needle-600"
+            >
+              Continue
+            </button>
+          </div>
+
+          <div className="mt-6 flex flex-col gap-3 border-t border-ink/6 pt-5 text-sm text-ink/62 sm:flex-row sm:items-center sm:justify-between">
+            <span>Already have an account?</span>
+            <a href="/sign-in" className="font-semibold text-needle">
+              Sign in
+            </a>
+          </div>
+        </>
+      ) : null}
+
+      {/* ── Step 2: Role choice ── */}
+      {step === 2 ? (
+        <>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
+              Your role
+            </p>
+            <h1 className="mt-3 text-4xl leading-tight text-ink sm:text-5xl">
+              How will you use Drapeon?
+            </h1>
+          </div>
+
+          <div className="mt-6 grid gap-3 sm:grid-cols-2">
+            {/* Customer card */}
+            <button
+              type="button"
+              onClick={() => setRole('CUSTOMER')}
+              className={`rounded-[1.2rem] border p-5 text-left transition ${
+                role === 'CUSTOMER'
+                  ? 'border-needle/30 bg-needle/6 ring-2 ring-needle/20'
+                  : 'border-ink/10 bg-white hover:bg-bone/60'
+              }`}
+            >
+              <div className="mb-3 grid h-10 w-10 place-items-center rounded-full bg-needle/10">
+                <svg
+                  viewBox="0 0 24 24"
+                  className="size-5 text-needle"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <circle cx="6" cy="6" r="3" />
+                  <circle cx="6" cy="18" r="3" />
+                  <line x1="20" y1="4" x2="8.12" y2="15.88" />
+                  <line x1="14.47" y1="14.48" x2="20" y2="20" />
+                  <line x1="8.12" y1="8.12" x2="12" y2="12" />
+                </svg>
+              </div>
+              <p className="text-base font-semibold text-ink">I&apos;m ordering</p>
+              <p className="mt-1.5 text-sm leading-6 text-ink/62">
+                Browse tailors, submit custom briefs, track orders, and manage fit records.
+              </p>
+            </button>
+
+            {/* Tailor card */}
+            <button
+              type="button"
+              onClick={() => setRole('TAILOR')}
+              className={`rounded-[1.2rem] border p-5 text-left transition ${
+                role === 'TAILOR'
+                  ? 'border-needle/30 bg-needle/6 ring-2 ring-needle/20'
+                  : 'border-ink/10 bg-white hover:bg-bone/60'
+              }`}
+            >
+              <div className="mb-3 grid h-10 w-10 place-items-center rounded-full bg-needle/10">
+                <svg
+                  viewBox="0 0 24 24"
+                  className="size-5 text-needle"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M3 3h18v4H3zM3 10h4M7 10v4M3 17h18v4H3z" />
+                </svg>
+              </div>
+              <p className="text-base font-semibold text-ink">I&apos;m tailoring</p>
+              <p className="mt-1.5 text-sm leading-6 text-ink/62">
+                Manage custom orders, showcase your portfolio, and get paid through Drapeon.
+              </p>
+            </button>
+          </div>
+
+          <p className="mt-3 text-xs text-ink/44">
+            You can add the other side from your account later.
+          </p>
+
+          {error ? (
+            <div role="alert" aria-live="polite" className="mt-4 rounded-[1rem] border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
+              {error}
+            </div>
+          ) : null}
+
+          <div className="mt-6 flex gap-3">
+            <button
+              type="button"
+              onClick={() => { setError(null); setStep(1) }}
+              className="flex-1 min-h-[52px] rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink transition hover:bg-bone"
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              onClick={() => { setError(null); setStep(3) }}
+              className="flex-1 min-h-[52px] rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(45,106,79,0.18)] transition hover:bg-needle-600"
+            >
+              Continue
+            </button>
+          </div>
+        </>
+      ) : null}
+
+      {/* ── Step 3: Profile setup ── */}
+      {step === 3 ? (
+        <>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">
+              Profile setup
+            </p>
+            <h1 className="mt-3 text-4xl leading-tight text-ink sm:text-5xl">
+              {role === 'TAILOR' ? 'Set up your studio.' : 'Tell tailors about your style.'}
+            </h1>
+            <p className="mt-4 text-sm leading-7 text-ink/66">
+              {role === 'TAILOR'
+                ? 'Add the basic studio details needed before deeper verification, portfolio, and payout setup.'
+                : 'Add the basic fit details needed before measurements, saved tailors, and orders.'}
+            </p>
+          </div>
+
+          <form
+            className="mt-6 grid gap-5"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void submit()
+            }}
+          >
+            {/* Currency selector — 7 currencies, keep styled select */}
             <label className="grid gap-2 text-sm font-semibold text-ink">
               Account currency
               <select
@@ -564,6 +1088,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                     ))}
                   </div>
                 </div>
+
                 <div className="grid gap-3 text-sm font-semibold text-ink">
                   <span>What do you typically order?</span>
                   <div className="grid gap-2">
@@ -597,29 +1122,26 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                     className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
                   />
                 </label>
-                <label className="grid gap-2 text-sm font-semibold text-ink">
-                  Languages
-                  <input
-                    value={tailorLanguages}
-                    onChange={(event) => setTailorLanguages(event.target.value)}
-                    placeholder="English, Yoruba"
-                    className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
-                  />
-                  <span className="text-xs font-normal leading-5 text-ink/52">Separate each language with a comma.</span>
-                </label>
-                <label className="grid gap-2 text-sm font-semibold text-ink">
-                  Specialties
-                  <input
-                    value={tailorSpecialties}
-                    onChange={(event) => setTailorSpecialties(event.target.value)}
-                    placeholder="Agbada, Ankara, bridal, alterations"
-                    className="min-h-12 rounded-[1rem] border border-ink/10 bg-white px-4 text-base font-normal text-ink outline-none transition placeholder:text-ink/36 focus:border-needle"
-                  />
-                  <span className="text-xs font-normal leading-5 text-ink/52">Separate each specialty with a comma.</span>
-                </label>
+
+                <ChipInput
+                  label="Languages"
+                  hint="Press Enter or comma to add each language."
+                  values={tailorLanguagesList}
+                  onChange={setTailorLanguagesList}
+                  placeholder="English, Yoruba..."
+                />
+
+                <ChipInput
+                  label="Specialties"
+                  hint="Press Enter or comma to add each specialty."
+                  values={tailorSpecialtiesList}
+                  onChange={setTailorSpecialtiesList}
+                  placeholder="Agbada, Ankara, bridal..."
+                />
+
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="grid gap-2 text-sm font-semibold text-ink">
-                    Starting price
+                    Starting price ({priceCurrencyLabel})
                     <input
                       value={priceMin}
                       onChange={(event) => setPriceMin(event.target.value)}
@@ -629,7 +1151,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                     />
                   </label>
                   <label className="grid gap-2 text-sm font-semibold text-ink">
-                    High-end price
+                    High-end price ({priceCurrencyLabel})
                     <input
                       value={priceMax}
                       onChange={(event) => setPriceMax(event.target.value)}
@@ -639,28 +1161,34 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                     />
                   </label>
                 </div>
+
                 <div className="grid gap-2 text-sm font-semibold text-ink">
                   <span>What will you offer?</span>
                   <div className="grid gap-2 sm:grid-cols-2">
-                    {[
-                      ['custom', 'Custom orders', supportsCustomOrders, setSupportsCustomOrders],
-                      ['ready-made', 'Ready-made items', supportsReadyMade, setSupportsReadyMade],
-                    ].map(([key, label, selected, setter]) => (
+                    {(
+                      [
+                        ['custom', 'Custom orders', supportsCustomOrders, setSupportsCustomOrders],
+                        ['ready-made', 'Ready-made items', supportsReadyMade, setSupportsReadyMade],
+                      ] as const
+                    ).map(([key, label, selected, setter]) => (
                       <button
-                        key={key as string}
+                        key={key}
                         type="button"
-                        onClick={() => (setter as Dispatch<SetStateAction<boolean>>)(!(selected as boolean))}
+                        onClick={() =>
+                          (setter as Dispatch<SetStateAction<boolean>>)(!(selected as boolean))
+                        }
                         className={
                           selected
                             ? 'rounded-full bg-needle px-4 py-3 text-sm font-semibold text-white'
                             : 'rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink'
                         }
                       >
-                        {label as string}
+                        {label}
                       </button>
                     ))}
                   </div>
                 </div>
+
                 <div className="grid gap-2 text-sm font-semibold text-ink">
                   <span>Fulfillment</span>
                   <div className="grid gap-2 sm:grid-cols-3">
@@ -674,7 +1202,7 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                             setFulfillment((current) =>
                               selected
                                 ? current.filter((entry) => entry !== option.value)
-                                : [...current, option.value]
+                                : [...current, option.value],
                             )
                           }}
                           className={
@@ -691,59 +1219,49 @@ export function AccountAuthForm({ mode }: { mode: AuthMode }): React.JSX.Element
                 </div>
               </>
             )}
-          </div>
-        ) : null}
 
-        {error ? (
-          <div className="rounded-[1rem] border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
-            {error}
-          </div>
-        ) : null}
-        {message ? (
-          <div className="rounded-[1rem] border border-needle/16 bg-needle/8 px-4 py-3 text-sm leading-6 text-ink">
-            {message}
-          </div>
-        ) : null}
-        {pendingConfirmationEmail ? (
-          <div className="grid gap-3 rounded-[1rem] border border-ink/8 bg-white/72 px-4 py-3 text-sm leading-6 text-ink">
-            <p className="text-ink/66">
-              Need a fresh link for <span className="font-semibold text-ink">{pendingConfirmationEmail}</span>?
-            </p>
+            {error ? (
+              <div role="alert" aria-live="polite" className="rounded-[1rem] border border-rust/20 bg-rust/8 px-4 py-3 text-sm leading-6 text-ink">
+                {error}
+              </div>
+            ) : null}
+
+            {message ? (
+              <div className="rounded-[1rem] border border-needle/16 bg-needle/8 px-4 py-3 text-sm leading-6 text-ink">
+                {message}
+              </div>
+            ) : null}
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => { setError(null); setStep(2) }}
+                className="flex-1 min-h-[52px] rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink transition hover:bg-bone"
+              >
+                Back
+              </button>
+              <button
+                type="submit"
+                disabled={loading}
+                className="flex-1 min-h-[52px] rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(45,106,79,0.18)] transition hover:bg-needle-600 disabled:cursor-not-allowed disabled:bg-ink/18 disabled:text-ink/42"
+              >
+                {loading ? 'Working...' : 'Create account'}
+              </button>
+            </div>
+
             <button
               type="button"
               onClick={() => {
-                void resendConfirmation()
+                setSkipProfileSetup(true)
+                void submit(true)
               }}
-              disabled={loading || resendLoading}
-              className="min-h-11 rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-needle transition hover:bg-bone disabled:cursor-not-allowed disabled:text-ink/36"
+              className="text-center text-xs text-ink/44 hover:text-ink"
             >
-              {resendLoading ? 'Sending...' : 'Resend confirmation email'}
+              Skip for now
             </button>
-          </div>
-        ) : null}
-
-        <button
-          type="submit"
-          disabled={loading}
-          className="min-h-[52px] rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(45,106,79,0.18)] transition hover:bg-needle-600 disabled:cursor-not-allowed disabled:bg-ink/18 disabled:text-ink/42"
-        >
-          {loading ? 'Working...' : isSignUp ? 'Create account' : 'Sign in'}
-        </button>
-      </form>
-
-      <div className="mt-6 flex flex-col gap-3 border-t border-ink/6 pt-5 text-sm text-ink/62 sm:flex-row sm:items-center sm:justify-between">
-        {isSignUp ? (
-          <>
-            <span>Already have an account?</span>
-            <a href={`/sign-in?role=${role.toLowerCase()}`} className="font-semibold text-needle">Sign in</a>
-          </>
-        ) : (
-          <>
-            <a href="/account/recovery" className="font-semibold text-needle">Forgot password?</a>
-            <a href={`/sign-up?role=${role.toLowerCase()}`} className="font-semibold text-needle">Create account</a>
-          </>
-        )}
-      </div>
+          </form>
+        </>
+      ) : null}
     </div>
   )
 }

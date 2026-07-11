@@ -36,6 +36,7 @@ import {
   type TailorStockAlert,
 } from '@/lib/ready-made-stock'
 import { parseOrderSupportMeta, type OrderSupportMeta } from '@/lib/order-support'
+import { decodeDisplayText } from '@drape/shared/display-text'
 
 // ─── Query Key Factory ───────────────────────────────────────────────────────
 
@@ -85,6 +86,16 @@ function fallbackInventoryQuantity(stockStatus: string | null | undefined, isLiv
   if (!isLive || stockStatus === 'SOLD_OUT' || stockStatus === 'HIDDEN') return 0
   if (stockStatus === 'LOW_STOCK') return 1
   return 1
+}
+
+function displayText(value: string | null | undefined, fallback = '') {
+  const decoded = decodeDisplayText(value ?? '').trim()
+  return decoded || fallback
+}
+
+function displayNullableText(value: string | null | undefined) {
+  const decoded = displayText(value)
+  return decoded || null
 }
 
 /**
@@ -878,10 +889,10 @@ async function fetchCustomerOrders(
       return {
         id: o.id,
         reference: o.reference,
-        garmentType: o.garment_type ?? 'Order',
+        garmentType: displayText(o.garment_type, 'Order'),
         orderKind: o.order_kind ?? 'CUSTOM',
         stage: o.stage,
-        tailorName: tailorProfile?.display_name ?? '',
+        tailorName: displayText(tailorProfile?.display_name),
         tailorId: tailorProfile?.id ?? '',
         estimatedDate: o.quoted_completion_date,
         createdAt: o.created_at,
@@ -941,12 +952,12 @@ async function fetchTailorOrders(
       return {
         id: o.id,
         reference: o.reference,
-        garmentType: o.garment_type ?? 'Order',
+        garmentType: displayText(o.garment_type, 'Order'),
         orderKind: o.order_kind ?? 'CUSTOM',
         sellerItemId: o.seller_item_id ?? null,
         customerId: o.customer_id ?? null,
         stage: o.stage,
-        customerName: customerProfile?.display_name ?? 'Customer',
+        customerName: displayText(customerProfile?.display_name, 'Customer'),
         estimatedDate: o.quoted_completion_date,
         quotedAmount: o.quoted_amount,
         quotedCurrency: o.currency ?? o.quoted_currency ?? 'USD',
@@ -984,11 +995,11 @@ async function fetchCustomerOrderDetail(
   return {
     id: d.id,
     reference: d.reference,
-    garmentType: d.garment_type ?? 'Order',
-    garmentDescription: d.garment_description,
+    garmentType: displayText(d.garment_type, 'Order'),
+    garmentDescription: displayText(d.garment_description),
     stage: d.stage,
     tailorId: d.tailor_id,
-    tailorName: tailorProfile?.display_name ?? '',
+    tailorName: displayText(tailorProfile?.display_name),
     quotedAmount: d.quoted_amount,
     quotedCurrency: (d.currency ?? d.quoted_currency ?? 'USD') as CurrencyCode,
     quotedCompletionDate: d.quoted_completion_date,
@@ -1000,7 +1011,7 @@ async function fetchCustomerOrderDetail(
     stageUpdates: (d.order_stage_updates ?? []).map((u) => ({
       id: u.id,
       stage: u.stage,
-      note: u.note,
+      note: displayText(u.note),
       photoUrl: u.photo_url,
       createdAt: u.created_at,
     })),
@@ -1054,10 +1065,10 @@ async function fetchCustomerProfile(userId: string): Promise<CustomerProfileData
     recentOrders: visibleOrders.map((o) => ({
       id: o.id,
       reference: o.reference,
-      garmentType: o.garment_type ?? 'Order',
+      garmentType: displayText(o.garment_type, 'Order'),
       orderKind: o.order_kind ?? 'CUSTOM',
       stage: o.stage,
-      tailorName: firstJoinedRow(o.tailor_profiles)?.display_name ?? 'Tailor',
+      tailorName: displayText(firstJoinedRow(o.tailor_profiles)?.display_name, 'Tailor'),
       createdAt: o.created_at,
     })),
   }
@@ -1087,8 +1098,8 @@ async function fetchSavedTailors(userId: string): Promise<SavedTailor[]> {
       return {
         savedId: row.id,
         id: t.id,
-        displayName: t.display_name,
-        location: t.location,
+        displayName: displayText(t.display_name, 'Tailor'),
+        location: displayText(t.location),
         tier: t.tier,
         avgRating: t.avg_rating,
         totalReviews: t.total_reviews,
@@ -1159,8 +1170,8 @@ async function fetchWishlistCollections(userId: string): Promise<WishlistCollect
         tailor.id,
         {
           id: tailor.id,
-          displayName: tailor.display_name,
-          location: tailor.location,
+          displayName: displayText(tailor.display_name, 'Tailor'),
+          location: displayText(tailor.location),
           tier: tailor.tier,
           avgRating: tailor.avg_rating ?? 0,
           totalReviews: tailor.total_reviews ?? 0,
@@ -1179,13 +1190,13 @@ async function fetchWishlistCollections(userId: string): Promise<WishlistCollect
         item.id,
         {
           id: item.id,
-          title: item.title,
-          category: item.category ?? null,
+          title: displayText(item.title, 'Ready-made item'),
+          category: displayNullableText(item.category),
           currency: item.currency as CurrencyCode,
           priceAmount: item.price_amount,
           photoUrl: photoUrls[0] ?? null,
           tailorProfileId: item.tailor_profile_id,
-          sellerName: sellerProfile?.display_name ?? 'Tailor',
+          sellerName: displayText(sellerProfile?.display_name, 'Tailor'),
           stockStatus: item.stock_status ?? 'IN_STOCK',
           inventoryQuantity:
             typeof item.inventory_quantity === 'number'
@@ -1352,8 +1363,8 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
     profile: profileData
       ? {
           id: profileData.id,
-          displayName: profileData.display_name,
-          location: profileData.location,
+          displayName: displayText(profileData.display_name, 'Tailor'),
+          location: displayText(profileData.location),
           sellerType: profileData.seller_type ?? 'TAILOR',
           tier: profileData.tier,
           avgRating: derivedAverageRating ?? profileData.avg_rating ?? 0,
@@ -1361,9 +1372,9 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
           totalOrders: profileData.total_orders,
           avgResponseHours: profileData.avg_response_hours ?? null,
           availability: profileData.availability,
-          bio: profileData.bio ?? null,
-          specialtyTags: asStringList(profileData.specialty_tags),
-          languages: asStringList(profileData.languages),
+          bio: displayNullableText(profileData.bio),
+          specialtyTags: asStringList(profileData.specialty_tags).map((tag) => displayText(tag)).filter(Boolean),
+          languages: asStringList(profileData.languages).map((language) => displayText(language)).filter(Boolean),
           currency: profileData.currency ?? 'USD',
           priceRangeMin: profileData.price_range_min ?? null,
           priceRangeMax: profileData.price_range_max ?? null,
@@ -1386,11 +1397,11 @@ async function fetchTailorPublic(tailorId: string, userId?: string): Promise<Tai
       return {
         id: r.id,
         rating: r.rating,
-        body: r.body,
-        tags: asStringList(r.tags),
-        reviewerName: r.reviewer_name ?? 'Customer',
+        body: displayNullableText(r.body),
+        tags: asStringList(r.tags).map((tag) => displayText(tag)).filter(Boolean),
+        reviewerName: displayText(r.reviewer_name, 'Customer'),
         reviewerAvatarUrl: customerProfile?.avatar_url ?? null,
-        response: r.tailor_response ?? null,
+        response: displayNullableText(r.tailor_response),
         createdAt: r.created_at,
       }
     }),
@@ -1451,8 +1462,8 @@ async function fetchTailorShop(tailorId: string): Promise<TailorShopData> {
   const items = (resolvedItemsData ?? [])
     .map((row) => ({
       id: row.id,
-      title: row.title,
-      category: row.category ?? null,
+      title: displayText(row.title, 'Ready-made item'),
+      category: displayNullableText(row.category),
       priceAmount: row.price_amount,
       currency: row.currency,
       photoUrls: asStringList(row.photo_urls),
@@ -1473,7 +1484,7 @@ async function fetchTailorShop(tailorId: string): Promise<TailorShopData> {
     )
 
   return {
-    tailorName: (profileData as TailorShopProfileQueryRow | null)?.display_name ?? 'This seller',
+    tailorName: displayText((profileData as TailorShopProfileQueryRow | null)?.display_name, 'This seller'),
     sellerAvailability: (profileData as TailorShopProfileQueryRow | null)?.availability ?? null,
     sellerLive: (profileData as TailorShopProfileQueryRow | null)?.is_live === true,
     supportsCustomOrders:
@@ -1562,13 +1573,13 @@ async function fetchSellerItem(itemId: string): Promise<SellerItemDetail | null>
     id: row.id,
     tailorProfileId: row.tailor_profile_id,
     tailorUserId: sellerProfile?.user_id ?? null,
-    sellerName: sellerProfile?.display_name ?? 'This seller',
-    sellerLocation: sellerProfile?.location ?? null,
+    sellerName: displayText(sellerProfile?.display_name, 'This seller'),
+    sellerLocation: displayNullableText(sellerProfile?.location),
     sellerAvailability: sellerProfile?.availability ?? null,
     sellerLive: sellerProfile?.is_live === true,
-    title: row.title,
-    description: row.description ?? null,
-    category: row.category ?? null,
+    title: displayText(row.title, 'Ready-made item'),
+    description: displayNullableText(row.description),
+    category: displayNullableText(row.category),
     sizes: asStringList(row.sizes),
     sizeGuide:
       row.size_guide && typeof row.size_guide === 'object' && !Array.isArray(row.size_guide)
@@ -1772,7 +1783,7 @@ async function fetchTailorDashboard(
         .map((row) =>
           buildTailorStockAlert({
             itemId: row.id,
-            title: row.title ?? 'This item',
+            title: displayText(row.title, 'This item'),
             sizes: asStringList(row.sizes),
             sizeInventory: normalizeSizeInventory(
               asStringList(row.sizes),
@@ -1804,7 +1815,7 @@ async function fetchTailorDashboard(
       monthEarningsByCurrency,
       avgRating: profile?.avg_rating ?? 0,
       tier: profile?.tier ?? null,
-      displayName: profile?.display_name ?? fallbackDisplayName,
+      displayName: displayText(profile?.display_name, fallbackDisplayName),
       availability: profile?.availability ?? 'OPEN',
       currency: displayCurrency,
       isLive: profile?.is_live ?? false,
@@ -1824,12 +1835,12 @@ async function fetchTailorDashboard(
     orders: visibleOrderList.map((o) => ({
       id: o.id,
       reference: o.reference,
-      garmentType: o.garment_type ?? 'Order',
+      garmentType: displayText(o.garment_type, 'Order'),
       orderKind: o.order_kind ?? 'CUSTOM',
       sellerItemId: o.seller_item_id ?? null,
       customerId: o.customer_id ?? null,
       stage: o.stage,
-      customerName: firstJoinedRow(o.customer_profiles)?.display_name ?? 'Customer',
+      customerName: displayText(firstJoinedRow(o.customer_profiles)?.display_name, 'Customer'),
       estimatedDate: o.quoted_completion_date,
       quotedAmount: o.quoted_amount,
     })),
@@ -1913,9 +1924,9 @@ async function fetchCustomerProfileOverview(
     recentOrders: visibleOrders.map((o) => ({
       id: o.id,
       reference: o.reference,
-      garmentType: o.garment_type ?? 'Order',
+      garmentType: displayText(o.garment_type, 'Order'),
       stage: o.stage,
-      tailorName: firstJoinedRow(o.tailor_profiles)?.display_name ?? 'Tailor',
+      tailorName: displayText(firstJoinedRow(o.tailor_profiles)?.display_name, 'Tailor'),
       createdAt: o.created_at,
     })),
   }
@@ -1944,19 +1955,19 @@ async function fetchCustomerMessageOrderInfo(
     const tailorProfile = firstJoinedRow(o.tailor_profiles)
     const customerProfile = firstJoinedRow(o.customer_profiles)
     return {
-      garmentType: o.garment_type ?? 'Order',
+      garmentType: displayText(o.garment_type, 'Order'),
       orderKind: o.order_kind ?? 'CUSTOM',
       sellerItemId: o.seller_item_id ?? null,
-      tailorName: tailorProfile?.display_name ?? 'Tailor',
+      tailorName: displayText(tailorProfile?.display_name, 'Tailor'),
       tailorAvatarUrl:
         tailorProfile?.avatar_url ?? asStringList(tailorProfile?.portfolio_photo_urls)[0] ?? null,
       tailorId: tailorProfile?.id ?? '',
       customerId: o.customer_id,
-      customerName: customerProfile?.display_name ?? fallbackDisplayName,
+      customerName: displayText(customerProfile?.display_name, fallbackDisplayName),
       customerAvatarUrl: customerProfile?.avatar_url ?? null,
       stage: o.stage,
       videoCallUrl: o.video_call_url ?? null,
-      supportMeta: parseOrderSupportMeta(o.special_note),
+      supportMeta: parseOrderSupportMeta(displayText(o.special_note)),
       resolvedOrderId: o.id,
     }
   }
@@ -1991,19 +2002,19 @@ async function fetchCustomerMessageOrderInfo(
   const tailorProfile = firstJoinedRow(o.tailor_profiles)
   const customerProfile = firstJoinedRow(o.customer_profiles)
   return {
-    garmentType: o.garment_type ?? 'Order',
+    garmentType: displayText(o.garment_type, 'Order'),
     orderKind: o.order_kind ?? 'CUSTOM',
     sellerItemId: o.seller_item_id ?? null,
-    tailorName: tailorProfile?.display_name ?? 'Tailor',
+    tailorName: displayText(tailorProfile?.display_name, 'Tailor'),
     tailorAvatarUrl:
       tailorProfile?.avatar_url ?? asStringList(tailorProfile?.portfolio_photo_urls)[0] ?? null,
     tailorId: tailorProfile?.id ?? '',
     customerId: o.customer_id,
-    customerName: customerProfile?.display_name ?? fallbackDisplayName,
+    customerName: displayText(customerProfile?.display_name, fallbackDisplayName),
     customerAvatarUrl: customerProfile?.avatar_url ?? null,
     stage: o.stage,
     videoCallUrl: o.video_call_url ?? null,
-    supportMeta: parseOrderSupportMeta(o.special_note),
+    supportMeta: parseOrderSupportMeta(displayText(o.special_note)),
     resolvedOrderId: o.id,
   }
 }

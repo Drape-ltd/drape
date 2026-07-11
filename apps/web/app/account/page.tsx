@@ -4,6 +4,7 @@ import Link from 'next/link'
 import type { JSX } from 'react'
 import { AppSurfacePreview } from '../../components/product-visuals'
 import { MarketingShell, SectionTitle } from '../../components/marketing-shell'
+import { AccountSignedInRedirect } from '../../components/account-signed-in-redirect'
 import { buildMetadata } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
@@ -77,11 +78,12 @@ export default function AccountPage(): JSX.Element {
         </div>
       }
     >
+      <AccountSignedInRedirect />
       <section className="py-8">
         <SectionTitle
           eyebrow="Access paths"
           title="The same identity can use customer and tailor mode."
-          description="Customer and tailor history is visible on web. Camera, checkout, push, production media, and sensitive changes continue in the app until each web flow is ported deliberately."
+          description="Use the customer side for orders, fit, messages, saved items, payments, and support. Use tailor mode for shop work, production, earnings, and payout tasks."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           {accessPaths.map((path) => (

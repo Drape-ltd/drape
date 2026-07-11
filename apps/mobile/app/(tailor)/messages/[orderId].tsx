@@ -30,6 +30,7 @@ import { goBackOrReturnTo } from '@/lib/navigation'
 import { parseOrderSupportMeta, type OrderCallMeta, type OrderSupportMeta } from '@/lib/order-support'
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { TERMINAL_STAGES, type OrderStage } from '@drape/shared/order-machine'
+import { decodeDisplayText } from '@drape/shared/display-text'
 
 const SUPPORT_EMAIL = 'support@drapeon.co'
 type SafetyReportCategory = 'ABUSIVE_LANGUAGE' | 'OFF_PLATFORM_PRESSURE' | 'UNSAFE_BEHAVIOR'
@@ -50,6 +51,11 @@ const ORDER_CALL_STAGES: OrderStage[] = [
 
 function isOrderCallStage(stage: OrderStage | null | undefined) {
   return !!stage && ORDER_CALL_STAGES.includes(stage)
+}
+
+function displayText(value: string | null | undefined, fallback = '') {
+  const decoded = decodeDisplayText(value ?? '').trim()
+  return decoded || fallback
 }
 
 function readyMadeCallJoinState(orderCall: OrderCallMeta | null | undefined) {
@@ -253,15 +259,15 @@ export default function TailorMessagesScreen() {
         const customerProfile = firstJoinedRow(d.customer_profiles)
         const tailorProfile = firstJoinedRow(d.tailor_profiles)
         setOrderInfo({
-          garmentType: d.garment_type ?? 'Order',
+          garmentType: displayText(d.garment_type, 'Order'),
           orderKind: d.order_kind ?? 'CUSTOM',
-          customerName: customerProfile?.display_name ?? 'Customer',
+          customerName: displayText(customerProfile?.display_name, 'Customer'),
           customerAvatarUrl: customerProfile?.avatar_url ?? null,
-          tailorName: (tailorProfile?.display_name ?? displayName) || 'Tailor',
+          tailorName: displayText(tailorProfile?.display_name, displayName || 'Tailor'),
           tailorAvatarUrl: tailorProfile?.avatar_url ?? null,
           stage: d.stage,
           videoCallUrl: d.video_call_url ?? null,
-          supportMeta: parseOrderSupportMeta(d.special_note),
+          supportMeta: parseOrderSupportMeta(displayText(d.special_note)),
         })
       } else {
         setOrderInfo(null)

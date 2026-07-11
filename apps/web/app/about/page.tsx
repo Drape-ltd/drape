@@ -1,12 +1,11 @@
 import type { Metadata } from 'next'
 import type { JSX } from 'react'
-import { AppSurfacePreview } from '../../components/product-visuals'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'About',
-  description: 'Drapeon is an AI-powered fashion discovery and fit platform operated by O4 Group LLC.',
+  description: 'Drapeon helps people order custom and ready-made fashion with clearer fit context, trusted tailors, and protected handoffs.',
   path: '/about',
 })
 
@@ -15,14 +14,13 @@ export default function AboutPage(): JSX.Element {
     <MarketingShell
       eyebrow="About Drapeon"
       title="Fashion commerce works better when it understands fit."
-      description="Drapeon is an AI-powered fashion discovery and fit platform operated by O4 Group LLC."
-      visual={<AppSurfacePreview variant="trust" />}
+      description="Drapeon helps people order custom and ready-made fashion with clearer fit context, trusted tailors, and protected handoffs."
     >
       <section className="py-8">
         <SectionTitle
           eyebrow="Company"
           title="O4 Group LLC builds Drapeon."
-          description="O4 Group LLC is building consumer technology for fashion discovery, fit, ordering, and marketplace trust."
+          description="O4 Group LLC is building consumer technology for fashion ordering, fit context, and marketplace trust."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           <MarketingCard
@@ -31,7 +29,7 @@ export default function AboutPage(): JSX.Element {
           />
           <MarketingCard
             title="Technology"
-            body="Drape Vision uses computer vision built on Google MediaPipe to help users capture body measurements from a phone camera."
+            body="Drapeon Vision uses computer vision built on Google MediaPipe to help users capture body measurements from a phone camera."
           />
           <MarketingCard
             title="Trust"
@@ -40,14 +38,13 @@ export default function AboutPage(): JSX.Element {
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="Mission"
-          title="Make fashion feel personal without making it complicated."
-          description="The future of fashion commerce is not just more inventory. It is better fit, better context, and better trust between the people buying and the people making."
-        />
-        <div className="mt-10 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
-          Drapeon brings discovery, measurement, order management, communication, payments, and handoff into a single experience. Customers get more confidence before they buy. Tailors and sellers get clearer briefs and cleaner order context. Support teams get the records they need when real life gets messy.
+      <section className="border-t border-ink/6 py-14">
+        <div className="overflow-hidden rounded-[1.6rem] bg-ink px-8 py-10 text-white">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">Mission</p>
+          <h2 className="mt-3 max-w-2xl text-3xl text-white sm:text-4xl">Make fashion feel personal without making it complicated.</h2>
+          <p className="mt-4 max-w-2xl text-sm leading-7 text-white/64">
+            Drapeon brings discovery, measurement, order management, communication, payments, and handoff into a single experience. Customers get more confidence before they buy. Tailors and sellers get clearer briefs and cleaner order context. Support teams get the records they need when real life gets messy.
+          </p>
         </div>
       </section>
     </MarketingShell>

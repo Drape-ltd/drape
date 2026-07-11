@@ -1,8 +1,9 @@
 import type { Metadata } from 'next'
 import { headers } from 'next/headers'
-import Script from 'next/script'
 import * as React from 'react'
 import { AuthLandingRedirect } from '../components/auth-landing-redirect'
+import { WebAnalytics } from '../components/web-analytics'
+import { WebSessionScopeGuard } from '../components/web-session-scope-guard'
 import { getSupabasePublishableKey, getSupabaseUrl } from '../lib/supabase-config'
 import './globals.css'
 
@@ -11,17 +12,17 @@ const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://drapeon.co'
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
-    default: 'Drapeon | AI-powered fashion discovery and fit',
+    default: 'Drapeon | Custom fashion orders, fit, and trusted tailors',
     template: '%s | Drapeon',
   },
   description:
-    'AI-powered fashion discovery and fit, including Drape Vision camera-assisted measurements.',
+    'Find trusted tailors, submit clear custom fashion briefs, track production, and use Drapeon Vision for camera-assisted fit measurements.',
   applicationName: 'Drapeon',
   manifest: '/manifest.webmanifest',
   openGraph: {
-    title: 'Drapeon | AI-powered fashion discovery and fit',
+    title: 'Drapeon | Custom fashion orders, fit, and trusted tailors',
     description:
-      'Discover fashion, work with trusted tailors, and use Drape Vision for camera-assisted measurements.',
+      'Find trusted tailors, submit clear custom fashion briefs, track production, and use Drapeon Vision for camera-assisted fit measurements.',
     url: siteUrl,
     siteName: 'Drapeon',
     type: 'website',
@@ -36,15 +37,18 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Drapeon | AI-powered fashion discovery and fit',
+    title: 'Drapeon | Custom fashion orders, fit, and trusted tailors',
     description:
-      'Discover fashion, work with trusted tailors, and use Drape Vision for camera-assisted measurements.',
+      'Find trusted tailors, submit clear custom fashion briefs, track production, and use Drapeon Vision for camera-assisted fit measurements.',
     images: ['/opengraph-image'],
   },
   icons: {
-    icon: '/icon.svg',
-    shortcut: '/icon.svg',
-    apple: '/icon.svg',
+    icon: [
+      { url: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+    ],
+    shortcut: [{ url: '/icon-192.png', sizes: '192x192', type: 'image/png' }],
+    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
   },
 }
 
@@ -74,34 +78,43 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     '@type': 'WebSite',
     name: 'Drapeon',
     url: siteUrl,
-    description: 'AI-powered fashion discovery and fit.',
+    description: 'Custom fashion orders, fit context, and trusted tailors.',
   }
 
   return (
-    <html lang="en">
+    <html lang="en" data-scroll-behavior="smooth">
       <body className="bg-bone text-ink antialiased">
+        <a href="#main-content" className="skip-link">
+          Skip to main content
+        </a>
         <script
           nonce={nonce}
+          suppressHydrationWarning
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationJsonLd) }}
         />
         <script
           nonce={nonce}
+          suppressHydrationWarning
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteJsonLd) }}
         />
-        <Script nonce={nonce} src="/api/public-env.js" strategy="beforeInteractive" />
         {hasPublicSupabaseEnv ? (
           <script
             nonce={nonce}
+            suppressHydrationWarning
             id="drapeon-public-env"
             dangerouslySetInnerHTML={{
               __html: `window.__DRAPEON_PUBLIC_ENV__=${JSON.stringify(publicSupabaseEnv).replace(/</g, '\\u003c')};`,
             }}
           />
         ) : null}
+        <WebAnalytics />
+        <WebSessionScopeGuard />
         <AuthLandingRedirect />
-        {children}
+        <div id="main-content" tabIndex={-1}>
+          {children}
+        </div>
       </body>
     </html>
   )

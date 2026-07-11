@@ -81,6 +81,11 @@ GRANT SELECT ON TABLE payouts TO authenticated;
 -- Each user manages their own device token.
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE push_tokens TO authenticated;
 
+-- ─── web_push_subscriptions ──────────────────────────────────────────────────
+-- Signed-in users manage their own account browser subscriptions.
+-- Ops browser subscriptions are service-role only.
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE web_push_subscriptions TO authenticated;
+
 -- ─── contact_bypass_logs ──────────────────────────────────────────────────────
 -- Service role only — no grants to anon or authenticated.
 -- (RLS is enabled with no policies, so nothing gets through.)

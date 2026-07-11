@@ -20,6 +20,7 @@ const PAYSTACK_PAYOUT_CURRENCIES = new Set(['NGN', 'GHS', 'KES'])
 const STRIPE_PAYOUT_CURRENCIES = new Set(['USD', 'GBP', 'EUR', 'CAD'])
 const PAYOUT_CHANGE_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000
 const PAYOUT_DESTINATION_HOLD_MS = 72 * 60 * 60 * 1000
+const MANUAL_BANK_ENTRY_ENABLED = Deno.env.get('MANUAL_BANK_ENTRY_ENABLED') === '1'
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
@@ -403,6 +404,7 @@ Deno.serve(async (req) => {
           manualBankAccountName: profile.manual_bank_account_name ?? null,
           manualBankVerificationStatus: profile.manual_bank_verification_status ?? 'NOT_SUBMITTED',
           manualBankSubmittedAt: profile.manual_bank_submitted_at ?? null,
+          manualBankEntryEnabled: MANUAL_BANK_ENTRY_ENABLED,
           paystackRecipientCode: profile.paystack_recipient_code ?? null,
           stripeConnectAccountId: profile.stripe_connect_account_id ?? null,
           payoutAccountChangeCount: profile.payout_account_change_count ?? 0,
@@ -631,6 +633,13 @@ Deno.serve(async (req) => {
     }
 
     if (body.action === 'submit-manual-bank-entry') {
+      if (!MANUAL_BANK_ENTRY_ENABLED) {
+        return jsonResponse({
+          code: 'MANUAL_BANK_ENTRY_DISABLED',
+          error: 'Manual bank entry is paused for beta. Use Stripe or Paystack, or contact payouts if your bank is not listed.',
+        }, 409, cors)
+      }
+
       const validation = validateManualBankEntry(body)
       if (!validation.ok) {
         return jsonResponse({

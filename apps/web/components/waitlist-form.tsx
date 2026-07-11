@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { type JSX, useState } from 'react'
 import { LocationAutocomplete } from './location-autocomplete'
+import { trackWebEvent } from './web-analytics'
 
 type WaitlistFormProps = {
   role: 'CUSTOMER' | 'TAILOR'
@@ -26,6 +27,7 @@ export function WaitlistForm({ role, title, description }: WaitlistFormProps): J
 
     setStatus('submitting')
     setMessage('')
+    trackWebEvent('waitlist_submit_attempt', { role })
 
     try {
       const response = await fetch('/api/waitlist', {
@@ -50,6 +52,7 @@ export function WaitlistForm({ role, title, description }: WaitlistFormProps): J
 
       setStatus('success')
       setMessage("You're in. We'll reach out when this side opens.")
+      trackWebEvent('waitlist_submit_success', { role })
       setName('')
       setEmail('')
       setWebsite('')
@@ -58,7 +61,9 @@ export function WaitlistForm({ role, title, description }: WaitlistFormProps): J
       setNotes('')
     } catch (error) {
       setStatus('error')
-      setMessage(error instanceof Error ? error.message : 'Unable to join the waitlist right now.')
+      const errorMessage = error instanceof Error ? error.message : 'Unable to join the waitlist right now.'
+      setMessage(errorMessage)
+      trackWebEvent('waitlist_submit_failure', { role, message: errorMessage })
     }
   }
 
@@ -153,8 +158,10 @@ export function WaitlistForm({ role, title, description }: WaitlistFormProps): J
               type="submit"
               disabled={status === 'submitting'}
               className="inline-flex w-full items-center justify-center rounded-full bg-needle px-6 py-4 text-sm font-semibold text-white shadow-[0_16px_35px_rgba(45,106,79,0.16)] transition hover:bg-needle-600 disabled:cursor-not-allowed disabled:opacity-60 lg:w-auto"
+              data-analytics-event="form_cta_click"
+              data-analytics-label={`Waitlist ${role}`}
             >
-              {status === 'submitting' ? 'Joining…' : 'Join the queue'}
+              {status === 'submitting' ? 'Joining...' : 'Get early access'}
             </button>
           </div>
         </div>

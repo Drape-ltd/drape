@@ -104,6 +104,7 @@ import { Button, HandoffSupportModal, Input, RemoteImage } from '@/components/ui
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { type OrderStage } from '@drape/shared/order-machine'
 import { filterContactInfo } from '@drape/shared/contact-filter'
+import { decodeDisplayText } from '@drape/shared/display-text'
 import {
   CANCELLATION_REFUND_COMPONENT_LABELS,
   deriveCancellationPolicy,
@@ -792,7 +793,18 @@ function hasPendingFulfillmentPayment(
 
 function safeOperationalText(value: string | null | undefined, fallback: string) {
   if (!value) return null
-  return filterContactInfo(value).blocked ? fallback : value
+  const decoded = decodeDisplayText(value)
+  return filterContactInfo(decoded).blocked ? fallback : decoded
+}
+
+function displayText(value: string | null | undefined, fallback = '') {
+  const decoded = decodeDisplayText(value ?? '').trim()
+  return decoded || fallback
+}
+
+function displayNullableText(value: string | null | undefined) {
+  const decoded = displayText(value)
+  return decoded || null
 }
 
 function defaultConsultationStart() {
@@ -1026,7 +1038,7 @@ export default function OrderTrackingScreen() {
 
           setFabricTracking(d.fabric_tracking ?? '')
           setHandoffIssue(openHandoffIssue)
-          const supportMeta = parseOrderSupportMeta(d.special_note)
+          const supportMeta = parseOrderSupportMeta(displayText(d.special_note))
           const shouldLoadGroupMembers = supportMeta.bulkOrder?.enabled === true
           const groupMemberRows = shouldLoadGroupMembers
             ? (await invokeFunction<GroupMemberListResponse>('group-member-action', {
@@ -1055,15 +1067,15 @@ export default function OrderTrackingScreen() {
               created_at: string | null
             }>).map((advance) => ({
               id: advance.id,
-              title: advance.title ?? 'Material advance',
-              description: advance.description ?? '',
+              title: displayText(advance.title, 'Material advance'),
+              description: displayText(advance.description),
               amount: advance.amount ?? 0,
               currency: (advance.currency ?? d.currency ?? d.quoted_currency ?? 'USD') as CurrencyCode,
               status: (advance.status ?? 'REQUESTED') as MaterialAdvanceStatus,
               releaseStatus: advance.release_status ?? null,
               receiptUrl: advance.receipt_url ?? null,
-              receiptNote: advance.receipt_note ?? null,
-              customerResponseNote: advance.customer_response_note ?? null,
+              receiptNote: displayNullableText(advance.receipt_note),
+              customerResponseNote: displayNullableText(advance.customer_response_note),
               createdAt: advance.created_at ?? new Date().toISOString(),
             }))
           )
@@ -1075,9 +1087,9 @@ export default function OrderTrackingScreen() {
             orderKind: d.order_kind ?? 'CUSTOM',
             sellerItemId: d.seller_item_id ?? null,
             fulfillmentOption: d.fulfillment_option ?? null,
-            garmentType: d.garment_type ?? 'Order',
-            garmentDescription: d.garment_description,
-            itemTitle: d.item_title ?? null,
+            garmentType: displayText(d.garment_type, 'Order'),
+            garmentDescription: displayNullableText(d.garment_description),
+            itemTitle: displayNullableText(d.item_title),
             itemSize: d.item_size ?? null,
             itemQuantity: d.item_quantity ?? 1,
             itemSubtotal: d.item_subtotal ?? null,
@@ -1095,10 +1107,10 @@ export default function OrderTrackingScreen() {
             sourceAmount: d.source_amount ?? null,
             stage: d.stage,
             tailorId: d.tailor_id,
-            tailorName: tailorProfile?.display_name ?? '',
-            tailorLocation: tailorProfile?.location ?? null,
-            pickupAddress,
-            pickupInstructions,
+            tailorName: displayText(tailorProfile?.display_name, ''),
+            tailorLocation: displayNullableText(tailorProfile?.location),
+            pickupAddress: displayNullableText(pickupAddress),
+            pickupInstructions: displayNullableText(pickupInstructions),
             quotedAmount: d.quoted_amount,
             quotedCurrency: (d.currency ?? d.quoted_currency ?? 'USD') as CurrencyCode,
             consultationFee: d.consultation_fee ?? null,
@@ -1110,15 +1122,15 @@ export default function OrderTrackingScreen() {
             fulfillmentPaymentCheckoutUrl: d.fulfillment_payment_checkout_url ?? null,
             fabricSource: d.fabric_source ?? '',
             deliveryMethod: d.delivery_method ?? '',
-            deliveryAddress: d.delivery_address ?? null,
-            recipientName: d.recipient_name ?? null,
+            deliveryAddress: displayNullableText(d.delivery_address),
+            recipientName: displayNullableText(d.recipient_name),
             recipientPhone: d.recipient_phone ?? null,
             fabricTracking: d.fabric_tracking,
             trackingNumber: d.tracking_number ?? null,
             carrier: d.carrier ?? null,
-            fulfillmentProvider: d.fulfillment_provider ?? null,
-            fulfillmentReference: d.fulfillment_reference ?? null,
-            fulfillmentContactName: d.fulfillment_contact_name ?? null,
+            fulfillmentProvider: displayNullableText(d.fulfillment_provider),
+            fulfillmentReference: displayNullableText(d.fulfillment_reference),
+            fulfillmentContactName: displayNullableText(d.fulfillment_contact_name),
             fulfillmentContactPhone: d.fulfillment_contact_phone ?? null,
             collectionCode: d.collection_code,
             videoCallUrl: d.video_call_url ?? null,
@@ -1132,7 +1144,7 @@ export default function OrderTrackingScreen() {
               ? {
                   fabricApprovalRequired: customDetail.fabric_approval_required === true,
                   fabricApprovalStatus: customDetail.fabric_approval_status ?? null,
-                  fabricDescription: customDetail.fabric_description ?? null,
+                  fabricDescription: displayNullableText(customDetail.fabric_description),
                   fabricSourcingDeadlineDays: customDetail.fabric_sourcing_deadline_days ?? null,
                   fabricSourcingDeadlineAt: customDetail.fabric_sourcing_deadline_at ?? null,
                 }
@@ -1140,7 +1152,7 @@ export default function OrderTrackingScreen() {
             stageUpdates: (d.order_stage_updates ?? []).map((u) => ({
               id: u.id,
               stage: u.stage,
-              note: u.note,
+              note: displayNullableText(u.note),
               photoUrl: u.photo_url,
               createdAt: u.created_at,
             })),
@@ -4367,7 +4379,7 @@ function SummaryLine({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.summaryLine}>
       <Text style={styles.summaryLineLabel}>{label}</Text>
-      <Text style={styles.summaryLineValue}>{value}</Text>
+      <Text style={styles.summaryLineValue}>{decodeDisplayText(value)}</Text>
     </View>
   )
 }

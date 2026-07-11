@@ -8,6 +8,7 @@ export const metadata: Metadata = buildMetadata({
   title: 'Careers',
   description: 'Learn about joining Drapeon and helping build a clearer trust-first custom-clothing product.',
   path: '/careers',
+  noindex: true,
 })
 
 export default function CareersPage(): JSX.Element {
@@ -35,6 +36,22 @@ export default function CareersPage(): JSX.Element {
           <MarketingCard title="Product craft" body="Help turn a messy real-world process into a product people can trust." />
           <MarketingCard title="Business systems" body="Work on the tools that help tailors run better and customers feel more confident." />
           <MarketingCard title="Trust design" body="Build around verification, fit data, and operational accountability from the start." />
+        </div>
+      </section>
+
+      <section className="border-t border-ink/6 py-14">
+        <div className="overflow-hidden rounded-[1.6rem] bg-ink px-8 py-10 text-white">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">Get in touch</p>
+          <h2 className="mt-3 text-3xl text-white sm:text-4xl">Send a note to the careers inbox.</h2>
+          <p className="mt-3 text-sm leading-7 text-white/62">
+            There are no open listings yet. If the product and the mission make sense to you, reach out and tell us what you do well.
+          </p>
+          <a
+            href={`mailto:${CONTACTS.careers}?subject=Drapeon%20careers`}
+            className="mt-7 inline-flex items-center justify-center rounded-full bg-white px-6 py-3.5 text-sm font-semibold text-ink"
+          >
+            {CONTACTS.careers}
+          </a>
         </div>
       </section>
     </MarketingShell>

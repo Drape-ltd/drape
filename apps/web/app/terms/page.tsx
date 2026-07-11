@@ -25,8 +25,8 @@ const orderRules = [
     body: 'Ready-made purchases depend on listed photos, size, stock, pickup, delivery, shipping, and return details.',
   },
   {
-    title: 'Drape Vision',
-    body: 'Drape Vision provides AI-assisted measurement guidance. Users remain responsible for reviewing measurements and choosing manual entry when needed.',
+    title: 'Drapeon Vision',
+    body: 'Drapeon Vision provides camera-assisted measurement guidance. Users remain responsible for reviewing measurements and choosing manual entry when needed.',
   },
 ]
 
@@ -39,7 +39,7 @@ const refundRules = [
 
 export const metadata: Metadata = buildMetadata({
   title: 'Terms of Service',
-  description: 'Terms for using Drapeon, an AI-powered fashion discovery and fit platform operated by O4 Group LLC.',
+  description: 'Terms for using Drapeon, a custom fashion ordering and tailor marketplace operated by O4 Group LLC.',
   path: '/terms',
 })
 
@@ -47,8 +47,8 @@ export default function TermsPage(): JSX.Element {
   return (
     <MarketingShell
       eyebrow="Terms of Service"
-      title="Terms for Drapeon users, tailors, orders, and AI fit tools."
-      description="Drapeon is operated by O4 Group LLC. These Terms explain the rules for accounts, orders, payments, Drape Vision, disputes, and support."
+      title="Terms for Drapeon users, tailors, orders, and fit tools."
+      description="Drapeon is operated by O4 Group LLC. These Terms explain the rules for accounts, orders, payments, Drapeon Vision, disputes, and support."
       cta={
         <a
           href={`mailto:${CONTACTS.legal}?subject=Drapeon%20legal%20question`}
@@ -106,9 +106,9 @@ export default function TermsPage(): JSX.Element {
 
       <section className="border-t border-ink/6 py-16">
         <SectionTitle
-          eyebrow="Orders and Drape Vision"
+          eyebrow="Orders and Drapeon Vision"
           title="The accepted order is the source of truth."
-          description="Measurements, Drape Vision results, reference photos, quotes, timelines, delivery details, and support decisions stay attached to the order."
+          description="Measurements, Drapeon Vision results, reference photos, quotes, timelines, delivery details, and support decisions stay attached to the order."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           {orderRules.map((item) => (
@@ -116,7 +116,7 @@ export default function TermsPage(): JSX.Element {
           ))}
         </div>
         <div className="mt-8 rounded-[1.75rem] border border-ink/6 bg-white/82 p-6 text-sm leading-7 text-ink/70 shadow-sm">
-          Drape Vision and other fit tools are designed to improve measurement quality, but custom clothing still involves human judgment, fabric behavior, body changes, lighting, camera quality, and tailoring execution. Drapeon does not guarantee a perfect garment outcome.
+          Drapeon Vision and other fit tools are designed to improve measurement quality, but custom clothing still involves human judgment, fabric behavior, body changes, lighting, camera quality, and tailoring execution. Drapeon does not guarantee a perfect garment outcome.
         </div>
       </section>
 

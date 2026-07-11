@@ -1,167 +1,131 @@
 import type { Metadata } from 'next'
-import Image from 'next/image'
 import Link from 'next/link'
 import type { JSX } from 'react'
-import { AppSurfacePreview } from '../../components/product-visuals'
-import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
+import { MarketingShell } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'For Tailors',
-  description: 'Run shop, custom orders, production updates, clients, and payouts from one Drapeon cockpit.',
+  description: 'Run shop, orders, production, clients, and payouts from one Drapeon workspace.',
   path: '/tailors',
 })
 
-const tailorSurfaces = [
-  ['Setup and verification', 'Legal name, phone, profile photo, specialties, portfolio, ID document, payout setup, and terms acceptance are checked before going live.'],
-  ['Shop', 'Create ready-made listings with garment photos, sizes, stock, fit guidance, fulfillment options, and listing health checks.'],
-  ['Order cockpit', 'Review custom briefs, ready-made orders, measurements, style references, delivery details, quote state, and payment readiness.'],
-  ['Production updates', 'Move through designing, sourcing, cutting, sewing, finishing, handoff, and stage media with photo or video proof.'],
-  ['Client context', 'See repeat customer history, measurement context, reviews, diary notes, consultation notes, and order-specific preferences.'],
-  ['Messages and calls', 'Keep clarification, consultation scheduling, voice, media, and safety filters in the order thread.'],
-  ['Money', 'View earnings, pending release, payout readiness, material advances, refunds, and provider-specific payment state.'],
-  ['Availability and capacity', 'Toggle availability, understand deadline density, and avoid taking work the business cannot fulfil well.'],
-] satisfies Array<readonly [string, string]>
+const benefits = [
+  {
+    title: 'Serious briefs',
+    body: 'Every order arrives with references, measurements, fit preference, deadline, and delivery expectations already filled in. No more chasing context over WhatsApp.',
+  },
+  {
+    title: 'One working cockpit',
+    body: 'Custom briefs, ready-made orders, consultations, production stages, client history, and shop management — all in one place on web and mobile.',
+  },
+  {
+    title: 'Money you can see',
+    body: 'Payment status, pending release, payout readiness, and blocked reasons are visible at a glance. Stripe and Paystack both supported.',
+  },
+]
 
-const launchSafety = [
-  ['No incomplete storefronts', 'Verification and payout checks prevent a tailor from going live before customers can safely place orders.'],
-  ['No invisible production', 'Stage media, style approval, fabric approval, and handoff evidence help customers trust remote tailoring.'],
-  ['No mystery payouts', 'Tailors see what is pending, what is blocked, what needs ops review, and what has already been released.'],
-] satisfies Array<readonly [string, string]>
+const journey = [
+  ['Present trust clearly', 'A strong profile, portfolio, specialties, and live availability help the right clients find and choose you.'],
+  ['Review and quote from one place', 'The brief already has the garment context, fit data, and deadline you need to respond with a real price.'],
+  ['Confirm style and fabric before cutting', 'Customers approve your interpretation and sourced material before irreversible work begins.'],
+  ['Guide the customer through production', 'Move through designing, sourcing, cutting, sewing, and finishing with stage notes — no mystery for the customer.'],
+  ['Complete the handoff cleanly', 'Collection, delivery, receipt confirmation, support, and payout release all close the order properly.'],
+]
 
 export default function TailorsPage(): JSX.Element {
   return (
     <MarketingShell
       eyebrow="For tailors"
-      title="Run your tailoring business from one clear cockpit."
-      description="Drapeon gives tailors a structured way to receive briefs, quote, consult, sell ready-made pieces, update production, manage clients, and understand payouts."
-      visual={<AppSurfacePreview variant="tailor" />}
+      title="Run your tailoring business from one place."
+      description="Drapeon gives tailors a structured workspace for briefs, quotes, shop, production, clients, earnings, and payout — on web and mobile."
       cta={
         <div className="flex flex-col gap-3 sm:flex-row">
           <Link
-            href="/how-it-works"
+            href="/apply"
             className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
+            data-analytics-event="primary_cta_click"
+            data-analytics-label="Tailors apply"
           >
-            See the working loop
+            Apply as a tailor
           </Link>
           <Link
-            href="/apply"
+            href="/how-it-works"
             className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink"
           >
-            Apply as tailor
+            See how it works
           </Link>
         </div>
       }
     >
+
+      {/* 3 benefits */}
       <section className="py-8">
-        <SectionTitle
-          eyebrow="What improves"
-          title="Less admin friction. Better operational visibility."
-          description="Cleaner intake, pricing, and handoff."
-        />
-        <div className="mt-10 grid gap-5 lg:grid-cols-3">
-          <MarketingCard
-            title="Serious briefs"
-            body="The work starts with better information: references, measurements, fit preference, wearer context, fabric source, deadline, and delivery expectations."
-          />
-          <MarketingCard
-            title="One working cockpit"
-            body="Quotes, consultations, production stages, collection, shipping, shop orders, and client context stay inside one live system."
-          />
-          <MarketingCard
-            title="Money clarity"
-            body="Payment status, material advances, pending release, payout readiness, refunds, and blocked reasons are visible instead of guessed."
-          />
-        </div>
-      </section>
-
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="App surface"
-          title="A real operating system for tailoring work."
-          description="Drapeon gives tailors the same connected workspace across setup, shop, clients, orders, production updates, and money."
-        />
-        <div className="mt-10 overflow-hidden rounded-[1.6rem] border border-ink/6 bg-white/82 p-3 shadow-sm">
-          <Image
-            src="/tailor-pipeline.svg"
-            alt="Drapeon tailor pipeline interface preview"
-            width={1200}
-            height={560}
-            className="h-auto w-full rounded-[1.25rem]"
-          />
-        </div>
-        <div className="mt-6 grid gap-4 sm:grid-cols-2">
-          {tailorSurfaces.map(([title, body]) => (
-            <div key={title} className="rounded-[1.5rem] border border-ink/6 bg-white/78 p-5 shadow-sm">
-              <div className="text-xl text-ink">{title}</div>
-              <div className="mt-2 text-sm leading-7 text-ink/66">{body}</div>
+        <div className="grid gap-4 lg:grid-cols-3">
+          {benefits.map(({ title, body }) => (
+            <div key={title} className="rounded-[1.5rem] border border-ink/6 bg-white/84 p-6 shadow-sm">
+              <h3 className="text-xl text-ink">{title}</h3>
+              <p className="mt-3 text-sm leading-7 text-ink/66">{body}</p>
             </div>
           ))}
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="Tailor journey"
-          title="From brief to handoff"
-          description="Present, quote, produce, hand off."
-        />
-        <div className="mt-10 grid gap-4">
-          {[
-            ['1. Present trust clearly', 'A strong storefront, portfolio, specialties, and availability help the right clients choose you.'],
-            ['2. Review and quote from one place', 'The order already contains the key fit and garment context needed to respond seriously.'],
-            ['3. Confirm style and fabric before cutting', 'Customers can approve interpretation and sourced material before irreversible work begins.'],
-            ['4. Guide the customer through production', 'Consultation, designing, sourcing, cutting, sewing, finishing, and handoff stay visible.'],
-            ['5. Complete the handoff cleanly', 'Collection, delivery, shipping, receipt confirmation, support, review, and payout release finish the order well.'],
-          ].map(([title, body]) => (
-            <div key={title} className="rounded-[1.5rem] border border-ink/6 bg-bone/80 p-5">
-              <div className="text-lg text-ink">{title}</div>
-              <div className="mt-2 text-sm leading-7 text-ink/68">{body}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="Launch safety"
-          title="The platform protects the craft and the customer."
-          description="Tailors get payment, proof, and order context in one place instead of scattered messages."
-        />
-        <div className="mt-10 grid gap-5 lg:grid-cols-3">
-          {launchSafety.map(([title, body]) => (
-            <MarketingCard key={title} title={title} body={body} />
-          ))}
-        </div>
-      </section>
-
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="Early access"
-          title="Join now."
-          description="We’ll let you know when tailor access opens."
-        />
-        <div className="mt-10 rounded-[1.6rem] border border-ink/6 bg-ink px-7 py-8 text-white shadow-[0_18px_60px_rgba(22,28,24,0.12)]">
-          <div className="grid gap-6 lg:grid-cols-[1fr_auto_auto] lg:items-center">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/70">Tailor waitlist</p>
-              <h3 className="mt-3 text-3xl sm:text-4xl">Join the tailor queue.</h3>
-            </div>
-            <Link
-              href="/join"
-              className="inline-flex items-center justify-center rounded-full bg-white px-6 py-4 text-sm font-semibold text-ink"
-            >
-              Join tailor queue
-            </Link>
-            <Link
-              href="/join"
-              className="inline-flex items-center justify-center rounded-full border border-white/18 px-6 py-4 text-sm font-semibold text-white"
-            >
-              View both sides
-            </Link>
+      {/* Journey */}
+      <section className="border-t border-ink/6 py-14">
+        <div className="grid gap-10 lg:grid-cols-[1fr_1.4fr] lg:items-start">
+          <div className="lg:sticky lg:top-10">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Tailor journey</p>
+            <h2 className="mt-3 text-3xl text-ink sm:text-4xl">From brief to handoff.</h2>
+            <p className="mt-4 text-sm leading-7 text-ink/62">
+              Every step is tracked in the same order record that the customer can see, so there is nothing to explain after the fact.
+            </p>
+          </div>
+          <div className="overflow-hidden rounded-[1.5rem] border border-ink/6 bg-white/84 shadow-sm">
+            {journey.map(([title, body], i) => (
+              <div key={title} className={`flex gap-4 px-5 py-5 ${i > 0 ? 'border-t border-ink/6' : ''}`}>
+                <span className="mt-0.5 shrink-0 text-xs font-semibold tabular-nums text-needle/40">0{i + 1}</span>
+                <div>
+                  <p className="font-semibold text-ink">{title}</p>
+                  <p className="mt-1 text-sm leading-6 text-ink/58">{body}</p>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </section>
+
+      {/* CTA */}
+      <section className="border-t border-ink/6 py-14">
+        <div className="overflow-hidden rounded-[1.6rem] bg-ink px-8 py-10 text-white">
+          <div className="grid gap-8 lg:grid-cols-[1fr_auto] lg:items-center">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">Early access</p>
+              <h2 className="mt-3 text-3xl text-white sm:text-4xl">Join the tailor queue.</h2>
+              <p className="mt-3 text-sm leading-7 text-white/62">
+                We&apos;re reviewing tailor applications and onboarding in batches. Apply now to secure your spot.
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-col gap-3">
+              <Link
+                href="/apply"
+                className="inline-flex items-center justify-center rounded-full bg-white px-6 py-3.5 text-sm font-semibold text-ink"
+                data-analytics-event="primary_cta_click"
+                data-analytics-label="Tailor CTA apply bottom"
+              >
+                Apply as a tailor
+              </Link>
+              <Link
+                href="/join"
+                className="inline-flex items-center justify-center rounded-full border border-white/16 px-6 py-3.5 text-sm font-semibold text-white"
+              >
+                Join customer waitlist
+              </Link>
+            </div>
+          </div>
+        </div>
+      </section>
+
     </MarketingShell>
   )
 }

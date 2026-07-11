@@ -80,7 +80,6 @@ import { Sentry } from '@/lib/sentry'
 import {
   MEASUREMENT_SCAN_CAPTURE_METHOD_LABELS,
   MEASUREMENT_SOURCE_LABELS,
-  isMeasurementMetadataKey,
   type MeasurementFitConfidence,
   type MeasurementScanCaptureMethod,
   type MeasurementScanStatus,
@@ -89,6 +88,7 @@ import {
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { stripExif } from '@/lib/stripExif'
 import { uploadPublicStorageImage } from '@/lib/storage-upload'
+import { buildMeasurementProfileStoragePayload } from '@drape/shared/measurement-profile'
 import {
   DRAPE_VISION_CALCULATION_MESSAGES,
   DRAPE_VISION_COLORS,
@@ -2805,38 +2805,6 @@ function buildSpecialistDraftSnapshot(drafts: SpecialistMeasurementDraft[], unit
     snapshot[key] = roundMeasurementValue(numericValue, unit)
     return snapshot
   }, { unit })
-}
-
-const MEASUREMENT_PROFILE_ALLOWED_METADATA_KEYS = new Set([
-  'unit',
-  'measurementProfileLabel',
-  'measurementProfileUpdatedAt',
-  'wearerContext',
-  'fitStyle',
-  'measurementSource',
-  'measurementSourceLabel',
-  'fitConfidence',
-  'garmentContext',
-  'bodyShape',
-  'fitFlags',
-  'bodyNote',
-  'bodyFlags',
-  'symmetryFlags',
-  'requiresTailorReview',
-])
-
-function buildMeasurementProfileStoragePayload(measurements: Record<string, unknown>) {
-  return Object.entries(measurements).reduce<Record<string, unknown>>((payload, [key, value]) => {
-    if (MEASUREMENT_PROFILE_ALLOWED_METADATA_KEYS.has(key)) {
-      payload[key] = value
-      return payload
-    }
-    if (isMeasurementMetadataKey(key)) return payload
-    if (value == null) return payload
-    if (typeof value === 'number' && Number.isFinite(value)) payload[key] = value
-    if (typeof value === 'string' && value.trim().length > 0) payload[key] = value
-    return payload
-  }, {})
 }
 
 function buildSpecialistDraftConfidence(drafts: SpecialistMeasurementDraft[]) {

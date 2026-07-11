@@ -24,8 +24,10 @@ export default function DiscoverPage(): JSX.Element {
           <Link
             href="/join"
             className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
+            data-analytics-event="primary_cta_click"
+            data-analytics-label="Discover get early access"
           >
-            Join the queue
+            Get early access
           </Link>
           <Link
             href="/customers"
@@ -53,7 +55,7 @@ export default function DiscoverPage(): JSX.Element {
           />
           <MarketingCard
             title="Fit confidence"
-            body="Drape Vision and manual measurements help customers understand fit before they place an order or choose a size."
+            body="Drapeon Vision and manual measurements help customers understand fit before they place an order or choose a size."
           />
         </div>
       </section>
@@ -78,16 +80,18 @@ export default function DiscoverPage(): JSX.Element {
         </div>
         <div className="mt-10 rounded-[1.6rem] border border-ink/6 bg-ink p-6 text-white shadow-[0_22px_70px_rgba(22,28,24,0.12)]">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/58">Access</p>
-          <h3 className="mt-3 text-3xl text-white">Join the queue while store access opens.</h3>
+          <h3 className="mt-3 text-3xl text-white">Get early access while store access opens.</h3>
           <p className="mt-4 max-w-2xl text-sm leading-7 text-white/70">
-            Join the queue for early access and see how Drapeon is designed around discovery, fit, orders, and trust.
+            Get on the early-access list and see how Drapeon is designed around discovery, fit, orders, and trust.
           </p>
           <div className="mt-6 flex flex-col gap-3 sm:flex-row">
             <Link
               href="/join"
               className="inline-flex items-center justify-center rounded-full bg-white px-6 py-4 text-sm font-semibold text-ink"
+              data-analytics-event="primary_cta_click"
+              data-analytics-label="Discover bottom get early access"
             >
-              Join the queue
+              Get early access
             </Link>
             <a
               href={`mailto:${CONTACTS.support}?subject=Drapeon%20customer%20queue`}

@@ -894,7 +894,7 @@ Deno.serve(async (req) => {
         payment_checkout_url
       `)
       .eq('id', orderId)
-      .single()
+      .maybeSingle()
 
     if (orderError) {
       log('error', FN, 'db.error', { actor_id: caller.id, order_id: orderId, error: orderError.message })

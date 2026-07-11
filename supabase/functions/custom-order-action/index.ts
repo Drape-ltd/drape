@@ -34,6 +34,7 @@ import { resolveDeadlineContextWarning } from '../../../packages/shared/src/dead
 const FN = 'custom-order-action'
 const STALE_MEASUREMENT_MONTHS = 6
 const ORDER_CONTRACT_VERSION = 1
+const MEASUREMENT_FALLBACK_MIN_CHARS = 24
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void
 }
@@ -160,6 +161,10 @@ function missingCoreMeasurements(snapshot: unknown, garmentType: string) {
   if (normalizedGarment === 'gele') return []
   const required = ['chest', 'waist', 'hips', 'height']
   return required.filter((field) => measurementValue(snapshot, field) == null)
+}
+
+function hasMeasurementFallbackNote(value: string | null | undefined) {
+  return (value ?? '').trim().length >= MEASUREMENT_FALLBACK_MIN_CHARS
 }
 
 function objectRecord(value: unknown): Record<string, unknown> | null {
@@ -386,26 +391,29 @@ Deno.serve(async (req) => {
     }
 
     const missingMeasurements = missingCoreMeasurements(measurementSnapshot, body.garmentType)
+    const hasStructuredMeasurements =
+      !!measurementSnapshot && typeof measurementSnapshot === 'object' && !Array.isArray(measurementSnapshot)
+    const hasMeasurementFallback = hasMeasurementFallbackNote(normalizedBodyNote)
     const measurementPreflight = runPreflight([
       {
         name: 'measurement_snapshot_present',
-        condition: !!measurementSnapshot && typeof measurementSnapshot === 'object' && !Array.isArray(measurementSnapshot),
+        condition: hasStructuredMeasurements || hasMeasurementFallback,
         errorCode: 'MEASUREMENTS_REQUIRED',
-        message: 'Add your measurement profile before placing this order.',
+        message: 'Add a measurement profile or explain that the tailor should follow up for measurements before quoting.',
         field: 'customerMeasurementsSnapshot',
         severity: 'BLOCKING',
-        actual: { hasMeasurements: !!measurementSnapshot },
+        actual: { hasMeasurements: hasStructuredMeasurements, hasMeasurementFallback },
       },
       {
         name: 'core_measurements_present',
-        condition: missingMeasurements.length === 0,
+        condition: missingMeasurements.length === 0 || hasMeasurementFallback,
         errorCode: 'MEASUREMENTS_INCOMPLETE',
         message: missingMeasurements.length > 0
-          ? `Your measurement profile is missing ${missingMeasurements.join(', ')} for this garment type. Add them before placing this order.`
+          ? `Your measurement profile is missing ${missingMeasurements.join(', ')} for this garment type. Add them, or explain that the tailor should follow up before quoting.`
           : 'Your measurement profile is complete enough for this order.',
         field: 'customerMeasurementsSnapshot',
         severity: 'BLOCKING',
-        actual: { missingMeasurements, garmentType: body.garmentType },
+        actual: { missingMeasurements, garmentType: body.garmentType, hasMeasurementFallback },
       },
     ])
 
@@ -775,6 +783,13 @@ Deno.serve(async (req) => {
       },
       styleNotes: normalizeText(body.styleNotes),
       bodyNote: normalizedBodyNote,
+      measurementFallback: hasMeasurementFallback && missingMeasurements.length > 0
+        ? {
+          requiredBeforeQuote: true,
+          missingMeasurements,
+          note: normalizedBodyNote,
+        }
+        : null,
       fabricSourcing: body.fabricSource === 'TAILOR_SOURCES'
         ? {
           description: normalizeText(body.fabricDescription),

@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
-import Link from 'next/link'
 import type { JSX } from 'react'
-import { MarketingShell, SectionTitle } from '../../components/marketing-shell'
+import { MarketingShell } from '../../components/marketing-shell'
 import { WaitlistForm } from '../../components/waitlist-form'
 import { buildMetadata } from '../../lib/metadata'
 
@@ -14,26 +13,10 @@ export const metadata: Metadata = buildMetadata({
 export default function JoinPage(): JSX.Element {
   return (
     <MarketingShell
-      eyebrow="Queue"
-      title="Join the right side of Drapeon."
-      description="Choose your side and we’ll reach out when it opens."
-      cta={
-        <Link
-          href="/discover"
-          className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
-        >
-          Explore discovery
-        </Link>
-      }
+      eyebrow="Early access"
+      title="Get early access to Drapeon."
+      description="Join as a customer or tailor. We’ll reach out when your access opens."
     >
-      <section className="py-8">
-        <SectionTitle
-          eyebrow="Choose your side"
-          title="Choose your side."
-          description="Customers and tailors start here."
-        />
-      </section>
-
       <section className="grid gap-8 pb-16">
         <WaitlistForm
           role="CUSTOMER"

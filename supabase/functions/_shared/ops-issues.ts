@@ -5,6 +5,7 @@ import {
   type OpsIssueType,
 } from '../../../packages/shared/src/ops-issues.ts'
 import { sendCriticalOpsIssueNotification } from './ops-notifications.ts'
+import { sendWebPushToOps } from './web-push.ts'
 
 type CreateOpsIssueInput = {
   issueType: OpsIssueType
@@ -157,6 +158,7 @@ export async function createOrRefreshOpsIssue(
         provider: input.provider ?? null,
         stage: input.stage ?? null,
       })
+      await sendWebPushToOps(supabase)
     }
 
     return updateResponse.data as { id: string; issue_number: number }
@@ -211,6 +213,7 @@ export async function createOrRefreshOpsIssue(
       provider: input.provider ?? null,
       stage: input.stage ?? null,
     })
+    await sendWebPushToOps(supabase)
   }
 
   return insertResponse.data as { id: string; issue_number: number }

@@ -41,6 +41,10 @@ export type OpsActionKind =
   | 'payout-block-resolution'
   | 'ops-issue-status'
   | 'manual-issue-create'
+  | 'ops-issue-bulk-resolve'
+  | 'support-thread-mark-read'
+  | 'payout-bulk-release'
+  | 'bypass-bulk-review'
 
 export type OpsSectionDefinition = {
   key: OpsView
@@ -296,12 +300,16 @@ const ROLE_ACTION_ACCESS: Record<OpsRole, OpsActionKind[]> = {
     'payout-block-resolution',
     'ops-issue-status',
     'manual-issue-create',
+    'ops-issue-bulk-resolve',
+    'support-thread-mark-read',
+    'payout-bulk-release',
+    'bypass-bulk-review',
   ],
-  ops: ['seller-item-visibility', 'application-status', 'dispatch-stage', 'order-partial-refund', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create'],
-  customer_success: ['dispute-status', 'dispute-resolution', 'conversation-access', 'order-review-resolution', 'order-partial-refund', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create'],
-  trust: ['seller-item-visibility', 'bypass-review', 'verification-decision', 'deletion-status', 'review-visibility', 'conversation-access', 'ops-issue-status', 'manual-issue-create'],
-  finance: ['order-partial-refund', 'payout-release', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create'],
-  engineering: ['ops-issue-status', 'manual-issue-create'],
+  ops: ['seller-item-visibility', 'application-status', 'dispatch-stage', 'order-partial-refund', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read'],
+  customer_success: ['dispute-status', 'dispute-resolution', 'conversation-access', 'order-review-resolution', 'order-partial-refund', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read'],
+  trust: ['seller-item-visibility', 'bypass-review', 'verification-decision', 'deletion-status', 'review-visibility', 'conversation-access', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'support-thread-mark-read', 'bypass-bulk-review'],
+  finance: ['order-partial-refund', 'payout-release', 'material-advance-release', 'payout-block-resolution', 'ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve', 'payout-bulk-release'],
+  engineering: ['ops-issue-status', 'manual-issue-create', 'ops-issue-bulk-resolve'],
 }
 
 export function parseOpsView(value: string | null | undefined): OpsView {

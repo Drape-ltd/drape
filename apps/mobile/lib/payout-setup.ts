@@ -26,6 +26,7 @@ export type TailorPayoutStatus = {
   manualBankAccountName: string | null
   manualBankVerificationStatus: ManualBankVerificationStatus | null
   manualBankSubmittedAt: string | null
+  manualBankEntryEnabled: boolean
   paystackRecipientCode: string | null
   stripeConnectAccountId: string | null
   payoutAccountChangeCount: number

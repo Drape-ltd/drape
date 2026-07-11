@@ -11,11 +11,11 @@ const previewContent: Record<PreviewVariant, {
   explore: {
     eyebrow: 'Explore',
     title: 'Find your tailor',
-    rows: ['Verified • Lagos', 'Agbada, bridal, ready-made', '4.9 rating • Available'],
+    rows: ['Verification shown in profile', 'Specialties and portfolio', 'Availability when live'],
     action: 'Start custom order',
   },
   vision: {
-    eyebrow: 'Drape Vision',
+    eyebrow: 'Drapeon Vision',
     title: 'Review measurements',
     rows: ['Camera-guided scan', 'Retake available', 'Manual fallback ready'],
     action: 'Use for order',
@@ -29,7 +29,7 @@ const previewContent: Record<PreviewVariant, {
   tailor: {
     eyebrow: 'Tailor',
     title: 'Today’s cockpit',
-    rows: ['2 active orders', '1 quote awaiting reply', 'Payout pending release'],
+    rows: ['Briefs ready for review', 'Quotes and production stages', 'Payout readiness'],
     action: 'Open orders',
   },
   privacy: {
@@ -52,7 +52,7 @@ const previewContent: Record<PreviewVariant, {
   },
   account: {
     eyebrow: 'Account',
-    title: 'Choose your side',
+    title: 'Pick a workspace',
     rows: ['Customer orders', 'Tailor workspace', 'Protected ops console'],
     action: 'Open access path',
   },
@@ -62,7 +62,11 @@ export function AppSurfacePreview({ variant = 'explore' }: { variant?: PreviewVa
   const content = previewContent[variant]
 
   return (
-    <div className="w-full max-w-[22rem] min-w-0 rounded-[1.6rem] border border-ink/8 bg-white/84 p-4 shadow-[0_18px_60px_rgba(22,28,24,0.06)] sm:max-w-none">
+    <div
+      className="w-full max-w-[22rem] min-w-0 rounded-[1.6rem] border border-ink/8 bg-white/84 p-4 shadow-[0_18px_60px_rgba(22,28,24,0.06)] sm:max-w-none"
+      role="img"
+      aria-label={`Stylized Drapeon app preview for ${content.title}`}
+    >
       <div className="min-w-0 rounded-[1.2rem] bg-ink p-5 text-white">
         <div className="flex items-center justify-between gap-3">
           <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-white/58">{content.eyebrow}</p>

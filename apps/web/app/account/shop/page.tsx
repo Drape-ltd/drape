@@ -4,7 +4,7 @@ import { AccountAppSurface } from '../../../components/account-app-surface'
 import { buildMetadata } from '../../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
-  title: 'Shop',
+  title: 'Marketplace',
   description: 'Review Drapeon ready-made shop inventory and live marketplace pieces.',
   path: '/account/shop',
 })

@@ -4,19 +4,13 @@ const routes = [
   '',
   '/how-it-works',
   '/vision',
+  '/pricing',
   '/about',
   '/faq',
   '/trust',
   '/discover',
   '/customers',
   '/tailors',
-  '/sign-in',
-  '/sign-up',
-  '/account',
-  '/account/customer',
-  '/account/tailor',
-  '/account/recovery',
-  '/account/ops',
   '/join',
   '/apply',
   '/contact',
@@ -28,16 +22,14 @@ const routes = [
   '/account-deletion',
   '/security',
   '/legal',
-  '/partnerships',
-  '/press',
-  '/careers',
 ]
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://drapeon.co'
+  const lastModified = new Date('2026-07-04')
 
   return routes.map((route) => ({
     url: `${siteUrl}${route}`,
-    lastModified: new Date(),
+    lastModified,
   }))
 }

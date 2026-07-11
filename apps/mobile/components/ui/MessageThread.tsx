@@ -4,7 +4,7 @@
  * Supports text, camera/library photo, and voice note messages.
  * Contact filter applied inline before send.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   TextInput, Alert, ActivityIndicator, Keyboard,
@@ -15,9 +15,10 @@ import { Audio } from 'expo-av'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase, invokeFunction } from '@/lib/supabase'
 import { stripExif } from '@/lib/stripExif'
-import { createValidatedUploadPayload, uploadPublicStorageImage } from '@/lib/storage-upload'
+import { createValidatedUploadPayload } from '@/lib/storage-upload'
 import { readFunctionErrorMessage, readFunctionErrorPayload } from '@/lib/function-errors'
 import { filterContactInfo } from '@drape/shared/contact-filter'
+import { decodeDisplayText } from '@drape/shared/display-text'
 import { Colors, Fonts, FontSize, FontWeight, Spacing, Radius, Shadow } from '@/constants/theme'
 import { AvatarImage } from '@/components/ui/AvatarImage'
 import { RemoteImage } from '@/components/ui/RemoteImage'
@@ -38,6 +39,15 @@ type Message = {
   voice_url: string | null
   created_at: string
   read_at: string | null
+}
+
+type MessageReaction = {
+  id: string
+  message_id: string
+  order_id: string
+  user_id: string
+  emoji: string
+  created_at: string | null
 }
 
 interface Props {
@@ -61,6 +71,7 @@ const RATE_LIMIT_COUNT = 8
 const RATE_LIMIT_WINDOW_MS = 30_000
 
 const MSG_PAGE_SIZE = 50
+const MESSAGE_REACTION_OPTIONS = ['👍', '❤️', '😂', '😮', '🙏'] as const
 const CONNECTIVITY_PATTERNS = [
   'network request failed',
   'failed to fetch',
@@ -71,6 +82,54 @@ const CONNECTIVITY_PATTERNS = [
   'offline',
   'internet connection appears to be offline',
 ]
+
+function isAbsoluteMediaUrl(value: string) {
+  return /^(https?:|file:|blob:|data:)/i.test(value)
+}
+
+function messageMediaPath(value: string) {
+  return value.trim().replace(/^\/+/, '').replace(/^message-media\//, '')
+}
+
+function useMessageMediaUrl(value: string | null | undefined) {
+  const immediateUrl = useMemo(() => {
+    const raw = value?.trim()
+    return raw && isAbsoluteMediaUrl(raw) ? raw : null
+  }, [value])
+  const storagePath = useMemo(() => {
+    const raw = value?.trim()
+    if (!raw || immediateUrl) return null
+    return messageMediaPath(raw)
+  }, [immediateUrl, value])
+  const [signedUrl, setSignedUrl] = useState<{ path: string; url: string | null } | null>(null)
+
+  useEffect(() => {
+    if (!storagePath) return undefined
+    let cancelled = false
+    supabase.storage
+      .from('message-media')
+      .createSignedUrl(storagePath, 60 * 60)
+      .then(({ data, error }) => {
+        if (cancelled) return
+        setSignedUrl({ path: storagePath, url: error ? null : data?.signedUrl ?? null })
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [storagePath])
+
+  if (immediateUrl) return immediateUrl
+  if (!storagePath) return null
+  return signedUrl?.path === storagePath ? signedUrl.url : null
+}
+
+function parseDateValue(value: string | null | undefined) {
+  if (!value) return null
+  const normalized = /\dT\d/.test(value) && !/(Z|[+-]\d{2}:?\d{2})$/i.test(value) ? `${value}Z` : value
+  const date = new Date(normalized)
+  return Number.isNaN(date.getTime()) ? null : date
+}
 
 function readErrorMessage(error: unknown): string | null {
   if (error instanceof Error && error.message.trim()) return error.message.trim()
@@ -215,11 +274,14 @@ export function MessageThread({
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([])
   const messagesRef = useRef<Message[]>([])
+  const [reactions, setReactions] = useState<MessageReaction[]>([])
+  const [reactionsAvailable, setReactionsAvailable] = useState(true)
   const [loading, setLoading] = useState(true)
   const [refreshingThread, setRefreshingThread] = useState(false)
   const [hasEarlier, setHasEarlier] = useState(false)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
   const loadingEarlierRef = useRef(false)
+  const optimisticReactionIdRef = useRef(0)
   const [loadError, setLoadError] = useState('')
   const [threadNotice, setThreadNotice] = useState<ThreadNotice | null>(null)
   const [text, setText] = useState('')
@@ -232,6 +294,39 @@ export function MessageThread({
   const sendTimestamps = useRef<number[]>([])
   const insets = useSafeAreaInsets()
   const composerBottomPadding = Math.max(insets.bottom + Spacing.sm, Spacing.md)
+
+  const reactionsByMessageId = useMemo(() => {
+    const grouped = new Map<string, MessageReaction[]>()
+    for (const reaction of reactions) {
+      const current = grouped.get(reaction.message_id) ?? []
+      current.push(reaction)
+      grouped.set(reaction.message_id, current)
+    }
+    return grouped
+  }, [reactions])
+
+  const fetchReactionsForMessageIds = useCallback(async (messageIds: string[]) => {
+    if (messageIds.length === 0) {
+      setReactions([])
+      return
+    }
+    if (!reactionsAvailable) return
+
+    const { data, error } = await supabase
+      .from('message_reactions')
+      .select('id, message_id, order_id, user_id, emoji, created_at')
+      .eq('order_id', orderId)
+      .in('message_id', messageIds)
+
+    if (error) {
+      setReactionsAvailable(false)
+      setReactions([])
+      return
+    }
+
+    setReactionsAvailable(true)
+    setReactions((data ?? []) as MessageReaction[])
+  }, [orderId, reactionsAvailable])
 
   const fetchMessages = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent === true
@@ -252,6 +347,7 @@ export function MessageThread({
       const nextMessages = data ? ([...data].reverse() as Message[]) : []
       messagesRef.current = nextMessages
       setMessages(nextMessages)
+      await fetchReactionsForMessageIds(nextMessages.map((message) => message.id))
       setHasEarlier((data?.length ?? 0) === MSG_PAGE_SIZE)
       setThreadNotice(null)
     } catch (error) {
@@ -266,7 +362,7 @@ export function MessageThread({
       setRefreshingThread(false)
       setLoading(false)
     }
-  }, [orderId])
+  }, [fetchReactionsForMessageIds, orderId])
 
   async function loadEarlier() {
     if (!hasEarlier || loadingEarlierRef.current || messages.length === 0) return
@@ -283,7 +379,11 @@ export function MessageThread({
         .limit(MSG_PAGE_SIZE)
 
       if (data) {
-        setMessages((prev) => [...([...data].reverse() as Message[]), ...prev])
+        const earlierMessages = [...data].reverse() as Message[]
+        const nextMessages = [...earlierMessages, ...messages]
+        setMessages(nextMessages)
+        messagesRef.current = nextMessages
+        await fetchReactionsForMessageIds(nextMessages.map((message) => message.id))
         setHasEarlier(data.length === MSG_PAGE_SIZE)
       }
     } catch (error) {
@@ -329,6 +429,24 @@ export function MessageThread({
             messagesRef.current = nextMessages
             return nextMessages
           })
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'message_reactions', filter: `order_id=eq.${orderId}` },
+        (payload) => {
+          const next = payload.new as MessageReaction
+          setReactionsAvailable(true)
+          setReactions((prev) => prev.some((reaction) => reaction.id === next.id) ? prev : [...prev, next])
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'message_reactions', filter: `order_id=eq.${orderId}` },
+        (payload) => {
+          const old = payload.old as Partial<MessageReaction>
+          if (!old.id) return
+          setReactions((prev) => prev.filter((reaction) => reaction.id !== old.id))
         }
       )
       .subscribe()
@@ -473,20 +591,22 @@ export function MessageThread({
     const filename = `messages/${orderId}/${Date.now()}.${ext}`
 
     try {
-      const publicUrl = await uploadPublicStorageImage({
-        bucket: 'message-media',
-        path: filename,
-        uri: cleanUri,
-        contentType: 'image/jpeg',
+      const payload = await createValidatedUploadPayload(cleanUri, {
         maxBytes: 10 * 1024 * 1024,
+        contentType: 'image/jpeg',
+        purpose: 'MESSAGE_MEDIA',
       })
+      const { error: uploadError } = await supabase.storage
+        .from('message-media')
+        .upload(filename, payload.data, { contentType: 'image/jpeg' })
+      if (uploadError) throw uploadError
 
       const { error: insertError } = await invokeFunction('message-action', {
         body: {
           action: 'send-message',
           orderId,
           type: 'PHOTO',
-          photoUrl: publicUrl,
+          photoUrl: filename,
         },
       })
       if (insertError) throw insertError
@@ -538,14 +658,13 @@ export function MessageThread({
       }
       const { error: uploadError } = await supabase.storage.from('message-media').upload(filename, payload.data, { contentType: 'audio/m4a' })
       if (uploadError) throw uploadError
-      const { data: urlData } = supabase.storage.from('message-media').getPublicUrl(filename)
 
       const { error: insertError } = await invokeFunction('message-action', {
         body: {
           action: 'send-message',
           orderId,
           type: 'VOICE',
-          voiceUrl: urlData.publicUrl,
+          voiceUrl: filename,
         },
       })
       if (insertError) throw insertError
@@ -561,6 +680,73 @@ export function MessageThread({
       Alert.alert(failure.title, failure.message)
     }
     setSending(false)
+  }
+
+  async function toggleReaction(message: Message, emoji: string) {
+    if (!reactionsAvailable) return
+    const existing = reactions.find((reaction) => (
+      reaction.message_id === message.id &&
+      reaction.user_id === currentUserId &&
+      reaction.emoji === emoji
+    ))
+    const previous = reactions
+
+    if (existing) {
+      setReactions((current) => current.filter((reaction) => reaction.id !== existing.id))
+      const { error } = await supabase.from('message_reactions').delete().eq('id', existing.id)
+      if (error) {
+        setReactions(previous)
+        Alert.alert('Reaction not saved', 'Could not update this reaction right now.')
+      }
+      return
+    }
+
+    optimisticReactionIdRef.current += 1
+    const tempReaction: MessageReaction = {
+      id: `local-${message.id}-${emoji}-${optimisticReactionIdRef.current}`,
+      message_id: message.id,
+      order_id: message.order_id,
+      user_id: currentUserId,
+      emoji,
+      created_at: new Date().toISOString(),
+    }
+    setReactions((current) => [...current, tempReaction])
+    const { data, error } = await supabase
+      .from('message_reactions')
+      .insert({
+        message_id: message.id,
+        order_id: message.order_id,
+        user_id: currentUserId,
+        emoji,
+      })
+      .select('id, message_id, order_id, user_id, emoji, created_at')
+      .single()
+
+    if (error) {
+      setReactions(previous)
+      Alert.alert('Reaction not saved', 'Could not update this reaction right now.')
+      return
+    }
+
+    setReactions((current) => current.map((reaction) => (
+      reaction.id === tempReaction.id ? data as MessageReaction : reaction
+    )))
+  }
+
+  function openReactionSheet(message: Message) {
+    if (!reactionsAvailable) return
+    const messageReactions = reactionsByMessageId.get(message.id) ?? []
+    Alert.alert('React to message', undefined, [
+      ...MESSAGE_REACTION_OPTIONS.map((emoji) => {
+        const selected = messageReactions.some((reaction) => reaction.user_id === currentUserId && reaction.emoji === emoji)
+        const count = messageReactions.filter((reaction) => reaction.emoji === emoji).length
+        return {
+          text: `${selected ? 'Remove ' : ''}${emoji}${count > 0 ? ` ${count}` : ''}`,
+          onPress: () => { void toggleReaction(message, emoji) },
+        }
+      }),
+      { text: 'Cancel', style: 'cancel' },
+    ])
   }
 
   const otherName = currentUserRole === 'CUSTOMER' ? tailorName : customerName
@@ -620,6 +806,11 @@ export function MessageThread({
             message={item}
             isOwn={item.sender_id === currentUserId}
             avatarUrl={item.sender_id === currentUserId ? null : otherAvatarUrl}
+            reactions={reactionsByMessageId.get(item.id) ?? []}
+            currentUserId={currentUserId}
+            reactionsAvailable={reactionsAvailable}
+            onOpenReactions={() => openReactionSheet(item)}
+            onToggleReaction={(emoji) => { void toggleReaction(item, emoji) }}
           />
         )}
       />
@@ -757,16 +948,28 @@ function MessageBubble({
   message,
   isOwn,
   avatarUrl,
+  reactions,
+  currentUserId,
+  reactionsAvailable,
+  onOpenReactions,
+  onToggleReaction,
 }: {
   message: Message
   isOwn: boolean
   avatarUrl?: string | null
+  reactions: MessageReaction[]
+  currentUserId: string
+  reactionsAvailable: boolean
+  onOpenReactions: () => void
+  onToggleReaction: (emoji: string) => void
 }) {
   const [sound, setSound] = useState<Audio.Sound | null>(null)
   const [playing, setPlaying] = useState(false)
+  const photoUrl = useMessageMediaUrl(message.photo_url)
+  const voiceUrl = useMessageMediaUrl(message.voice_url)
 
   async function toggleVoice() {
-    if (!message.voice_url) return
+    if (!voiceUrl) return
     if (playing && sound) {
       await sound.pauseAsync()
       setPlaying(false)
@@ -777,7 +980,7 @@ function MessageBubble({
       setPlaying(true)
       return
     }
-    const { sound: s } = await Audio.Sound.createAsync({ uri: message.voice_url! })
+    const { sound: s } = await Audio.Sound.createAsync({ uri: voiceUrl })
     setSound(s)
     setPlaying(true)
     await s.playAsync()
@@ -790,10 +993,19 @@ function MessageBubble({
     })
   }
 
-  const time = new Date(message.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+  const time = (parseDateValue(message.created_at) ?? new Date()).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
   const receipt = message.read_at
     ? { text: '✓✓', label: 'Read', style: styles.readReceiptRead }
     : { text: '✓✓', label: 'Delivered', style: styles.readReceiptDelivered }
+  const bodyText = decodeDisplayText(message.body ?? '')
+  const reactionCounts = MESSAGE_REACTION_OPTIONS.map((emoji) => {
+    const matching = reactions.filter((reaction) => reaction.emoji === emoji)
+    return {
+      emoji,
+      count: matching.length,
+      selected: matching.some((reaction) => reaction.user_id === currentUserId),
+    }
+  }).filter(({ count }) => count > 0)
 
   return (
     <View style={[styles.bubbleRow, isOwn && styles.bubbleRowOwn]}>
@@ -807,17 +1019,22 @@ function MessageBubble({
           borderWidth={2}
         />
       ) : null}
-      <View style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther]}>
+      <TouchableOpacity
+        activeOpacity={0.92}
+        onLongPress={reactionsAvailable ? onOpenReactions : undefined}
+        accessibilityRole="button"
+        accessibilityHint={reactionsAvailable ? 'Long press to react to this message' : undefined}
+        style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther]}
+      >
         {!isOwn && <Text style={styles.senderName}>{message.sender_name}</Text>}
 
         {message.type === 'TEXT' && (
-          <Text style={[styles.bubbleText, isOwn && styles.bubbleTextOwn]}>{message.body}</Text>
+          <Text style={[styles.bubbleText, isOwn && styles.bubbleTextOwn]}>{bodyText}</Text>
         )}
 
         {message.type === 'PHOTO' && message.photo_url && (
           <RemoteImage
-            uri={message.photo_url}
-            bucket="message-media"
+            uri={photoUrl}
             style={styles.bubblePhoto}
             contentFit="cover"
             transition={120}
@@ -854,8 +1071,39 @@ function MessageBubble({
               {receipt.text} {receipt.label}
             </Text>
           ) : null}
+          {reactionsAvailable ? (
+            <TouchableOpacity
+              onPress={onOpenReactions}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="React to message"
+            >
+              <Feather name="smile" size={13} color={isOwn ? 'rgba(255,255,255,0.72)' : Colors.midGrey} />
+            </TouchableOpacity>
+          ) : null}
         </View>
-      </View>
+        {reactionCounts.length > 0 ? (
+          <View style={[styles.reactionSummary, isOwn && styles.reactionSummaryOwn]}>
+            {reactionCounts.map(({ emoji, count, selected }) => (
+              <TouchableOpacity
+                key={emoji}
+                style={[styles.reactionChip, selected && styles.reactionChipSelected, isOwn && styles.reactionChipOwn]}
+                onPress={() => onToggleReaction(emoji)}
+                accessibilityRole="button"
+                accessibilityLabel={`${selected ? 'Remove' : 'Add'} ${emoji} reaction`}
+              >
+                <Text style={[
+                  styles.reactionChipText,
+                  isOwn && styles.reactionChipTextOwn,
+                  selected && styles.reactionChipTextSelected,
+                ]}>
+                  {emoji} {count}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : null}
+      </TouchableOpacity>
     </View>
   )
 }
@@ -1031,4 +1279,36 @@ const styles = StyleSheet.create({
   readReceipt: { fontSize: 10, fontWeight: FontWeight.semibold },
   readReceiptDelivered: { color: 'rgba(255,255,255,0.72)' },
   readReceiptRead: { color: Colors.accentLight },
+  reactionSummary: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    marginTop: 2,
+  },
+  reactionSummaryOwn: {
+    justifyContent: 'flex-end',
+  },
+  reactionChip: {
+    borderRadius: Radius.full,
+    backgroundColor: Colors.bone,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  reactionChipOwn: {
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  reactionChipSelected: {
+    backgroundColor: Colors.needleGreenLight,
+  },
+  reactionChipText: {
+    fontSize: 11,
+    color: Colors.inkLight,
+    fontWeight: FontWeight.semibold,
+  },
+  reactionChipTextOwn: {
+    color: Colors.textInverse,
+  },
+  reactionChipTextSelected: {
+    color: Colors.needleGreen,
+  },
 })
