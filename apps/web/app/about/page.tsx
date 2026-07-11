@@ -1,5 +1,4 @@
 import type { Metadata } from 'next'
-import type { JSX } from 'react'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
@@ -9,7 +8,7 @@ export const metadata: Metadata = buildMetadata({
   path: '/about',
 })
 
-export default function AboutPage(): JSX.Element {
+export default function AboutPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="About Drapeon"

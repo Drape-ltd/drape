@@ -1,5 +1,4 @@
 import type { Metadata } from 'next'
-import type { JSX } from 'react'
 import { AccountAppSurface } from '../../../components/account-app-surface'
 import { buildMetadata } from '../../../lib/metadata'
 
@@ -9,6 +8,6 @@ export const metadata: Metadata = buildMetadata({
   path: '/account/checkout',
 })
 
-export default function AccountCheckoutPage(): JSX.Element {
+export default function AccountCheckoutPage(): React.JSX.Element {
   return <AccountAppSurface surface="checkout" />
 }

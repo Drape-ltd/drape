@@ -360,7 +360,7 @@ function SummaryCard({
   label: string
   value: number
   hint: string
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <div className="rounded-[1.5rem] border border-ink/8 bg-white/88 p-5 shadow-sm">
       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">{label}</p>
@@ -398,7 +398,7 @@ function OpsPulsePanel({
 }: {
   enabled: boolean
   snapshot: OpsPulseSnapshot
-}): JSX.Element | null {
+}): React.JSX.Element | null {
   if (!enabled) return null
 
   return (
@@ -420,7 +420,7 @@ function CompactMetric({
   label: string
   value: number | string
   tone?: 'normal' | 'attention' | 'good'
-}): JSX.Element {
+}): React.JSX.Element {
   const toneClass =
     tone === 'attention'
       ? 'border-rust/16 bg-rust/8 text-rust-700'
@@ -516,7 +516,7 @@ function buildPriorityQueueItems(
     })
 }
 
-function QueueRow({ item }: { item: OpsQueueItem }): JSX.Element {
+function QueueRow({ item }: { item: OpsQueueItem }): React.JSX.Element {
   const toneClass =
     item.urgency === 'critical'
       ? 'border-rust/18 bg-rust/8'
@@ -558,7 +558,7 @@ function SectionFrame({
   title: string
   description: string
   children: ReactNode
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <section id={id} className="grid gap-5">
       <div className="border-b border-ink/8 pb-5">
@@ -571,7 +571,7 @@ function SectionFrame({
   )
 }
 
-function CardCollapseChevron(): JSX.Element {
+function CardCollapseChevron(): React.JSX.Element {
   return (
     <span className="ml-auto inline-flex size-5 shrink-0 items-center justify-center text-[13px] text-ink/28 transition-transform duration-200 group-open:rotate-180">
       ▾
@@ -587,7 +587,7 @@ function CardCollapse({
   background: string
   summary: ReactNode
   children: ReactNode
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <article className={`rounded-[1.5rem] border border-ink/8 ${background} shadow-sm`}>
       <details className="group">
@@ -609,7 +609,7 @@ function EmptyState({
 }: {
   title: string
   body: string
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <div className="rounded-[1.5rem] border border-dashed border-ink/12 bg-bone/60 p-6">
       <h3 className="text-xl text-ink">{title}</h3>
@@ -622,7 +622,7 @@ function DetailList({
   items,
 }: {
   items: Array<{ label: string; value: string }>
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
       {items.map((item) => (
@@ -635,7 +635,7 @@ function DetailList({
   )
 }
 
-function JobQueueCard({ queue }: { queue: OpsJobQueueHealth }): JSX.Element {
+function JobQueueCard({ queue }: { queue: OpsJobQueueHealth }): React.JSX.Element {
   const queueRisk = queue.dead > 0 ? 'CRITICAL' : queue.retryable > 0 ? 'ESCALATED' : queue.pending > 25 ? 'IN_REVIEW' : 'RESOLVED'
 
   return (
@@ -665,7 +665,7 @@ function JobQueueCard({ queue }: { queue: OpsJobQueueHealth }): JSX.Element {
   )
 }
 
-function ProviderCircuitCard({ provider }: { provider: OpsProviderHealth }): JSX.Element {
+function ProviderCircuitCard({ provider }: { provider: OpsProviderHealth }): React.JSX.Element {
   const normalizedStatus = provider.status.toUpperCase()
   const status = normalizedStatus === 'OK' ? 'RESOLVED' : normalizedStatus === 'OPEN' ? 'ESCALATED' : normalizedStatus
 
@@ -706,7 +706,7 @@ function ProviderCircuitCard({ provider }: { provider: OpsProviderHealth }): JSX
   )
 }
 
-function RoleAccessCard({ role }: { role: OpsRole }): JSX.Element {
+function RoleAccessCard({ role }: { role: OpsRole }): React.JSX.Element {
   const sections = getOpsRoleSections(role)
   const actions = getOpsRoleActions(role)
 
@@ -744,7 +744,7 @@ function IssueHistoryBlock({
   history,
 }: {
   history: OpsIssueHistoryEntry[]
-}): JSX.Element | null {
+}): React.JSX.Element | null {
   if (history.length === 0) return null
 
   return (
@@ -774,7 +774,7 @@ function ManualIssueCreateCard({
   redirectTo,
 }: {
   redirectTo: string
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <article className="rounded-[1.5rem] border border-needle/12 bg-[linear-gradient(180deg,#ffffff_0%,#eef8f4_100%)] p-5 shadow-sm">
       <form action="/ops/action" method="post" className="grid gap-3">
@@ -902,7 +902,7 @@ function DisputeCard({
 }: {
   dispute: OpsDispute
   redirectTo: string
-}): JSX.Element {
+}): React.JSX.Element {
   const editable = dispute.status === 'OPEN' || dispute.status === 'UNDER_REVIEW'
   const canResolve = editable && dispute.orderStage === 'IN_DISPUTE'
 
@@ -1068,7 +1068,7 @@ function BypassLogCard({
 }: {
   log: OpsBypassLog
   redirectTo: string
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <CardCollapse
       background="bg-white/86"
@@ -1138,7 +1138,7 @@ function ApplicationCard({
 }: {
   application: OpsTailorApplication
   redirectTo: string
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <CardCollapse
       background="bg-white/86"
@@ -1255,7 +1255,7 @@ function VerificationCard({
 }: {
   profile: OpsVerification
   redirectTo: string
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <CardCollapse
       background="bg-white/86"
@@ -1376,7 +1376,7 @@ function DeletionRequestCard({
 }: {
   request: OpsAccountDeletionRequest
   redirectTo: string
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <CardCollapse
       background="bg-white/86"
@@ -1465,7 +1465,7 @@ function DeletionRequestCard({
   )
 }
 
-function PayoutCard({ payout }: { payout: OpsPayout }): JSX.Element {
+function PayoutCard({ payout }: { payout: OpsPayout }): React.JSX.Element {
   const canRetryRelease =
     !!payout.orderId && ['BLOCKED', 'FAILED', 'PENDING'].includes(payout.status.toUpperCase())
   const releaseLabel = releaseWindowLabel(payout)
@@ -1635,7 +1635,7 @@ function ShopItemCard({
 }: {
   item: OpsShopItem
   redirectTo: string
-}): JSX.Element {
+}): React.JSX.Element {
   const canRestore = !item.isLive || item.stockStatus === 'HIDDEN'
   const imageUrl = item.photoUrls[0] ?? null
 
@@ -1766,7 +1766,7 @@ function SupportThreadCard({
 }: {
   thread: OpsSupportThread
   redirectTo: string
-}): JSX.Element {
+}): React.JSX.Element {
   const closedThread = isClosedConversationStage(thread.orderStage)
 
   return (
@@ -1906,7 +1906,7 @@ function WorkflowIssueCard({
   issue: OpsWorkflowIssue
   redirectTo: string
   role: OpsRole
-}): JSX.Element {
+}): React.JSX.Element {
   const issueOpen = issue.status !== 'RESOLVED'
   const canManageConversation =
     issueOpen
@@ -2303,7 +2303,7 @@ function ReviewQueueCard({
 }: {
   review: OpsReviewQueueItem
   redirectTo: string
-}): JSX.Element {
+}): React.JSX.Element {
   const visibilityLabel = review.publishedAt ? 'Public' : review.flagged ? 'Held for review' : 'Not public yet'
   const visibilityTone = review.publishedAt ? 'APPROVED' : review.flagged ? 'PENDING' : 'UNDER_REVIEW'
 
@@ -2416,7 +2416,7 @@ function DispatchCard({
 }: {
   item: OpsDispatchItem
   redirectTo: string
-}): JSX.Element {
+}): React.JSX.Element {
   const isLocalDelivery = item.deliveryMethod === 'LOCAL_DELIVERY'
   const targetStage = isLocalDelivery ? 'OUT_FOR_DELIVERY' : 'SHIPPED'
   const providerLabel = isLocalDelivery ? 'Rider or provider' : 'Courier or provider'
@@ -2612,7 +2612,7 @@ function OrderReviewCard({
 }: {
   review: OpsOrderReviewItem
   redirectTo: string
-}): JSX.Element {
+}): React.JSX.Element {
   const reviewTypeLabel = review.reviewType === 'CANCELLATION' ? 'Cancellation review' : 'Delivery review'
   const continueLabel =
     review.reviewType === 'CANCELLATION'
@@ -2742,7 +2742,7 @@ function LoginView({
   error,
 }: {
   error: string | null
-}): JSX.Element {
+}): React.JSX.Element {
   const bootstrapRole = getOpsBootstrapRole()
 
   return (
@@ -2814,7 +2814,7 @@ function WorkforceAccessView({
   error,
 }: {
   error: string | null
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(45,106,79,0.16),transparent_34%),radial-gradient(circle_at_80%_12%,rgba(216,90,48,0.12),transparent_28%),linear-gradient(180deg,#f7f1e8_0%,#efe8db_100%)]">
       <div className="mx-auto flex min-h-screen max-w-4xl items-center px-5 py-12 sm:px-8">
@@ -2857,7 +2857,7 @@ function WorkforceAccessView({
   )
 }
 
-function SetupView(): JSX.Element {
+function SetupView(): React.JSX.Element {
   const bootstrapRole = getOpsBootstrapRole()
   const workforceConfigured = hasOpsWorkforceAccessConfig()
   const tokenStatus = getOpsDashboardTokenStatus()
@@ -2925,7 +2925,7 @@ function OpsNavItem({
   label: string
   count: number
   active: boolean
-}): JSX.Element {
+}): React.JSX.Element {
   const countClass = count > 0
     ? 'border-rust/16 bg-rust/8 text-rust-700'
     : 'border-ink/8 bg-white/70 text-ink/40'
@@ -2980,7 +2980,7 @@ function IncidentSurface({
   data: OpsDashboardData
   currentView: OpsView
   role: OpsRole
-}): JSX.Element {
+}): React.JSX.Element {
   const degradedProviders = data.systemHealth.providers.filter((provider) => provider.status.toUpperCase() !== 'OK')
   const incidentIssues = data.workflowIssues.filter((issue) => {
     const severity = issue.severity.toUpperCase()
@@ -3069,7 +3069,7 @@ function IncidentSurface({
   )
 }
 
-function AccessControlSurface({ context }: { context: OpsRenderContext }): JSX.Element {
+function AccessControlSurface({ context }: { context: OpsRenderContext }): React.JSX.Element {
   const accessModeLabel =
     context.accessMode === 'cloudflare-access'
       ? 'Cloudflare Access'
@@ -3130,7 +3130,7 @@ function AccessControlSurface({ context }: { context: OpsRenderContext }): JSX.E
   )
 }
 
-function OpsRunbookSurface({ context }: { context: OpsRenderContext }): JSX.Element {
+function OpsRunbookSurface({ context }: { context: OpsRenderContext }): React.JSX.Element {
   const normalizedQuery = context.query.trim().toLowerCase()
   const entries = normalizedQuery
     ? OPS_RUNBOOK_ENTRIES.filter((entry) => {
@@ -3357,7 +3357,7 @@ function buildNextDecisions(data: OpsDashboardData, visibleSections: OpsVisibleS
   return items.slice(0, 5)
 }
 
-function NextDecisionRow({ item }: { item: OpsNextDecisionItem }): JSX.Element {
+function NextDecisionRow({ item }: { item: OpsNextDecisionItem }): React.JSX.Element {
   const dangerClass =
     item.danger === 'destructive'
       ? 'border-rust/16 bg-rust/7'
@@ -3416,7 +3416,7 @@ function OpsOverviewSurface({
 }: {
   data: OpsDashboardData
   visibleSections: OpsVisibleSection[]
-}): JSX.Element {
+}): React.JSX.Element {
   const priorityItems = buildPriorityQueueItems(data, visibleSections)
   const nextDecisions = buildNextDecisions(data, visibleSections)
   const providerIssueCount = data.summary.providersDegraded + data.summary.deadJobs + data.summary.retryableJobs
@@ -3515,7 +3515,7 @@ function OpsFilterChips({
   query: string
   currentFilter: string
   chips: Array<{ key: string; label: string; count: number }>
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <div className="-mb-2 flex flex-wrap gap-2">
       <a
@@ -3599,7 +3599,7 @@ function renderOpsSection(
   data: OpsDashboardData,
   currentView: OpsView,
   context: OpsRenderContext,
-): JSX.Element {
+): React.JSX.Element {
   switch (sectionKey) {
     case 'incidents':
       return (
@@ -4026,7 +4026,7 @@ export default async function OpsPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
-}): Promise<JSX.Element> {
+}): Promise<React.JSX.Element> {
   const params = await searchParams
   const accessMode = getOpsAccessMode()
   const noticeKey = readParam(params, 'notice')

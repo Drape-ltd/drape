@@ -1,5 +1,4 @@
 import type { Metadata } from 'next'
-import type { JSX } from 'react'
 import { MarketingShell } from '../../components/marketing-shell'
 import { WaitlistForm } from '../../components/waitlist-form'
 import { buildMetadata } from '../../lib/metadata'
@@ -10,7 +9,7 @@ export const metadata: Metadata = buildMetadata({
   path: '/join',
 })
 
-export default function JoinPage(): JSX.Element {
+export default function JoinPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Early access"

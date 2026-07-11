@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import { CONTACTS } from '@drape/shared'
 import Link from 'next/link'
-import type { JSX } from 'react'
 import { AccountRecoveryRequestForm } from '../../../components/account-recovery-request-form'
 import { AppSurfacePreview } from '../../../components/product-visuals'
 import { MarketingShell, SectionTitle } from '../../../components/marketing-shell'
@@ -13,7 +12,7 @@ export const metadata: Metadata = buildMetadata({
   path: '/account/recovery',
 })
 
-export default function AccountRecoveryPage(): JSX.Element {
+export default function AccountRecoveryPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Account recovery"

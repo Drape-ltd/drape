@@ -5,7 +5,7 @@ import { type JSX, useState } from 'react'
 import { LocationAutocomplete } from './location-autocomplete'
 import { trackWebEvent } from './web-analytics'
 
-export function TailorApplicationForm(): JSX.Element {
+export function TailorApplicationForm(): React.JSX.Element {
   const [businessName, setBusinessName] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [email, setEmail] = useState('')

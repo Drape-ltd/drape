@@ -1,5 +1,4 @@
 import type { Metadata } from 'next'
-import type { JSX } from 'react'
 import { AuthCallbackClient } from '../../../components/auth-callback-client'
 
 export const metadata: Metadata = {
@@ -13,6 +12,6 @@ export const metadata: Metadata = {
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-export default function AuthCallbackPage(): JSX.Element {
+export default function AuthCallbackPage(): React.JSX.Element {
   return <AuthCallbackClient />
 }

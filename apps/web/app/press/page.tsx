@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import { CONTACTS } from '@drape/shared'
-import type { JSX } from 'react'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
@@ -11,7 +10,7 @@ export const metadata: Metadata = buildMetadata({
   noindex: true,
 })
 
-export default function PressPage(): JSX.Element {
+export default function PressPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Press"

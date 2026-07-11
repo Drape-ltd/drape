@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import type { JSX } from 'react'
 import { MarketingShell } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
@@ -33,7 +32,7 @@ const journey = [
   ['Complete the handoff cleanly', 'Collection, delivery, receipt confirmation, support, and payout release all close the order properly.'],
 ]
 
-export default function TailorsPage(): JSX.Element {
+export default function TailorsPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="For tailors"

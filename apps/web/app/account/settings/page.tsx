@@ -1,5 +1,4 @@
 import type { Metadata } from 'next'
-import type { JSX } from 'react'
 import { AccountAppSurface } from '../../../components/account-app-surface'
 import { buildMetadata } from '../../../lib/metadata'
 
@@ -9,6 +8,6 @@ export const metadata: Metadata = buildMetadata({
   path: '/account/settings',
 })
 
-export default function AccountSettingsPage(): JSX.Element {
+export default function AccountSettingsPage(): React.JSX.Element {
   return <AccountAppSurface surface="settings" />
 }

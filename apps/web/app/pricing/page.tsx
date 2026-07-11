@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import type { JSX } from 'react'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
@@ -33,7 +32,7 @@ const openItems = [
   'Tax, invoice, and accounting treatment by market',
 ]
 
-export default function PricingPage(): JSX.Element {
+export default function PricingPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Pricing"

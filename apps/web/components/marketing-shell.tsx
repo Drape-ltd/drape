@@ -6,8 +6,8 @@ type MarketingShellProps = {
   eyebrow: string
   title: string
   description: string
-  cta?: JSX.Element
-  visual?: JSX.Element
+  cta?: React.JSX.Element
+  visual?: React.JSX.Element
   children: ReactNode
 }
 
@@ -18,7 +18,7 @@ export function MarketingShell({
   cta,
   visual,
   children,
-}: MarketingShellProps): JSX.Element {
+}: MarketingShellProps): React.JSX.Element {
   return (
     <main className="min-h-screen overflow-x-hidden bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)]">
       <div className="viewport-safe-shell mx-auto py-6 sm:px-8 lg:px-12">
@@ -51,7 +51,7 @@ export function SectionTitle({
   eyebrow: string
   title: string
   description: string
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <div className="max-w-3xl">
       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">{eyebrow}</p>
@@ -67,7 +67,7 @@ export function MarketingCard({
 }: {
   title: string
   body: string
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <div className="rounded-[1.75rem] border border-ink/6 bg-white/80 p-6 shadow-sm">
       <h3 className="text-2xl text-ink">{title}</h3>

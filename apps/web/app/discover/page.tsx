@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { CONTACTS } from '@drape/shared'
-import type { JSX } from 'react'
 import { AppSurfacePreview } from '../../components/product-visuals'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
@@ -12,7 +11,7 @@ export const metadata: Metadata = buildMetadata({
   path: '/discover',
 })
 
-export default function DiscoverPage(): JSX.Element {
+export default function DiscoverPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Discover Drapeon"

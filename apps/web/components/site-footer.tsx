@@ -1,7 +1,6 @@
 import { CONTACTS } from '@drape/shared'
 import Link from 'next/link'
 import type { Route } from 'next'
-import type { JSX } from 'react'
 
 const productLinks: Array<{ href: Route; label: string }> = [
   { href: '/how-it-works', label: 'How it works' },
@@ -27,7 +26,7 @@ const legalLinks: Array<{ href: Route; label: string }> = [
   { href: '/payouts', label: 'Payouts' },
 ]
 
-export function SiteFooter(): JSX.Element {
+export function SiteFooter(): React.JSX.Element {
   return (
     <footer className="mt-20 border-t border-ink/8 pt-12 pb-8">
       <div className="grid gap-10 lg:grid-cols-[1.2fr_1.8fr] lg:items-start">

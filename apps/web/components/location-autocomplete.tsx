@@ -22,7 +22,7 @@ export function LocationAutocomplete({
   placeholder,
   required = false,
   helperText,
-}: LocationAutocompleteProps): JSX.Element {
+}: LocationAutocompleteProps): React.JSX.Element {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [loading, setLoading] = useState(false)
   const [open, setOpen] = useState(false)

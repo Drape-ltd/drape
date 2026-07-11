@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import { CONTACTS } from '@drape/shared'
 import Link from 'next/link'
-import type { JSX } from 'react'
 import { AppSurfacePreview } from '../../../components/product-visuals'
 import { MarketingShell, SectionTitle } from '../../../components/marketing-shell'
 import { AccountSignedInRedirect } from '../../../components/account-signed-in-redirect'
@@ -13,7 +12,7 @@ export const metadata: Metadata = buildMetadata({
   path: '/account/tailor',
 })
 
-export default function TailorAccountPage(): JSX.Element {
+export default function TailorAccountPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Tailor access"

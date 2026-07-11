@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import { CONTACTS } from '@drape/shared'
 import Link from 'next/link'
-import type { JSX } from 'react'
 import { AppSurfacePreview } from '../../components/product-visuals'
 import { MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { AccountSignedInRedirect } from '../../components/account-signed-in-redirect'
@@ -17,7 +16,7 @@ const accessPaths: Array<{
   title: string
   eyebrow: string
   body: string
-  action: JSX.Element
+  action: React.JSX.Element
 }> = [
   {
     eyebrow: 'Customers',
@@ -54,7 +53,7 @@ const accessPaths: Array<{
   },
 ]
 
-export default function AccountPage(): JSX.Element {
+export default function AccountPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Account access"

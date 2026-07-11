@@ -1,7 +1,6 @@
 import type { Metadata, Route } from 'next'
 import { CONTACTS } from '@drape/shared'
 import Link from 'next/link'
-import type { JSX } from 'react'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
@@ -87,7 +86,7 @@ export const metadata: Metadata = buildMetadata({
   path: '/privacy',
 })
 
-export default function PrivacyPage(): JSX.Element {
+export default function PrivacyPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Privacy Policy"

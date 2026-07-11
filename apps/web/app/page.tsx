@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import type { JSX } from 'react'
 import { PublicSiteHeader } from '../components/public-site-header'
 import { SiteFooter } from '../components/site-footer'
 import { buildMetadata } from '../lib/metadata'
@@ -35,7 +34,7 @@ const forTailors = [
   'Stripe and Paystack payout — USD, GBP, NGN, GHS, KES, and more',
 ]
 
-export default function Home(): JSX.Element {
+export default function Home(): React.JSX.Element {
   return (
     <main className="min-h-screen overflow-x-hidden bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)]">
       <div className="mx-auto max-w-6xl px-5 py-5 sm:px-8 lg:px-12">

@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import { CONTACTS } from '@drape/shared'
-import type { JSX } from 'react'
 import { MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
@@ -24,7 +23,7 @@ const specializedContactRoutes = [
   ['Legal', CONTACTS.legal, 'Formal legal communication.'],
 ] satisfies Array<readonly [string, string, string]>
 
-export default function ContactPage(): JSX.Element {
+export default function ContactPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Contact"

@@ -1,7 +1,6 @@
 import type { Metadata, Route } from 'next'
 import { CONTACTS } from '@drape/shared'
 import Link from 'next/link'
-import type { JSX } from 'react'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
@@ -43,7 +42,7 @@ export const metadata: Metadata = buildMetadata({
   path: '/terms',
 })
 
-export default function TermsPage(): JSX.Element {
+export default function TermsPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Terms of Service"

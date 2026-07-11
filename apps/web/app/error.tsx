@@ -1,13 +1,12 @@
 'use client'
 
 import Link from 'next/link'
-import type { JSX } from 'react'
 
 export default function Error({
   reset,
 }: {
   reset: () => void
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)]">
       <div className="mx-auto flex min-h-screen max-w-4xl flex-col justify-center px-6 py-16 sm:px-8">

@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import type { JSX } from 'react'
 import { OpenAppButton } from '../../components/open-app-button'
 import { MarketingShell } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
@@ -35,7 +34,7 @@ const privacy = [
   ['Built for clothing fit', 'Drapeon Vision supports body measurements, fit preferences, and garment-specific measurement needs — not general biometric profiling.'],
 ]
 
-export default function VisionPage(): JSX.Element {
+export default function VisionPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Drapeon Vision"

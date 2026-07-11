@@ -1,5 +1,4 @@
 import type { Metadata } from 'next'
-import type { JSX } from 'react'
 import { AccountAuthForm } from '../../components/account-auth-form'
 import { AccountSignedInRedirect } from '../../components/account-signed-in-redirect'
 import { PublicSiteHeader } from '../../components/public-site-header'
@@ -12,7 +11,7 @@ export const metadata: Metadata = buildMetadata({
   noindex: true,
 })
 
-export default function SignUpPage(): JSX.Element {
+export default function SignUpPage(): React.JSX.Element {
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)]">
       <AccountSignedInRedirect />

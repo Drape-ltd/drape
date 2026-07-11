@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import type { JSX } from 'react'
 import { MarketingShell } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
@@ -33,7 +32,7 @@ const tailorSteps = [
   ['Complete the handoff', 'Finish dispatch, support aftercare if needed, and track payout from the order.'],
 ]
 
-export default function HowItWorksPage(): JSX.Element {
+export default function HowItWorksPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="How it works"

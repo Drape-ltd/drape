@@ -31,7 +31,7 @@ export function trackWebEvent(eventName: string, properties: AnalyticsProperties
   }
 }
 
-export function WebAnalytics(): JSX.Element | null {
+export function WebAnalytics(): React.JSX.Element | null {
   const pathname = usePathname()
 
   useEffect(() => {

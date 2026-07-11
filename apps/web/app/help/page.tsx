@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import { CONTACTS, DRAPE_EXCEPTION_BUCKETS, DRAPE_HELP_FAQ } from '@drape/shared'
 import Link from 'next/link'
-import type { JSX } from 'react'
 import { MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
@@ -40,7 +39,7 @@ export const metadata: Metadata = buildMetadata({
   path: '/help',
 })
 
-export default function HelpPage(): JSX.Element {
+export default function HelpPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Help"

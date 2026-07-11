@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import type { JSX } from 'react'
 import { AppSurfacePreview } from '../../../components/product-visuals'
 import { MarketingShell, SectionTitle } from '../../../components/marketing-shell'
 import { buildMetadata } from '../../../lib/metadata'
@@ -11,7 +10,7 @@ export const metadata: Metadata = buildMetadata({
   path: '/account/ops',
 })
 
-export default function OpsAccountPage(): JSX.Element {
+export default function OpsAccountPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Ops access"

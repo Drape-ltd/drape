@@ -1,6 +1,5 @@
 'use client'
 
-import type { JSX } from 'react'
 import { useEffect, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 
@@ -20,7 +19,7 @@ function buildAppUrl(reference: string | null, status: string | null) {
   return `drape:///paystack-redirect${query ? `?${query}` : ''}`
 }
 
-export default function PaystackCallbackPage(): JSX.Element {
+export default function PaystackCallbackPage(): React.JSX.Element {
   const searchParams = useSearchParams()
   const reference = searchParams.get('reference') ?? searchParams.get('trxref')
   const status = searchParams.get('status')

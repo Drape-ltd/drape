@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import Image from 'next/image'
 import Link from 'next/link'
-import type { JSX } from 'react'
 import { AppSurfacePreview } from '../../components/product-visuals'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
@@ -29,7 +28,7 @@ const trustMoments = [
   ['Delivery proof', 'Pickup, delivery, shipping, tracking, and receipt confirmation are treated as part of the order record.'],
 ] satisfies Array<readonly [string, string]>
 
-export default function CustomersPage(): JSX.Element {
+export default function CustomersPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="For customers"

@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import { CONTACTS } from '@drape/shared'
-import type { JSX } from 'react'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
@@ -17,7 +16,7 @@ const checks = [
   ['Payout readiness', 'A tailor should not receive paid platform work until payout setup is reviewed for the supported provider and market.'],
 ] satisfies Array<readonly [string, string]>
 
-export default function VerifyPage(): JSX.Element {
+export default function VerifyPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Verification"

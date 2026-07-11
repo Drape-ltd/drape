@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import { CONTACTS, DRAPE_EXCEPTION_BUCKETS, DRAPE_PUBLIC_TRUST_SECTIONS } from '@drape/shared'
 import Link from 'next/link'
-import type { JSX } from 'react'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
@@ -11,7 +10,7 @@ export const metadata: Metadata = buildMetadata({
   path: '/trust',
 })
 
-export default function TrustPage(): JSX.Element {
+export default function TrustPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Trust"

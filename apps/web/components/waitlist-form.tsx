@@ -11,7 +11,7 @@ type WaitlistFormProps = {
   description: string
 }
 
-export function WaitlistForm({ role, title, description }: WaitlistFormProps): JSX.Element {
+export function WaitlistForm({ role, title, description }: WaitlistFormProps): React.JSX.Element {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [website, setWebsite] = useState('')

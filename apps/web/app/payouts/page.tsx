@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import { CONTACTS } from '@drape/shared'
-import type { JSX } from 'react'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
@@ -25,7 +24,7 @@ const payoutQuestions = [
   'What evidence or account detail does ops need from me?',
 ]
 
-export default function PayoutsPage(): JSX.Element {
+export default function PayoutsPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Payouts"

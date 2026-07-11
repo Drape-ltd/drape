@@ -1,4 +1,3 @@
-import type { JSX } from 'react'
 
 type PreviewVariant = 'explore' | 'vision' | 'timeline' | 'tailor' | 'privacy' | 'contact' | 'trust' | 'account'
 
@@ -58,7 +57,7 @@ const previewContent: Record<PreviewVariant, {
   },
 }
 
-export function AppSurfacePreview({ variant = 'explore' }: { variant?: PreviewVariant }): JSX.Element {
+export function AppSurfacePreview({ variant = 'explore' }: { variant?: PreviewVariant }): React.JSX.Element {
   const content = previewContent[variant]
 
   return (
@@ -98,7 +97,7 @@ export function AppSurfacePreview({ variant = 'explore' }: { variant?: PreviewVa
   )
 }
 
-export function ProductSurfaceGrid(): JSX.Element {
+export function ProductSurfaceGrid(): React.JSX.Element {
   return (
     <div className="grid gap-3 sm:grid-cols-3">
       <AppSurfaceMini variant="explore" />
@@ -108,7 +107,7 @@ export function ProductSurfaceGrid(): JSX.Element {
   )
 }
 
-function AppSurfaceMini({ variant }: { variant: PreviewVariant }): JSX.Element {
+function AppSurfaceMini({ variant }: { variant: PreviewVariant }): React.JSX.Element {
   const content = previewContent[variant]
 
   return (

@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import { CONTACTS } from '@drape/shared'
-import type { JSX } from 'react'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
@@ -41,7 +40,7 @@ export const metadata: Metadata = buildMetadata({
   path: '/account-deletion',
 })
 
-export default function AccountDeletionPage(): JSX.Element {
+export default function AccountDeletionPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Account deletion"

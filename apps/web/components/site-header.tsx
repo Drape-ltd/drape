@@ -3,7 +3,6 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import type { Route } from 'next'
-import type { JSX } from 'react'
 import { useEffect, useState } from 'react'
 import { createClient } from '../lib/supabase'
 import { clearWebSessionScope } from '../lib/web-session-scope'
@@ -20,7 +19,7 @@ const actionItems: Array<{ href: Route; label: string; primary: boolean }> = [
   { href: '/sign-up', label: 'Create account', primary: true },
 ]
 
-export function SiteHeader(): JSX.Element {
+export function SiteHeader(): React.JSX.Element {
   const pathname = usePathname()
   const router = useRouter()
   const [signedIn, setSignedIn] = useState(false)

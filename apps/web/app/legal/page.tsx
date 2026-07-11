@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import { CONTACTS } from '@drape/shared'
-import type { JSX } from 'react'
 import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
@@ -10,7 +9,7 @@ export const metadata: Metadata = buildMetadata({
   path: '/legal',
 })
 
-export default function LegalPage(): JSX.Element {
+export default function LegalPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="Legal"

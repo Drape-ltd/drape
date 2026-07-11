@@ -3,7 +3,6 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import type { Route } from 'next'
-import type { JSX } from 'react'
 import { useEffect, useState } from 'react'
 import { createClient } from '../lib/supabase'
 import { clearWebSessionScope } from '../lib/web-session-scope'
@@ -15,7 +14,7 @@ const navItems: Array<{ href: Route; label: string }> = [
 ]
 
 
-export function PublicSiteHeader(): JSX.Element {
+export function PublicSiteHeader(): React.JSX.Element {
   const pathname = usePathname()
   const router = useRouter()
   const [menuOpen, setMenuOpen] = useState(false)
