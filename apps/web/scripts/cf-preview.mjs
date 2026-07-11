@@ -105,28 +105,47 @@ const mode =
       ? 'deploy'
       : 'preview'
 const command = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
-const args = ['dlx', '@opennextjs/cloudflare@latest', mode]
 
 assertSafeDeployEnv(mode)
 
 if (cloudflareDeployEnv) {
-  console.log('Cloudflare deploy environment detected; running OpenNext deploy instead of the long-lived preview server.')
+  console.log('Cloudflare deploy environment detected; building and deploying OpenNext output.')
 }
 
-const child = spawn(command, args, {
-  stdio: 'inherit',
-  env: process.env,
-})
+function runOpenNext(openNextMode) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, ['dlx', '@opennextjs/cloudflare@latest', openNextMode], {
+      stdio: 'inherit',
+      env: process.env,
+    })
 
-child.on('error', (error) => {
-  console.error(`Failed to run OpenNext ${mode}:`, error)
-  process.exit(1)
-})
+    child.on('error', (error) => {
+      reject(error)
+    })
 
-child.on('exit', (code, signal) => {
-  if (signal) {
-    process.kill(process.pid, signal)
-    return
+    child.on('exit', (code, signal) => {
+      if (signal) {
+        process.kill(process.pid, signal)
+        return
+      }
+
+      if ((code ?? 1) !== 0) {
+        reject(new Error(`OpenNext ${openNextMode} exited with code ${code ?? 1}.`))
+        return
+      }
+
+      resolve()
+    })
+  })
+}
+
+try {
+  if (mode === 'deploy') {
+    await runOpenNext('build')
   }
-  process.exit(code ?? 1)
-})
+
+  await runOpenNext(mode)
+} catch (error) {
+  console.error(`Failed to run OpenNext ${mode}:`, error instanceof Error ? error.message : error)
+  process.exit(1)
+}
