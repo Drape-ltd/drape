@@ -439,8 +439,9 @@ function providerSecretChecks() {
       { sk_test_: 'test', sk_live_: 'live' },
     ),
     smsProvider: smsSecretCheck(),
+    ziptaxSecret: envCheck('ZIPTAX_API_KEY'),
     authSmsHookSecret: anyEnvCheck(['AUTH_SMS_HOOK_SECRET', 'SUPABASE_AUTH_HOOK_SECRET'], 'AUTH_SMS_HOOK_SECRET', false),
-    reauthProofSecret: envCheck('REAUTH_PROOF_SECRET'),
+    reauthProofSecret: anyEnvCheck(['REAUTH_PROOF_SECRET', 'DRAPE_REAUTH_PROOF_SECRET'], 'REAUTH_PROOF_SECRET'),
     healthcheckSecret: anyEnvCheck(['DRAPE_HEALTHCHECK_SECRET', 'HEALTHCHECK_SECRET'], 'DRAPE_HEALTHCHECK_SECRET'),
     sentryDsn: anyEnvCheck(['SENTRY_DSN', 'SUPABASE_SENTRY_DSN'], 'SENTRY_DSN', false),
   } satisfies Record<string, Check>

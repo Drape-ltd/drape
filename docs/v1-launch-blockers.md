@@ -104,7 +104,7 @@ Everything here should be treated as launch-critical unless explicitly moved out
   - delivery / shipping milestones
   - dispute or ops resolution
   - payout/security issues
-- Launch blocker before SMS QA: configure `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM_NUMBER` in the target Supabase environment.
+- Launch blocker before SMS QA: configure `SMS_PROVIDER=termii`, `TERMII_API_KEY`, and `TERMII_SENDER_ID` or `TERMII_FROM` in the target Supabase environment. Twilio remains supported as a fallback only when `SMS_PROVIDER=twilio` and the Twilio credentials are present.
 
 ### 6. Calls and Rich Communication
 

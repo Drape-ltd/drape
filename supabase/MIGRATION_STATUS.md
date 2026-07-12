@@ -106,7 +106,7 @@ Important guardrail: never run `supabase db push` directly against production. R
 | --- | --- | --- |
 | `20260428000002_order_terminal_hardening.sql` | PENDING_PROD | Launch-critical order immutability hardening. Requires rollback plan because it replaces order update policies and adds a terminal guard trigger. |
 | `20260429000001_payment_currency_foundation.sql` | PENDING_PROD | Launch-critical payment/currency foundation. Contains large backfills and ledger setup; review row counts and rollback before applying. |
-| `20260429000002_tax_and_payout_hardening.sql` | PENDING_PROD | Launch-critical tax and payout fields. Review grants carefully before applying; private-column prod hotfix already exists as `20260506000001`. |
+| `20260429000002_tax_and_payout_hardening.sql` | APPLIED_PROD | Verified in linked production migration history on 2026-07-12; production still needs `ZIPTAX_API_KEY` for live US/Canada lookup instead of fallback tax. |
 | `20260429000003_payout_execution_hardening.sql` | PENDING_PROD | Launch-critical payout execution hardening. Review payout status backfills before applying. |
 | `20260429000004_order_handoff_and_payout_gate.sql` | PENDING_PROD | Launch-critical payout gate fields and indexes. Review updates on existing orders before applying. |
 | `20260429000005_schedule_payout_release.sql` | PENDING_PROD | Launch-critical scheduled payout release job. Apply only with function deployment plan. |
@@ -127,6 +127,7 @@ Important guardrail: never run `supabase db push` directly against production. R
 | `20260702000001_testflight_feedback_and_cascade_hardening.sql` | APPLIED_PROD | TestFlight security hardening applied on 2026-07-02. Adds product feedback RLS, bounded JSON/profile fields, safer deletion FKs, measurement scan audit logging, invite expiry, and atomic collection-code attempts. |
 | `20260702000002_schedule_account_deletion_finalizer.sql` | APPLIED_PROD | Account deletion finalizer schedule applied on 2026-07-02. Requires Vault cron secrets to invoke `finalize-account-deletions`. |
 | `20260702000003_public_media_review_gate.sql` | APPLIED_PROD | Applied on 2026-07-02. Re-queued public media now resets to pending moderation so same-path overwrites cannot inherit previous approval. |
+| `20260712172913_fix_signup_phone_trigger_casts.sql` | APPLIED_PROD | Applied on 2026-07-12. Fixes signup-trigger failures from mixed uuid/text phone uniqueness comparisons; dev was also repaired and verified with customer/tailor signup QA. |
 | `20260502000003_drape_vision_measurement_scan_methods.sql` | APPLIED_PROD | Existing Drape Vision capture-method support is present in production. |
 | `20260503000001_drape_vision_scan_logs.sql` | APPLIED_PROD | Existing Drape Vision scan-log support is present in production. |
 | `20260503000002_drape_vision_ground_truth.sql` | APPLIED_PROD | Existing Drape Vision ground-truth support is present in production. |

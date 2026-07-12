@@ -98,6 +98,7 @@ function contentSecurityPolicy(nonce: string) {
     'https://*.sentry.io',
     'https://*.posthog.com',
     'https://us.i.posthog.com',
+    'https://nominatim.openstreetmap.org',
     'https://api.resend.com',
     'https://api.stripe.com',
     'https://r.stripe.com',

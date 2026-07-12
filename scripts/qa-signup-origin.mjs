@@ -257,13 +257,19 @@ async function qaOne(input) {
 }
 
 const stamp = Date.now()
+
+function qaPhone(offset) {
+  const localDigits = String((BigInt(stamp) + BigInt(offset)) % 10_000_000n).padStart(7, '0')
+  return `+1555${localDigits}`
+}
+
 const customer = {
   email: `signup.qa.customer.${stamp}@drapeon.co`,
   onboarding: {
     source: 'web',
     role: 'CUSTOMER',
     displayName: 'Signup QA Customer',
-    phone: '+15550107771',
+    phone: qaPhone(1),
     defaultCurrency: 'USD',
     currencySource: 'USER_SELECTED',
     regionCode: 'US',
@@ -279,7 +285,7 @@ const tailor = {
     source: 'web',
     role: 'TAILOR',
     displayName: 'Signup QA Tailor',
-    phone: '+15550107772',
+    phone: qaPhone(2),
     defaultCurrency: 'USD',
     currencySource: 'USER_SELECTED',
     regionCode: 'US',

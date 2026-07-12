@@ -34,6 +34,7 @@
   - `STRIPE_WEBHOOK_SECRET`
   - `STRIPE_WEBHOOK_SECRETS` only during webhook endpoint rotation, as a comma-separated overlap list
   - `PAYSTACK_SECRET_KEY`
+  - `ZIPTAX_API_KEY` for US/Canada checkout tax lookup and tax-rate cache refresh
   - `SMS_PROVIDER=termii` for critical SMS fallback
   - `TERMII_API_KEY` for critical order/security SMS
   - `TERMII_SENDER_ID` or `TERMII_FROM` for the approved sender ID

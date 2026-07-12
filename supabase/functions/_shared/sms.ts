@@ -38,7 +38,7 @@ function getTermiiSenderId() {
   return (
     Deno.env.get('TERMII_SENDER_ID') ??
     Deno.env.get('TERMII_FROM') ??
-    'Drape'
+    'Drapeon'
   ).trim()
 }
 

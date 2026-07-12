@@ -31,6 +31,18 @@ supabase secrets set \
 
 Use `TERMII_FROM` only if the provider dashboard uses that naming. `TERMII_SENDER_ID` is preferred.
 
+## Cloudflare Web Worker Secrets
+
+Ops dashboard actions can also send critical SMS from the web Worker. Set the same provider secrets in Cloudflare for the `drape` Worker:
+
+```bash
+wrangler secret put SMS_PROVIDER --name drape
+wrangler secret put TERMII_API_KEY --name drape
+wrangler secret put TERMII_SENDER_ID --name drape
+```
+
+Use `TERMII_FROM`, `TERMII_CHANNEL`, `TERMII_MESSAGE_TYPE`, or `TERMII_API_BASE_URL` only when the Termii dashboard/account requires those overrides.
+
 ## Critical Order SMS
 
 The existing `SEND_SMS` job path sends through:

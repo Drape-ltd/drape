@@ -318,6 +318,25 @@ type SellerItem = {
   tailor_profiles?: JoinedProfile | JoinedProfile[] | null
 }
 
+type ReadyMadeCheckoutPricingPreview = {
+  currency: string
+  displayCurrency?: string | null
+  sourceCurrency?: string | null
+  sourceSubtotal?: number | null
+  fxRate?: number | null
+  fxRateTimestamp?: string | null
+  subtotalAmount: number
+  platformFeeAmount: number
+  taxAmount: number
+  taxRateBps: number
+  taxRegion: string | null
+  taxFallback: boolean
+  taxFallbackReason: string | null
+  shippingAmount: number
+  totalAmount: number
+  taxLabel: string | null
+}
+
 type WishlistCollection = {
   id: string
   name: string | null
@@ -7247,25 +7266,80 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
   const [recipientPhone, setRecipientPhone] = useState('')
   const [ack, setAck] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [pricingBusy, setPricingBusy] = useState(false)
+  const [pricingPreview, setPricingPreview] = useState<ReadyMadeCheckoutPricingPreview | null>(null)
+  const [pricingKey, setPricingKey] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const needsAddress = fulfillment !== 'PICKUP'
+  const previewKey = useMemo(() => JSON.stringify({
+    itemId: item.id,
+    size: size || '',
+    quantity,
+    fulfillment,
+    address: needsAddress ? address.trim() : '',
+    city: needsAddress ? city.trim() : '',
+    region: needsAddress ? region.trim() : '',
+    postalCode: needsAddress ? postalCode.trim() : '',
+    countryCode: needsAddress ? countryCode.trim().toUpperCase() : '',
+  }), [address, city, countryCode, fulfillment, item.id, needsAddress, postalCode, quantity, region, size])
+  const previewIsFresh = Boolean(pricingPreview && pricingKey === previewKey)
 
-  async function startCheckout() {
+  function validateCheckoutInput() {
     setError(null)
     setSuccess(null)
     const leak = assertNoContactLeak([address, city, region, recipientName].join('\n'), "Checkout delivery details can't include off-platform contact details.")
     if (leak) {
       setError(leak)
-      return
+      return null
     }
     const parsedQuantity = Number.parseInt(quantity, 10)
     if (!Number.isInteger(parsedQuantity) || parsedQuantity < 1 || parsedQuantity > 3) {
       setError('Choose a quantity between 1 and 3.')
-      return
+      return null
     }
     if (needsAddress && (!address.trim() || !recipientName.trim() || !recipientPhone.trim())) {
       setError('Delivery and shipping need recipient details before checkout.')
+      return null
+    }
+    return parsedQuantity
+  }
+
+  async function previewCheckout() {
+    const parsedQuantity = validateCheckoutInput()
+    if (!parsedQuantity) return
+
+    setPricingBusy(true)
+    try {
+      const result = await invokeAccountFunction<{ pricing?: ReadyMadeCheckoutPricingPreview }>('ready-made-order-action', {
+        action: 'preview-checkout',
+        sellerItemId: item.id,
+        size: size || undefined,
+        quantity: parsedQuantity,
+        fulfillment,
+        address: needsAddress ? address.trim() : undefined,
+        city: needsAddress ? city.trim() : undefined,
+        region: needsAddress ? region.trim() : undefined,
+        postalCode: needsAddress ? postalCode.trim() : undefined,
+        countryCode: needsAddress ? countryCode.trim().toUpperCase() : undefined,
+      })
+      setPricingPreview(result.pricing ?? null)
+      setPricingKey(previewKey)
+      setSuccess('Tax and total are ready for review.')
+    } catch (previewError) {
+      setPricingPreview(null)
+      setPricingKey('')
+      setError(friendlyActionError(previewError, 'We could not calculate tax and totals for this checkout right now.'))
+    } finally {
+      setPricingBusy(false)
+    }
+  }
+
+  async function startCheckout() {
+    const parsedQuantity = validateCheckoutInput()
+    if (!parsedQuantity) return
+    if (!previewIsFresh) {
+      setError('Review the latest tax and total before creating checkout.')
       return
     }
     if (!ack) {
@@ -7344,9 +7418,47 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
           <input type="checkbox" checked={ack} onChange={(event) => setAck(event.target.checked)} className="mt-1" />
           I understand cancellation and handoff reviews stay inside Drapeon.
         </label>
-        <button type="button" onClick={startCheckout} disabled={busy || !data.userId} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
-          {busy ? 'Starting checkout...' : 'Create checkout'}
-        </button>
+        <div className="rounded-[1.25rem] border border-ink/8 bg-white p-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/40">Tax and total</p>
+          {pricingPreview ? (
+            <div className="mt-3 grid gap-2 text-sm">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-ink/58">Item subtotal</span>
+                <span className="font-semibold text-ink">{formatMoney(pricingPreview.subtotalAmount, pricingPreview.currency)}</span>
+              </div>
+              {pricingPreview.shippingAmount > 0 ? (
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-ink/58">Drapeon fulfillment</span>
+                  <span className="font-semibold text-ink">{formatMoney(pricingPreview.shippingAmount, pricingPreview.currency)}</span>
+                </div>
+              ) : null}
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-ink/58">{pricingPreview.taxFallback ? 'Estimated tax' : pricingPreview.taxLabel || 'Tax'}</span>
+                <span className="font-semibold text-ink">{formatMoney(pricingPreview.taxAmount, pricingPreview.currency)}</span>
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-4 border-t border-ink/8 pt-3">
+                <span className="font-semibold text-ink">Total</span>
+                <span className="text-lg font-semibold text-needle">{formatMoney(pricingPreview.totalAmount, pricingPreview.currency)}</span>
+              </div>
+              {pricingPreview.taxFallback ? (
+                <p className="text-xs leading-5 text-rust">Tax is estimated because live tax lookup was unavailable for this address.</p>
+              ) : null}
+              {!previewIsFresh ? (
+                <p className="text-xs leading-5 text-rust">Checkout details changed. Refresh the tax preview before creating checkout.</p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="mt-3 text-sm leading-6 text-ink/62">Calculate the checkout preview to see locked tax and total before payment starts.</p>
+          )}
+        </div>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <button type="button" onClick={() => { void previewCheckout() }} disabled={pricingBusy || busy || !data.userId} className="inline-flex justify-center rounded-full border border-needle/18 bg-white px-5 py-3 text-sm font-semibold text-needle disabled:cursor-not-allowed disabled:text-ink/30">
+            {pricingBusy ? 'Calculating...' : 'Preview tax and total'}
+          </button>
+          <button type="button" onClick={startCheckout} disabled={busy || pricingBusy || !data.userId || !previewIsFresh} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+            {busy ? 'Starting checkout...' : 'Create checkout'}
+          </button>
+        </div>
       </div>
     </section>
   )

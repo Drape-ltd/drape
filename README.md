@@ -345,6 +345,23 @@ supabase functions deploy --debug tailor-order-action customer-order-action cust
 
 If shared files under `supabase/functions/_shared` changed, deploy every function that imports those shared files. A full function sweep is safer before launch.
 
+Before claiming production Tax/SMS readiness, confirm these Supabase Edge Function secrets are set in the target project:
+
+```bash
+pnpm supabase:secrets:manifest
+supabase secrets list --project-ref <prod-ref>
+```
+
+Launch-critical provider secrets include `ZIPTAX_API_KEY` for US/Canada checkout tax lookups, `SMS_PROVIDER=termii`, `TERMII_API_KEY`, `TERMII_SENDER_ID` or `TERMII_FROM` for critical SMS fallback, and `AUTH_SMS_HOOK_SECRET` only if Supabase Auth phone OTP is enabled through `auth-sms-hook`.
+
+Set the same SMS provider secrets on the Cloudflare `drape` Worker if Ops dashboard actions should send SMS directly:
+
+```bash
+wrangler secret put SMS_PROVIDER --name drape
+wrangler secret put TERMII_API_KEY --name drape
+wrangler secret put TERMII_SENDER_ID --name drape
+```
+
 5. Build and deploy web to Cloudflare with production public env values. Wrangler currently needs Node 22+:
 
 ```bash

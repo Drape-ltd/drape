@@ -82,9 +82,10 @@ Confirm server-side env is present:
 - `VERIFICATION_SECRET`
 - `REAUTH_PROOF_SECRET` for dedicated five-minute password-confirmation proofs
 - `DRAPE_HEALTHCHECK_SECRET` for protected service readiness checks
+- `ZIPTAX_API_KEY` for US/Canada checkout tax lookup and tax-rate cache refresh
 - `SMS_PROVIDER=termii` for critical SMS order/security messages
 - `TERMII_API_KEY` for critical SMS delivery
-- `TERMII_SENDER_ID` or `TERMII_FROM` for the approved sender ID, expected `Drape`
+- `TERMII_SENDER_ID` or `TERMII_FROM` for the approved sender ID, expected `Drapeon`
 - `AUTH_SMS_HOOK_SECRET` if Supabase Auth phone OTP is enabled through the HTTP Send SMS hook
 - Optional legacy fallback only: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`
 - `DECISION_FUNCTION_URL` if you do not want the default same-project verification URL
