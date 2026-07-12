@@ -1,8 +1,6 @@
 import type { Metadata } from 'next'
-import Image from 'next/image'
 import Link from 'next/link'
-import { AppSurfacePreview } from '../../components/product-visuals'
-import { MarketingCard, MarketingShell, SectionTitle } from '../../components/marketing-shell'
+import { MarketingShell } from '../../components/marketing-shell'
 import { buildMetadata } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
@@ -11,155 +9,158 @@ export const metadata: Metadata = buildMetadata({
   path: '/customers',
 })
 
-const customerSurfaces = [
-  ['Explore', 'Find verified tailors, ready-made pieces, portfolios, reviews, location, availability, and fit context.'],
-  ['Wishlist', 'Save tailors and outfits for weddings, gifts, family events, and repeat orders.'],
-  ['Drapeon Vision', 'Capture camera-assisted measurements, review results, retake, or switch to manual entry before using them.'],
-  ['Custom brief', 'Send garment details, references, fit preference, deadline, measurements, and delivery context in one order.'],
-  ['Ready-made checkout', 'Choose size, stock, pickup, delivery, or shipping without custom-order noise.'],
-  ['Messages and calls', 'Keep consultation scheduling, voice, media, clarifications, and support context inside Drapeon.'],
-  ['Order timeline', 'See quote, payment, sourcing, style approval, cutting, sewing, finishing, handoff, and review.'],
-  ['Support and safety', 'Use help, disputes, aftercare, cancellation review, privacy, security, and account deletion routes.'],
-] satisfies Array<readonly [string, string]>
+const benefits = [
+  {
+    title: 'Verified tailors with real context',
+    body: 'Compare by specialty, portfolio, reviews, location, and availability — not just price. Every profile has enough to make a confident choice.',
+  },
+  {
+    title: 'Fit before anything is cut',
+    body: 'Use Drapeon Vision for camera-assisted measurements, or enter manually. Your fit data travels with the order so nothing depends on memory.',
+  },
+  {
+    title: 'Your order, fully protected',
+    body: 'Quotes, payments, production updates, delivery proof, and support all stay attached to the same record. No lost threads.',
+  },
+]
 
-const trustMoments = [
-  ['Payment processing', 'If a payment is still confirming, Drapeon tells the customer not to pay twice and keeps the order visible.'],
-  ['Fit protection', 'Measurements carry dates, fit preference, wearer context, and review paths so orders do not depend on memory.'],
-  ['Delivery proof', 'Pickup, delivery, shipping, tracking, and receipt confirmation are treated as part of the order record.'],
-] satisfies Array<readonly [string, string]>
+const journey = [
+  ['Find the right tailor', 'Browse verified profiles with portfolios, reviews, specialties, and live availability. Shortlist and compare before committing.'],
+  ['Confirm your fit', 'Run Drapeon Vision or enter measurements manually. Review, retake, or switch — then attach to your order before the brief is sent.'],
+  ['Send one clear brief', 'Garment type, references, fit preference, fabric source, deadline, and delivery all in one structured submission. No back-and-forth setup.'],
+  ['Review quote and pay', 'The tailor quotes from your brief context. Provider checkout, payment state, and commercial clarity happen before any cutting starts.'],
+  ['Track production', 'Follow consultation, sourcing approval, cutting, sewing, finishing, and handoff — each stage visible in the timeline as it moves.'],
+  ['Close the loop', 'Confirm receipt, leave a review, raise a dispute if needed. The full trust cycle closes on-record, not over chat.'],
+]
+
+const surfaces = [
+  ['Explore', 'Verified tailors, ready-made pieces, portfolios, reviews, location, and availability.'],
+  ['Drapeon Vision', 'Camera-assisted body measurements with retake and manual fallback.'],
+  ['Custom brief', 'Garment details, references, fit, deadline, and delivery context in one order.'],
+  ['Ready-made checkout', 'Size, stock, pickup, delivery, or shipping without custom-order noise.'],
+  ['Order timeline', 'Quote, payment, sourcing, style approval, cutting, sewing, finishing, handoff, review.'],
+  ['Messages', 'Consultation scheduling, voice notes, media, and support inside Drapeon.'],
+  ['Wishlist', 'Save tailors and outfits for weddings, gifts, family events, and repeat orders.'],
+  ['Support and safety', 'Help, disputes, aftercare, cancellation, privacy, and account deletion routes.'],
+]
 
 export default function CustomersPage(): React.JSX.Element {
   return (
     <MarketingShell
       eyebrow="For customers"
-      title="Discover fashion, capture fit, and order with confidence."
-      description="Drapeon keeps the real customer journey in one place: explore, measurements, custom briefs, ready-made checkout, messages, payments, delivery, and support."
-      visual={<AppSurfacePreview variant="explore" />}
+      title="Find a tailor, get it made, and own the whole order."
+      description="Drapeon connects you with verified tailors for custom and ready-made fashion — with measurements, briefs, payments, production tracking, and support in one place."
       cta={
-        <Link
-          href="/join"
-          className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
-          data-analytics-event="primary_cta_click"
-          data-analytics-label="Customers join"
-        >
-          Join as customer
-        </Link>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <Link
+            href="/join"
+            className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white"
+            data-analytics-event="primary_cta_click"
+            data-analytics-label="Customers join"
+          >
+            Join as a customer
+          </Link>
+          <Link
+            href="/how-it-works"
+            className="inline-flex items-center justify-center rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink"
+          >
+            See how it works
+          </Link>
+        </div>
       }
     >
+
+      {/* Benefits */}
       <section className="py-8">
-        <SectionTitle
-          eyebrow="What improves"
-          title="Less scattered messaging. More confidence."
-          description="Everything important stays in one place."
-        />
-        <div className="mt-10 grid gap-5 lg:grid-cols-3">
-          <MarketingCard
-            title="Discovery with context"
-            body="Compare tailors and ready-made pieces by specialty, portfolio, reviews, location, availability, and fit signals."
-          />
-          <MarketingCard
-            title="Fit before checkout"
-            body="Use Drapeon Vision or manual measurements before sending a brief, choosing a size, or asking a tailor for guidance."
-          />
-          <MarketingCard
-            title="Protected order history"
-            body="Quotes, payments, consultations, production updates, delivery proof, support, and reviews stay attached to the order."
-          />
-        </div>
-      </section>
-
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="App surface"
-          title="The customer app is more than a checkout."
-          description="Every major customer surface is designed around a real moment: choosing a tailor, confirming fit, paying, tracking, receiving, and getting help."
-        />
-        <div className="mt-10 overflow-hidden rounded-[1.6rem] border border-ink/6 bg-white/82 p-3 shadow-sm">
-          <Image
-            src="/customer-brief.svg"
-            alt="Drapeon customer brief interface preview"
-            width={1200}
-            height={560}
-            className="h-auto w-full rounded-[1.25rem]"
-          />
-        </div>
-        <div className="mt-6 grid gap-4 sm:grid-cols-2">
-          {customerSurfaces.map(([title, body]) => (
-            <div key={title} className="rounded-[1.5rem] border border-ink/6 bg-white/78 p-5 shadow-sm">
-              <div className="text-xl text-ink">{title}</div>
-              <div className="mt-2 text-sm leading-7 text-ink/66">{body}</div>
+        <div className="grid gap-4 lg:grid-cols-3">
+          {benefits.map(({ title, body }) => (
+            <div key={title} className="rounded-[1.5rem] border border-ink/6 bg-white/84 p-6 shadow-sm">
+              <h3 className="text-xl text-ink">{title}</h3>
+              <p className="mt-3 text-sm leading-7 text-ink/66">{body}</p>
             </div>
           ))}
         </div>
       </section>
 
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="Customer journey"
-          title="From idea to handoff"
-          description="Find, brief, review, track, complete."
-        />
-        <div className="mt-10 grid gap-4">
-          {[
-            ['1. Find the right tailor', 'Choose the right fit for the garment and the level of trust you want.'],
-            ['2. Confirm fit context', 'Review Drapeon Vision results, manual measurements, wearer details, or size guide choices before ordering.'],
-            ['3. Submit one strong brief', 'References, fit preference, fabric source, deadline, delivery, and cancellation context start cleanly.'],
-            ['4. Review quote and payment state', 'Commercial clarity happens before production starts, with provider checkout and human payment copy.'],
-            ['5. Track the work', 'Follow consultation, sourcing, approval, production media, delivery, pickup, or shipping without guesswork.'],
-            ['6. Close the loop', 'Receipt, completion, dispute window, aftercare, and review complete the trust cycle.'],
-          ].map(([title, body]) => (
-            <div key={title} className="rounded-[1.5rem] border border-ink/6 bg-bone/80 p-5">
-              <div className="text-lg text-ink">{title}</div>
-              <div className="mt-2 text-sm leading-7 text-ink/68">{body}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="Trust moments"
-          title="The stressful moments get product copy too."
-          description="Drapeon is designed around the places fashion commerce usually breaks: money, fit, delivery, and proof."
-        />
-        <div className="mt-10 grid gap-5 lg:grid-cols-3">
-          {trustMoments.map(([title, body]) => (
-            <MarketingCard key={title} title={title} body={body} />
-          ))}
-        </div>
-      </section>
-
-      <section className="border-t border-ink/6 py-16">
-        <SectionTitle
-          eyebrow="Early access"
-          title="Join now."
-          description="We’ll let you know when customer access opens."
-        />
-        <div className="mt-10 rounded-[1.6rem] border border-ink/6 bg-ink px-7 py-8 text-white shadow-[0_18px_60px_rgba(22,28,24,0.12)]">
-          <div className="grid gap-6 lg:grid-cols-[1fr_auto_auto] lg:items-center">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/70">Customer waitlist</p>
-              <h3 className="mt-3 text-3xl sm:text-4xl">Join the customer queue.</h3>
-            </div>
-            <Link
-              href="/join"
-              className="inline-flex items-center justify-center rounded-full bg-white px-6 py-4 text-sm font-semibold text-ink"
-              data-analytics-event="primary_cta_click"
-              data-analytics-label="Customer CTA join"
-            >
-              Join as a customer
-            </Link>
-            <Link
-              href="/how-it-works"
-              className="inline-flex items-center justify-center rounded-full border border-white/18 px-6 py-4 text-sm font-semibold text-white"
-              data-analytics-event="secondary_cta_click"
-              data-analytics-label="Customer CTA how it works"
-            >
-              See how it works
-            </Link>
+      {/* Customer journey */}
+      <section className="border-t border-ink/6 py-14">
+        <div className="grid gap-10 lg:grid-cols-[1fr_1.4fr] lg:items-start">
+          <div className="lg:sticky lg:top-10">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Customer journey</p>
+            <h2 className="mt-3 text-3xl text-ink sm:text-4xl">From idea to handoff.</h2>
+            <p className="mt-4 text-sm leading-7 text-ink/62">
+              Every step is tracked in the same order record your tailor can see, so nothing gets lost between explore and delivery.
+            </p>
+          </div>
+          <div className="overflow-hidden rounded-[1.5rem] border border-ink/6 bg-white/84 shadow-sm">
+            {journey.map(([title, body], i) => (
+              <div key={title} className={`flex gap-4 px-5 py-5 ${i > 0 ? 'border-t border-ink/6' : ''}`}>
+                <span className="mt-0.5 shrink-0 text-xs font-semibold tabular-nums text-needle/40">0{i + 1}</span>
+                <div>
+                  <p className="font-semibold text-ink">{title}</p>
+                  <p className="mt-1 text-sm leading-6 text-ink/58">{body}</p>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </section>
+
+      {/* App surfaces */}
+      <section className="border-t border-ink/6 py-14">
+        <div className="grid gap-10 lg:grid-cols-[1fr_1.4fr] lg:items-start">
+          <div className="lg:sticky lg:top-10">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">App surface</p>
+            <h2 className="mt-3 text-3xl text-ink sm:text-4xl">Every major moment has its own screen.</h2>
+            <p className="mt-4 text-sm leading-7 text-ink/62">
+              The customer app is designed around real moments — choosing a tailor, confirming fit, paying, tracking, receiving, and getting help.
+            </p>
+          </div>
+          <div className="overflow-hidden rounded-[1.5rem] border border-ink/6 bg-white/84 shadow-sm">
+            {surfaces.map(([title, body], i) => (
+              <div key={title} className={`flex gap-4 px-5 py-4 ${i > 0 ? 'border-t border-ink/6' : ''}`}>
+                <div className="mt-0.5 size-1.5 shrink-0 rounded-full bg-needle/50 mt-[9px]" />
+                <div>
+                  <p className="font-semibold text-ink">{title}</p>
+                  <p className="mt-0.5 text-sm leading-6 text-ink/58">{body}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* CTA */}
+      <section className="border-t border-ink/6 py-14">
+        <div className="overflow-hidden rounded-[1.6rem] bg-ink px-8 py-10 text-white">
+          <div className="grid gap-8 lg:grid-cols-[1fr_auto] lg:items-center">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">Early access</p>
+              <h2 className="mt-3 text-3xl text-white sm:text-4xl">Join the customer queue.</h2>
+              <p className="mt-3 text-sm leading-7 text-white/62">
+                We&apos;re onboarding soon. Join the waitlist and be among the first customers on Drapeon.
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-col gap-3">
+              <Link
+                href="/join"
+                className="inline-flex items-center justify-center rounded-full bg-white px-6 py-3.5 text-sm font-semibold text-ink"
+                data-analytics-event="primary_cta_click"
+                data-analytics-label="Customer CTA join bottom"
+              >
+                Join as a customer
+              </Link>
+              <Link
+                href="/tailors"
+                className="inline-flex items-center justify-center rounded-full border border-white/16 px-6 py-3.5 text-sm font-semibold text-white"
+              >
+                Are you a tailor?
+              </Link>
+            </div>
+          </div>
+        </div>
+      </section>
+
     </MarketingShell>
   )
 }

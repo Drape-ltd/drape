@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { PublicSiteHeader } from '../components/public-site-header'
 import { SiteFooter } from '../components/site-footer'
+import { SocialIconLinks } from '../components/social-links'
 import { buildMetadata } from '../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
@@ -69,6 +70,9 @@ export default function Home(): React.JSX.Element {
               >
                 Sign in
               </Link>
+            </div>
+            <div className="mt-5 flex items-center gap-2">
+              <SocialIconLinks size="sm" />
             </div>
           </div>
 

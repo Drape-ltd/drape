@@ -1,7 +1,8 @@
 import { CONTACTS } from '@drape/shared'
 import Link from 'next/link'
 import type { Route } from 'next'
-import { publicPhoneDisplay, publicPhoneE164, socialLinks } from '../lib/metadata'
+import { publicPhoneDisplay, publicPhoneE164 } from '../lib/metadata'
+import { SocialIconLinks } from './social-links'
 
 const productLinks: Array<{ href: Route; label: string }> = [
   { href: '/how-it-works', label: 'How it works' },
@@ -43,18 +44,8 @@ export function SiteFooter(): React.JSX.Element {
             <a href={`mailto:${CONTACTS.support}`} className="transition hover:text-needle">{CONTACTS.support}</a>
             <a href={`tel:${publicPhoneE164}`} className="transition hover:text-needle">{publicPhoneDisplay}</a>
           </div>
-          <div className="mt-5 flex flex-wrap gap-4 text-xs font-semibold text-ink/54">
-            {socialLinks.map((link) => (
-              <a
-                key={link.url}
-                href={link.url}
-                target="_blank"
-                rel="me noopener noreferrer"
-                className="transition hover:text-needle"
-              >
-                {link.label}
-              </a>
-            ))}
+          <div className="mt-5 flex flex-wrap gap-2">
+            <SocialIconLinks size="sm" />
           </div>
         </div>
 

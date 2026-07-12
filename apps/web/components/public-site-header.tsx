@@ -6,6 +6,7 @@ import type { Route } from 'next'
 import { useEffect, useState } from 'react'
 import { createClient } from '../lib/supabase'
 import { clearWebSessionScope } from '../lib/web-session-scope'
+import { SocialIconLinks } from './social-links'
 
 const navItems: Array<{ href: Route; label: string }> = [
   { href: '/how-it-works', label: 'How it works' },
@@ -121,6 +122,8 @@ export function PublicSiteHeader(): React.JSX.Element {
               {item.label}
             </Link>
           ))}
+          <span className="mx-1 h-6 w-px bg-ink/8" />
+          <SocialIconLinks size="sm" />
           <span className="mx-1 h-6 w-px bg-ink/8" />
           {signedIn ? (
             <>
