@@ -4,7 +4,7 @@ import { buildMetadata } from '../../lib/metadata'
 
 export const metadata: Metadata = buildMetadata({
   title: 'About',
-  description: 'Drapeon helps people order custom and ready-made fashion with clearer fit context, trusted tailors, and protected handoffs.',
+  description: 'Drapeon is a custom-clothing marketplace for finding trusted tailors, sharing fit context, tracking orders, and completing protected handoffs.',
   path: '/about',
 })
 
@@ -13,17 +13,17 @@ export default function AboutPage(): React.JSX.Element {
     <MarketingShell
       eyebrow="About Drapeon"
       title="Fashion commerce works better when it understands fit."
-      description="Drapeon helps people order custom and ready-made fashion with clearer fit context, trusted tailors, and protected handoffs."
+      description="Drapeon helps customers and tailors move from discovery to measurements, briefs, quotes, production, payment, and delivery in one clear order record."
     >
       <section className="py-8">
         <SectionTitle
-          eyebrow="Company"
-          title="O4 Group LLC builds Drapeon."
-          description="O4 Group LLC is building consumer technology for fashion ordering, fit context, and marketplace trust."
+          eyebrow="Marketplace"
+          title="Drapeon brings custom clothing into one clearer workflow."
+          description="Customers get trusted discovery, fit context, and order visibility. Tailors get stronger briefs, production tools, and cleaner handoffs."
         />
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           <MarketingCard
-            title="Product"
+            title="Custom orders"
             body="Drapeon helps people discover fashion, work with trusted tailors, place custom and ready-made orders, and track the work clearly."
           />
           <MarketingCard
@@ -35,6 +35,9 @@ export default function AboutPage(): React.JSX.Element {
             body="Orders, payments, messages, measurements, production updates, delivery, and support stay connected to one record."
           />
         </div>
+        <p className="mt-6 text-xs leading-6 text-ink/42" data-nosnippet>
+          Drapeon is operated by O4 Group LLC.
+        </p>
       </section>
 
       <section className="border-t border-ink/6 py-14">
