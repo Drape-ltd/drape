@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { registerWebPushSubscription } from '../lib/web-push-client'
 
 const OPS_WEB_PUSH_SAVED_KEY = 'drapeon:ops:web-push-saved'
@@ -79,7 +79,7 @@ export function OpsPulseAlerts({
   initialLatestKey,
   initialLatestTitle,
   workflowHref,
-}: OpsPulseAlertsProps) {
+}: OpsPulseAlertsProps): ReactElement {
   const initialFingerprint = useMemo(
     () => `${initialOpenCount}:${initialCriticalCount}:${initialLatestKey}`,
     [initialCriticalCount, initialLatestKey, initialOpenCount],

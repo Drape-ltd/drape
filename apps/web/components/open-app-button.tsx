@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, type ReactElement } from 'react'
 
 export function OpenAppButton({
   label = 'Open app',
@@ -8,7 +8,7 @@ export function OpenAppButton({
 }: {
   label?: string
   className?: string
-}) {
+}): ReactElement {
   const [fallback, setFallback] = useState<string | null>(null)
 
   function openApp() {

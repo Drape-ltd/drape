@@ -1,8 +1,9 @@
 'use client'
 
+import type { ReactElement } from 'react'
 import { useSearchParams } from 'next/navigation'
 
-export function SignedOutFlash() {
+export function SignedOutFlash(): ReactElement | null {
   const searchParams = useSearchParams()
   if (!searchParams.get('signed_out')) return null
   return (

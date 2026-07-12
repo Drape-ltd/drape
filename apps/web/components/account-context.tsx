@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, type ReactNode } from 'react'
+import { createContext, useContext, type ReactElement, type ReactNode } from 'react'
 
 export type AccountRole = 'CUSTOMER' | 'TAILOR'
 
@@ -34,7 +34,7 @@ export function AccountContextProvider({
 }: {
   value: AccountContextValue
   children: ReactNode
-}) {
+}): ReactElement {
   return <AccountContext.Provider value={value}>{children}</AccountContext.Provider>
 }
 
