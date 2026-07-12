@@ -368,6 +368,7 @@ pnpm --filter @drape/web cf:deploy
 ```
 
 Run `cf:build` before `cf:deploy`; deploying an old `.open-next` bundle can leave production on a stale build.
+After pushing to `main`, wait for the GitHub `Workers Builds: drape` check to finish successfully before calling the deployment done. If that external check fails, inspect the Cloudflare build, rerun or retrigger it, and then run the production smoke checks below against `https://drapeon.co`.
 
 6. Confirm production:
 
