@@ -1,7 +1,16 @@
 import type { Metadata } from 'next'
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://drapeon.co'
-const defaultTitle = 'Drapeon | Custom fashion orders, fit, and trusted tailors'
+export const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://drapeon.co'
+export const defaultTitle = 'Drapeon | Custom fashion orders, fit, and trusted tailors'
+export const defaultDescription =
+  'Find trusted tailors, submit clear custom fashion briefs, track production, and use Drapeon Vision for camera-assisted fit measurements.'
+export const publicPhoneE164 = '+15128450347'
+export const publicPhoneDisplay = '(512) 845-0347'
+export const socialLinks = [
+  { label: 'Instagram', url: 'https://www.instagram.com/drapeonn/' },
+  { label: 'X', url: 'https://x.com/Drapeonn' },
+] as const
+export const socialUrls = socialLinks.map((link) => link.url)
 
 export function buildMetadata({
   title,
@@ -35,6 +44,7 @@ export function buildMetadata({
       url,
       siteName: 'Drapeon',
       type: 'website',
+      locale: 'en_US',
       images: [
         {
           url: '/opengraph-image',
@@ -46,6 +56,8 @@ export function buildMetadata({
     },
     twitter: {
       card: 'summary_large_image',
+      site: '@Drapeonn',
+      creator: '@Drapeonn',
       title: title === 'Drapeon' ? defaultTitle : `${title} | Drapeon`,
       description,
       images: ['/opengraph-image'],

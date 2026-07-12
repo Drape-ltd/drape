@@ -1,31 +1,42 @@
 import type { Metadata } from 'next'
+import { CONTACTS } from '@drape/shared'
 import { headers } from 'next/headers'
 import * as React from 'react'
 import { AuthLandingRedirect } from '../components/auth-landing-redirect'
 import { WebAnalytics } from '../components/web-analytics'
 import { WebSessionScopeGuard } from '../components/web-session-scope-guard'
+import {
+  defaultDescription,
+  defaultTitle,
+  publicPhoneE164,
+  siteUrl,
+  socialUrls,
+} from '../lib/metadata'
 import { getSupabasePublishableKey, getSupabaseUrl } from '../lib/supabase-config'
 import './globals.css'
-
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://drapeon.co'
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
-    default: 'Drapeon | Custom fashion orders, fit, and trusted tailors',
+    default: defaultTitle,
     template: '%s | Drapeon',
   },
-  description:
-    'Find trusted tailors, submit clear custom fashion briefs, track production, and use Drapeon Vision for camera-assisted fit measurements.',
+  description: defaultDescription,
   applicationName: 'Drapeon',
   manifest: '/manifest.webmanifest',
+  alternates: {
+    canonical: '/',
+  },
+  category: 'fashion marketplace',
+  creator: 'Drapeon',
+  publisher: 'O4 Group LLC',
   openGraph: {
-    title: 'Drapeon | Custom fashion orders, fit, and trusted tailors',
-    description:
-      'Find trusted tailors, submit clear custom fashion briefs, track production, and use Drapeon Vision for camera-assisted fit measurements.',
+    title: defaultTitle,
+    description: defaultDescription,
     url: siteUrl,
     siteName: 'Drapeon',
     type: 'website',
+    locale: 'en_US',
     images: [
       {
         url: '/opengraph-image',
@@ -37,9 +48,10 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Drapeon | Custom fashion orders, fit, and trusted tailors',
-    description:
-      'Find trusted tailors, submit clear custom fashion briefs, track production, and use Drapeon Vision for camera-assisted fit measurements.',
+    site: '@Drapeonn',
+    creator: '@Drapeonn',
+    title: defaultTitle,
+    description: defaultDescription,
     images: ['/opengraph-image'],
   },
   icons: {
@@ -59,26 +71,57 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     supabasePublishableKey: getSupabasePublishableKey(),
   }
   const hasPublicSupabaseEnv = Boolean(publicSupabaseEnv.supabaseUrl && publicSupabaseEnv.supabasePublishableKey)
+  const logoUrl = `${siteUrl}/icon-512.png`
 
   const organizationJsonLd = {
     '@context': 'https://schema.org',
     '@type': 'Organization',
-    name: 'O4 Group LLC',
+    '@id': `${siteUrl}/#organization`,
+    name: 'Drapeon',
+    alternateName: 'O4 Group LLC',
     legalName: 'O4 Group LLC',
+    url: siteUrl,
+    logo: logoUrl,
+    image: logoUrl,
+    email: CONTACTS.hello,
+    telephone: publicPhoneE164,
+    contactPoint: [
+      {
+        '@type': 'ContactPoint',
+        contactType: 'customer support',
+        email: CONTACTS.support,
+        telephone: publicPhoneE164,
+        availableLanguage: ['en'],
+      },
+      {
+        '@type': 'ContactPoint',
+        contactType: 'general inquiries',
+        email: CONTACTS.hello,
+        telephone: publicPhoneE164,
+        availableLanguage: ['en'],
+      },
+    ],
+    sameAs: socialUrls,
     brand: {
       '@type': 'Brand',
       name: 'Drapeon',
+      logo: logoUrl,
     },
-    url: siteUrl,
-    email: 'hello@drapeon.co',
   }
 
   const websiteJsonLd = {
     '@context': 'https://schema.org',
     '@type': 'WebSite',
+    '@id': `${siteUrl}/#website`,
     name: 'Drapeon',
+    alternateName: 'Drapeon custom tailoring marketplace',
     url: siteUrl,
-    description: 'Custom fashion orders, fit context, and trusted tailors.',
+    description: defaultDescription,
+    publisher: {
+      '@id': `${siteUrl}/#organization`,
+    },
+    inLanguage: 'en-US',
+    sameAs: socialUrls,
   }
 
   return (
@@ -91,13 +134,13 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           nonce={nonce}
           suppressHydrationWarning
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationJsonLd) }}
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationJsonLd).replace(/</g, '\\u003c') }}
         />
         <script
           nonce={nonce}
           suppressHydrationWarning
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteJsonLd) }}
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteJsonLd).replace(/</g, '\\u003c') }}
         />
         {hasPublicSupabaseEnv ? (
           <script
