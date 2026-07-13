@@ -7548,6 +7548,7 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
   const [size, setSize] = useState(sizes[0] ?? '')
   const [quantity, setQuantity] = useState('1')
   const [fulfillment, setFulfillment] = useState(item.pickup_available ? 'PICKUP' : item.delivery_available ? 'DELIVERY' : 'SHIPPING')
+  const [pickupBlocked, setPickupBlocked] = useState(false)
   const [address, setAddress] = useState('')
   const [city, setCity] = useState('')
   const [region, setRegion] = useState('')
@@ -7562,6 +7563,7 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
   const [pricingKey, setPricingKey] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const hasFulfillmentOption = Boolean((item.pickup_available && !pickupBlocked) || item.delivery_available || item.shipping_available)
   const needsAddress = fulfillment !== 'PICKUP'
   const fallbackFulfillment = fulfillment === 'PICKUP'
     ? item.delivery_available
@@ -7586,6 +7588,10 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
   function validateCheckoutInput() {
     setError(null)
     setSuccess(null)
+    if (!hasFulfillmentOption) {
+      setError('This item is not ready for checkout yet. Ask the seller to finish fulfillment setup.')
+      return null
+    }
     const leak = assertNoContactLeak([address, city, region, recipientName].join('\n'), "Checkout delivery details can't include off-platform contact details.")
     if (leak) {
       setError(leak)
@@ -7604,14 +7610,21 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
   }
 
   function handlePickupSetupFallback(message: string) {
-    if (!fallbackFulfillment || !/pickup details|finished pickup details/iu.test(message)) {
+    if (!/pickup details|finished pickup details/iu.test(message)) {
       return false
     }
-    setFulfillment(fallbackFulfillment)
+    setPickupBlocked(true)
+    if (fallbackFulfillment) {
+      setFulfillment(fallbackFulfillment)
+    }
     setPricingPreview(null)
     setPricingKey('')
     setSuccess(null)
-    setError(`Pickup is not ready for this seller yet. Checkout has been switched to ${fallbackFulfillment.toLowerCase()}. Add recipient details and preview tax again.`)
+    setError(
+      fallbackFulfillment
+        ? `Pickup is not ready for this seller yet. Checkout has been switched to ${fallbackFulfillment.toLowerCase()}. Add recipient details and preview tax again.`
+        : 'Pickup is not ready for this seller yet. Ask the seller to finish pickup setup before checkout.',
+    )
     return true
   }
 
@@ -7713,7 +7726,7 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
           <label className="grid gap-2">
             <span className="text-sm font-semibold text-ink">Fulfillment</span>
             <select value={fulfillment} onChange={(event) => setFulfillment(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
-              {item.pickup_available ? <option value="PICKUP">Pickup</option> : null}
+              {item.pickup_available ? <option value="PICKUP" disabled={pickupBlocked}>{pickupBlocked ? 'Pickup not ready' : 'Pickup'}</option> : null}
               {item.delivery_available ? <option value="DELIVERY">Delivery</option> : null}
               {item.shipping_available ? <option value="SHIPPING">Shipping</option> : null}
             </select>
@@ -7771,10 +7784,10 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
           )}
         </div>
         <div className="flex flex-col gap-3 sm:flex-row">
-          <button type="button" onClick={() => { void previewCheckout() }} disabled={pricingBusy || busy || !data.userId} className="inline-flex justify-center rounded-full border border-needle/18 bg-white px-5 py-3 text-sm font-semibold text-needle disabled:cursor-not-allowed disabled:text-ink/30">
+          <button type="button" onClick={() => { void previewCheckout() }} disabled={pricingBusy || busy || !data.userId || !hasFulfillmentOption} className="inline-flex justify-center rounded-full border border-needle/18 bg-white px-5 py-3 text-sm font-semibold text-needle disabled:cursor-not-allowed disabled:text-ink/30">
             {pricingBusy ? 'Calculating...' : 'Preview tax and total'}
           </button>
-          <button type="button" onClick={startCheckout} disabled={busy || pricingBusy || !data.userId || !previewIsFresh} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+          <button type="button" onClick={startCheckout} disabled={busy || pricingBusy || !data.userId || !hasFulfillmentOption || !previewIsFresh} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
             {busy ? 'Starting checkout...' : 'Create checkout'}
           </button>
         </div>
