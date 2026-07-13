@@ -257,6 +257,8 @@ type TailorProfile = {
   shipping_available: boolean | null
   portfolio_photo_urls: string[] | null
   avatar_url: string | null
+  profile_completed?: boolean | null
+  id_verification_status?: string | null
   payout_currency?: string | null
   payout_provider?: string | null
   payout_reverification_required?: boolean | null
@@ -277,6 +279,8 @@ type TailorProfile = {
   manual_bank_submitted_at?: string | null
   paystack_recipient_code?: string | null
   stripe_connect_account_id?: string | null
+  paystack_account_id?: string | null
+  stripe_account_id?: string | null
   payout_account_change_count?: number | null
   payout_account_last_changed_at?: string | null
   payout_account_change_locked_until?: string | null
@@ -552,6 +556,7 @@ type ShopSurfaceData = {
 type ShopRenderData = ShopSurfaceData & {
   userId: string | null
   tailorProfile: TailorProfile | null
+  pickupDetails: TailorPickupDetails | null
 }
 
 type WorkSurfaceData = {
@@ -1626,10 +1631,145 @@ const publicTailorProfileSelect =
   'id, user_id, display_name, business_name, bio, location, languages, specialty_tags, price_range_min, price_range_max, currency, tier, availability, seller_type, is_live, is_verified, avg_rating, total_reviews, total_orders, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, portfolio_photo_urls, avatar_url'
 
 const ownTailorProfileSelect =
-  `${publicTailorProfileSelect}, payout_currency, payout_provider, payout_reverification_required, payout_account_type, payout_account_verified, payout_account_verified_at, payout_bank_name, payout_account_name, payout_account_masked, payout_country_code, manual_bank_entry, manual_bank_name, manual_bank_country_code, manual_bank_country_name, manual_bank_swift_bic, manual_bank_account_name, manual_bank_verification_status, manual_bank_submitted_at, paystack_recipient_code, stripe_connect_account_id, payout_account_change_count, payout_account_last_changed_at, payout_account_change_locked_until, payout_destination_hold_until`
+  `${publicTailorProfileSelect}, profile_completed, id_verification_status, payout_currency, payout_provider, payout_reverification_required, payout_account_type, payout_account_verified, payout_account_verified_at, payout_bank_name, payout_account_name, payout_account_masked, payout_country_code, manual_bank_entry, manual_bank_name, manual_bank_country_code, manual_bank_country_name, manual_bank_swift_bic, manual_bank_account_name, manual_bank_verification_status, manual_bank_submitted_at, paystack_recipient_code, stripe_connect_account_id, paystack_account_id, stripe_account_id, payout_account_change_count, payout_account_last_changed_at, payout_account_change_locked_until, payout_destination_hold_until`
 
 const sellerItemSelect =
   'id, tailor_profile_id, title, description, category, sizes, size_inventory, price_amount, currency, photo_urls, stock_status, inventory_quantity, size_guide, is_live, pickup_available, delivery_available, shipping_available, updated_at, tailor_profiles(id, display_name, business_name, avatar_url, location, availability, is_live)'
+
+type WebTailorReadiness = {
+  profileCompleted: boolean
+  identityVerified: boolean
+  payoutReady: boolean
+  publicDiscoveryReady: boolean
+  canAcceptPaidOrders: boolean
+  canPublishPaidItems: boolean
+  code: 'PROFILE_INCOMPLETE' | 'IDENTITY_REVIEW_PENDING' | 'IDENTITY_VERIFICATION_REQUIRED' | 'PAYOUT_SETUP_REQUIRED' | null
+  title: string
+  body: string
+  actionLabel: string | null
+  actionHref: Route | null
+  tone: 'neutral' | 'warning' | 'success'
+}
+
+function hasNonEmptyText(value: string | null | undefined) {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function isVerifiedIdentityStatus(status: string | null | undefined) {
+  return status === 'VERIFIED' || status === 'APPROVED'
+}
+
+function deriveWebTailorReadiness(profile: TailorProfile | null | undefined): WebTailorReadiness {
+  const profileCompleted = profile?.profile_completed === true
+  const idStatus = profile?.id_verification_status ?? 'NOT_SUBMITTED'
+  const identityVerified = isVerifiedIdentityStatus(idStatus)
+  const legacyProviderLinked =
+    hasNonEmptyText(profile?.stripe_account_id) ||
+    hasNonEmptyText(profile?.paystack_account_id) ||
+    hasNonEmptyText(profile?.stripe_connect_account_id) ||
+    hasNonEmptyText(profile?.paystack_recipient_code)
+  const payoutVerified = profile?.payout_account_verified === true
+  const needsReverification = profile?.payout_reverification_required === true
+  const explicitPayoutStateKnown =
+    typeof profile?.payout_account_verified === 'boolean' ||
+    typeof profile?.payout_reverification_required === 'boolean'
+  const payoutReady = identityVerified && (
+    explicitPayoutStateKnown
+      ? payoutVerified && !needsReverification
+      : legacyProviderLinked
+  )
+
+  if (!profileCompleted) {
+    return {
+      profileCompleted,
+      identityVerified,
+      payoutReady,
+      publicDiscoveryReady: false,
+      canAcceptPaidOrders: false,
+      canPublishPaidItems: false,
+      code: 'PROFILE_INCOMPLETE',
+      title: 'Finish your seller profile first',
+      body: 'Your public profile, portfolio, and selling setup need to be complete before customers can discover you as a normal live business.',
+      actionLabel: 'Complete profile',
+      actionHref: '/account/profile' as Route,
+      tone: 'warning',
+    }
+  }
+
+  if (!identityVerified) {
+    const pending = idStatus === 'PENDING'
+    return {
+      profileCompleted,
+      identityVerified,
+      payoutReady,
+      publicDiscoveryReady: false,
+      canAcceptPaidOrders: false,
+      canPublishPaidItems: false,
+      code: pending ? 'IDENTITY_REVIEW_PENDING' : 'IDENTITY_VERIFICATION_REQUIRED',
+      title: pending ? 'Identity review is in progress' : 'Identity verification is still needed',
+      body: pending
+        ? 'Your profile can finish review before it goes live. Paid work should wait until identity review and payout setup are both complete.'
+        : idStatus === 'REJECTED'
+          ? 'Your verification needs attention before Drapeon can show you publicly or let you take paid work.'
+          : 'Customers should not discover or pay an unverified seller profile as if it were fully ready.',
+      actionLabel: pending ? null : idStatus === 'REJECTED' ? 'Resubmit verification in app' : 'Finish verification in app',
+      actionHref: null,
+      tone: 'warning',
+    }
+  }
+
+  if (!payoutReady) {
+    const reconnect = needsReverification
+    return {
+      profileCompleted,
+      identityVerified,
+      payoutReady,
+      publicDiscoveryReady: true,
+      canAcceptPaidOrders: false,
+      canPublishPaidItems: false,
+      code: 'PAYOUT_SETUP_REQUIRED',
+      title: reconnect ? 'Reconnect your payout account' : 'Set up your payout account',
+      body: reconnect
+        ? 'Your payout details changed or need review again. Reconnect your payout account before paid quotes, shop publishing, and earnings release continue.'
+        : 'Set up your payout account before paid quotes and live shop items unlock.',
+      actionLabel: reconnect ? 'Reconnect payout' : 'Set up payout',
+      actionHref: '/account/payout' as Route,
+      tone: 'warning',
+    }
+  }
+
+  if (profile?.is_live !== true) {
+    return {
+      profileCompleted,
+      identityVerified,
+      payoutReady,
+      publicDiscoveryReady: true,
+      canAcceptPaidOrders: true,
+      canPublishPaidItems: true,
+      code: null,
+      title: 'You are payout-ready',
+      body: 'Identity and payout checks look good. Review your storefront and go live when you are ready for standard paid work.',
+      actionLabel: 'Review profile',
+      actionHref: '/account/profile' as Route,
+      tone: 'neutral',
+    }
+  }
+
+  return {
+    profileCompleted,
+    identityVerified,
+    payoutReady,
+    publicDiscoveryReady: true,
+    canAcceptPaidOrders: true,
+    canPublishPaidItems: true,
+    code: null,
+    title: 'Live and payout-ready',
+    body: 'You can accept standard paid work and publish paid items with your current setup.',
+    actionLabel: null,
+    actionHref: null,
+    tone: 'success',
+  }
+}
 
 const accountOrderSelect = `
   id, reference, order_kind, garment_type, item_title, item_size, garment_description, occasion, stage, delivery_method,
@@ -5771,7 +5911,7 @@ function SellerItemManager({
   data,
   onRefresh,
 }: {
-  data: Pick<ShopRenderData, 'userId' | 'tailorProfile' | 'sellerItems'>
+  data: Pick<ShopRenderData, 'userId' | 'tailorProfile' | 'pickupDetails' | 'sellerItems'>
   onRefresh: () => void
 }) {
   const [title, setTitle] = useState('')
@@ -5792,6 +5932,17 @@ function SellerItemManager({
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const photoInputRef = useRef<HTMLInputElement | null>(null)
+  const readiness = deriveWebTailorReadiness(data.tailorProfile)
+  const canPublishLive = data.tailorProfile?.supports_ready_made === true && readiness.canPublishPaidItems
+  const hasPickupAddress = hasNonEmptyText(data.pickupDetails?.pickup_address)
+  const publishBlockedReason = !data.tailorProfile?.supports_ready_made
+    ? 'Enable ready-made shop in Selling setup before publishing live items.'
+    : !readiness.canPublishPaidItems
+      ? readiness.body
+      : fulfillment.pickup && !hasPickupAddress
+        ? 'Add the exact private pickup address in Profile before publishing a pickup item.'
+        : null
+  const publishBlocked = publish && !!publishBlockedReason
 
   function resetForm() {
     setEditingItemId(null)
@@ -5851,6 +6002,10 @@ function SellerItemManager({
     const nextSizes = splitList(sizes)
     if (!title.trim() || !category.trim() || !description.trim() || !priceAmount || nextSizes.length === 0) {
       setError('Add title, category, description, price, and at least one size.')
+      return
+    }
+    if (publishBlocked) {
+      setError(publishBlockedReason ?? 'Finish go-live checks before publishing this item.')
       return
     }
     if (photoFile) {
@@ -5942,6 +6097,35 @@ function SellerItemManager({
       </div>
       <div className="mt-5 grid gap-4">
         <ActionNotice error={error} success={success} />
+        {!canPublishLive || (fulfillment.pickup && !hasPickupAddress) ? (
+          <div className={`rounded-[1.1rem] border p-4 ${
+            canPublishLive && fulfillment.pickup && !hasPickupAddress
+              ? 'border-amber-300/35 bg-amber-400/8'
+              : 'border-rust/18 bg-rust/8'
+          }`}>
+            <p className="text-sm font-semibold text-ink">
+              {canPublishLive ? 'Pickup needs private details' : readiness.title}
+            </p>
+            <p className="mt-1.5 text-sm leading-6 text-ink/62">
+              {data.tailorProfile?.supports_ready_made === false
+                ? 'Draft items are fine, but live ready-made listings should stay hidden until ready-made shop is enabled on your tailor profile.'
+                : canPublishLive
+                  ? 'Drafts can still be saved. To publish pickup items, add the exact private pickup address in Profile first.'
+                  : readiness.body}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-3">
+              {!canPublishLive && readiness.actionHref ? (
+                <Link href={readiness.actionHref} className="text-sm font-semibold text-needle">{readiness.actionLabel ?? 'Review readiness'} →</Link>
+              ) : null}
+              {(fulfillment.pickup && !hasPickupAddress) || data.tailorProfile?.supports_ready_made === false ? (
+                <Link href="/account/profile" className="text-sm font-semibold text-needle">Open Selling setup →</Link>
+              ) : null}
+              {!readiness.identityVerified && !readiness.actionHref ? (
+                <OpenAppButton label={readiness.actionLabel ?? 'Open app verification'} className="text-sm font-semibold text-needle" />
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         <div className="grid gap-3 md:grid-cols-2">
           <label className="grid gap-2">
             <span className="text-sm font-semibold text-ink">Title</span>
@@ -6015,7 +6199,7 @@ function SellerItemManager({
           Publish after preflight
         </label>
         <div className="flex flex-col gap-2 sm:flex-row">
-          <button type="button" onClick={saveItem} disabled={busy} className="inline-flex w-full justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20 sm:w-auto">
+          <button type="button" onClick={saveItem} disabled={busy || publishBlocked} className="inline-flex w-full justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20 sm:w-auto">
             {busy ? 'Saving...' : editingItemId ? publish ? 'Update and publish' : 'Update draft' : publish ? 'Save and publish' : 'Save draft'}
           </button>
           {editingItemId ? (
@@ -6033,6 +6217,7 @@ function SellerItemManager({
               const busyForItem = actionBusy?.endsWith(`:${item.id}`) ?? false
               const canEdit = !item.is_live || item.stock_status === 'SOLD_OUT'
               const isHiddenDraft = !item.is_live && item.stock_status === 'HIDDEN'
+              const itemPublishBlocked = !canPublishLive || (item.pickup_available === true && !hasPickupAddress)
               return (
                 <div key={item.id} className="rounded-[1rem] border border-ink/8 bg-white p-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -6067,10 +6252,10 @@ function SellerItemManager({
                         <button
                           type="button"
                           onClick={() => runSellerItemAction('publish-item', item)}
-                          disabled={busy || !!actionBusy}
+                          disabled={busy || !!actionBusy || itemPublishBlocked}
                           className="rounded-full border border-needle/16 bg-needle/8 px-4 py-2 text-sm font-semibold text-needle disabled:cursor-not-allowed disabled:text-ink/36"
                         >
-                          {busyForItem ? 'Publishing...' : 'Publish'}
+                          {busyForItem ? 'Publishing...' : itemPublishBlocked ? 'Publishing locked' : 'Publish'}
                         </button>
                       )}
                       {isHiddenDraft ? (
@@ -6087,6 +6272,9 @@ function SellerItemManager({
                   </div>
                   {!canEdit ? (
                     <p className="mt-3 text-xs leading-5 text-ink/50">Unpublish this item before editing details, photos, price, sizes, or stock.</p>
+                  ) : null}
+                  {itemPublishBlocked && !item.is_live ? (
+                    <p className="mt-3 text-xs leading-5 text-rust">{item.pickup_available === true && !hasPickupAddress ? 'Add private pickup details before publishing this pickup item.' : readiness.body}</p>
                   ) : null}
                 </div>
               )
@@ -10758,6 +10946,20 @@ function RenderWork({ data, onRefresh }: { data: WorkRenderData; onRefresh: () =
     : data.tailorProfile.payout_reverification_required
       ? 'bg-rust/10 text-rust'
       : 'bg-amber-400/15 text-amber-600'
+  const readiness = deriveWebTailorReadiness(data.tailorProfile)
+  const identityStatus = data.tailorProfile.id_verification_status ?? 'NOT_SUBMITTED'
+  const identityLabel = readiness.identityVerified
+    ? 'Verified'
+    : identityStatus === 'PENDING'
+      ? 'In review'
+      : identityStatus === 'REJECTED'
+        ? 'Needs resubmission'
+        : 'Not submitted'
+  const identityBadgeStyle = readiness.identityVerified
+    ? 'bg-needle/10 text-needle'
+    : identityStatus === 'PENDING'
+      ? 'bg-amber-400/15 text-amber-600'
+      : 'bg-rust/10 text-rust'
 
   const todayFocus: { tone: 'warning' | 'default' | 'success'; eyebrow: string; title: string; body: string; action: string; actionHref: Route } = (() => {
     if (pendingReplyOrders.length > 0) {
@@ -10781,6 +10983,16 @@ function RenderWork({ data, onRefresh }: { data: WorkRenderData; onRefresh: () =
           action: 'Open active orders',
           actionHref: '/account/orders' as Route,
         }
+      }
+    }
+    if (!readiness.canAcceptPaidOrders) {
+      return {
+        tone: 'warning',
+        eyebrow: 'Readiness',
+        title: readiness.title,
+        body: readiness.body,
+        action: readiness.actionLabel ?? 'Review profile',
+        actionHref: readiness.actionHref ?? ('/account/profile' as Route),
       }
     }
     if (!payoutVerified) {
@@ -10864,7 +11076,7 @@ function RenderWork({ data, onRefresh }: { data: WorkRenderData; onRefresh: () =
         </div>
 
         {/* Status tiles */}
-        <div className="mt-3 grid grid-cols-2 gap-3">
+        <div className="mt-3 grid gap-3 md:grid-cols-3">
           <Link href="/account/profile" className="rounded-[1.1rem] bg-needle/8 p-3 transition hover:bg-needle/12">
             <div className="flex items-center gap-1.5">
               <span className={`h-2 w-2 shrink-0 rounded-full ${availDotColor}`} />
@@ -10872,6 +11084,13 @@ function RenderWork({ data, onRefresh }: { data: WorkRenderData; onRefresh: () =
             </div>
             <p className="mt-1.5 text-sm font-semibold text-ink">{availLabel}</p>
             <p className="mt-0.5 text-xs leading-4 text-ink/52">{availHint}</p>
+          </Link>
+          <Link href="/account/profile" className="rounded-[1.1rem] bg-needle/8 p-3 transition hover:bg-needle/12">
+            <div className="flex items-center gap-1.5">
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${identityBadgeStyle}`}>{identityLabel}</span>
+            </div>
+            <p className="mt-1.5 text-sm font-semibold text-ink">Identity</p>
+            <p className="mt-0.5 text-xs leading-4 text-ink/52">{readiness.profileCompleted ? 'Profile setup complete.' : 'Finish profile setup before paid work.'}</p>
           </Link>
           <Link href="/account/payout" className="rounded-[1.1rem] bg-needle/8 p-3 transition hover:bg-needle/12">
             <div className="flex items-center gap-1.5">
@@ -11930,8 +12149,19 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
     : profile.availability === 'LIMITED'
       ? 'Limited'
       : 'Fully booked'
+  const readiness = deriveWebTailorReadiness(profile)
+  const identityStatus = profile.id_verification_status ?? 'NOT_SUBMITTED'
+  const identityLabel = readiness.identityVerified
+    ? 'Verified'
+    : identityStatus === 'PENDING'
+      ? 'In review'
+      : identityStatus === 'REJECTED'
+        ? 'Needs resubmission'
+        : 'Not submitted'
 
   const sellingSetupRows = [
+    { label: 'Profile', value: readiness.profileCompleted ? 'Complete' : 'Setup in progress' },
+    { label: 'Identity', value: identityLabel },
     {
       label: 'Offers',
       value: [profile.supports_custom_orders && 'Custom orders', profile.supports_ready_made && 'Ready-made'].filter(Boolean).join(' + ') || 'No offers enabled',
@@ -12017,11 +12247,35 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
         </div>
       </section>
 
+      {/* ── Readiness ── */}
+      <section className={`rounded-[1.6rem] border p-5 shadow-sm ${
+        readiness.tone === 'success'
+          ? 'border-needle/14 bg-needle/6'
+          : readiness.tone === 'warning'
+            ? 'border-amber-300/35 bg-amber-400/8'
+            : 'border-ink/8 bg-white/84'
+      }`}>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">Seller readiness</p>
+            <h3 className="mt-2 text-xl font-semibold text-ink">{readiness.title}</h3>
+            <p className="mt-2 text-sm leading-6 text-ink/64">{readiness.body}</p>
+          </div>
+          {readiness.actionHref ? (
+            <Link href={readiness.actionHref} className="inline-flex shrink-0 justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white">
+              {readiness.actionLabel ?? 'Review'}
+            </Link>
+          ) : readiness.actionLabel ? (
+            <OpenAppButton label={readiness.actionLabel} className="inline-flex shrink-0 justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white" />
+          ) : null}
+        </div>
+      </section>
+
       {/* ── Selling setup ── */}
       <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-5 shadow-sm">
         <div className="flex items-center justify-between">
           <h3 className="text-xl text-ink">Selling setup</h3>
-          <OpenAppButton label="Open app for ID" className="text-xs font-semibold text-needle" />
+          {readiness.identityVerified ? null : <OpenAppButton label="Open app for ID" className="text-xs font-semibold text-needle" />}
         </div>
         <div className="mt-4 divide-y divide-ink/6">
           {sellingSetupRows.map((row) => (
@@ -12069,7 +12323,7 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
       <section className="rounded-[1.6rem] border border-needle/12 bg-needle/6 p-5">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">App-only trust steps</p>
         <p className="mt-2 text-sm leading-6 text-ink/66">
-          Identity verification, native body scans, camera-guided proof, push permissions, and stronger reauth flows still work best in the app. Profile setup, portfolio, shop, payouts, and order work are available on web.
+          Identity document upload, native body scans, camera-guided proof, push permissions, and stronger reauth flows still work best in the app. Profile setup, portfolio, shop, payouts, and order work are available on web.
         </p>
         <div className="mt-4">
           <OpenAppButton label="Open app trust flows" className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white" />
@@ -13637,7 +13891,7 @@ export function AccountAppSurface({
           />
         )
       case 'shop':
-        return <RenderShop data={{ ...shopData, userId: shellData.userId ?? data.userId, tailorProfile: shellData.tailorProfile ?? data.tailorProfile }} onRefresh={onRefresh} />
+        return <RenderShop data={{ ...shopData, userId: shellData.userId ?? data.userId, tailorProfile: shellData.tailorProfile ?? data.tailorProfile, pickupDetails: shellData.pickupDetails }} onRefresh={onRefresh} />
       case 'work':
         return <RenderWork data={{ ...workData, userId: shellData.userId ?? data.userId, tailorProfile: shellData.tailorProfile ?? data.tailorProfile }} onRefresh={onRefresh} />
       case 'earnings':
