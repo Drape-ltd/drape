@@ -77,6 +77,17 @@ function buildReference() {
   return `DRP${Date.now().toString(36).toUpperCase().slice(-6)}`
 }
 
+function preferredReadyMadeDeliveryMethod(item: {
+  delivery_available?: boolean | null
+  shipping_available?: boolean | null
+  pickup_available?: boolean | null
+}) {
+  if (item.delivery_available) return 'LOCAL_DELIVERY'
+  if (item.shipping_available) return 'SHIPPING'
+  if (item.pickup_available) return 'LOCAL_COLLECTION'
+  return 'SHIPPING'
+}
+
 function jsonResponse(payload: Record<string, unknown>, status: number, cors: HeadersInit) {
   return new Response(JSON.stringify(payload), {
     status,
@@ -460,10 +471,24 @@ Deno.serve(async (req) => {
           order_kind: 'READY_MADE',
           seller_item_id: item.id,
           garment_type: item.title,
+          description: item.description ?? item.title,
           garment_description: item.description,
+          fabric_source: 'TAILOR_SOURCES',
+          delivery_method: preferredReadyMadeDeliveryMethod(item),
           item_title: item.title,
+          item_quantity: 1,
+          item_unit_price: item.price_amount,
+          item_subtotal: item.price_amount,
           currency: orderCurrency,
           quoted_currency: orderCurrency,
+          source_currency: item.currency,
+          source_amount: item.price_amount,
+          subtotal_amount: item.price_amount,
+          platform_fee_amount: 0,
+          tax_amount: 0,
+          tax_rate_bps: 0,
+          shipping_amount: 0,
+          total_amount: item.price_amount,
           stage: 'PENDING_QUOTE',
           stage_updated_at: new Date().toISOString(),
         })
@@ -794,7 +819,9 @@ Deno.serve(async (req) => {
         order_kind: 'READY_MADE',
         seller_item_id: item.id,
         garment_type: item.title,
+        description: item.description ?? item.title,
         garment_description: item.description,
+        fabric_source: 'TAILOR_SOURCES',
         item_title: item.title,
         item_size: nextSize || null,
         item_quantity: body.quantity,

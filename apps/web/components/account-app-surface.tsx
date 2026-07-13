@@ -7547,7 +7547,7 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
   const sizes = stringList(item.sizes)
   const [size, setSize] = useState(sizes[0] ?? '')
   const [quantity, setQuantity] = useState('1')
-  const [fulfillment, setFulfillment] = useState(item.pickup_available ? 'PICKUP' : item.delivery_available ? 'DELIVERY' : 'SHIPPING')
+  const [fulfillment, setFulfillment] = useState(item.delivery_available ? 'DELIVERY' : item.shipping_available ? 'SHIPPING' : item.pickup_available ? 'PICKUP' : 'SHIPPING')
   const [pickupBlocked, setPickupBlocked] = useState(false)
   const [address, setAddress] = useState('')
   const [city, setCity] = useState('')
