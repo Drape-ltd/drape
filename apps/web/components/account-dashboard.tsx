@@ -361,7 +361,7 @@ function buildNextAction({
     return {
       eyebrow: 'Fit',
       title: 'Add measurements before ordering.',
-      body: 'Use Drapeon Vision on iOS or manual measurements so tailors have the right fit context.',
+      body: 'Use manual measurements on web or Drapeon Vision in the app so tailors have the right fit context.',
       cta: 'Review measurements',
       href: '/account/measurements',
     }
@@ -987,7 +987,7 @@ export function AccountDashboard(): React.JSX.Element {
                   </p>
                 ) : activity.measurementProfiles.length === 0 && activity.measurementScans.length === 0 ? (
                   <p className="rounded-[1.15rem] border border-ink/6 bg-bone/60 p-4 text-sm leading-6 text-ink/62">
-                    Add measurements in the app with Drapeon Vision or manual entry. Web will show the profile age and source here.
+                    Add manual measurements on web, or use Drapeon Vision in the app. Saved profile age and source appear here.
                   </p>
                 ) : (
                   <>
