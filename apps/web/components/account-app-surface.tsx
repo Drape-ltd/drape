@@ -495,6 +495,7 @@ type ExploreSurfaceData = {
 }
 
 type ExploreRenderData = ExploreSurfaceData & {
+  userId: string | null
   accountCurrency: string | null
 }
 
@@ -1726,6 +1727,22 @@ function isReadyMadeBuyableOnWeb(item: SellerItem, tailor: JoinedProfile | null)
   )
 }
 
+function canStartCustomBriefOnWeb(tailor: TailorProfile, userId: string | null) {
+  return (
+    tailor.is_live === true &&
+    tailor.supports_custom_orders === true &&
+    tailor.availability !== 'FULLY_BOOKED' &&
+    tailor.user_id !== userId
+  )
+}
+
+function customBriefUnavailableLabel(tailor: TailorProfile, userId: string | null) {
+  if (tailor.user_id === userId) return 'Your tailor profile'
+  if (tailor.availability === 'FULLY_BOOKED') return 'Fully booked'
+  if (tailor.is_live !== true || tailor.supports_custom_orders !== true) return 'Custom orders unavailable'
+  return 'Custom orders unavailable'
+}
+
 function readyMadeUnavailableLabel(item: SellerItem, tailor: JoinedProfile | null) {
   const stockStatus = (item.stock_status ?? 'IN_STOCK').toUpperCase()
   if (tailor?.availability === 'FULLY_BOOKED' || tailor?.is_live !== true) return 'Seller unavailable'
@@ -2458,6 +2475,7 @@ async function fetchExploreSurfaceData(userId: string): Promise<ExploreSurfaceDa
     .from('tailor_profiles')
     .select(publicTailorProfileSelect)
     .eq('is_live', true)
+    .neq('availability', 'FULLY_BOOKED')
     .order('avg_rating', { ascending: false })
     .order('updated_at', { ascending: false })
     .limit(24)
@@ -4098,8 +4116,8 @@ function CustomerOrderActions({ order, data, onRefresh }: { order: AccountOrder;
     supportMeta.scopeChange?.requestedBy === 'TAILOR'
   const canCancelScopeChange = scopeChangeOpen && supportMeta.scopeChange?.requestedBy === 'CUSTOMER'
   const canSelfCancel = CUSTOMER_SELF_CANCEL_STAGES.has(stage)
-  const canRequestCancellationReview = CUSTOMER_CANCELLATION_REVIEW_STAGES.has(stage)
-  const canRequestDeliveryReview = CUSTOMER_DELIVERY_REVIEW_STAGES.has(stage)
+  const canRequestCancellationReview = CUSTOMER_CANCELLATION_REVIEW_STAGES.has(stage) && !cancellationReviewOpen
+  const canRequestDeliveryReview = CUSTOMER_DELIVERY_REVIEW_STAGES.has(stage) && !deliveryReviewOpen && !cancellationReviewOpen
   const canOpenDispute = CUSTOMER_DISPUTE_STAGES.has(stage)
   const canConfirmReceipt = CUSTOMER_RECEIPT_STAGES.has(stage)
   const canCompleteOrder = CUSTOMER_COMPLETE_STAGES.has(stage)
@@ -8410,6 +8428,7 @@ function RenderExplore({ data }: { data: ExploreRenderData }) {
                 const photo = tailorPhoto(tailor)
                 const safeSrc = safeMediaUrl(photo)
                 const specialtyTags = stringList(tailor.specialty_tags).slice(0, 3)
+                const canRequestBrief = canStartCustomBriefOnWeb(tailor, data.userId)
                 const ratingText = tailor.total_reviews
                   ? `${Number(tailor.avg_rating ?? 0).toFixed(1)} (${tailor.total_reviews})`
                   : null
@@ -8463,12 +8482,14 @@ function RenderExplore({ data }: { data: ExploreRenderData }) {
                         <Link href={accountRoute(`/account/tailors/${tailor.id}`)} className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-4 py-2.5 text-sm font-semibold text-ink">
                           View profile
                         </Link>
-                        {tailor.supports_custom_orders ? (
+                        {canRequestBrief ? (
                           <Link href={accountRoute(`/account/brief/${tailor.id}`)} className="inline-flex justify-center rounded-full bg-needle px-4 py-2.5 text-sm font-semibold text-white">
                             Request brief
                           </Link>
                         ) : (
-                          <OpenAppButton label="Start in app" className="inline-flex justify-center rounded-full bg-needle px-4 py-2.5 text-sm font-semibold text-white" />
+                          <button type="button" disabled className="inline-flex cursor-not-allowed justify-center rounded-full bg-ink/10 px-4 py-2.5 text-sm font-semibold text-ink/48">
+                            {customBriefUnavailableLabel(tailor, data.userId)}
+                          </button>
                         )}
                       </div>
                     </div>
@@ -8593,6 +8614,16 @@ function RenderBrief({ data, tailorId, onRefresh }: { data: BriefRenderData; tai
       <EmptyState
         title="Custom orders are not listed for this tailor."
         body="Browse ready-made pieces or open the app if you already have an active order with this tailor."
+        action={<Link href={accountRoute(`/account/tailors/${tailor.id}`)} className="font-semibold text-needle">Back to profile</Link>}
+      />
+    )
+  }
+
+  if (!canStartCustomBriefOnWeb(tailor, data.userId)) {
+    return (
+      <EmptyState
+        title={customBriefUnavailableLabel(tailor, data.userId)}
+        body="This tailor is not accepting new custom briefs from this account right now. You can review the profile, save the tailor, or browse other available tailors."
         action={<Link href={accountRoute(`/account/tailors/${tailor.id}`)} className="font-semibold text-needle">Back to profile</Link>}
       />
     )
@@ -10540,7 +10571,9 @@ function RenderMeasurements({ data, onRefresh }: { data: MeasurementsRenderData;
 
 function RenderShop({ data, onRefresh }: { data: ShopRenderData; onRefresh: () => void }) {
   const isTailor = !!data.tailorProfile
-  const allItems = isTailor ? data.sellerItems : data.exploreItems
+  const allItems = isTailor
+    ? data.sellerItems
+    : data.exploreItems.filter((item) => isReadyMadeBuyableOnWeb(item, firstJoinedRow(item.tailor_profiles)))
   const [shopSearch, setShopSearch] = useState('')
   const [shopCategory, setShopCategory] = useState('all')
   const [shopSort, setShopSort] = useState('newest')
@@ -12667,8 +12700,11 @@ function RenderTailorDetail({ data, onRefresh }: { data: TailorDetailSurfaceData
     .map((src) => safeMediaUrl(src, 'portfolio-photos'))
     .filter((src): src is string => !!src)
   const profileMedia = uniqueValues([tailorPhoto(tailor), ...portfolio])
-  const readyMade = data.readyMade
+  const readyMade = data.readyMade.filter((item) => (
+    account.userId === tailor.user_id || isReadyMadeBuyableOnWeb(item, tailor)
+  ))
   const isSaved = savedOverride ?? data.isSaved
+  const canRequestCustomOrder = canStartCustomBriefOnWeb(tailor, account.userId)
 
   async function toggleSaved() {
     if (!tailor || busy) return
@@ -12750,10 +12786,14 @@ function RenderTailorDetail({ data, onRefresh }: { data: TailorDetailSurfaceData
           <ActionNotice error={error} success={success} />
 
           <div className="mt-5 flex flex-wrap gap-3">
-            {tailor.supports_custom_orders ? (
+            {canRequestCustomOrder ? (
               <Link href={accountRoute(`/account/brief/${tailor.id}`)} className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white">
                 Request custom order
               </Link>
+            ) : tailor.supports_custom_orders ? (
+              <button type="button" disabled className="inline-flex cursor-not-allowed items-center justify-center rounded-full bg-ink/10 px-5 py-3 text-sm font-semibold text-ink/48">
+                {customBriefUnavailableLabel(tailor, account.userId)}
+              </button>
             ) : null}
             <button
               type="button"
@@ -13564,7 +13604,7 @@ export function AccountAppSurface({
     }
     switch (surface) {
       case 'explore':
-        return <RenderExplore data={{ ...exploreData, accountCurrency: shellData.accountCurrency ?? data.accountCurrency }} />
+        return <RenderExplore data={{ ...exploreData, userId: shellData.userId ?? data.userId, accountCurrency: shellData.accountCurrency ?? data.accountCurrency }} />
       case 'orders':
         return <RenderOrders data={{ ...ordersData, userId: shellData.userId ?? data.userId, tailorProfile: shellData.tailorProfile ?? data.tailorProfile }} />
       case 'order-detail':
