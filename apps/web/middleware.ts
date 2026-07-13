@@ -86,7 +86,7 @@ function notFoundResponse() {
 
 function contentSecurityPolicy(nonce: string) {
   const isDevelopment = process.env.NODE_ENV !== 'production'
-  const imgSrc = ["'self'", 'data:', 'blob:', getSupabaseStorageOrigin(), 'https://*.stripe.com']
+  const imgSrc = ["'self'", 'data:', 'blob:', getSupabaseStorageOrigin(), 'https://images.unsplash.com', 'https://*.stripe.com']
     .filter(Boolean)
     .join(' ')
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? ''

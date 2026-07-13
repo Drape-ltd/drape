@@ -1301,9 +1301,9 @@ function partyName(order: AccountOrder, userId: string | null) {
 
 function partyAvatar(order: AccountOrder, userId: string | null) {
   if (order.customer_id === userId) {
-    return safeMediaUrl(firstJoinedRow(order.tailor_profiles)?.avatar_url ?? null)
+    return safeMediaUrl(firstJoinedRow(order.tailor_profiles)?.avatar_url ?? null, 'avatars')
   }
-  return safeMediaUrl(firstJoinedRow(order.customer_profiles)?.avatar_url ?? null)
+  return safeMediaUrl(firstJoinedRow(order.customer_profiles)?.avatar_url ?? null, 'avatars')
 }
 
 function partyKey(order: AccountOrder, userId: string | null): string {
@@ -1312,12 +1312,62 @@ function partyKey(order: AccountOrder, userId: string | null): string {
     : (order.customer_id ?? `_${order.id}`)
 }
 
-function safeMediaUrl(src: string | null | undefined) {
+type PublicMediaBucket = 'avatars' | 'portfolio-photos' | 'seller-item-media'
+
+const PUBLIC_MEDIA_BUCKETS: PublicMediaBucket[] = ['avatars', 'portfolio-photos', 'seller-item-media']
+const TRUSTED_EXTERNAL_IMAGE_HOSTS = new Set(['images.unsplash.com'])
+
+function isPublicMediaBucket(value: string): value is PublicMediaBucket {
+  return PUBLIC_MEDIA_BUCKETS.includes(value as PublicMediaBucket)
+}
+
+function runtimeSupabaseUrl() {
+  const envUrl = process.env.DRAPEON_PUBLIC_SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
+  if (envUrl.trim()) return envUrl.replace(/\/+$/u, '')
+
+  if (typeof window === 'undefined') return ''
+  return window.__DRAPEON_PUBLIC_ENV__?.supabaseUrl?.trim().replace(/\/+$/u, '') ?? ''
+}
+
+function encodeStoragePath(path: string) {
+  return path
+    .split('/')
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join('/')
+}
+
+function publicStorageMediaUrl(src: string, fallbackBucket: PublicMediaBucket) {
+  const supabaseUrl = runtimeSupabaseUrl()
+  if (!supabaseUrl) return null
+
+  const parts = src
+    .trim()
+    .replace(/^\/+/u, '')
+    .replace(/^public\//u, '')
+    .split('/')
+    .filter(Boolean)
+
+  const first = parts[0] ?? ''
+  const bucket = isPublicMediaBucket(first) ? first : fallbackBucket
+  const objectParts = isPublicMediaBucket(first) ? parts.slice(1) : parts
+  if (objectParts[0] === 'public') objectParts.shift()
+  const objectPath = encodeStoragePath(objectParts.join('/'))
+  if (!objectPath) return null
+
+  return `${supabaseUrl}/storage/v1/object/public/${bucket}/${objectPath}`
+}
+
+function safeMediaUrl(src: string | null | undefined, bucket?: PublicMediaBucket) {
   if (!src) return null
-  if (src.startsWith('/') || src.startsWith('data:') || src.startsWith('blob:')) return src
+  const value = src.trim()
+  if (!value) return null
+  if (value.startsWith('data:') || value.startsWith('blob:')) return value
+  if (bucket && !/^(https?:)/iu.test(value)) return publicStorageMediaUrl(value, bucket)
+  if (value.startsWith('/')) return value
   try {
-    const url = new URL(src)
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
+    const url = new URL(value)
+    const supabaseUrl = runtimeSupabaseUrl()
     const supabaseHost = supabaseUrl ? new URL(supabaseUrl).hostname : ''
     if (
       supabaseHost &&
@@ -1325,7 +1375,10 @@ function safeMediaUrl(src: string | null | undefined) {
       (url.pathname.startsWith('/storage/v1/object/public/') ||
         url.pathname.startsWith('/storage/v1/object/sign/'))
     ) {
-      return src
+      return value
+    }
+    if (url.protocol === 'https:' && TRUSTED_EXTERNAL_IMAGE_HOSTS.has(url.hostname)) {
+      return value
     }
   } catch {
     return null
@@ -1343,7 +1396,7 @@ function initialsForName(value: string | null | undefined) {
 }
 
 function itemPhoto(item: SellerItem) {
-  return stringList(item.photo_urls).map(safeMediaUrl).find(Boolean) ?? null
+  return stringList(item.photo_urls).map((src) => safeMediaUrl(src, 'seller-item-media')).find(Boolean) ?? null
 }
 
 function sizeGuideNotes(item: SellerItem) {
@@ -1352,7 +1405,7 @@ function sizeGuideNotes(item: SellerItem) {
 }
 
 function tailorPhoto(tailor: TailorProfile) {
-  return stringList(tailor.portfolio_photo_urls).map(safeMediaUrl).find(Boolean) ?? safeMediaUrl(tailor.avatar_url) ?? null
+  return stringList(tailor.portfolio_photo_urls).map((src) => safeMediaUrl(src, 'portfolio-photos')).find(Boolean) ?? safeMediaUrl(tailor.avatar_url, 'avatars') ?? null
 }
 
 function hasMeasurements(profile: CustomerProfile | null) {
@@ -2986,6 +3039,7 @@ function AccountIdentityCard({
     isTailorRole
       ? (shellData.tailorProfile?.avatar_url ?? shellData.customerProfile?.avatar_url)
       : (shellData.customerProfile?.avatar_url ?? shellData.tailorProfile?.avatar_url),
+    'avatars',
   )
 
   return (
@@ -3443,7 +3497,7 @@ function PhotoTile({ src, label }: { src: string | null; label: string }) {
 }
 
 function MediaSlideshow({ media, label }: { media: string[]; label: string }) {
-  const safeMedia = media.map(safeMediaUrl).filter((src): src is string => !!src)
+  const safeMedia = media.map((src) => safeMediaUrl(src)).filter((src): src is string => !!src)
   const [activeIndex, setActiveIndex] = useState(0)
   const [expanded, setExpanded] = useState(false)
   const activeSrc = safeMedia[activeIndex] ?? null
@@ -7557,7 +7611,7 @@ function ProfileSettingsEditor({ data, session, onRefresh }: { data: SettingsRen
 
 function AvatarUploadPanel({ data, session, onRefresh }: { data: Pick<SettingsRenderData, 'userId' | 'customerProfile' | 'tailorProfile'>; session: Session | null; onRefresh: () => void }) {
   const role = session?.user.user_metadata?.role === 'TAILOR' || data.tailorProfile ? 'TAILOR' : 'CUSTOMER'
-  const currentAvatar = safeMediaUrl(data.tailorProfile?.avatar_url ?? data.customerProfile?.avatar_url)
+  const currentAvatar = safeMediaUrl(data.tailorProfile?.avatar_url ?? data.customerProfile?.avatar_url, 'avatars')
   const [file, setFile] = useState<File | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -8950,7 +9004,7 @@ function RenderOrderDetail({ data, onRefresh }: { data: OrderDetailRenderData; o
   const proofMediaUrls = Array.from(new Set(
     proofEvidence
       .flatMap((item) => stringList(item.photo_urls))
-      .map(safeMediaUrl)
+      .map((src) => safeMediaUrl(src))
       .filter((src): src is string => !!src),
   ))
   const viewerIsCustomer = isCustomerOrder(order, data)
@@ -10207,6 +10261,7 @@ function RenderShop({ data, onRefresh }: { data: ShopRenderData; onRefresh: () =
             const tailor = firstJoinedRow(item.tailor_profiles)
             const photo = itemPhoto(item)
             const safeSrc = safeMediaUrl(photo)
+            const tailorAvatarSrc = safeMediaUrl(tailor?.avatar_url, 'avatars')
             return (
               <article key={item.id} className="overflow-hidden rounded-[1.5rem] border border-ink/8 bg-white shadow-sm transition hover:shadow-[0_12px_36px_rgba(22,28,24,0.10)]">
                 <div className="relative aspect-[4/3] w-full overflow-hidden bg-needle/8">
@@ -10228,9 +10283,9 @@ function RenderShop({ data, onRefresh }: { data: ShopRenderData; onRefresh: () =
                   <h3 className="text-xl font-semibold text-ink">{safeUserText(item.title, 'Ready-made item')}</h3>
                   {tailor ? (
                     <Link href={accountRoute(`/account/tailors/${tailor.id}`)} className="mt-1 inline-flex items-center gap-1.5 text-sm text-needle hover:underline">
-                      {tailor.avatar_url ? (
+                      {tailorAvatarSrc ? (
                         <span className="relative inline-block h-5 w-5 overflow-hidden rounded-full bg-needle/10">
-                          <Image src={safeMediaUrl(tailor.avatar_url) ?? ''} alt="" fill className="object-cover" unoptimized />
+                          <Image src={tailorAvatarSrc} alt="" fill className="object-cover" unoptimized />
                         </span>
                       ) : null}
                       {safeEntityName(tailor.business_name || tailor.display_name, 'Tailor')}
@@ -11234,9 +11289,9 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
           {/* Avatar with live dot */}
           <div className="relative shrink-0">
             <div className="h-[76px] w-[76px] overflow-hidden rounded-full border border-ink/10 bg-needle/10">
-              {profile.avatar_url ? (
+              {safeMediaUrl(profile.avatar_url, 'avatars') ? (
                 <Image
-                  src={safeMediaUrl(profile.avatar_url) ?? ''}
+                  src={safeMediaUrl(profile.avatar_url, 'avatars') ?? ''}
                   alt=""
                   width={76}
                   height={76}
@@ -11974,6 +12029,8 @@ function RenderTailorDetail({ data, onRefresh }: { data: TailorDetailSurfaceData
     )
   }
   const portfolio = stringList(tailor.portfolio_photo_urls)
+    .map((src) => safeMediaUrl(src, 'portfolio-photos'))
+    .filter((src): src is string => !!src)
   const profileMedia = uniqueValues([tailorPhoto(tailor), ...portfolio])
   const readyMade = data.readyMade
   const isSaved = savedOverride ?? data.isSaved
@@ -12221,10 +12278,12 @@ function RenderItemDetail({ data, onRefresh }: { data: ItemDetailRenderData; onR
   const readyMadeItemId = item.id
   const tailor = firstJoinedRow(item.tailor_profiles)
   const gallery = stringList(item.photo_urls)
+    .map((src) => safeMediaUrl(src, 'seller-item-media'))
+    .filter((src): src is string => !!src)
   const canStartWebCheckout = Boolean(data.userId && data.tailorProfile?.id !== item.tailor_profile_id && item.is_live)
 
   const sizes = stringList(item.sizes)
-  const tailorAvatarSrc = safeMediaUrl(tailor?.avatar_url) ?? null
+  const tailorAvatarSrc = safeMediaUrl(tailor?.avatar_url, 'avatars') ?? null
 
   async function startReadyMadeInquiry() {
     if (!data.userId || inquiryBusy) return
