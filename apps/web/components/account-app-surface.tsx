@@ -12,8 +12,12 @@ import {
   CUSTOM_ORDER_FABRIC_SOURCING_DEFAULT_BUSINESS_DAYS,
   CUSTOM_ORDER_MAX_REFERENCE_PHOTOS,
   CUSTOM_ORDER_MAX_STYLE_LINKS,
+  MEASUREMENT_FIELD_KEYS,
+  buildMeasurementProfileStoragePayload,
   deriveCancellationPolicy,
   currencySymbol,
+  isMeasurementFieldKey,
+  isTransientMeasurementMetadataKey,
   measurementCoreCompleteness,
   mergeMeasurementRecords,
   normalizeAccountCurrency,
@@ -1423,6 +1427,82 @@ function measurementsForProfile(profile: MeasurementProfile, customerProfile: Cu
   return shouldMergeLegacy
     ? mergeMeasurementRecords(customerProfile?.measurements, profile.measurements)
     : profile.measurements ?? {}
+}
+
+const MEASUREMENT_FIELD_LABELS: Record<(typeof MEASUREMENT_FIELD_KEYS)[number], string> = {
+  chest: 'Chest',
+  waist: 'Waist',
+  hips: 'Hips',
+  shoulderWidth: 'Shoulder width',
+  inseam: 'Inseam',
+  sleeveLength: 'Sleeve length',
+  neckCircumference: 'Neck circumference',
+  underBust: 'Under bust',
+  height: 'Height',
+  backLength: 'Back length',
+  outseam: 'Outseam',
+  thighCircumference: 'Thigh circumference',
+  kneeCircumference: 'Knee circumference',
+  bicepCircumference: 'Bicep circumference',
+  wristCircumference: 'Wrist circumference',
+  headCircumference: 'Head circumference',
+  hatBandLine: 'Hat band line',
+  headLength: 'Head length',
+  headWidth: 'Head width',
+  earToEarOverCrown: 'Ear to ear over crown',
+  frontToBackOverCrown: 'Front to back over crown',
+  filaHeight: 'Fila height',
+  torsoLength: 'Torso length',
+}
+
+const MEASUREMENT_PROFILE_METADATA_KEYS = new Set([
+  'unit',
+  'measurementProfileLabel',
+  'measurementProfileUpdatedAt',
+  'wearerContext',
+  'fitStyle',
+  'fitPassportVersion',
+  'measurementSource',
+  'measurementSourceLabel',
+  'fitConfidence',
+  'needsConfirmation',
+  'confirmationReason',
+  'confirmationFields',
+  'confirmationRequestedAt',
+  'confirmedAt',
+  'confirmedBy',
+  'confirmedFields',
+  'garmentContext',
+  'bodyShape',
+  'fitFlags',
+  'bodyNote',
+  'bodyFlags',
+  'symmetryFlags',
+  'requiresTailorReview',
+])
+
+function hasEditableMeasurementValue(value: unknown) {
+  if (value == null) return false
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value === 'string') return value.trim().length > 0
+  return false
+}
+
+function measurementEditorValue(
+  measurements: Record<string, unknown> | null | undefined,
+  field: { key: string; aliases?: readonly string[] },
+) {
+  if (!measurements) return undefined
+  const candidates = [field.key, ...(field.aliases ?? [])]
+  return candidates.map((key) => measurements[key]).find(hasEditableMeasurementValue)
+}
+
+function isEditableCustomMeasurementKey(key: string, value: unknown): boolean {
+  const isTransientMetadata = isTransientMeasurementMetadataKey(String(key))
+  return !isMeasurementFieldKey(key) &&
+    !MEASUREMENT_PROFILE_METADATA_KEYS.has(key) &&
+    !isTransientMetadata &&
+    hasEditableMeasurementValue(value)
 }
 
 function coreMeasurementSummary(measurements: Record<string, unknown> | null | undefined) {
@@ -5287,10 +5367,36 @@ function ManualMeasurementEditor({ data, onRefresh }: { data: MeasurementsRender
   const [relationship, setRelationship] = useState('SELF')
   const [unit, setUnit] = useState('in')
   const [fields, setFields] = useState<Record<string, string>>({})
+  const [customMeasurements, setCustomMeasurements] = useState<Array<{ id: string; name: string; value: string }>>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
-  const fieldNames = CORE_MEASUREMENT_FIELDS
+  const customMeasurementCounterRef = useRef(0)
+  const coreFieldNames = CORE_MEASUREMENT_FIELDS
+  const coreFieldKeys = new Set<string>(coreFieldNames.map((field) => field.key))
+  const additionalFieldNames = MEASUREMENT_FIELD_KEYS
+    .filter((key) => !coreFieldKeys.has(key))
+    .map((key) => ({ key, label: MEASUREMENT_FIELD_LABELS[key] }))
+  const allFieldNames = [...coreFieldNames, ...additionalFieldNames]
+
+  function customMeasurementId() {
+    customMeasurementCounterRef.current += 1
+    return `custom_${customMeasurementCounterRef.current}`
+  }
+
+  function addCustomMeasurement(name = '', value = '') {
+    setCustomMeasurements((current) => [...current, { id: customMeasurementId(), name, value }])
+  }
+
+  function updateCustomMeasurement(id: string, field: 'name' | 'value', value: string) {
+    setCustomMeasurements((current) => current.map((measurement) => (
+      measurement.id === id ? { ...measurement, [field]: value } : measurement
+    )))
+  }
+
+  function removeCustomMeasurement(id: string) {
+    setCustomMeasurements((current) => current.filter((measurement) => measurement.id !== id))
+  }
 
   function startEdit(profile: MeasurementProfile) {
     const nextMeasurements = measurementsForProfile(profile, data.customerProfile)
@@ -5298,10 +5404,17 @@ function ManualMeasurementEditor({ data, onRefresh }: { data: MeasurementsRender
     setLabel(profile.label ?? 'Me')
     setRelationship(profile.relationship ?? 'SELF')
     setUnit(profile.unit_preference ?? data.customerProfile?.unit_preference ?? 'in')
-    setFields(Object.fromEntries(fieldNames.map((field) => {
-      const value = readMeasurementValue(nextMeasurements, field)
+    setFields(Object.fromEntries(allFieldNames.map((field) => {
+      const value = measurementEditorValue(nextMeasurements, field)
       return [field.key, typeof value === 'number' || typeof value === 'string' ? String(value) : '']
     })))
+    setCustomMeasurements(Object.entries(nextMeasurements)
+      .filter(([key, value]) => isEditableCustomMeasurementKey(key, value))
+      .map(([name, value]) => ({
+        id: customMeasurementId(),
+        name,
+        value: String(value),
+      })))
     setError(null)
     setSuccess(null)
   }
@@ -5312,6 +5425,7 @@ function ManualMeasurementEditor({ data, onRefresh }: { data: MeasurementsRender
     setRelationship('SELF')
     setUnit('in')
     setFields({})
+    setCustomMeasurements([])
   }
 
   async function saveProfile() {
@@ -5323,26 +5437,63 @@ function ManualMeasurementEditor({ data, onRefresh }: { data: MeasurementsRender
       setError(labelLeak)
       return
     }
-    const coreMeasurements = Object.fromEntries(
-      fieldNames
+    const numericMeasurements = Object.fromEntries(
+      allFieldNames
         .map((field) => [field.key, Number.parseFloat(fields[field.key] ?? '')] as const)
         .filter(([, value]) => Number.isFinite(value) && value > 0),
-    )
-    if (Object.keys(coreMeasurements).length < 4) {
+    ) as Record<string, number>
+    const coreMeasurementCount = coreFieldNames.filter((field) => {
+      const value = numericMeasurements[field.key]
+      return typeof value === 'number' && Number.isFinite(value) && value > 0
+    }).length
+    if (coreMeasurementCount < 4) {
       setError('Add at least height, chest, waist, and hips before saving a profile.')
       return
+    }
+    const customMeasurementPayload: Record<string, number> = {}
+    const seenCustomNames = new Set<string>()
+    for (const customMeasurement of customMeasurements) {
+      const name = customMeasurement.name.trim()
+      const rawValue = customMeasurement.value.trim()
+      if (!name && !rawValue) continue
+      if (!name || !rawValue) {
+        setError('Each custom measurement needs both a name and a value.')
+        return
+      }
+      const nameLeak = assertNoContactLeak(name, "Custom measurement names can't include contact details.")
+      if (nameLeak) {
+        setError(nameLeak)
+        return
+      }
+      if (!isEditableCustomMeasurementKey(name, rawValue)) {
+        setError('Use a normal measurement name for custom tape points.')
+        return
+      }
+      const duplicateKey = name.toLowerCase()
+      if (seenCustomNames.has(duplicateKey)) {
+        setError('Custom measurement names must be unique.')
+        return
+      }
+      const value = Number.parseFloat(rawValue)
+      if (!Number.isFinite(value) || value <= 0) {
+        setError('Custom measurement values must be positive numbers.')
+        return
+      }
+      seenCustomNames.add(duplicateKey)
+      customMeasurementPayload[name] = value
     }
     setBusy(true)
     const supabase = createClient()
     const now = new Date().toISOString()
     const trimmedLabel = label.trim() || 'Me'
-    const measurements = {
-      ...coreMeasurements,
+    const measurements = buildMeasurementProfileStoragePayload({
+      ...numericMeasurements,
+      ...customMeasurementPayload,
       unit,
       measurementSource: 'MANUAL',
       measurementProfileLabel: trimmedLabel,
       measurementProfileUpdatedAt: now,
-    }
+    })
     const payload = {
       label: trimmedLabel,
       relationship,
@@ -5422,7 +5573,7 @@ function ManualMeasurementEditor({ data, onRefresh }: { data: MeasurementsRender
         </label>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {fieldNames.map((field) => (
+        {coreFieldNames.map((field) => (
           <label key={field.key} className="grid gap-2">
             <span className="text-sm font-semibold text-ink">{field.label}</span>
             <input
@@ -5434,6 +5585,61 @@ function ManualMeasurementEditor({ data, onRefresh }: { data: MeasurementsRender
           </label>
         ))}
       </div>
+      <DisclosurePanel
+        title="Additional measurements"
+        summary="Add optional body areas or custom tape points a tailor asked for. Blank optional fields stay out of the saved profile."
+      >
+        <div className="grid gap-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {additionalFieldNames.map((field) => (
+              <label key={field.key} className="grid gap-2">
+                <span className="text-sm font-semibold text-ink">{field.label}</span>
+                <input
+                  inputMode="decimal"
+                  value={fields[field.key] ?? ''}
+                  onChange={(event) => setFields((current) => ({ ...current, [field.key]: event.target.value }))}
+                  className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                />
+              </label>
+            ))}
+          </div>
+          <div className="grid gap-3 rounded-[1rem] border border-ink/6 bg-bone/35 p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-ink">Custom tape points</p>
+                <p className="mt-1 text-xs leading-5 text-ink/56">Use these for garment-specific points that are not listed above.</p>
+              </div>
+              <button type="button" onClick={() => addCustomMeasurement()} className="inline-flex w-fit justify-center rounded-full border border-needle/20 bg-white px-4 py-2 text-xs font-semibold text-needle">
+                Add custom point
+              </button>
+            </div>
+            {customMeasurements.length > 0 ? (
+              <div className="grid gap-2">
+                {customMeasurements.map((measurement) => (
+                  <div key={measurement.id} className="grid gap-2 sm:grid-cols-[1fr_9rem_auto] sm:items-center">
+                    <input
+                      value={measurement.name}
+                      onChange={(event) => updateCustomMeasurement(measurement.id, 'name', event.target.value)}
+                      placeholder="e.g. Ankle"
+                      className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                    />
+                    <input
+                      inputMode="decimal"
+                      value={measurement.value}
+                      onChange={(event) => updateCustomMeasurement(measurement.id, 'value', event.target.value)}
+                      placeholder={`0 ${unit}`}
+                      className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50"
+                    />
+                    <button type="button" onClick={() => removeCustomMeasurement(measurement.id)} className="inline-flex justify-center rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink/64">
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </DisclosurePanel>
       <div className="flex flex-col gap-2 sm:flex-row">
         <button type="button" onClick={saveProfile} disabled={busy} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
           {busy ? 'Saving...' : editingId ? 'Update profile' : 'Save profile'}
