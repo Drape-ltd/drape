@@ -5034,6 +5034,7 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
   const orderCallMeta = supportMeta.orderCall ?? null
   const viewerIsCustomer = order.customer_id === account.userId
   const canRequestConsultation = isCustomOrder && viewerIsCustomer && order.stage === 'PENDING_QUOTE'
+  const canScheduleReadyMadeCall = isReadyMade && ORDER_CALL_STAGES.has(order.stage ?? '')
   const consultationLabel = formatDateTime(consultationMeta?.scheduledStartAt ?? consultationMeta?.proposedStartAt, consultationMeta?.timezone)
   const readyMadeCallLabel = formatDateTime(orderCallMeta?.scheduledStartAt, orderCallMeta?.timezone)
 
@@ -5099,6 +5100,10 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
     const scheduledStartAt = datetimeLocalToIso(callTime)
     setError(null)
     setSuccess(null)
+    if (!canScheduleReadyMadeCall) {
+      setError('Use Messages for item questions before checkout. Ready-made calls open after checkout when the order is active.')
+      return
+    }
     if (!scheduledStartAt) {
       setError('Choose a valid call time.')
       return
@@ -5347,10 +5352,10 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
       ) : null}
 
       {/* Ready-made call schedule */}
-      {isReadyMade ? (
+      {canScheduleReadyMadeCall ? (
         <DisclosurePanel
           title="Schedule call"
-          summary={readyMadeCallLabel ? `Scheduled ${readyMadeCallLabel}` : callTime ? 'Call time set' : 'Set a time for a ready-made clarification call.'}
+          summary={readyMadeCallLabel ? `Scheduled ${readyMadeCallLabel}` : callTime ? 'Call time set' : 'Use a call for active-order pickup, delivery, sizing, or item-condition clarity.'}
         >
           <div className="grid gap-3 md:grid-cols-[1fr_0.8fr_auto] md:items-end">
             <label className="grid gap-1.5">
@@ -5386,6 +5391,10 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
             </button>
           </div>
         </DisclosurePanel>
+      ) : isReadyMade ? (
+        <p className="mt-3 rounded-[0.85rem] border border-ink/8 bg-bone/55 px-3 py-2 text-xs leading-5 text-ink/54">
+          Use Messages for item questions before checkout. Ready-made calls open after checkout when the order is active.
+        </p>
       ) : null}
     </div>
   )

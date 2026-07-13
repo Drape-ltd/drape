@@ -140,7 +140,7 @@ Deno.serve(async (req) => {
       return jsonError(corsHeaders, 409, 'CALL_TYPE_NOT_AVAILABLE', 'Use consultation calls for custom orders. Ready-made calls are scheduled from Messages.')
     }
     if (!READY_MADE_CALL_STAGES.includes(order.stage as typeof READY_MADE_CALL_STAGES[number])) {
-      return jsonError(corsHeaders, 409, 'ORDER_CALL_NOT_READY', 'Ready-made calls open after checkout while the item is being prepared or handed off.')
+      return jsonError(corsHeaders, 409, 'ORDER_CALL_NOT_READY', 'Use Messages for item questions before checkout. Ready-made calls open after checkout when the order is active.')
     }
 
     const supportMeta = parseOrderSupportMeta(order.special_note)
