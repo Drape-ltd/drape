@@ -111,6 +111,8 @@ type JoinedProfile = {
   business_name?: string | null
   avatar_url?: string | null
   location?: string | null
+  availability?: string | null
+  is_live?: boolean | null
 }
 
 type AccountOrder = {
@@ -1626,7 +1628,7 @@ const ownTailorProfileSelect =
   `${publicTailorProfileSelect}, payout_currency, payout_provider, payout_reverification_required, payout_account_type, payout_account_verified, payout_account_verified_at, payout_bank_name, payout_account_name, payout_account_masked, payout_country_code, manual_bank_entry, manual_bank_name, manual_bank_country_code, manual_bank_country_name, manual_bank_swift_bic, manual_bank_account_name, manual_bank_verification_status, manual_bank_submitted_at, paystack_recipient_code, stripe_connect_account_id, payout_account_change_count, payout_account_last_changed_at, payout_account_change_locked_until, payout_destination_hold_until`
 
 const sellerItemSelect =
-  'id, tailor_profile_id, title, description, category, sizes, size_inventory, price_amount, currency, photo_urls, stock_status, inventory_quantity, size_guide, is_live, pickup_available, delivery_available, shipping_available, updated_at, tailor_profiles(id, display_name, business_name, avatar_url, location)'
+  'id, tailor_profile_id, title, description, category, sizes, size_inventory, price_amount, currency, photo_urls, stock_status, inventory_quantity, size_guide, is_live, pickup_available, delivery_available, shipping_available, updated_at, tailor_profiles(id, display_name, business_name, avatar_url, location, availability, is_live)'
 
 const accountOrderSelect = `
   id, reference, order_kind, garment_type, item_title, item_size, garment_description, occasion, stage, delivery_method,
@@ -1696,11 +1698,50 @@ function sizeGuideSummary(sizeGuide: Record<string, unknown> | null | undefined)
   return keys.length > 0 ? `Fit guide saved for ${keys.join(', ')}.` : 'Fit guide saved.'
 }
 
+function readyMadeInventoryCount(item: SellerItem) {
+  if (typeof item.inventory_quantity === 'number' && Number.isFinite(item.inventory_quantity)) {
+    return Math.max(0, Math.floor(item.inventory_quantity))
+  }
+
+  const sizeInventory = item.size_inventory
+  if (!sizeInventory || typeof sizeInventory !== 'object' || Array.isArray(sizeInventory)) return 0
+
+  return Object.values(sizeInventory).reduce((sum, value) => {
+    const parsedValue =
+      typeof value === 'number'
+        ? value
+        : Number.parseInt(typeof value === 'string' ? value : '', 10)
+    return sum + (Number.isFinite(parsedValue) ? Math.max(0, Math.floor(parsedValue)) : 0)
+  }, 0)
+}
+
+function isReadyMadeBuyableOnWeb(item: SellerItem, tailor: JoinedProfile | null) {
+  const stockStatus = (item.stock_status ?? 'IN_STOCK').toUpperCase()
+  return (
+    item.is_live === true &&
+    tailor?.is_live === true &&
+    tailor?.availability !== 'FULLY_BOOKED' &&
+    !['SOLD_OUT', 'HIDDEN'].includes(stockStatus) &&
+    readyMadeInventoryCount(item) > 0
+  )
+}
+
+function readyMadeUnavailableLabel(item: SellerItem, tailor: JoinedProfile | null) {
+  const stockStatus = (item.stock_status ?? 'IN_STOCK').toUpperCase()
+  if (tailor?.availability === 'FULLY_BOOKED' || tailor?.is_live !== true) return 'Seller unavailable'
+  if (item.is_live !== true || stockStatus === 'HIDDEN') return 'Unavailable'
+  if (stockStatus === 'SOLD_OUT' || readyMadeInventoryCount(item) <= 0) return 'Sold out'
+  return 'Unavailable'
+}
+
 function stockCopy(item: SellerItem) {
-  if (typeof item.inventory_quantity === 'number') {
-    if (item.inventory_quantity <= 0) return 'Sold out'
-    if (item.inventory_quantity === 1) return '1 left'
-    return `${item.inventory_quantity} left`
+  const inventoryQuantity = readyMadeInventoryCount(item)
+  const stockStatus = (item.stock_status ?? 'IN_STOCK').toUpperCase()
+  if (item.is_live !== true || stockStatus === 'HIDDEN') return 'No longer available'
+  if (stockStatus === 'SOLD_OUT' || inventoryQuantity <= 0) return 'Sold out'
+  if (inventoryQuantity === 1) return '1 left'
+  if (inventoryQuantity > 1) {
+    return `${inventoryQuantity} left`
   }
   return cleanLabel(item.stock_status, 'In stock')
 }
@@ -5035,6 +5076,7 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
   const viewerIsCustomer = order.customer_id === account.userId
   const canRequestConsultation = isCustomOrder && viewerIsCustomer && order.stage === 'PENDING_QUOTE'
   const canScheduleReadyMadeCall = isReadyMade && ORDER_CALL_STAGES.has(order.stage ?? '')
+  const canShowCallButtons = canStartOrderCall(order)
   const consultationLabel = formatDateTime(consultationMeta?.scheduledStartAt ?? consultationMeta?.proposedStartAt, consultationMeta?.timezone)
   const readyMadeCallLabel = formatDateTime(orderCallMeta?.scheduledStartAt, orderCallMeta?.timezone)
 
@@ -5232,24 +5274,28 @@ function MessageComposer({ order, onRefresh }: { order: AccountOrder; onRefresh:
         >
           &#128206;
         </button>
-        <button
-          type="button"
-          title="Audio call"
-          onClick={() => { void startCall('audio') }}
-          disabled={!!callBusy}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-base text-ink/44 transition hover:bg-ink/6 hover:text-ink disabled:cursor-not-allowed disabled:text-ink/20"
-        >
-          {callBusy === 'audio' ? '⏳' : '📞'}
-        </button>
-        <button
-          type="button"
-          title="Video call"
-          onClick={() => { void startCall('video') }}
-          disabled={!!callBusy}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-base text-ink/44 transition hover:bg-ink/6 hover:text-ink disabled:cursor-not-allowed disabled:text-ink/20"
-        >
-          {callBusy === 'video' ? '⏳' : '📹'}
-        </button>
+        {canShowCallButtons ? (
+          <>
+            <button
+              type="button"
+              title="Audio call"
+              onClick={() => { void startCall('audio') }}
+              disabled={!!callBusy}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-base text-ink/44 transition hover:bg-ink/6 hover:text-ink disabled:cursor-not-allowed disabled:text-ink/20"
+            >
+              {callBusy === 'audio' ? '⏳' : '📞'}
+            </button>
+            <button
+              type="button"
+              title="Video call"
+              onClick={() => { void startCall('video') }}
+              disabled={!!callBusy}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-base text-ink/44 transition hover:bg-ink/6 hover:text-ink disabled:cursor-not-allowed disabled:text-ink/20"
+            >
+              {callBusy === 'video' ? '⏳' : '📹'}
+            </button>
+          </>
+        ) : null}
         {uploadStatus ? (
           <span className="ml-1 text-xs font-semibold text-needle">{uploadStatus}</span>
         ) : null}
@@ -12869,13 +12915,19 @@ function RenderItemDetail({ data, onRefresh }: { data: ItemDetailRenderData; onR
   const gallery = stringList(item.photo_urls)
     .map((src) => safeMediaUrl(src, 'seller-item-media'))
     .filter((src): src is string => !!src)
-  const canStartWebCheckout = Boolean(data.userId && data.tailorProfile?.id !== item.tailor_profile_id && item.is_live)
+  const itemInventoryQuantity = readyMadeInventoryCount(item)
+  const canUseReadyMadeItemActions = Boolean(data.userId && data.tailorProfile?.id !== item.tailor_profile_id && item.is_live)
+  const itemIsBuyable = isReadyMadeBuyableOnWeb(item, tailor)
+  const canStartWebCheckout = canUseReadyMadeItemActions && itemIsBuyable
+  const canAskSeller = canStartWebCheckout
+  const checkoutCtaLabel = itemInventoryQuantity === 1 ? 'Buy last one' : 'Start web checkout'
+  const checkoutUnavailableLabel = readyMadeUnavailableLabel(item, tailor)
 
   const sizes = stringList(item.sizes)
   const tailorAvatarSrc = safeMediaUrl(tailor?.avatar_url, 'avatars') ?? null
 
   async function startReadyMadeInquiry() {
-    if (!data.userId || inquiryBusy) return
+    if (!canAskSeller || inquiryBusy) return
     setInquiryError(null)
     setInquirySuccess(null)
     setInquiryBusy(true)
@@ -12951,12 +13003,20 @@ function RenderItemDetail({ data, onRefresh }: { data: ItemDetailRenderData; onR
           <div className="mt-6 flex flex-wrap gap-3">
             {canStartWebCheckout ? (
               <a href="#ready-made-checkout" className="inline-flex items-center justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white">
-                Start web checkout
+                {checkoutCtaLabel}
               </a>
+            ) : canUseReadyMadeItemActions ? (
+              <button
+                type="button"
+                disabled
+                className="inline-flex cursor-not-allowed items-center justify-center rounded-full bg-ink/10 px-5 py-3 text-sm font-semibold text-ink/48"
+              >
+                {checkoutUnavailableLabel}
+              </button>
             ) : (
               <OpenAppButton label="Open in app" />
             )}
-            {canStartWebCheckout ? (
+            {canAskSeller ? (
               <button
                 type="button"
                 onClick={() => { void startReadyMadeInquiry() }}
