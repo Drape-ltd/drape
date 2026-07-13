@@ -1,9 +1,10 @@
 'use client'
 
 import Link from 'next/link'
-import { type JSX, useState } from 'react'
+import { type JSX, useEffect, useState } from 'react'
 import { LocationAutocomplete } from './location-autocomplete'
 import { trackWebEvent } from './web-analytics'
+import { createClient } from '../lib/supabase'
 
 export function TailorApplicationForm(): React.JSX.Element {
   const [businessName, setBusinessName] = useState('')
@@ -15,8 +16,52 @@ export function TailorApplicationForm(): React.JSX.Element {
   const [portfolioUrl, setPortfolioUrl] = useState('')
   const [instagramUrl, setInstagramUrl] = useState('')
   const [notes, setNotes] = useState('')
+  const [source, setSource] = useState<'WEB' | 'SIGNED_IN_ACCOUNT'>(() => {
+    if (typeof window === 'undefined') return 'WEB'
+    return new URLSearchParams(window.location.search).get('source') === 'account' ? 'SIGNED_IN_ACCOUNT' : 'WEB'
+  })
   const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle')
   const [message, setMessage] = useState('')
+
+  useEffect(() => {
+    let active = true
+
+    let supabase: ReturnType<typeof createClient>
+    try {
+      supabase = createClient()
+    } catch {
+      return () => {
+        active = false
+      }
+    }
+
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (!active || !data.session) return
+      const user = data.session.user
+      const metadata = user.user_metadata ?? {}
+      const metadataName = typeof metadata.display_name === 'string' ? metadata.display_name : ''
+
+      setSource('SIGNED_IN_ACCOUNT')
+      setEmail((current) => current || user.email || '')
+      setDisplayName((current) => current || metadataName)
+
+      const { data: customerProfile } = await supabase
+        .from('customer_profiles')
+        .select('display_name')
+        .eq('user_id', user.id)
+        .maybeSingle()
+
+      if (!active) return
+      const profileName = typeof customerProfile?.display_name === 'string' ? customerProfile.display_name : ''
+      setDisplayName((current) => current || profileName || metadataName)
+    }).catch(() => {
+      // Public applications should remain usable even if session prefill cannot load.
+    })
+
+    return () => {
+      active = false
+    }
+  }, [])
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -47,6 +92,7 @@ export function TailorApplicationForm(): React.JSX.Element {
           portfolioUrl,
           instagramUrl,
           notes,
+          source,
         }),
       })
 
@@ -89,6 +135,12 @@ export function TailorApplicationForm(): React.JSX.Element {
           </div>
         ))}
       </div>
+
+      {source === 'SIGNED_IN_ACCOUNT' ? (
+        <div className="rounded-[1rem] border border-needle/12 bg-needle/8 px-4 py-3 text-sm leading-6 text-needle lg:col-span-2">
+          This application is tied to your signed-in Drapeon account. Ops will review it before tailor workspace setup opens.
+        </div>
+      ) : null}
 
       <label className="grid gap-2 text-sm text-ink/72">
         Business name

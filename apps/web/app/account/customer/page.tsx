@@ -36,7 +36,7 @@ export default function CustomerAccountPage(): React.JSX.Element {
         </div>
       }
     >
-      <AccountSignedInRedirect />
+      <AccountSignedInRedirect to="/account/dashboard" />
       <section className="py-8">
         <SectionTitle
           eyebrow="What customer access controls"

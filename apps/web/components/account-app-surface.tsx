@@ -3106,7 +3106,7 @@ function AccountIdentityCard({
   const email = session.user.email ?? ''
   const metadata = session.user.user_metadata ?? {}
   const metadataName = typeof metadata.display_name === 'string' ? metadata.display_name : null
-  const isTailorRole = metadata.role === 'TAILOR' || !!shellData.tailorProfile
+  const isTailorRole = !!shellData.tailorProfile
   const customerName = shellData.customerProfile?.display_name ?? null
   const tailorName = shellData.tailorProfile?.business_name || shellData.tailorProfile?.display_name || null
   const displayName = safeEntityName(
@@ -3203,7 +3203,7 @@ function AccountRouteShell({
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
-  const hasTailorWorkspace = session.user.user_metadata?.role === 'TAILOR' || !!shellData.tailorProfile
+  const hasTailorWorkspace = !!shellData.tailorProfile
   const tailorSurfaceCopy: Partial<Record<AccountSurface, { eyebrow: string; title: string; body: string }>> = {
     orders: {
       eyebrow: 'Order pipeline',
@@ -7753,7 +7753,7 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
 }
 
 function ProfileSettingsEditor({ data, session, onRefresh }: { data: SettingsRenderData; session: Session | null; onRefresh: () => void }) {
-  const role = session?.user.user_metadata?.role === 'TAILOR' ? 'TAILOR' : 'CUSTOMER'
+  const role = data.tailorProfile ? 'TAILOR' : 'CUSTOMER'
   const currentDisplayName = data.customerProfile?.display_name || data.tailorProfile?.display_name || data.tailorProfile?.business_name || ''
   const currentCurrency = data.accountCurrency || data.tailorProfile?.currency || 'USD'
   const [displayName, setDisplayName] = useState(currentDisplayName)
@@ -7844,7 +7844,7 @@ function ProfileSettingsEditor({ data, session, onRefresh }: { data: SettingsRen
 }
 
 function AvatarUploadPanel({ data, session, onRefresh }: { data: Pick<SettingsRenderData, 'userId' | 'customerProfile' | 'tailorProfile'>; session: Session | null; onRefresh: () => void }) {
-  const role = session?.user.user_metadata?.role === 'TAILOR' || data.tailorProfile ? 'TAILOR' : 'CUSTOMER'
+  const role = data.tailorProfile ? 'TAILOR' : 'CUSTOMER'
   const currentAvatar = safeMediaUrl(data.tailorProfile?.avatar_url ?? data.customerProfile?.avatar_url, 'avatars')
   const [file, setFile] = useState<File | null>(null)
   const [busy, setBusy] = useState(false)
@@ -10594,8 +10594,8 @@ function RenderWork({ data, onRefresh }: { data: WorkRenderData; onRefresh: () =
     return (
       <EmptyState
         title="Tailor workspace not set up."
-        body="Create or switch to a tailor profile before the web work queue can show orders, shop, payout state, and client context."
-        action={<Link href="/sign-up?role=tailor" className="font-semibold text-needle">Create tailor account</Link>}
+        body="Apply for tailor access before the web work queue can show orders, shop, payout state, and client context."
+        action={<Link href="/apply?source=account" className="font-semibold text-needle">Apply as a tailor</Link>}
       />
     )
   }
@@ -11121,8 +11121,8 @@ function RenderEarnings({ data }: { data: EarningsRenderData }) {
     return (
       <EmptyState
         title="Tailor earnings need a tailor profile."
-        body="Create or switch to a tailor profile before web can show payout records, status breakdowns, and order-linked earnings."
-        action={<Link href="/sign-up?role=tailor" className="font-semibold text-needle">Create tailor account</Link>}
+        body="Apply for tailor access before web can show payout records, status breakdowns, and order-linked earnings."
+        action={<Link href="/apply?source=account" className="font-semibold text-needle">Apply as a tailor</Link>}
       />
     )
   }
@@ -11253,8 +11253,8 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
     return (
       <EmptyState
         title="Payout setup needs a tailor profile."
-        body="Tailor payout setup is only available after the account has a tailor profile."
-        action={<Link href="/sign-up?role=tailor" className="font-semibold text-needle">Create tailor account</Link>}
+        body="Tailor payout setup is only available after this account has approved tailor access and a tailor profile."
+        action={<Link href="/apply?source=account" className="font-semibold text-needle">Apply as a tailor</Link>}
       />
     )
   }
@@ -11513,8 +11513,8 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
     return (
       <EmptyState
         title="Tailor profile not found."
-        body="Customer accounts can still use orders, messages, measurements, and saved items. Tailor profile editing appears after a tailor profile exists."
-        action={<Link href="/sign-up?role=tailor" className="font-semibold text-needle">Create tailor account</Link>}
+        body="Customer accounts can still use orders, messages, measurements, and saved items. Tailor profile editing appears after tailor access is approved and setup is started."
+        action={<Link href="/apply?source=account" className="font-semibold text-needle">Apply as a tailor</Link>}
       />
     )
   }
@@ -12067,7 +12067,7 @@ function SettingsRow({ label, sublabel, children }: { label: string; sublabel?: 
 }
 
 function RenderSettings({ data, session, onRefresh }: { data: SettingsRenderData; session: Session | null; onRefresh: () => void }) {
-  const role = session?.user.user_metadata?.role === 'TAILOR' ? 'TAILOR' : 'CUSTOMER'
+  const role = data.tailorProfile ? 'TAILOR' : 'CUSTOMER'
   const displayName = safeEntityName(
     data.customerProfile?.display_name || data.tailorProfile?.business_name || data.tailorProfile?.display_name,
     'Drapeon member',
@@ -12097,9 +12097,11 @@ function RenderSettings({ data, session, onRefresh }: { data: SettingsRenderData
           label="Workspace"
           sublabel={role === 'TAILOR' ? 'Tailor workspace active. Customer tools remain available.' : 'Customer account active. Tailor access requires setup.'}
         >
-          <Link href={role === 'TAILOR' ? '/account/work' : '/account/orders'} className="text-sm font-semibold text-needle">
-            Open {role === 'TAILOR' ? 'work queue' : 'orders'} →
-          </Link>
+          {role === 'TAILOR' ? (
+            <Link href="/account/work" className="text-sm font-semibold text-needle">Open work queue →</Link>
+          ) : (
+            <Link href="/apply?source=account" className="text-sm font-semibold text-needle">Apply as a tailor →</Link>
+          )}
         </SettingsRow>
       </SettingsSection>
 
@@ -13266,10 +13268,9 @@ export function AccountAppSurface({
     const userId = session?.user.id ?? shellData.userId ?? data.userId
     if (!userId) return null
 
-    const metadataRole = session?.user.user_metadata?.role
     const customerProfile = shellData.customerProfile ?? data.customerProfile
     const tailorProfile = shellData.tailorProfile ?? data.tailorProfile
-    const role = metadataRole === 'TAILOR' || tailorProfile ? 'TAILOR' : 'CUSTOMER'
+    const role = tailorProfile ? 'TAILOR' : 'CUSTOMER'
 
     return {
       userId,
@@ -13298,7 +13299,6 @@ export function AccountAppSurface({
     data.tailorProfile,
     data.userId,
     session?.user.id,
-    session?.user.user_metadata?.role,
     shellData.accountCurrency,
     shellData.customerProfile,
     shellData.tailorProfile,

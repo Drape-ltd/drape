@@ -178,6 +178,8 @@ export async function POST(request: Request) {
   const portfolioUrl = trimmedString(body.portfolioUrl, 2048) || null
   const instagramUrl = trimmedString(body.instagramUrl, 2048) || null
   const notes = trimmedString(body.notes, 1500)
+  const requestedSource = trimmedString(body.source, 40).toUpperCase()
+  const source = requestedSource === 'SIGNED_IN_ACCOUNT' ? 'SIGNED_IN_ACCOUNT' : 'WEB'
 
   if (website) {
     return NextResponse.json({ ok: true })
@@ -223,7 +225,7 @@ export async function POST(request: Request) {
     portfolio_url: portfolioUrl,
     instagram_url: instagramUrl,
     notes,
-    source: 'WEB' as const,
+    source,
     status: 'PENDING' as const,
   }
 

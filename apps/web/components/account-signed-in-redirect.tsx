@@ -5,7 +5,13 @@ import type { Route } from 'next'
 import { useEffect } from 'react'
 import { createClient } from '../lib/supabase'
 
-export function AccountSignedInRedirect({ to = '/account/orders' }: { to?: Route }): null {
+export function AccountSignedInRedirect({
+  to = '/account/orders',
+  tailorIntentTo = null,
+}: {
+  to?: string
+  tailorIntentTo?: string | null
+}): null {
   const router = useRouter()
 
   useEffect(() => {
@@ -13,12 +19,13 @@ export function AccountSignedInRedirect({ to = '/account/orders' }: { to?: Route
     const supabase = createClient()
     supabase.auth.getSession().then(({ data }) => {
       if (!active || !data.session) return
-      router.replace(to)
+      const roleIntent = new URLSearchParams(window.location.search).get('role')?.toLowerCase()
+      router.replace((roleIntent === 'tailor' && tailorIntentTo ? tailorIntentTo : to) as Route)
     })
     return () => {
       active = false
     }
-  }, [router, to])
+  }, [router, tailorIntentTo, to])
 
   return null
 }

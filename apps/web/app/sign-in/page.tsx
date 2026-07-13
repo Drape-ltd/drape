@@ -16,7 +16,7 @@ export const metadata: Metadata = buildMetadata({
 export default function SignInPage(): React.JSX.Element {
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#fbfaf7_0%,#f5f0e8_100%)]">
-      <AccountSignedInRedirect />
+      <AccountSignedInRedirect to="/account/dashboard" />
       <div className="mx-auto max-w-6xl px-5 py-6 sm:px-8 lg:px-12">
         <PublicSiteHeader />
         <section className="grid gap-8 py-8 lg:grid-cols-[1fr_1fr] lg:items-start lg:py-12">

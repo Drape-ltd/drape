@@ -297,10 +297,10 @@ function buildNextAction({
     if (!activity.tailorProfile) {
       return {
         eyebrow: 'Setup',
-        title: 'Finish tailor setup.',
-        body: 'Add your profile, verification details, payout setup, shop, and portfolio before customers can trust the work.',
-        cta: 'Open profile setup',
-        href: '/account/profile',
+        title: 'Request tailor access.',
+        body: 'Apply first so Drapeon can review your craft and keep tailor setup, identity checks, payout readiness, and shop access intentional.',
+        cta: 'Apply as a tailor',
+        href: '/apply?source=account',
       }
     }
     if (!activity.tailorProfile.profile_completed) {
@@ -670,8 +670,9 @@ export function AccountDashboard(): React.JSX.Element {
   const unreadMessages = activity.messages.filter((message) => message.sender_id !== userId && !message.read_at).length
   const liveSellerItems = activity.sellerItems.filter((item) => item.is_live).length
   const hasTailorProfile = Boolean(activity.tailorProfile)
+  const workspaceRole: DrapeRole = role === 'TAILOR' && hasTailorProfile ? 'TAILOR' : 'CUSTOMER'
   const avatarUrl = safeAvatarUrl(
-    role === 'TAILOR'
+    workspaceRole === 'TAILOR'
       ? (activity.tailorProfile?.avatar_url ?? activity.customerProfile?.avatar_url)
       : (activity.customerProfile?.avatar_url ?? activity.tailorProfile?.avatar_url),
   )
@@ -696,7 +697,7 @@ export function AccountDashboard(): React.JSX.Element {
     ['Settings', '/account/settings'],
     ['Support', '/account/support'],
   ]
-  if (role === 'TAILOR' || activity.tailorProfile) {
+  if (hasTailorProfile) {
     accountLinks.push(['Shop', '/account/shop'], ['Work queue', '/account/work'])
   }
 
@@ -725,15 +726,15 @@ export function AccountDashboard(): React.JSX.Element {
           <div className="rounded-[0.85rem] border border-ink/6 bg-bone/70 px-3 py-2 lg:min-w-56">
             <p className="text-[0.68rem] font-semibold uppercase text-needle/80">Viewing</p>
             <p className="mt-1 text-base font-semibold text-ink">
-              {role === 'TAILOR' ? 'Tailor workspace' : role === 'CUSTOMER' ? 'Customer account' : 'Choose a mode'}
+              {workspaceRole === 'TAILOR' ? 'Tailor workspace' : 'Customer account'}
             </p>
             <p className="mt-1 text-xs leading-5 text-ink/62">
-              {role === 'TAILOR'
+              {workspaceRole === 'TAILOR'
                 ? 'Orders, shop, client context, and payout readiness.'
                 : 'Orders, fit, wishlist, messages, and payment history.'}
             </p>
             <div className="mt-3 flex flex-col gap-2">
-              {role === 'TAILOR' ? (
+              {workspaceRole === 'TAILOR' ? (
                 <button
                   type="button"
                   onClick={() => {
@@ -756,7 +757,7 @@ export function AccountDashboard(): React.JSX.Element {
                   {savingRole === 'TAILOR' ? 'Switching...' : 'Use tailor workspace'}
                 </button>
               ) : (
-                <Link href="/apply" className="inline-flex min-h-10 items-center justify-center rounded-full bg-needle px-3 py-2 text-xs font-semibold text-white transition hover:bg-needle-600">
+                <Link href="/apply?source=account" className="inline-flex min-h-10 items-center justify-center rounded-full bg-needle px-3 py-2 text-xs font-semibold text-white transition hover:bg-needle-600">
                   Apply as a tailor
                 </Link>
               )}
@@ -802,10 +803,10 @@ export function AccountDashboard(): React.JSX.Element {
           </p>
         </div>
         <div className="rounded-[1rem] border border-ink/6 bg-white/84 p-4 shadow-sm">
-          <p className="text-[0.68rem] font-semibold uppercase text-needle/80">{role === 'TAILOR' ? 'Shop' : 'Fit'}</p>
-          <p className="mt-2 text-3xl font-semibold text-ink">{activityLoading ? '...' : role === 'TAILOR' ? liveSellerItems : measurementCount}</p>
+          <p className="text-[0.68rem] font-semibold uppercase text-needle/80">{workspaceRole === 'TAILOR' ? 'Shop' : 'Fit'}</p>
+          <p className="mt-2 text-3xl font-semibold text-ink">{activityLoading ? '...' : workspaceRole === 'TAILOR' ? liveSellerItems : measurementCount}</p>
           <p className="mt-2 text-sm leading-6 text-ink/62">
-            {role === 'TAILOR' ? `${activity.sellerItems.length} ready-made records` : 'Measurement records on file'}
+            {workspaceRole === 'TAILOR' ? `${activity.sellerItems.length} ready-made records` : 'Measurement records on file'}
           </p>
         </div>
       </div>
@@ -833,7 +834,7 @@ export function AccountDashboard(): React.JSX.Element {
         </div>
       </div>
 
-      {role === 'TAILOR' ? (
+      {workspaceRole === 'TAILOR' ? (
         <div className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
           <div className="rounded-[1.6rem] border border-ink/8 bg-white/88 p-6 shadow-[0_18px_60px_rgba(22,28,24,0.06)]">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -1173,16 +1174,16 @@ export function AccountDashboard(): React.JSX.Element {
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Account access</p>
             <h2 className="mt-2 text-2xl font-semibold text-ink">
-              {role === 'TAILOR' ? 'Tailor workspace active.' : 'Customer account active.'}
+              {workspaceRole === 'TAILOR' ? 'Tailor workspace active.' : 'Customer account active.'}
             </h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-ink/62">
-              {role === 'TAILOR'
+              {workspaceRole === 'TAILOR'
                 ? 'Manage work, shop, earnings, payouts, and customer order context.'
                 : 'Browse, order, track, message, confirm handoff, and manage fit.'}
             </p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row lg:justify-end">
-            {role === 'CUSTOMER' ? (
+            {workspaceRole === 'CUSTOMER' ? (
               <Link href="/account/orders" className="inline-flex min-h-11 items-center justify-center rounded-full border border-ink/10 bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:bg-bone">
                 Review orders
               </Link>
@@ -1199,7 +1200,7 @@ export function AccountDashboard(): React.JSX.Element {
               </button>
             )}
             {hasTailorProfile ? (
-              role === 'TAILOR' ? (
+              workspaceRole === 'TAILOR' ? (
                 <Link href="/account/work" className="inline-flex min-h-11 items-center justify-center rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white transition hover:bg-needle-600">
                   Open work queue
                 </Link>
@@ -1216,7 +1217,7 @@ export function AccountDashboard(): React.JSX.Element {
                 </button>
               )
             ) : (
-              <Link href="/apply" className="inline-flex min-h-11 items-center justify-center rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white transition hover:bg-needle-600">
+              <Link href="/apply?source=account" className="inline-flex min-h-11 items-center justify-center rounded-full bg-needle px-4 py-2 text-sm font-semibold text-white transition hover:bg-needle-600">
                 Apply as a tailor
               </Link>
             )}
@@ -1225,7 +1226,7 @@ export function AccountDashboard(): React.JSX.Element {
         <div className="mt-5 grid gap-3 md:grid-cols-3">
           <div className="rounded-[1rem] border border-ink/6 bg-bone/45 p-4">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/48">Current role</p>
-            <p className="mt-2 text-sm font-semibold text-ink">{role === 'TAILOR' ? 'Tailor' : 'Customer'}</p>
+            <p className="mt-2 text-sm font-semibold text-ink">{workspaceRole === 'TAILOR' ? 'Tailor' : 'Customer'}</p>
           </div>
           <div className="rounded-[1rem] border border-ink/6 bg-bone/45 p-4">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink/48">Tailor access</p>

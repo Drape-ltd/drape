@@ -77,7 +77,7 @@ export default function AccountPage(): React.JSX.Element {
         </div>
       }
     >
-      <AccountSignedInRedirect />
+      <AccountSignedInRedirect to="/account/dashboard" />
       <section className="py-8">
         <SectionTitle
           eyebrow="Access paths"
