@@ -242,6 +242,7 @@ type TailorProfile = {
   currency: string | null
   tier: string | null
   availability: string | null
+  seller_type?: string | null
   is_live: boolean | null
   is_verified: boolean | null
   avg_rating: number | null
@@ -278,6 +279,13 @@ type TailorProfile = {
   payout_account_last_changed_at?: string | null
   payout_account_change_locked_until?: string | null
   payout_destination_hold_until?: string | null
+}
+
+type TailorPickupDetails = {
+  user_id: string
+  pickup_address: string | null
+  pickup_instructions: string | null
+  updated_at: string | null
 }
 
 type MeasurementProfile = {
@@ -458,6 +466,7 @@ type AccountShellData = {
   accountCurrency: string | null
   customerProfile: CustomerProfile | null
   tailorProfile: TailorProfile | null
+  pickupDetails: TailorPickupDetails | null
   activeOrderCount: number
   customerActiveOrderCount: number
   tailorActiveOrderCount: number
@@ -592,6 +601,7 @@ type ProfileSurfaceData = {
 type ProfileRenderData = ProfileSurfaceData & {
   userId: string | null
   tailorProfile: TailorProfile | null
+  pickupDetails: TailorPickupDetails | null
 }
 
 type SettingsSurfaceData = {
@@ -648,6 +658,7 @@ const emptyShellData: AccountShellData = {
   accountCurrency: null,
   customerProfile: null,
   tailorProfile: null,
+  pickupDetails: null,
   activeOrderCount: 0,
   customerActiveOrderCount: 0,
   tailorActiveOrderCount: 0,
@@ -920,6 +931,19 @@ function safeList(value: string[] | null | undefined, fallback = 'Not listed') {
     .map((entry) => safeUserText(entry))
     .filter(Boolean)
   return cleaned.length > 0 ? cleaned.join(', ') : fallback
+}
+
+function editableListText(value: string[] | null | undefined) {
+  return stringList(value).join(', ')
+}
+
+function parseEditableList(value: string, maxItems: number) {
+  return uniqueValues(
+    value
+      .split(/[,\n]/gu)
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  ).slice(0, maxItems)
 }
 
 function formatMoney(amountMinor: number | null | undefined, currency: string | null | undefined) {
@@ -1596,7 +1620,7 @@ function mediaFingerprint(file: File) {
 }
 
 const publicTailorProfileSelect =
-  'id, user_id, display_name, business_name, bio, location, languages, specialty_tags, price_range_min, price_range_max, currency, tier, availability, is_live, is_verified, avg_rating, total_reviews, total_orders, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, portfolio_photo_urls, avatar_url'
+  'id, user_id, display_name, business_name, bio, location, languages, specialty_tags, price_range_min, price_range_max, currency, tier, availability, seller_type, is_live, is_verified, avg_rating, total_reviews, total_orders, supports_custom_orders, supports_ready_made, pickup_available, delivery_available, shipping_available, portfolio_photo_urls, avatar_url'
 
 const ownTailorProfileSelect =
   `${publicTailorProfileSelect}, payout_currency, payout_provider, payout_reverification_required, payout_account_type, payout_account_verified, payout_account_verified_at, payout_bank_name, payout_account_name, payout_account_masked, payout_country_code, manual_bank_entry, manual_bank_name, manual_bank_country_code, manual_bank_country_name, manual_bank_swift_bic, manual_bank_account_name, manual_bank_verification_status, manual_bank_submitted_at, paystack_recipient_code, stripe_connect_account_id, payout_account_change_count, payout_account_last_changed_at, payout_account_change_locked_until, payout_destination_hold_until`
@@ -2261,7 +2285,7 @@ async function fetchAccountShellData(userId: string): Promise<AccountShellData> 
   const supabase = createClient()
   let warning: string | null = null
 
-  const [accountRes, customerProfileRes, tailorProfileRes] = await Promise.all([
+  const [accountRes, customerProfileRes, tailorProfileRes, pickupDetailsRes] = await Promise.all([
     supabase
       .from('users')
       .select('default_currency')
@@ -2277,9 +2301,15 @@ async function fetchAccountShellData(userId: string): Promise<AccountShellData> 
       .select(publicTailorProfileSelect)
       .eq('user_id', userId)
       .maybeSingle(),
+    supabase
+      .from('tailor_pickup_details')
+      .select('user_id, pickup_address, pickup_instructions, updated_at')
+      .eq('user_id', userId)
+      .maybeSingle(),
   ])
 
   const tailorProfile = tailorProfileRes.error ? null : ((tailorProfileRes.data ?? null) as TailorProfile | null)
+  const pickupDetails = pickupDetailsRes.error ? null : ((pickupDetailsRes.data ?? null) as TailorPickupDetails | null)
   const orderFilter = tailorProfile?.id
     ? `customer_id.eq.${userId},tailor_id.eq.${userId},tailor_profile_id.eq.${tailorProfile.id}`
     : `customer_id.eq.${userId},tailor_id.eq.${userId}`
@@ -2336,6 +2366,7 @@ async function fetchAccountShellData(userId: string): Promise<AccountShellData> 
     accountCurrency: accountRes.error ? null : ((accountRes.data as { default_currency?: string | null } | null)?.default_currency ?? null),
     customerProfile: customerProfileRes.error ? null : ((customerProfileRes.data ?? null) as CustomerProfile | null),
     tailorProfile,
+    pickupDetails,
     activeOrderCount,
     customerActiveOrderCount,
     tailorActiveOrderCount,
@@ -11248,6 +11279,45 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
   const [success, setSuccess] = useState<string | null>(null)
   const paystackCurrency = ['NGN', 'GHS', 'KES'].includes(payoutCurrency)
   const stripeCurrency = ['USD', 'GBP', 'EUR', 'CAD'].includes(payoutCurrency)
+  const autoLoadedPaystackBanksRef = useRef<string | null>(null)
+  const paystackCountryForCurrency = payoutCurrency === 'NGN' ? 'NG' : payoutCurrency === 'GHS' ? 'GH' : payoutCurrency === 'KES' ? 'KE' : countryCode
+  const displayedCountryCode = paystackCurrency ? paystackCountryForCurrency : countryCode
+
+  const loadBanks = useCallback(async (options?: { quiet?: boolean }) => {
+    if (!paystackCurrency) return
+    setBusy('banks')
+    setError(null)
+    if (!options?.quiet) setSuccess(null)
+    try {
+      const result = await invokeAccountFunction<{ banks?: Array<{ code: string; name: string; country?: string | null; currency?: string | null }>; warning?: string | null }>('payout-account-action', {
+        action: 'list-paystack-banks',
+        payoutCurrency,
+        countryCode: paystackCountryForCurrency,
+      })
+      setBanks(result.banks ?? [])
+      if (result.warning) {
+        setSuccess(result.warning)
+      } else if (!options?.quiet) {
+        setSuccess('Bank directory refreshed.')
+      }
+    } catch (loadError) {
+      setError(friendlyActionError(loadError, 'Bank directory could not load.'))
+    } finally {
+      setBusy(null)
+    }
+  }, [paystackCountryForCurrency, paystackCurrency, payoutCurrency])
+
+  useEffect(() => {
+    if (!profile || !paystackCurrency || busy) return
+    const directoryKey = `${payoutCurrency}:${paystackCountryForCurrency}`
+    if (autoLoadedPaystackBanksRef.current === directoryKey) return
+    autoLoadedPaystackBanksRef.current = directoryKey
+    setBanks([])
+    setBankCode('')
+    setBankName('')
+    setVerification(null)
+    void loadBanks({ quiet: true })
+  }, [busy, loadBanks, paystackCountryForCurrency, paystackCurrency, payoutCurrency, profile])
 
   if (!profile) {
     return (
@@ -11257,25 +11327,6 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
         action={<Link href="/apply?source=account" className="font-semibold text-needle">Apply as a tailor</Link>}
       />
     )
-  }
-
-  async function loadBanks() {
-    setBusy('banks')
-    setError(null)
-    setSuccess(null)
-    try {
-      const result = await invokeAccountFunction<{ banks?: Array<{ code: string; name: string; country?: string | null; currency?: string | null }>; warning?: string | null }>('payout-account-action', {
-        action: 'list-paystack-banks',
-        payoutCurrency,
-        countryCode,
-      })
-      setBanks(result.banks ?? [])
-      setSuccess(result.warning ?? 'Bank directory loaded.')
-    } catch (loadError) {
-      setError(friendlyActionError(loadError, 'Bank directory could not load.'))
-    } finally {
-      setBusy(null)
-    }
   }
 
   async function verifyPaystack() {
@@ -11420,13 +11471,37 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
         <div className="mt-5 grid gap-4 md:grid-cols-3">
           <label className="grid gap-2">
             <span className="text-sm font-semibold text-ink">Payout currency</span>
-            <select value={payoutCurrency} onChange={(event) => { setPayoutCurrency(event.target.value); setVerification(null) }} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+            <select
+              value={payoutCurrency}
+              onChange={(event) => {
+                const nextCurrency = event.target.value
+                setPayoutCurrency(nextCurrency)
+                setCountryCode(nextCurrency === 'NGN' ? 'NG' : nextCurrency === 'GHS' ? 'GH' : nextCurrency === 'KES' ? 'KE' : countryCode)
+                setBankCode('')
+                setBankName('')
+                setBanks([])
+                setVerification(null)
+              }}
+              className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50"
+            >
               {['NGN', 'GHS', 'KES', 'USD', 'GBP', 'EUR', 'CAD'].map((currency) => <option key={currency} value={currency}>{currency}</option>)}
             </select>
           </label>
           <label className="grid gap-2">
             <span className="text-sm font-semibold text-ink">Country code</span>
-            <input value={countryCode} onChange={(event) => setCountryCode(event.target.value.toUpperCase().slice(0, 2))} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50" placeholder="US" />
+            <input
+              value={displayedCountryCode}
+              onChange={(event) => {
+                setCountryCode(event.target.value.toUpperCase().slice(0, 2))
+                setBankCode('')
+                setBankName('')
+                setBanks([])
+                setVerification(null)
+              }}
+              className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50"
+              placeholder="US"
+              readOnly={paystackCurrency}
+            />
           </label>
           <div className="flex items-end">
             {stripeCurrency ? (
@@ -11434,8 +11509,8 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
                 {busy === 'stripe' ? 'Opening Stripe...' : 'Start Stripe Connect'}
               </button>
             ) : (
-              <button type="button" onClick={loadBanks} disabled={!!busy || !paystackCurrency} className="inline-flex w-full justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
-                {busy === 'banks' ? 'Loading banks...' : 'Load Paystack banks'}
+              <button type="button" onClick={() => void loadBanks()} disabled={!!busy || !paystackCurrency} className="inline-flex w-full justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+                {busy === 'banks' ? 'Loading banks...' : banks.length > 0 ? 'Refresh banks' : 'Retry banks'}
               </button>
             )}
           </div>
@@ -11460,9 +11535,10 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
                     setBankName(next?.name ?? '')
                     setVerification(null)
                   }}
+                  disabled={busy === 'banks' || banks.length === 0}
                   className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50"
                 >
-                  <option value="">Select bank</option>
+                  <option value="">{busy === 'banks' ? 'Loading banks...' : banks.length > 0 ? 'Select bank' : 'Banks unavailable'}</option>
                   {banks.map((bank) => <option key={bank.code} value={bank.code}>{bank.name}</option>)}
                 </select>
               </label>
@@ -11503,6 +11579,218 @@ function RenderPayout({ data, onRefresh }: { data: PayoutRenderData; onRefresh: 
         </a>
       </section>
     </div>
+  )
+}
+
+function TailorSellingSetupEditor({ data, onRefresh }: { data: ProfileRenderData; onRefresh: () => void }) {
+  const profile = data.tailorProfile
+  const [displayName, setDisplayName] = useState(profile?.display_name || profile?.business_name || '')
+  const [location, setLocation] = useState(profile?.location ?? '')
+  const [bio, setBio] = useState(profile?.bio ?? '')
+  const [languages, setLanguages] = useState(editableListText(profile?.languages))
+  const [specialties, setSpecialties] = useState(editableListText(profile?.specialty_tags))
+  const [currency, setCurrency] = useState(profile?.currency ?? 'USD')
+  const [availability, setAvailability] = useState(profile?.availability === 'FULLY_BOOKED' || profile?.availability === 'LIMITED' ? profile.availability : 'OPEN')
+  const [sellerType, setSellerType] = useState(profile?.seller_type === 'BOUTIQUE' || profile?.seller_type === 'TAILOR_SHOP' ? profile.seller_type : 'TAILOR')
+  const [supportsCustomOrders, setSupportsCustomOrders] = useState(profile?.supports_custom_orders !== false)
+  const [supportsReadyMade, setSupportsReadyMade] = useState(profile?.supports_ready_made === true)
+  const [pickupAvailable, setPickupAvailable] = useState(profile?.pickup_available === true)
+  const [deliveryAvailable, setDeliveryAvailable] = useState(profile?.delivery_available === true)
+  const [shippingAvailable, setShippingAvailable] = useState(profile?.shipping_available === true)
+  const [pickupAddress, setPickupAddress] = useState(data.pickupDetails?.pickup_address ?? '')
+  const [pickupInstructions, setPickupInstructions] = useState(data.pickupDetails?.pickup_instructions ?? '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+
+  if (!profile) return null
+
+  async function saveSellingSetup() {
+    setError(null)
+    setSuccess(null)
+
+    const parsedLanguages = parseEditableList(languages, 12)
+    const parsedSpecialties = parseEditableList(specialties, 20)
+    const leak = assertNoContactLeak(
+      [
+        displayName,
+        location,
+        bio,
+        parsedLanguages.join('\n'),
+        parsedSpecialties.join('\n'),
+        pickupInstructions,
+      ].join('\n'),
+      "Selling setup can't include phone numbers, emails, or off-platform contact details.",
+    )
+    if (leak) {
+      setError(leak)
+      return
+    }
+    if (displayName.trim().length < 2) {
+      setError('Add a public display name before saving.')
+      return
+    }
+    if (location.trim().length < 2) {
+      setError('Add a city or location before saving.')
+      return
+    }
+    if (parsedSpecialties.length === 0) {
+      setError('Add at least one specialty.')
+      return
+    }
+    if (!supportsCustomOrders && !supportsReadyMade) {
+      setError('Choose at least one selling mode.')
+      return
+    }
+    if (!pickupAvailable && !deliveryAvailable && !shippingAvailable) {
+      setError('Choose at least one fulfillment option.')
+      return
+    }
+    if (pickupAvailable && pickupAddress.trim().length < 8) {
+      setError('Add a fuller private pickup address before offering pickup.')
+      return
+    }
+
+    setBusy(true)
+    try {
+      await invokeAccountFunction('tailor-profile-action', {
+        action: 'update-profile',
+        profile: {
+          displayName: displayName.trim(),
+          location: location.trim(),
+          bio: bio.trim() || null,
+          languages: parsedLanguages,
+          specialties: parsedSpecialties,
+          currency,
+          availability,
+          sellerType,
+          supportsCustomOrders,
+          supportsReadyMade,
+          pickupAvailable,
+          pickupAddress: pickupAddress.trim() || null,
+          pickupInstructions: pickupInstructions.trim() || null,
+          deliveryAvailable,
+          shippingAvailable,
+        },
+      })
+      setSuccess('Selling setup saved.')
+      onRefresh()
+    } catch (setupError) {
+      setError(friendlyActionError(setupError, 'Selling setup could not save.'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <details className="group mt-4 border-t border-ink/6 pt-4">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-4 marker:hidden">
+        <span>
+          <span className="block text-sm font-semibold text-ink">Edit setup on web</span>
+          <span className="mt-1 block text-xs leading-5 text-ink/56">Update availability, offers, fulfillment, private pickup details, public bio, specialties, and languages.</span>
+        </span>
+        <span className="shrink-0 rounded-full border border-ink/8 bg-white px-3 py-1 text-xs font-semibold text-needle group-open:hidden">Edit</span>
+        <span className="hidden shrink-0 rounded-full border border-ink/8 bg-white px-3 py-1 text-xs font-semibold text-ink/52 group-open:inline-flex">Close</span>
+      </summary>
+      <div className="mt-4 grid gap-4">
+        <ActionNotice error={error} success={success} />
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="grid gap-2">
+            <span className="text-sm font-semibold text-ink">Public display name</span>
+            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+          </label>
+          <label className="grid gap-2">
+            <span className="text-sm font-semibold text-ink">Location</span>
+            <input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="City, country" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+          </label>
+          <label className="grid gap-2">
+            <span className="text-sm font-semibold text-ink">Availability</span>
+            <select value={availability} onChange={(event) => setAvailability(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+              <option value="OPEN">Open for orders</option>
+              <option value="LIMITED">Limited availability</option>
+              <option value="FULLY_BOOKED">Fully booked</option>
+            </select>
+          </label>
+          <label className="grid gap-2">
+            <span className="text-sm font-semibold text-ink">Profile currency</span>
+            <select value={currency} onChange={(event) => setCurrency(event.target.value)} className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm font-semibold text-ink outline-none focus:border-needle/50">
+              {['USD', 'GBP', 'NGN', 'CAD', 'EUR', 'GHS', 'KES'].map((code) => <option key={code} value={code}>{code}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-2 md:col-span-2">
+            <span className="text-sm font-semibold text-ink">Bio</span>
+            <textarea value={bio} onChange={(event) => setBio(event.target.value)} rows={4} className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+          </label>
+          <label className="grid gap-2">
+            <span className="text-sm font-semibold text-ink">Specialties</span>
+            <textarea value={specialties} onChange={(event) => setSpecialties(event.target.value)} rows={3} placeholder="Aso oke, Bridal, Agbada" className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+          </label>
+          <label className="grid gap-2">
+            <span className="text-sm font-semibold text-ink">Languages</span>
+            <textarea value={languages} onChange={(event) => setLanguages(event.target.value)} rows={3} placeholder="English, Yoruba" className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+          </label>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          {([
+            ['TAILOR', 'Tailor'],
+            ['BOUTIQUE', 'Boutique'],
+            ['TAILOR_SHOP', 'Tailor shop'],
+          ] as const).map(([value, label]) => (
+            <label key={value} className={`flex cursor-pointer items-center gap-3 rounded-[0.9rem] border px-4 py-3 text-sm font-semibold ${sellerType === value ? 'border-needle/24 bg-needle/10 text-needle' : 'border-ink/8 bg-white text-ink/68'}`}>
+              <input type="radio" name="seller-type" checked={sellerType === value} onChange={() => setSellerType(value)} />
+              {label}
+            </label>
+          ))}
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          {([
+            ['custom', 'Custom orders', supportsCustomOrders, setSupportsCustomOrders],
+            ['ready-made', 'Ready-made shop', supportsReadyMade, setSupportsReadyMade],
+          ] as const).map(([key, label, checked, setter]) => (
+            <label key={key} className="flex cursor-pointer items-center gap-3 rounded-[0.9rem] border border-ink/8 bg-white px-4 py-3 text-sm font-semibold text-ink">
+              <input type="checkbox" checked={checked} onChange={() => setter(!checked)} />
+              {label}
+            </label>
+          ))}
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          {([
+            ['pickup', 'Pickup', pickupAvailable, setPickupAvailable],
+            ['delivery', 'Delivery', deliveryAvailable, setDeliveryAvailable],
+            ['shipping', 'Shipping', shippingAvailable, setShippingAvailable],
+          ] as const).map(([key, label, checked, setter]) => (
+            <label key={key} className="flex cursor-pointer items-center gap-3 rounded-[0.9rem] border border-ink/8 bg-white px-4 py-3 text-sm font-semibold text-ink">
+              <input type="checkbox" checked={checked} onChange={() => setter(!checked)} />
+              {label}
+            </label>
+          ))}
+        </div>
+
+        {pickupAvailable ? (
+          <div className="grid gap-3 rounded-[1rem] border border-needle/10 bg-needle/6 p-4">
+            <label className="grid gap-2">
+              <span className="text-sm font-semibold text-ink">Private pickup address</span>
+              <textarea value={pickupAddress} onChange={(event) => setPickupAddress(event.target.value)} rows={3} placeholder="Full address customers unlock after collection is ready" className="resize-none rounded-[1rem] border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+            </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-semibold text-ink">Pickup instructions</span>
+              <input value={pickupInstructions} onChange={(event) => setPickupInstructions(event.target.value)} placeholder="e.g. Bring your collection code" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
+            </label>
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="button" onClick={saveSellingSetup} disabled={busy} className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
+            {busy ? 'Saving...' : 'Save selling setup'}
+          </button>
+          <Link href="/account/shop" className="text-sm font-semibold text-needle">Manage ready-made shop →</Link>
+          <Link href="/account/payout" className="text-sm font-semibold text-needle">Review payout →</Link>
+        </div>
+      </div>
+    </details>
   )
 }
 
@@ -11632,7 +11920,7 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
       <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-5 shadow-sm">
         <div className="flex items-center justify-between">
           <h3 className="text-xl text-ink">Selling setup</h3>
-          <OpenAppButton label="Edit in app" className="text-xs font-semibold text-needle" />
+          <OpenAppButton label="Open app for ID" className="text-xs font-semibold text-needle" />
         </div>
         <div className="mt-4 divide-y divide-ink/6">
           {sellingSetupRows.map((row) => (
@@ -11642,6 +11930,7 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
             </div>
           ))}
         </div>
+        <TailorSellingSetupEditor data={data} onRefresh={onRefresh} />
       </section>
 
       {/* ── Portfolio ── */}
@@ -11679,10 +11968,10 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
       <section className="rounded-[1.6rem] border border-needle/12 bg-needle/6 p-5">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">App-only trust steps</p>
         <p className="mt-2 text-sm leading-6 text-ink/66">
-          Bio editing, private pickup details, identity verification, and sensitive payout changes still use the app&apos;s camera and reauth controls. Portfolio, shop, payouts, and order work are available on web.
+          Identity verification, native body scans, camera-guided proof, push permissions, and stronger reauth flows still work best in the app. Profile setup, portfolio, shop, payouts, and order work are available on web.
         </p>
         <div className="mt-4">
-          <OpenAppButton label="Edit profile in app" className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white" />
+          <OpenAppButton label="Open app trust flows" className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white" />
         </div>
       </section>
 
@@ -12193,7 +12482,7 @@ function RenderSupport({ data, onRefresh }: { data: SupportRenderData; onRefresh
     ['How do I respond to a custom order brief?', 'Go to Orders and open the brief. Tap "Send quote" to enter your price, estimated completion date, and a note. You can also request a consultation before quoting. Respond within 48 hours — customers see a response timer on their end.'],
     ['How does payout work?', 'Earnings are released after the customer confirms delivery or 7 days after dispatch if they do not respond. Funds route to your Stripe or Paystack account automatically. Manual bank routes require an ops handoff — email payouts@drapeon.co to initiate.'],
     ['Why is my payout showing "blocked"?', 'Blocked payouts are held pending dispute resolution, identity checks, or a missing reverification step. Go to Payout to check the status. If the block is unclear, email payouts@drapeon.co with your order reference.'],
-    ['How do I change my availability?', 'Go to Profile and look at the Selling setup section. Tap "Edit →" to open Settings where availability can be set to Open, Limited, or Fully booked. Changes apply immediately and affect how you appear in customer search.'],
+    ['How do I change my availability?', 'Go to Profile, open Selling setup, and use "Edit setup on web." Availability can be set to Open, Limited, or Fully booked, and changes affect how you appear in customer search.'],
     ['How do I mark an order as dispatched?', 'Open the order in Orders, scroll to the Actions section, and select the dispatch stage. You will need to enter a fulfillment method and optionally a tracking number. Collection and self-delivery orders use different stage flows.'],
     ['How do I handle a scope change from a customer?', 'Customers can request scope changes on active briefs. Go to the order in Orders — an action card will appear asking you to approve or decline the change. You can adjust the price and timeline before accepting.'],
     ['Why is my account or listing restricted?', 'Restrictions are triggered by unresolved disputes, payment failures, or identity verification requirements. Open a support request using "Account or security issue" below and ops will review within 1 business day.'],
@@ -13234,7 +13523,7 @@ export function AccountAppSurface({
       case 'payout':
         return <RenderPayout data={{ tailorProfile: shellData.tailorProfile ?? data.tailorProfile }} onRefresh={onRefresh} />
       case 'profile':
-        return <RenderProfile data={{ ...profileData, userId: shellData.userId ?? data.userId, tailorProfile: shellData.tailorProfile ?? data.tailorProfile }} onRefresh={onRefresh} />
+        return <RenderProfile data={{ ...profileData, userId: shellData.userId ?? data.userId, tailorProfile: shellData.tailorProfile ?? data.tailorProfile, pickupDetails: shellData.pickupDetails }} onRefresh={onRefresh} />
       case 'checkout':
         return <RenderCheckout data={{ ...checkoutData, userId: shellData.userId ?? data.userId }} orderId={orderId} onRefresh={onRefresh} />
       case 'saved':
@@ -13262,7 +13551,7 @@ export function AccountAppSurface({
       default:
         return null
     }
-  }, [briefData, checkoutData, data, earningsData, exploreData, itemDetailData, measurementsData, messagesData, orderDetailData, orderId, ordersData, profileData, savedData, session, settingsData, shellData.accountCurrency, shellData.customerProfile, shellData.tailorProfile, shellData.userId, shopData, supportData, surface, tailorDetailData, tailorId, workData])
+  }, [briefData, checkoutData, data, earningsData, exploreData, itemDetailData, measurementsData, messagesData, orderDetailData, orderId, ordersData, profileData, savedData, session, settingsData, shellData.accountCurrency, shellData.customerProfile, shellData.pickupDetails, shellData.tailorProfile, shellData.userId, shopData, supportData, surface, tailorDetailData, tailorId, workData])
 
   const accountContextValue = useMemo<AccountContextValue | null>(() => {
     const userId = session?.user.id ?? shellData.userId ?? data.userId
