@@ -7532,6 +7532,13 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const needsAddress = fulfillment !== 'PICKUP'
+  const fallbackFulfillment = fulfillment === 'PICKUP'
+    ? item.delivery_available
+      ? 'DELIVERY'
+      : item.shipping_available
+        ? 'SHIPPING'
+        : null
+    : null
   const previewKey = useMemo(() => JSON.stringify({
     itemId: item.id,
     size: size || '',
@@ -7565,6 +7572,18 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
     return parsedQuantity
   }
 
+  function handlePickupSetupFallback(message: string) {
+    if (!fallbackFulfillment || !/pickup details|finished pickup details/iu.test(message)) {
+      return false
+    }
+    setFulfillment(fallbackFulfillment)
+    setPricingPreview(null)
+    setPricingKey('')
+    setSuccess(null)
+    setError(`Pickup is not ready for this seller yet. Checkout has been switched to ${fallbackFulfillment.toLowerCase()}. Add recipient details and preview tax again.`)
+    return true
+  }
+
   async function previewCheckout() {
     const parsedQuantity = validateCheckoutInput()
     if (!parsedQuantity) return
@@ -7589,7 +7608,10 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
     } catch (previewError) {
       setPricingPreview(null)
       setPricingKey('')
-      setError(friendlyActionError(previewError, 'We could not calculate tax and totals for this checkout right now.'))
+      const message = friendlyActionError(previewError, 'We could not calculate tax and totals for this checkout right now.')
+      if (!handlePickupSetupFallback(message)) {
+        setError(message)
+      }
     } finally {
       setPricingBusy(false)
     }
@@ -7631,7 +7653,10 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
       }
       setSuccess('Checkout order created. Open Orders to continue payment.')
     } catch (checkoutError) {
-      setError(friendlyActionError(checkoutError, 'Ready-made checkout could not start. Refresh and try again.'))
+      const message = friendlyActionError(checkoutError, 'Ready-made checkout could not start. Refresh and try again.')
+      if (!handlePickupSetupFallback(message)) {
+        setError(message)
+      }
     } finally {
       setBusy(false)
     }
@@ -7663,6 +7688,9 @@ function ReadyMadeCheckoutForm({ item, data, onRefresh }: { item: SellerItem; da
             </select>
           </label>
         </div>
+        {fulfillment === 'PICKUP' ? (
+          <p className="text-sm leading-6 text-ink/58">Exact pickup details are shared only after the seller marks the order ready for collection.</p>
+        ) : null}
         {needsAddress ? (
           <div className="grid gap-3 md:grid-cols-2">
             <input value={recipientName} onChange={(event) => setRecipientName(event.target.value)} placeholder="Recipient name" className="rounded-full border border-ink/10 bg-white px-4 py-3 text-sm text-ink outline-none focus:border-needle/50" />
@@ -11604,7 +11632,7 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
       <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-5 shadow-sm">
         <div className="flex items-center justify-between">
           <h3 className="text-xl text-ink">Selling setup</h3>
-          <Link href="/account/settings" className="text-xs font-semibold text-needle">Edit →</Link>
+          <OpenAppButton label="Edit in app" className="text-xs font-semibold text-needle" />
         </div>
         <div className="mt-4 divide-y divide-ink/6">
           {sellingSetupRows.map((row) => (
@@ -11647,11 +11675,11 @@ function RenderProfile({ data, onRefresh }: { data: ProfileRenderData; onRefresh
         </Link>
       </section>
 
-      {/* ── Mobile only notice ── */}
+      {/* ── App-only trust steps ── */}
       <section className="rounded-[1.6rem] border border-needle/12 bg-needle/6 p-5">
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">Mobile only</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-needle/70">App-only trust steps</p>
         <p className="mt-2 text-sm leading-6 text-ink/66">
-          Bio editing, portfolio uploads, ID verification, and sensitive payout changes need the app&apos;s camera and reauth controls.
+          Bio editing, private pickup details, identity verification, and sensitive payout changes still use the app&apos;s camera and reauth controls. Portfolio, shop, payouts, and order work are available on web.
         </p>
         <div className="mt-4">
           <OpenAppButton label="Edit profile in app" className="inline-flex justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white" />
@@ -12176,7 +12204,7 @@ function RenderSupport({ data, onRefresh }: { data: SupportRenderData; onRefresh
     ['My item arrived with a fit issue — what do I do?', 'Message the tailor through the order thread first. Most fit issues are resolved with a free alteration. If the tailor is unresponsive, open a support request with "Fit or alteration issue" and attach the order. Drapeon ops will step in.'],
     ['How do I set up payout as a tailor?', 'Go to Payout in the account navigation. Stripe Connect handles GBP, USD, EUR, and CAD. Paystack handles NGN, GHS, and KES. Manual bank entry requires ops verification — email payouts@drapeon.co if your bank is not listed.'],
     ['Why is my account restricted?', 'Accounts can be restricted for unresolved disputes, payment failures, or identity verification requirements. Open a support request with "Account or security issue" and ops will review within 1 business day.'],
-    ['How do I update my measurements?', 'Measurements are saved in the app via Drapeon Vision body scan or manual entry. On web, go to Measurements to view saved profiles. Editing requires the app.'],
+    ['How do I update my measurements?', 'Use Measurements on web to add or edit manual profiles and custom tape points. Drapeon Vision body scans still run in the mobile app.'],
   ]
 
   const faqItems = isTailor ? tailorFaqItems : customerFaqItems
