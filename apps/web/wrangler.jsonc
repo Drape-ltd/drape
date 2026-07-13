@@ -12,7 +12,12 @@
     "OPS_HOSTNAME": "ops.drapeon.co"
   },
   "secrets": {
-    "required": ["SUPABASE_SERVICE_ROLE_KEY"]
+    "required": [
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "SMS_PROVIDER",
+      "TERMII_API_KEY",
+      "TERMII_SENDER_ID"
+    ]
   },
   "assets": {
     "directory": ".open-next/assets",
