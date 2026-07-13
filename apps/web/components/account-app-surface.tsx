@@ -7616,7 +7616,34 @@ function AvatarUploadPanel({ data, session, onRefresh }: { data: Pick<SettingsRe
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
+  const previewUrlRef = useRef<string | null>(null)
+  const displayAvatar = previewUrl ?? currentAvatar
+
+  useEffect(() => {
+    return () => {
+      if (previewUrlRef.current) {
+        URL.revokeObjectURL(previewUrlRef.current)
+        previewUrlRef.current = null
+      }
+    }
+  }, [])
+
+  function setSelectedAvatarFile(nextFile: File | null) {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current)
+      previewUrlRef.current = null
+    }
+    setFile(nextFile)
+    if (!nextFile) {
+      setPreviewUrl(null)
+      return
+    }
+    const nextPreviewUrl = URL.createObjectURL(nextFile)
+    previewUrlRef.current = nextPreviewUrl
+    setPreviewUrl(nextPreviewUrl)
+  }
 
   async function saveAvatar() {
     setError(null)
@@ -7639,7 +7666,7 @@ function AvatarUploadPanel({ data, session, onRefresh }: { data: Pick<SettingsRe
         role,
         avatarUrl,
       })
-      setFile(null)
+      setSelectedAvatarFile(null)
       if (fileRef.current) fileRef.current.value = ''
       setSuccess('Profile photo updated.')
       onRefresh()
@@ -7653,17 +7680,32 @@ function AvatarUploadPanel({ data, session, onRefresh }: { data: Pick<SettingsRe
   return (
     <section className="rounded-[1.6rem] border border-ink/8 bg-white/84 p-6 shadow-sm">
       <div className="grid gap-5 md:grid-cols-[120px_1fr] md:items-center">
-        <div className="h-28 w-28 overflow-hidden rounded-[1.25rem] border border-ink/8 bg-bone">
-          {currentAvatar ? (
+        <div className="relative h-28 w-28 overflow-hidden rounded-[1.25rem] border border-ink/8 bg-bone">
+          {displayAvatar ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={currentAvatar} alt="Current profile" className="h-full w-full object-cover" />
+            <img src={displayAvatar} alt={previewUrl ? 'Selected profile preview' : 'Current profile'} className="h-full w-full object-cover" />
+          ) : null}
+          {previewUrl ? (
+            <span className="absolute bottom-2 left-2 rounded-full bg-ink/72 px-2 py-1 text-[0.68rem] font-semibold text-white">
+              Preview
+            </span>
           ) : null}
         </div>
         <div className="grid gap-3">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-needle/80">Profile photo</p>
           <h2 className="text-3xl text-ink">Update avatar</h2>
           <ActionNotice error={error} success={success} />
-          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setFile(event.target.files?.[0] ?? null)} className="rounded-full border border-ink/10 bg-bone/45 px-4 py-3 text-sm text-ink file:mr-4 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-sm file:font-semibold file:text-ink" />
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            onChange={(event) => {
+              setError(null)
+              setSuccess(null)
+              setSelectedAvatarFile(event.target.files?.[0] ?? null)
+            }}
+            className="rounded-full border border-ink/10 bg-bone/45 px-4 py-3 text-sm text-ink file:mr-4 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-sm file:font-semibold file:text-ink"
+          />
           <button type="button" onClick={saveAvatar} disabled={busy || !file} className="inline-flex w-fit justify-center rounded-full bg-needle px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-ink/20">
             {busy ? 'Uploading...' : 'Save profile photo'}
           </button>
