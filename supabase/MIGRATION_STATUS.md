@@ -1,8 +1,9 @@
 # Supabase Migration Status
 
-Generated: 2026-05-06
+Generated: 2026-07-18
 
-Production audit source: `supabase migration list` against production project `wkfsrunetmgjdtcurmoj`.
+Audit source: `supabase migration list` and `supabase db lint` against development
+project `pqptfuqogvrajozfsqzi` and production project `wkfsrunetmgjdtcurmoj`.
 
 Preview project note: on 2026-05-07 the linked mobile preview project
 `pqptfuqogvrajozfsqzi` was verified with `supabase migration list` after
@@ -20,6 +21,16 @@ Status meanings:
 - `HOLD_REVIEW`: needs more review before any production apply.
 
 Important guardrail: never run `supabase db push` directly against production. Review pending migrations one by one, then apply only approved launch-critical migrations.
+
+## 2026-07-18 Cross-Environment Release
+
+- Applied and verified the 20 migrations from
+  `20260716000001_allow_hidden_onboarding_seller_item_price_null.sql` through
+  `20260717011020_allow_identity_review_without_payout.sql` on development and production.
+- Applied `20260718020224_verification_shadow_review_profile_id_compat.sql` on
+  both environments so verification review RPCs support either text or UUID
+  `tailor_profiles.id` schemas.
+- `public` and `util` schema lint completed with zero errors on both environments.
 
 ## Applied In Production
 
@@ -100,30 +111,33 @@ Important guardrail: never run `supabase db push` directly against production. R
 | `20260428000001_contact_bypass_auth_user_fk.sql` | APPLIED_PROD | Existing prod history. |
 | `20260506000001_tailor_profile_private_column_grants.sql` | APPLIED_PROD | Prod hotfix applied and repaired into migration history. |
 
-## Pending Or Held
+## Historical Review Status
+
+The review notes below preserve the original rollout rationale. Status values
+reflect the current production migration history verified on 2026-07-18.
 
 | Migration | Status | Review decision |
 | --- | --- | --- |
-| `20260428000002_order_terminal_hardening.sql` | PENDING_PROD | Launch-critical order immutability hardening. Requires rollback plan because it replaces order update policies and adds a terminal guard trigger. |
-| `20260429000001_payment_currency_foundation.sql` | PENDING_PROD | Launch-critical payment/currency foundation. Contains large backfills and ledger setup; review row counts and rollback before applying. |
+| `20260428000002_order_terminal_hardening.sql` | APPLIED_PROD | Launch-critical order immutability hardening. Requires rollback plan because it replaces order update policies and adds a terminal guard trigger. |
+| `20260429000001_payment_currency_foundation.sql` | APPLIED_PROD | Launch-critical payment/currency foundation. Contains large backfills and ledger setup; review row counts and rollback before applying. |
 | `20260429000002_tax_and_payout_hardening.sql` | APPLIED_PROD | Verified in linked production migration history on 2026-07-12; production still needs `ZIPTAX_API_KEY` for live US/Canada lookup instead of fallback tax. |
-| `20260429000003_payout_execution_hardening.sql` | PENDING_PROD | Launch-critical payout execution hardening. Review payout status backfills before applying. |
-| `20260429000004_order_handoff_and_payout_gate.sql` | PENDING_PROD | Launch-critical payout gate fields and indexes. Review updates on existing orders before applying. |
-| `20260429000005_schedule_payout_release.sql` | PENDING_PROD | Launch-critical scheduled payout release job. Apply only with function deployment plan. |
-| `20260429000006_payment_failed_state.sql` | PENDING_PROD | Launch-critical payment failure state support. Review enum/status compatibility before applying. |
-| `20260429000007_payment_webhook_idempotency_key.sql` | PENDING_PROD | Launch-critical webhook idempotency index. Should apply with webhook idempotency code. |
-| `20260429000008_signup_trigger_hardening.sql` | PENDING_PROD | Launch-critical auth resilience. Review existing auth trigger body before applying. |
-| `20260430000001_ops_issue_ledger.sql` | PENDING_PROD | Launch-critical for rate-limit/webhook/security alerting. Creates ops issue/audit tables with RLS. |
-| `20260430000002_order_payout_snapshots.sql` | PENDING_PROD | Launch-critical payout snapshot data. Review existing order backfill before applying. |
-| `20260430000003_partial_refunds.sql` | PENDING_PROD | Launch-critical refund accounting. Review payment rows before applying. |
-| `20260430000004_partial_refund_terminal_exceptions.sql` | PENDING_PROD | Launch-critical refund/order terminal exception logic. Apply with `20260430000003`. |
-| `20260502000001_manual_bank_entries.sql` | PENDING_PROD | Launch-critical if manual payout fallback remains enabled. Review private bank-detail grants before applying. |
-| `20260502000002_custom_order_staged_flow.sql` | PENDING_PROD | Launch-critical only if current mobile order flow depends on staged custom-order details. Review feature readiness before applying. |
-| `20260509000001_payout_account_change_guards.sql` | PENDING_PROD | Launch-critical financial safety guard. Adds payout destination cooldown and release-hold columns; apply before deploying payout guard functions. |
-| `20260509000002_tailor_profile_completed_status_compat.sql` | PENDING_PROD | Launch-critical navigation stability guard. Keeps legacy APPROVED verification rows from being recomputed as incomplete during payout/profile updates. |
-| `20260509000003_sync_public_user_email_after_auth_change.sql` | PENDING_PROD | Launch-critical account settings guard. Syncs `public.users.email` only after confirmed Supabase Auth email changes. |
-| `20260509000004_schedule_production_stall_escalation.sql` | PENDING_PROD | Launch-critical fulfillment safety guard. Schedules `escalate-production-stalls` hourly once the function is deployed and Vault cron secrets exist. |
-| `20260509000008_service_health_rpc.sql` | PENDING_PROD | Service observability helper. Lets protected readiness checks inspect required cron jobs without exposing cron schema. |
+| `20260429000003_payout_execution_hardening.sql` | APPLIED_PROD | Launch-critical payout execution hardening. Review payout status backfills before applying. |
+| `20260429000004_order_handoff_and_payout_gate.sql` | APPLIED_PROD | Launch-critical payout gate fields and indexes. Review updates on existing orders before applying. |
+| `20260429000005_schedule_payout_release.sql` | APPLIED_PROD | Launch-critical scheduled payout release job. Apply only with function deployment plan. |
+| `20260429000006_payment_failed_state.sql` | APPLIED_PROD | Launch-critical payment failure state support. Review enum/status compatibility before applying. |
+| `20260429000007_payment_webhook_idempotency_key.sql` | APPLIED_PROD | Launch-critical webhook idempotency index. Should apply with webhook idempotency code. |
+| `20260429000008_signup_trigger_hardening.sql` | APPLIED_PROD | Launch-critical auth resilience. Review existing auth trigger body before applying. |
+| `20260430000001_ops_issue_ledger.sql` | APPLIED_PROD | Launch-critical for rate-limit/webhook/security alerting. Creates ops issue/audit tables with RLS. |
+| `20260430000002_order_payout_snapshots.sql` | APPLIED_PROD | Launch-critical payout snapshot data. Review existing order backfill before applying. |
+| `20260430000003_partial_refunds.sql` | APPLIED_PROD | Launch-critical refund accounting. Review payment rows before applying. |
+| `20260430000004_partial_refund_terminal_exceptions.sql` | APPLIED_PROD | Launch-critical refund/order terminal exception logic. Apply with `20260430000003`. |
+| `20260502000001_manual_bank_entries.sql` | APPLIED_PROD | Launch-critical if manual payout fallback remains enabled. Review private bank-detail grants before applying. |
+| `20260502000002_custom_order_staged_flow.sql` | APPLIED_PROD | Launch-critical only if current mobile order flow depends on staged custom-order details. Review feature readiness before applying. |
+| `20260509000001_payout_account_change_guards.sql` | APPLIED_PROD | Launch-critical financial safety guard. Adds payout destination cooldown and release-hold columns; apply before deploying payout guard functions. |
+| `20260509000002_tailor_profile_completed_status_compat.sql` | APPLIED_PROD | Launch-critical navigation stability guard. Keeps legacy APPROVED verification rows from being recomputed as incomplete during payout/profile updates. |
+| `20260509000003_sync_public_user_email_after_auth_change.sql` | APPLIED_PROD | Launch-critical account settings guard. Syncs `public.users.email` only after confirmed Supabase Auth email changes. |
+| `20260509000004_schedule_production_stall_escalation.sql` | APPLIED_PROD | Launch-critical fulfillment safety guard. Schedules `escalate-production-stalls` hourly once the function is deployed and Vault cron secrets exist. |
+| `20260509000008_service_health_rpc.sql` | APPLIED_PROD | Service observability helper. Lets protected readiness checks inspect required cron jobs without exposing cron schema. |
 | `20260702000001_testflight_feedback_and_cascade_hardening.sql` | APPLIED_PROD | TestFlight security hardening applied on 2026-07-02. Adds product feedback RLS, bounded JSON/profile fields, safer deletion FKs, measurement scan audit logging, invite expiry, and atomic collection-code attempts. |
 | `20260702000002_schedule_account_deletion_finalizer.sql` | APPLIED_PROD | Account deletion finalizer schedule applied on 2026-07-02. Requires Vault cron secrets to invoke `finalize-account-deletions`. |
 | `20260702000003_public_media_review_gate.sql` | APPLIED_PROD | Applied on 2026-07-02. Re-queued public media now resets to pending moderation so same-path overwrites cannot inherit previous approval. |

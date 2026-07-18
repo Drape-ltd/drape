@@ -513,6 +513,8 @@ grant execute on function public.ops_decide_payout_change_request(uuid, text, te
 
 -- Keep the live selfie handoff RPC lint-safe on projects where tailor_profiles.user_id
 -- is text while handoff/user parameters are uuid.
+drop function if exists public.submit_identity_verification_handoff(uuid, uuid, text);
+
 create or replace function public.submit_identity_verification_handoff(
   p_handoff_id uuid,
   p_tailor_user_id uuid,
